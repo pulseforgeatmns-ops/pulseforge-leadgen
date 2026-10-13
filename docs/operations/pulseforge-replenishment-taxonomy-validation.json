@@ -1,0 +1,209 @@
+{
+  "base": "697995ce1adf6d7eab8742dc37655676c5403db7",
+  "network": "External sockets and fetch blocked before transmission by validation-only preload; local fixtures permitted.",
+  "baseline": {
+    "passed": 448,
+    "failed": 41
+  },
+  "patch": {
+    "passed": 448,
+    "failed": 41
+  },
+  "identicalFailureNamesAndLocations": true,
+  "failures": [
+    {
+      "test": "packages/acquisition-mission/tests/adr075TransactionalPersistence.test.js:259:3",
+      "name": "plan and discovery TME commits keep contributionIds aligned with durable store"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/adr075TransactionalPersistence.test.js:378:3",
+      "name": "runtime.create persists exclusively through persistStageCommit bundle"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/amo.test.js:213:3",
+      "name": "records every meaningful event in chronological order"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/amo.test.js:263:3",
+      "name": "answers mission health instead of a vague outreach status"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/auditDiscoveryFixes.test.js:34:3",
+      "name": "infers target segment from mission objective only"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/auditDiscoveryFixes.test.js:49:3",
+      "name": "buildDelegationFromAmoMission binds immutable mission objective"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec071ExecuteOutbound.test.js:130:3",
+      "name": "stage entry: READY + valid EXECUTION_APPROVAL \u2192 EXECUTE"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec071ExecuteOutbound.test.js:155:3",
+      "name": "EXECUTE_OUTBOUND CER routes through ExecutionRouter to outbound adapter"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec071ExecuteOutbound.test.js:187:3",
+      "name": "EXECUTE_OUTBOUND maxSends=1 sends one queue item and replay is suppressed"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec071ExecuteOutbound.test.js:316:3",
+      "name": "Paige integrity: subject/body originate from Paige contribution"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec071ExecuteOutbound.test.js:412:3",
+      "name": "provider success persists mission-bound execution evidence"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec071ExecuteOutbound.test.js:441:3",
+      "name": "provider failure persists explicit failed result without false sent state"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec071ExecuteOutbound.test.js:462:3",
+      "name": "idempotency: same missionId + prospectId + revision sends once"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec135.test.js:129:3",
+      "name": "discovery does not execute on ask path before plan is locked"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec138.test.js:99:3",
+      "name": "deleteAllAmoData clears all AMO tables in FK-safe order"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec139.test.js:248:3",
+      "name": "plan approval persists and survives hydration"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec139.test.js:283:3",
+      "name": "discovery approval persists and survives hydration"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec139.test.js:372:3",
+      "name": "assertPersistedMatchesEngine rejects mismatched durable snapshots"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec153DiscoveryCoverage.test.js:180:3",
+      "name": "normalizes discovery payload with coverage report fields"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec153WorkspaceMode.test.js:109:3",
+      "name": "Test 3: mission in execution \u2192 EXECUTION mode with execution controls"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec157AutonomousDiscoveryPolicy.test.js:159:3",
+      "name": "Test 5: approve plan via ask path with autonomous session chains to Scout"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec169.test.js:238:5",
+      "name": "canonical projections are identical after plan approval"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec169.test.js:273:5",
+      "name": "canonical projections are identical after discovery approval"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec169.test.js:307:5",
+      "name": "canonical projections are identical after prioritization approval"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec169.test.js:396:5",
+      "name": "returns first divergent field, memory value, persisted value, and reason"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec175.test.js:190:3",
+      "name": "Scenario 6: TME precondition gate blocks discovery when no external provider is configured"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec186CanonicalSender.test.js:276:3",
+      "name": "sender/domain change alters prepared artifact revision"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec186CanonicalSender.test.js:322:3",
+      "name": "provider receives the exact canonical email and name"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec186CanonicalSender.test.js:343:3",
+      "name": "READY \u2192 approval \u2192 EXECUTE still correlates with canonical sender binding"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec212ProspectMessageBinding.test.js:1:1",
+      "name": "packages/acquisition-mission/tests/spec212ProspectMessageBinding.test.js"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec249PennyPaidAcquisition.test.js:138:3",
+      "name": "is callable through canonical AMO execution and persists a Penny contribution"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec249PennyPaidAcquisition.test.js:186:3",
+      "name": "produces a valid SEC result with evidence, confidence, unknowns, and stop/continue/scale conditions"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec249PennyPaidAcquisition.test.js:218:3",
+      "name": "defers when budget or readiness evidence is missing and does not invent economics"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec249PennyPaidAcquisition.test.js:244:3",
+      "name": "compares multiple channels and does not default to Google merely because Google evidence exists"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec249PennyPaidAcquisition.test.js:255:3",
+      "name": "missing platform credentials do not crash canonical reasoning"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec249PennyPaidAcquisition.test.js:265:3",
+      "name": "Max inspection can explain Penny contribution from durable mission state"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec249PennyPaidAcquisition.test.js:277:3",
+      "name": "canonical Penny execution does not invoke legacy pennyAgent.js"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/spec252PreparedOutreachCadence.test.js:69:3",
+      "name": "includes outreachSequence steps in prepared artifact revision hash"
+    },
+    {
+      "test": "packages/acquisition-mission/tests/specExecutionApprovalHydration.test.js:78:3",
+      "name": "putMission rejects execution_approval when contributions are not yet in store"
+    },
+    {
+      "test": "test/acquisitionMission.test.js:116:3",
+      "name": "answers why is this mission here from evidence through Max"
+    },
+    {
+      "test": "test/acquisitionMission.test.js:158:3",
+      "name": "routes progress inspection before durable retrieval when a mission is active"
+    }
+  ],
+  "validationDateUtc": "2026-10-13",
+  "nodeVersion": "v24.19.0",
+  "localResults": {
+    "core": {
+      "passed": 83,
+      "failed": 0
+    },
+    "semanticGeographyStartupCi": {
+      "passed": 94,
+      "failed": 0
+    },
+    "max": {
+      "passed": 1349,
+      "failed": 0
+    },
+    "independentReview": {
+      "passed": 67,
+      "failed": 0
+    },
+    "finalTaxonomyStartupCiSmoke": {
+      "passed": 22,
+      "failed": 0
+    },
+    "finalCiSelector": {
+      "passed": 9,
+      "failed": 0
+    }
+  },
+  "aggregateApplicationSuite": "Incomplete: auto-review blocked an existing external-site request. Not retried; no full-suite pass claimed.",
+  "productionVerification": "Not performed; read-only plan supplied. No publication, merge, deployment, activation, source/program writes or sends authorized by this task."
+}

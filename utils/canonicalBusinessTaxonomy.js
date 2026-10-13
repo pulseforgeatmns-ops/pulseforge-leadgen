@@ -5,6 +5,58 @@
  * Scout query generation and replenishment admission must use these same keys.
  */
 
+const { normalizeVertical } = require('./normalize');
+
+// Explicit service trades are separate from the founder-led SMB audience. Adding
+// an enrichable trade must not silently expand an existing tenant's mission.
+const SERVICE_TRADE_TAXONOMY = Object.freeze({
+  plumbing: Object.freeze({
+    customerType: 'Plumbing contractors',
+    aliases: Object.freeze(['plumbing', 'plumber', 'plumbers', 'plumbing contractor', 'plumbing company', 'plumbing service', 'plumbing services']),
+    searchTerms: Object.freeze(['Plumbing Contractor', 'Plumbing Company']),
+    evidence: Object.freeze([/\bplumb(?:ing|er|ers)\b/i]),
+  }),
+  heating: Object.freeze({
+    customerType: 'Heating contractors',
+    aliases: Object.freeze(['heating', 'heating contractor', 'heating company', 'heating service', 'heating services', 'furnace repair', 'boiler service']),
+    searchTerms: Object.freeze(['Heating Contractor', 'Heating Company']),
+    evidence: Object.freeze([/\bheating\b/i, /\bfurnace repair\b/i, /\bboiler service\b/i]),
+  }),
+  hvac: Object.freeze({
+    customerType: 'HVAC contractors',
+    aliases: Object.freeze(['hvac', 'hvac contractor', 'hvac company', 'hvac service', 'hvac services', 'air conditioning', 'air conditioning contractor', 'air conditioning company', 'heating and cooling', 'heating & cooling', 'heating and cooling company', 'heating & cooling company', 'heating ventilation and air conditioning']),
+    searchTerms: Object.freeze(['HVAC Contractor', 'Heating and Cooling Company', 'Air Conditioning Contractor']),
+    evidence: Object.freeze([/\bhvac\b/i, /\bheating (?:and|&) cooling\b/i, /\bair conditioning\b/i]),
+  }),
+});
+const SERVICE_TRADE_VERTICALS = Object.freeze(Object.keys(SERVICE_TRADE_TAXONOMY));
+const SERVICE_TRADE_ALIASES = Object.freeze(Object.fromEntries(
+  Object.entries(SERVICE_TRADE_TAXONOMY).flatMap(([vertical, entry]) =>
+    entry.aliases.map(alias => [normalizeVertical(alias), vertical]))
+));
+
+// Exact aliases, then explicit compounds. Unknown members reject the whole
+// expression; generic contractors/home services and query slugs are not aliases.
+function serviceTradeVerticals(value) {
+  const key = normalizeVertical(value);
+  if (SERVICE_TRADE_ALIASES[key]) return [SERVICE_TRADE_ALIASES[key]];
+  const parts = String(value || '').replace(/_/g, ' ').split(/\s*(?:[,/&+]|\band\b)\s*/i);
+  if (parts.length < 2) return [];
+  const mapped = parts.map(part => SERVICE_TRADE_ALIASES[normalizeVertical(part)]);
+  return mapped.every(Boolean) ? [...new Set(mapped)] : [];
+}
+
+function serviceTradeMissionVerticals(segments) {
+  if (!Array.isArray(segments) || !segments.length) return [];
+  const mapped = segments.map(serviceTradeVerticals);
+  return mapped.every(values => values.length) ? [...new Set(mapped.flat())] : [];
+}
+
+function serviceTradeSearchTerms(segments) {
+  return [...new Set(serviceTradeMissionVerticals(segments)
+    .flatMap(vertical => SERVICE_TRADE_TAXONOMY[vertical].searchTerms))];
+}
+
 const FOUNDER_LED_SMALL_BUSINESS_TAXONOMY = Object.freeze({
   cleaning: Object.freeze({
     customerType: 'Owner-operated cleaning companies',
@@ -75,6 +127,11 @@ function founderLedSmallBusinessCustomerTypes() {
 }
 
 module.exports = {
+  SERVICE_TRADE_TAXONOMY,
+  SERVICE_TRADE_VERTICALS,
+  serviceTradeVerticals,
+  serviceTradeMissionVerticals,
+  serviceTradeSearchTerms,
   FOUNDER_LED_SMALL_BUSINESS_TAXONOMY,
   FOUNDER_LED_SMALL_BUSINESS_VERTICALS,
   SMALL_BUSINESS_OWNER_SEGMENT_KEYS,

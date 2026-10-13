@@ -6,6 +6,8 @@
  */
 
 const { asText, clone, isPlainObject, normalizeSignal, REJECTION_REASONS } = require('./Types');
+const { serviceTradeMissionVerticals } = require('../../../utils/canonicalBusinessTaxonomy');
+const { evaluateReplenishmentAdmission } = require('../../../utils/replenishmentVertical');
 const { parseGeographyList } = require('./InvestigationProvenance');
 const {
   allowedCitiesFromGeographyLabel,
@@ -95,6 +97,11 @@ function segmentNeedles(segment) {
 
 function matchesSegment(record, segments) {
   if (!segments || !segments.length) return true;
+  // Concrete trade missions use the same evidence contract as replenishment.
+  // Substring matches such as HVAC software or search-query metadata are not fit.
+  if (serviceTradeMissionVerticals(segments).length) {
+    return evaluateReplenishmentAdmission(record, { missionSegments: segments }).admitted;
+  }
   const hay = [
     record.industry,
     record.vertical,
