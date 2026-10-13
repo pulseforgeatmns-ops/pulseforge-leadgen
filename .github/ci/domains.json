@@ -148,7 +148,10 @@
       "test/aoProspectRouting",
       "test/aoAdvisoryDebriefEvaluator.test.js",
       "test/anchorPhoneSetterPostgres.test.js",
-      "packages/max/workspace/tests/missionRouting.test.js"
+      "packages/max/workspace/tests/missionRouting.test.js",
+      "scripts/rolloutPreflight.js",
+      "test/rolloutPreflight",
+      "test/fixtures/rolloutPreflight"
     ],
     "walkthrough": [
       "lib/walkthrough",
