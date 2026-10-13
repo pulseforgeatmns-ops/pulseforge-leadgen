@@ -10,6 +10,8 @@ const {
   verificationDeliverabilityRank,
   attributionRank,
   isLikelyTypoDomain,
+  providerCandidateFromEnrichment,
+  contactResolutionProvenance,
   CONTACT_FINAL_STATE,
 } = require('../scripts/lib/babrunContactResolution');
 
@@ -106,6 +108,36 @@ describe('babrun contact resolution classification', () => {
   it('matches founder first name in local part', () => {
     assert.equal(isFounderLocalPartMatch('luis@venturalawncare.com', 'Luis Ventura'), true);
     assert.equal(isFounderLocalPartMatch('info@cchaulsjunk.com', 'Sirewl Cooper'), false);
+  });
+
+  it('binds provider-observed email only when the provider names the canonical founder', () => {
+    const observed = providerCandidateFromEnrichment(
+      { founder: 'Sebastian Thomas' },
+      { email: 'sebastian@ovopainting.com', contact: 'Sebastian Thomas', source: ['hunter'] }
+    );
+    assert.equal(observed.email, 'sebastian@ovopainting.com');
+    assert.equal(observed.discoveryMethod, 'hunter');
+    assert.equal(observed.founderAttribution, true);
+    assert.equal(providerCandidateFromEnrichment(
+      { founder: 'Sebastian Thomas' },
+      { email: 'other@ovopainting.com', contact: 'Other Person', source: ['hunter'] }
+    ), null);
+  });
+
+  it('records a newly observed verified provider source without erasing its prior audit label', () => {
+    const provenance = contactResolutionProvenance(
+      { email: { source: 'contact_resolution', original_source: 'contact_resolution' } },
+      {
+        discoveryMethod: 'hunter',
+        discoverySource: 'hunter',
+        verification: { verified: true, method: 'bouncer', status: 'valid' },
+      },
+      CONTACT_FINAL_STATE.VERIFIED_FOUNDER_EMAIL,
+      '2026-10-08T17:00:00.000Z'
+    );
+    assert.equal(provenance.email.source, 'hunter');
+    assert.equal(provenance.email.original_source, 'hunter');
+    assert.equal(provenance.email.prior_original_source, 'contact_resolution');
   });
 });
 

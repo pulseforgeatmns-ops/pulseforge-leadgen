@@ -14,9 +14,10 @@ const { addBusinessDays, todayISOInZone, distributeDueDates } = require('../util
 const { CRM_NEXT_TO_LEGACY } = require('./aoCrmTypes');
 
 /** Minimum assigned accounts visible in AO CRM "My Accounts" after a fill run. */
-const DEFAULT_MIN_ACCOUNTS_PER_AO = 10;
-const DEFAULT_TARGET_ACCOUNTS_PER_AO = 15;
+const DEFAULT_MIN_ACCOUNTS_PER_AO = 12;
+const DEFAULT_TARGET_ACCOUNTS_PER_AO = 20;
 const DEFAULT_TODAY_QUEUE_SIZE = 5;
+const DEFAULT_LONG_WAIT_DAYS = 30;
 
 /**
  * SPEC-250 Anchor allocation segments (by AO display name, case-insensitive).
@@ -79,7 +80,11 @@ async function countCrmVisibleAccounts({ clientId, aoUserId, db }) {
       AND p.assigned_ao_id = $2
       AND COALESCE(p.do_not_contact, false) = false
       AND COALESCE(p.prospect_motion, '') NOT IN ('SUPPRESS', 'EMAIL_LED')
-  `, [clientId, aoUserId]);
+      AND COALESCE(p.ao_current_status, '') NOT IN ('won', 'lost', 'not_a_fit', 'dead')
+      AND COALESCE(p.ao_paused, false) = false
+      AND COALESCE(p.ao_next_action, '') NOT IN ('no_action', 'disqualify')
+      AND (p.next_action_due_at IS NULL OR p.next_action_due_at <= NOW() + ($3 * INTERVAL '1 day'))
+  `, [clientId, aoUserId, DEFAULT_LONG_WAIT_DAYS]);
   return rows[0]?.n || 0;
 }
 
@@ -95,7 +100,7 @@ async function fetchActiveAos(clientId, db) {
   return rows.filter(row => !BULK_FILL_EXCLUDED_AO_NAMES.has(normalizeAoKey(row.name)));
 }
 
-async function fetchUnassignedCandidates({ clientId, limit, db }) {
+async function fetchUnassignedCandidates({ clientId, limit, db, preserveGovernedEmailInventory = true }) {
   const { rows } = await db.query(`
     SELECT
       p.*,
@@ -110,9 +115,24 @@ async function fetchUnassignedCandidates({ clientId, limit, db }) {
       AND COALESCE(p.do_not_contact, false) = false
       AND COALESCE(p.prospect_motion, '') NOT IN ('SUPPRESS', 'EMAIL_LED')
       AND COALESCE(p.icp_score, 0) >= 70
-    ORDER BY p.icp_score DESC NULLS LAST, p.created_at DESC
+      AND p.company_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM prospects owned
+        WHERE owned.client_id=p.client_id AND owned.company_id=p.company_id
+          AND owned.assigned_ao_id IS NOT NULL AND owned.id<>p.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM acquisition_outbound_items governed
+        WHERE governed.tenant_id=$1::text AND governed.company_id::text=p.company_id::text
+      )
+      AND ($3::boolean = false OR NOT (
+        COALESCE(p.email_verified, false) = true
+        AND lower(COALESCE(p.email_status, '')) IN ('valid', 'verified', 'role')
+      ))
+    ORDER BY (NULLIF(regexp_replace(COALESCE(p.phone, ''), '\\D', '', 'g'), '') IS NOT NULL) DESC,
+      p.icp_score DESC NULLS LAST, p.created_at DESC
     LIMIT $2
-  `, [clientId, limit]);
+  `, [clientId, limit, preserveGovernedEmailInventory]);
   return rows.map(row => ({
     prospect: row,
     company: row.company_id ? {
@@ -124,8 +144,8 @@ async function fetchUnassignedCandidates({ clientId, limit, db }) {
   }));
 }
 
-function initCrmFieldsForAssignment({ rankAmongNew, today, timeZone = 'America/New_York' }) {
-  const inTodayQueue = rankAmongNew < DEFAULT_TODAY_QUEUE_SIZE;
+function initCrmFieldsForAssignment({ rankAmongNew, today, motion = null, timeZone = 'America/New_York' }) {
+  const inTodayQueue = rankAmongNew < DEFAULT_TODAY_QUEUE_SIZE && motion !== 'NURTURE';
   const dueDates = distributeDueDates(DEFAULT_TODAY_QUEUE_SIZE, { today, timeZone });
   if (inTodayQueue) {
     const due = dueDates[rankAmongNew] || today;
@@ -192,16 +212,59 @@ async function fillActiveAoAccounts({
   minPerAo = DEFAULT_MIN_ACCOUNTS_PER_AO,
   targetPerAo = DEFAULT_TARGET_ACCOUNTS_PER_AO,
   maxCandidateScan = 400,
+  targetAoNames = null,
+  preserveGovernedEmailInventory = true,
+  _inTransaction = false,
+  _schemaReady = false,
 } = {}) {
   if (!clientId) throw new Error('clientId required');
-  await ensureAoProspectRoutingSchema(db);
+  if (!_schemaReady) await ensureAoProspectRoutingSchema(db);
 
-  const aos = await fetchActiveAos(clientId, db);
+  // One fill transaction per tenant prevents overlapping control ticks from
+  // selecting the same unassigned company before either assignment commits.
+  if (!dryRun && !_inTransaction && typeof db.connect === 'function') {
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtext($1))',
+        [`ao-account-fill:${clientId}`]
+      );
+      const result = await fillActiveAoAccounts({
+        clientId,
+        db: client,
+        dryRun,
+        minPerAo,
+        targetPerAo,
+        maxCandidateScan,
+        targetAoNames,
+        preserveGovernedEmailInventory,
+        _inTransaction: true,
+        _schemaReady: true,
+      });
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  let aos = await fetchActiveAos(clientId, db);
+  if (Array.isArray(targetAoNames) && targetAoNames.length) {
+    const wanted = new Set(targetAoNames.map(normalizeAoKey));
+    aos = aos.filter(ao => wanted.has(normalizeAoKey(ao.name)));
+  }
   const today = todayISOInZone();
   const gaps = [];
+  const forceSelectedAos = Array.isArray(targetAoNames) && targetAoNames.length > 0;
   for (const ao of aos) {
     const current = await countCrmVisibleAccounts({ clientId, aoUserId: ao.id, db });
-    const need = Math.max(0, targetPerAo - current);
+    const need = current < minPerAo || forceSelectedAos
+      ? Math.max(0, targetPerAo - current)
+      : 0;
     gaps.push({ ao, current, need });
   }
 
@@ -214,18 +277,21 @@ async function fillActiveAoAccounts({
     clientId,
     limit: Math.max(maxCandidateScan, totalNeed * 3),
     db,
+    preserveGovernedEmailInventory,
   });
 
   const assigned = [];
   const skipped = [];
   const reservedProspectIds = new Set();
+  const reservedCompanyIds = new Set();
 
   for (const gap of gaps) {
     if (gap.need <= 0) continue;
     const { ao } = gap;
     let rank = 0;
     const ranked = candidates
-      .filter(({ prospect }) => !reservedProspectIds.has(prospect.id))
+      .filter(({ prospect }) => !reservedProspectIds.has(prospect.id)
+        && !reservedCompanyIds.has(String(prospect.company_id || '')))
       .map(bundle => ({
         ...bundle,
         aoScore: scoreProspectForAo({ prospect: bundle.prospect, company: bundle.company, aoName: ao.name }),
@@ -261,7 +327,11 @@ async function fillActiveAoAccounts({
       routing.recommended_ao_id = ao.id;
       routing.recommended_ao_name = ao.name;
 
-      const crmInit = initCrmFieldsForAssignment({ rankAmongNew: rank, today });
+      const crmInit = initCrmFieldsForAssignment({
+        rankAmongNew: rank,
+        today,
+        motion: routing.recommended_motion,
+      });
       rank += 1;
 
       if (dryRun) {
@@ -289,6 +359,7 @@ async function fillActiveAoAccounts({
         assigned.push(result);
       }
       reservedProspectIds.add(prospect.id);
+      reservedCompanyIds.add(String(prospect.company_id || ''));
       filled += 1;
     }
 
@@ -367,6 +438,7 @@ module.exports = {
   DEFAULT_MIN_ACCOUNTS_PER_AO,
   DEFAULT_TARGET_ACCOUNTS_PER_AO,
   DEFAULT_TODAY_QUEUE_SIZE,
+  DEFAULT_LONG_WAIT_DAYS,
   AO_SEGMENT_AFFINITY,
   BULK_FILL_EXCLUDED_AO_NAMES,
   segmentAffinityForAo,

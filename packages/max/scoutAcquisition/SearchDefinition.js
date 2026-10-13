@@ -206,6 +206,9 @@ function buildAcquisitionSearchDefinition(input = {}) {
   const desiredSignals = Array.isArray(target.desiredSignals)
     ? target.desiredSignals.map(asText).filter(Boolean)
     : [];
+  const discoveryGeneration = Number.isInteger(Number(target.discoveryGeneration))
+    ? Math.max(0, Number(target.discoveryGeneration))
+    : 0;
   const rawAim = input.aim || business.aim || null;
   const aim = isRuntimeAim(rawAim) ? rawAim : null;
   const populationStatement = buildPopulationStatement({
@@ -232,6 +235,7 @@ function buildAcquisitionSearchDefinition(input = {}) {
     companyCriteria: companyCriteriaFor(businessNeed, populationStatement),
     exclusions,
     desiredSignals,
+    discoveryGeneration,
     createdFromDelegationId: asText(delegation.id || input.createdFromDelegationId),
     populationStatement,
     profileId: profile ? profile.id : null,
@@ -302,6 +306,9 @@ function buildSearchDefinitionFromMarketDefinition(marketDefinition = {}, opts =
   const desiredSignals = Array.isArray(target.desiredSignals)
     ? target.desiredSignals.map(asText).filter(Boolean)
     : [];
+  const discoveryGeneration = Number.isInteger(Number(target.discoveryGeneration))
+    ? Math.max(0, Number(target.discoveryGeneration))
+    : 0;
   const rawAim = opts.aim || business.aim || null;
   const aim = isRuntimeAim(rawAim) ? rawAim : null;
   const populationStatement = buildPopulationStatement({
@@ -328,6 +335,7 @@ function buildSearchDefinitionFromMarketDefinition(marketDefinition = {}, opts =
     companyCriteria: companyCriteriaFor(businessNeed, populationStatement),
     exclusions,
     desiredSignals,
+    discoveryGeneration,
     createdFromDelegationId: asText(delegation.id || opts.createdFromDelegationId),
     populationStatement,
     profileId: profile ? profile.id : null,
