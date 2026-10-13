@@ -266,6 +266,10 @@ async function selectInventoryRefillEntries({ cleanRows = [], store, adapters, p
         || (!entry.companyId ? 'missing_company' : null)
         || (!entry.prospectId ? 'missing_contact' : null)
         || existingReason(entry, [...existingItems, ...selected]);
+      // This fallback only has Anchor copy. Substral must use its reviewed Paige
+      // candidates through selectRefillEntries until tenant-specific refill exists.
+      if (!reason && [program?.tenant_id, program?.policy?.tenantId, crm?.client_id, crm?.tenant_id]
+        .some(id => String(id).trim() === '17')) reason = 'tenant_specific_paige_copy_required';
       if (!reason) {
         entry.message = buildFirstTouchCopy(row, crm, prepared?.sender);
         reason = candidateReason(entry, crm, entry.message, program?.policy)
