@@ -4,6 +4,16 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ## [Unreleased]
 
+### Added
+
+- [SPEC-PF-ACCEL-001](docs/specs/SPEC-PF-ACCEL-001_Rollout_Preflight.md):
+  default-dry-run rollout preflight for PR897 schema/index/constraint/trigger
+  prerequisites and optional local PR899 token-length diagnostics. Uses an
+  owned, bounded read-only connection and fixed metadata SELECTs; never starts
+  the app, contacts providers, prints secrets or certifies deployment readiness.
+  Includes failure/timeout/redaction tests, a non-skipping PostgreSQL CI gate,
+  and an approval-gated operator plan.
+
 ### Fixed
 
 - Max merge-readiness regressions against existing contracts: restore the

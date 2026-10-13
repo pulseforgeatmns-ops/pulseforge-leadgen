@@ -199,6 +199,8 @@ jobs:
           stage-file: ${{ env.CI_STAGE_FILE }}
       - run: npm ci
       - run: npm run test:postgres:harness
+      - name: Rollout preflight unit and non-skipping PostgreSQL gate
+        run: npm run test:rollout-preflight && npm run test:rollout-preflight:postgres
       - run: npm run test:revenue:postgres
       - run: npm run test:revenue:phase16b
       - run: npm run test:anchor-phone-setter:postgres
