@@ -64,7 +64,7 @@ const { isSmallBusinessOwnerSegment } = require('../utils/canonicalBusinessTaxon
 function preparationGrantActive(store, program) {
   if (program?.mode !== 'active') return false;
   const tid = String(store?.tenantId ?? program?.tenant_id ?? '').trim();
-  if (!tid || !['10', '13'].includes(tid)) return true;
+  if (!tid || !['1', '10', '13', '17'].includes(tid)) return true;
   return governedOutboundPreparationEnabledForTenant(tid);
 }
 
@@ -260,6 +260,7 @@ function sourceScope(source) {
       payload.commercialCapability,
     ),
     businessType: firstPresent(market.businessType, payload.businessType),
+    offerId: firstPresent(offer.id, offer.offerId, payload.offerId),
   };
 }
 
@@ -304,8 +305,12 @@ function prospectMissionVertical(row, scope) {
   return vertical;
 }
 
-function missionCandidateReason(row, scope) {
+function missionCandidateReason(row, scope, tenantId = null) {
   if (!isProspectServiceAreaConfirmed(row, scope)) return 'service_area_not_confirmed';
+  if (String(tenantId || row.client_id || '') === '1'
+    && scope.offerId === require('../utils/pulseforgeCashflowOffer').PULSEFORGE_CASHFLOW_OFFER_ID) {
+    return require('../utils/pulseforgeCashflowOffer').pulseforgeAssessmentReason(row.website_opportunity_payload);
+  }
   const vertical = prospectMissionVertical(row, scope);
   const aliases = segmentAliases(scope);
   if (aliases.size && (!vertical || !aliases.has(vertical))) return 'mission_segment_mismatch';
@@ -326,11 +331,27 @@ async function loadCleanInventory(pool, store, source, clientId, policy = {}) {
     throw Object.assign(new Error('governed_outbound_tenant_required'), { code: 'governed_outbound_tenant_required' });
   }
   const scope = sourceScope(source);
+  const websiteAssessmentSelect = cid === 1
+    ? `, woa.id AS website_opportunity_assessment_id,
+      woa.payload AS website_opportunity_payload,
+      woa.opportunity_score AS website_opportunity_score,
+      woa.recommended_action AS website_recommended_action`
+    : '';
+  const websiteAssessmentJoin = cid === 1
+    ? `LEFT JOIN LATERAL (
+        SELECT a.* FROM website_opportunity_assessments a
+        WHERE a.client_id=p.client_id
+          AND (a.prospect_id=p.id OR a.domain=c.domain)
+        ORDER BY (a.prospect_id=p.id) DESC, a.updated_at DESC
+        LIMIT 1
+      ) woa ON true`
+    : '';
   const { rows } = await pool.query(`
     SELECT p.*, c.name AS company_name, c.domain AS company_domain, c.website AS company_website,
-      c.industry AS industry, c.location AS company_location
+      c.industry AS industry, c.location AS company_location${websiteAssessmentSelect}
     FROM prospects p
     JOIN companies c ON c.id=p.company_id AND c.client_id=p.client_id
+    ${websiteAssessmentJoin}
     WHERE p.client_id=$1
       AND p.email IS NOT NULL
       AND COALESCE(p.do_not_contact,false)=false
@@ -355,7 +376,7 @@ async function loadCleanInventory(pool, store, source, clientId, policy = {}) {
     const scopedRow = knowledgeRow
       ? { ...row, knowledge_content: knowledgeRow.knowledge_content }
       : row;
-    const missionReason = qualifiedKnowledge.has(String(row.id)) ? null : missionCandidateReason(scopedRow, scope);
+    const missionReason = qualifiedKnowledge.has(String(row.id)) ? null : missionCandidateReason(scopedRow, scope, cid);
     const emailReason = missionReason ? null : governedContactReason(row, policy);
     const candidate = {
       candidateId: String(row.id),
@@ -366,6 +387,10 @@ async function loadCleanInventory(pool, store, source, clientId, policy = {}) {
       website: row.company_website,
       email: String(row.email || '').toLowerCase(),
       contactClassification: contactEvidence(row).classification,
+      assessmentId: row.website_opportunity_assessment_id || null,
+      assessmentPayload: row.website_opportunity_payload || null,
+      opportunityScore: row.website_opportunity_score ?? null,
+      recommendedAction: row.website_recommended_action || null,
     };
     const ownership = missionReason || emailReason
       ? null
@@ -374,7 +399,7 @@ async function loadCleanInventory(pool, store, source, clientId, policy = {}) {
       ? null
       : await store.suppression(candidate, '__max_inventory_buffer__');
     const eligibility = evaluateColdOutboundEligibility({
-      businessFit: missionReason === 'mission_segment_mismatch' ? 'not_qualified' : 'qualified',
+      businessFit: missionReason ? 'not_qualified' : 'qualified',
       geography: missionReason === 'service_area_not_confirmed' ? 'out_of_scope' : 'in_scope',
       contactVerified: !emailReason,
       dnc: row.do_not_contact === true,
@@ -386,7 +411,9 @@ async function loadCleanInventory(pool, store, source, clientId, policy = {}) {
     const companyNameKey = require('../utils/companyIdentityName').companyIdentityNameKey(candidate.company);
     const duplicate = eligibility.eligible && (seenCompanies.has(candidate.companyId) || seenEmails.has(candidate.email)
       || (companyNameKey && seenCompanyNames.has(companyNameKey)));
-    const blocked = duplicate ? 'duplicate_company_or_email' : (eligibility.eligible ? null : eligibility.reason);
+    const blocked = cid === 1 && missionReason
+      ? missionReason
+      : (duplicate ? 'duplicate_company_or_email' : (eligibility.eligible ? null : eligibility.reason));
     if (blocked) {
       excluded.push({ prospectId: candidate.prospectId, reason: blocked });
       bump(blocked);
@@ -418,6 +445,8 @@ function scoutInput(program, source, plan, tenantContext = null, discoveryGenera
   const segments = scope.eligibleSubsegments?.length ? scope.eligibleSubsegments : (segment ? [segment] : []);
   const commercialCapability = firstPresent(scope.commercialCapability);
   const businessType = firstPresent(scope.businessType, scope.industry, segment);
+  const pulseforgeCashflow = scope.offerId
+    === require('../utils/pulseforgeCashflowOffer').PULSEFORGE_CASHFLOW_OFFER_ID;
   return {
     authorizedTenantId: tenantId,
     tenantId,
@@ -440,7 +469,9 @@ function scoutInput(program, source, plan, tenantContext = null, discoveryGenera
       geographyScope: scope.scope || null,
       segments,
       businessType,
-      desiredSignals: ['decision_maker', 'service_gap', 'portfolio_growth', 'turnover_support'],
+      desiredSignals: pulseforgeCashflow
+        ? ['live_website', 'contact_or_booking_path', 'mobile_usability', 'observable_website_defect']
+        : ['decision_maker', 'service_gap', 'portfolio_growth', 'turnover_support'],
       discoveryGeneration: Math.max(0, Number(discoveryGeneration || 0)),
     },
     operatorDirection: 'Maintain verified inventory ahead of governed outbound demand. Do not contact prospects.',
@@ -609,6 +640,33 @@ async function persistDiscoveredCompanies(pool, store, {
     if (!admission.admitted) {
       reject(admission.reason);
       continue;
+    }
+
+    if (tenant.tenantId === '1'
+      && scope.offerId === require('../utils/pulseforgeCashflowOffer').PULSEFORGE_CASHFLOW_OFFER_ID) {
+      try {
+        const assessed = await require('./webDesignScout').assessDiscoveredBusiness({
+          client_id: tenant.clientId,
+          mission_id: scoutContext.program?.source_mission_id || null,
+          cohort_tag: 'pulseforge_cashflow_repair_sprint_v1',
+          company: name,
+          domain,
+          website,
+          industry: admission.vertical,
+          location: company.location,
+          email: company.email,
+          phone: company.phone,
+          skipPuppeteer: true,
+        }, { pool, skipPuppeteer: true });
+        const reason = require('../utils/pulseforgeCashflowOffer').pulseforgeAssessmentReason(assessed.assessment);
+        if (reason) {
+          reject(reason);
+          continue;
+        }
+      } catch (_error) {
+        reject('website_assessment_failed');
+        continue;
+      }
     }
 
     counters.fit += 1;

@@ -16,7 +16,7 @@ function executionClockEnabled(options = {}) {
   if (process.env.GOVERNED_OUTBOUND_EXECUTION_CLOCK_ENABLED === 'false') return false;
   if (process.env.GOVERNED_OUTBOUND_EXECUTION_CLOCK_ENABLED === 'true') return true;
   if (process.env.ANCHOR_GOVERNED_OUTBOUND_SCHEDULER_ENABLED === 'true') return true;
-  // Mailbox tenants (13, 17) have no Anchor-only in-process scheduler; arm the
+  // Mailbox tenants (1, 13, 17) have no Anchor-only in-process scheduler; arm the
   // tick clock whenever live governed sending is enabled for a non-Anchor tenant.
   return parseGovernedOutboundTenantIds().some((tenantId) => tenantId !== '10'
     && governedOutboundEnabledForTenant(tenantId));

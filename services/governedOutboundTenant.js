@@ -1,6 +1,6 @@
 'use strict';
 
-const ALLOWED_GOVERNED_OUTBOUND_TENANTS = Object.freeze(['10', '13', '17']);
+const ALLOWED_GOVERNED_OUTBOUND_TENANTS = Object.freeze(['1', '10', '13', '17']);
 // Send/tick serialization. Distinct from the Max control-cycle lock so Scout
 // replenishment cannot block an eligible Emmett send.
 const GOVERNED_OUTBOUND_SEND_LOCK_NAMESPACE = 261018;
@@ -25,13 +25,15 @@ function createGovernedOutboundTenantContext(tenantId) {
     advisoryLockNamespace: GOVERNED_OUTBOUND_SEND_LOCK_NAMESPACE,
     controlLockNamespace: GOVERNED_OUTBOUND_CONTROL_LOCK_NAMESPACE,
     advisoryLockKey: clientId,
-    attentionTitle: tid === '13'
+    attentionTitle: tid === '1'
+      ? 'Pulseforge outbound needs attention'
+      : tid === '13'
       ? 'Babrun outbound needs attention'
       : tid === '17'
         ? 'Studio Substral outbound needs attention'
         : 'Anchor outbound needs attention',
     usesBrevoTransport: tid === '10',
-    usesTenantMailboxTransport: tid === '13' || tid === '17',
+    usesTenantMailboxTransport: tid === '1' || tid === '13' || tid === '17',
     requiresAoOwners: tid === '10',
     requiresLegacyEmailTelemetry: tid === '10',
   });
@@ -48,6 +50,10 @@ function governedOutboundEnabledForTenant(tenantId) {
   const tid = assertGovernedOutboundTenantId(tenantId);
   if (tid === '10') {
     return process.env.ANCHOR_GOVERNED_OUTBOUND_ENABLED === 'true';
+  }
+  if (tid === '1') {
+    return process.env.PULSEFORGE_GOVERNED_OUTBOUND_ENABLED === 'true'
+      || process.env.GOVERNED_OUTBOUND_TENANT_1_ENABLED === 'true';
   }
   if (tid === '13') {
     return process.env.BABRUN_GOVERNED_OUTBOUND_ENABLED === 'true'
@@ -71,6 +77,7 @@ function governedOutboundPreparationEnabledForTenant(tenantId, sendingEnabled = 
 
 function governedOutboundSendingDisabledForTenant(tenantId) {
   const tid = assertGovernedOutboundTenantId(tenantId);
+  if (tid === '1') return process.env.PULSEFORGE_GOVERNED_OUTBOUND_ENABLED === 'false';
   if (tid === '10') return process.env.ANCHOR_GOVERNED_OUTBOUND_ENABLED === 'false';
   if (tid === '13') return process.env.BABRUN_GOVERNED_OUTBOUND_ENABLED === 'false';
   if (tid === '17') return process.env.SUBSTRAL_GOVERNED_OUTBOUND_ENABLED === 'false';
