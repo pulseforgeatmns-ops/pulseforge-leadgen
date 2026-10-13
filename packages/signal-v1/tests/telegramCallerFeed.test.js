@@ -262,13 +262,14 @@ describe('SIGNAL-V1-007 telegram empirical caller feed', () => {
   });
 
   it('feed schema compatible with LiveCallerCollector and rejects procedural rows', async () => {
-    const fetchFn = async url => {
+    const fetchFn = async (url, options = {}) => {
       if (url.includes('/health')) {
         return {
           ok: true,
           json: async () => ({ connected: true, credentialsConfigured: true, sources: [] }),
         };
       }
+      assert.equal(options.headers?.authorization, 'Bearer OPERATIONAL-TEST-ONLY-AUTH-FIXTURE-000');
       return {
         ok: true,
         json: async () => ({
@@ -293,6 +294,7 @@ describe('SIGNAL-V1-007 telegram empirical caller feed', () => {
     };
     const collector = createOperatorJsonFeedCollector({
       feedUrl: 'http://feed.test/feed',
+      feedToken: 'OPERATIONAL-TEST-ONLY-AUTH-FIXTURE-000',
       fetchFn,
     });
     const rows = await collector.poll();
