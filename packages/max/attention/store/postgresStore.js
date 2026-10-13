@@ -1,6 +1,8 @@
 'use strict';
 
 const { ATTENTION_STATUS, UNRESOLVED_STATUSES } = require('../types');
+const { DEFAULT_LEASE_MS, validateLeaseMs, requireClaimToken, claimLost } = require('../claimPolicy');
+const { withAttentionTransaction } = require('../transaction');
 
 function mapRow(row) {
   if (!row) return null;
@@ -32,9 +34,10 @@ function mapRow(row) {
 }
 
 class PostgresAttentionStore {
-  constructor(db, { clientId } = {}) {
+  constructor(db, { clientId, leaseMs = DEFAULT_LEASE_MS } = {}) {
     this.db = db;
     this.clientId = clientId;
+    this.leaseMs = validateLeaseMs(leaseMs);
   }
 
   async init() {
@@ -161,52 +164,65 @@ class PostgresAttentionStore {
   }
 
   async claimDueItems({ clientId, now = new Date(), limit = 20, claimToken }) {
-    const client = await this.db.connect();
-    try {
-      await client.query('BEGIN');
+    requireClaimToken(claimToken);
+    return withAttentionTransaction(this.db, async client => {
       const due = await client.query(
         `SELECT id FROM max_attention_items
          WHERE client_id = $1
            AND status = ANY($2::text[])
            AND next_review_at IS NOT NULL
            AND next_review_at <= $3::timestamptz
-           AND claim_token IS NULL
+           AND (claim_token IS NULL OR claimed_at IS NULL
+             OR claimed_at <= clock_timestamp() - $5::double precision * interval '1 millisecond')
          ORDER BY next_review_at
          LIMIT $4
          FOR UPDATE SKIP LOCKED`,
-        [clientId, UNRESOLVED_STATUSES, now.toISOString(), limit]
+        [clientId, UNRESOLVED_STATUSES, now.toISOString(), limit, this.leaseMs]
       );
       const claimed = [];
       for (const row of due.rows) {
         const updated = await client.query(
           `UPDATE max_attention_items
            SET claim_token = $2,
-               claimed_at = NOW(),
+               claimed_at = clock_timestamp(),
                status = CASE WHEN next_review_at < $3::timestamptz THEN 'OVERDUE' ELSE status END
-           WHERE id = $1 AND claim_token IS NULL
+           WHERE id = $1
            RETURNING *`,
           [row.id, claimToken, now.toISOString()]
         );
         if (updated.rows[0]) claimed.push(mapRow(updated.rows[0]));
       }
-      await client.query('COMMIT');
       return claimed;
-    } catch (err) {
-      await client.query('ROLLBACK').catch(() => {});
-      throw err;
-    } finally {
-      client.release();
-    }
+    });
+  }
+
+  // The callback must use this connection for every effect. Never call init() here:
+  // migration BEGIN/COMMIT statements would break the transaction fence.
+  async withClaim(id, { claimToken, clientId }, callback) {
+    requireClaimToken(claimToken);
+    return withAttentionTransaction(this.db, async client => {
+      const { rows } = await client.query(
+        `SELECT * FROM max_attention_items
+         WHERE id = $1 AND claim_token = $2 AND client_id = $3
+           AND claimed_at > clock_timestamp() - $4::double precision * interval '1 millisecond'
+         FOR UPDATE`, [id, claimToken, clientId, this.leaseMs]
+      );
+      if (!rows[0]) throw claimLost();
+      const scoped = new PostgresAttentionStore(client, { clientId, leaseMs: this.leaseMs });
+      const result = await callback({ db: client, attentionStore: scoped, item: mapRow(rows[0]) });
+      return result;
+    }, { bounded: true });
   }
 
   async releaseClaim(id, { claimToken, patch = {} } = {}) {
+    requireClaimToken(claimToken);
     const failures = patch.execution_failures_increment ? 1 : 0;
     const fields = [
       'claim_token = NULL',
       'claimed_at = NULL',
       `execution_failures = execution_failures + ${failures}`,
     ];
-    const params = [id, claimToken];
+    const params = [id, claimToken, this.leaseMs];
     const add = (column, value, { allowNull = false } = {}) => {
       if (value === undefined && !allowNull) return;
       if (value === undefined) return;
@@ -225,6 +241,7 @@ class PostgresAttentionStore {
     const { rows } = await this.db.query(
       `UPDATE max_attention_items SET ${fields.join(', ')}
        WHERE id = $1 AND claim_token = $2
+         AND claimed_at > clock_timestamp() - $3::double precision * interval '1 millisecond'
        RETURNING *`,
       params
     );
@@ -232,25 +249,58 @@ class PostgresAttentionStore {
   }
 
   async recordSchedulerRun(run) {
-    await this.db.query(
+    if (run.status !== 'running') return this.finishSchedulerRun(run);
+    const { rows } = await this.db.query(
       `INSERT INTO max_attention_scheduler_runs (
-        id, client_id, started_at, completed_at, status,
-        items_claimed, items_evaluated, items_failed, error_message, telemetry
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-      [
-        run.id,
-        run.client_id ?? null,
-        run.started_at,
-        run.completed_at || null,
-        run.status,
-        run.items_claimed || 0,
-        run.items_evaluated || 0,
-        run.items_failed || 0,
-        run.error_message || null,
-        JSON.stringify(run.telemetry || {}),
-      ]
+        id, client_id, started_at, status, items_claimed, items_evaluated, items_failed, telemetry
+      ) VALUES ($1,$2,$3,'running',0,0,0,$4)
+      ON CONFLICT (id) DO NOTHING RETURNING *`,
+      [run.id, run.client_id ?? null, run.started_at, JSON.stringify(run.telemetry || {})]
     );
-    return run;
+    if (rows[0]) return rows[0];
+    return this._readSchedulerRun(run, this.db);
+  }
+
+  async _readSchedulerRun(run, db) {
+    const { rows } = await db.query(
+      `SELECT * FROM max_attention_scheduler_runs
+       WHERE id = $1 AND client_id IS NOT DISTINCT FROM $2 AND started_at = $3::timestamptz`,
+      [run.id, run.client_id ?? null, run.started_at]
+    );
+    if (!rows[0]) throw new Error('Scheduler run identity does not match or has not started');
+    return rows[0];
+  }
+
+  async finishSchedulerRun(run) {
+    if (!['completed', 'failed'].includes(run.status)) throw new Error('Terminal scheduler status required');
+    return withAttentionTransaction(this.db, async client => {
+      const { rows } = await client.query(
+        `UPDATE max_attention_scheduler_runs SET
+           completed_at = $4, status = $5, items_claimed = $6, items_evaluated = $7,
+           items_failed = $8, error_message = $9, telemetry = $10
+         WHERE id = $1 AND client_id IS NOT DISTINCT FROM $2 AND started_at = $3::timestamptz
+           AND status = 'running'
+         RETURNING *`,
+        [run.id, run.client_id ?? null, run.started_at, run.completed_at, run.status,
+          run.items_claimed || 0, run.items_evaluated || 0, run.items_failed || 0,
+          run.error_message || null, JSON.stringify(run.telemetry || {})]
+      );
+      const saved = rows[0] || await this._readSchedulerRun(run, client);
+      // Only the first terminal transition updates the heartbeat. Atomic arithmetic
+      // avoids lost increments between concurrent failed cycles.
+      if (rows[0]) {
+        await client.query(
+          `UPDATE max_attention_heartbeats SET
+             last_successful_cycle_at = CASE WHEN $2 = 'completed' THEN $3::timestamptz
+               ELSE last_successful_cycle_at END,
+             last_run_id = $1,
+             consecutive_failures = CASE WHEN $2 = 'failed' THEN consecutive_failures + 1 ELSE 0 END,
+             updated_at = clock_timestamp()
+           WHERE id = 'global'`, [run.id, run.status, run.completed_at]
+        );
+      }
+      return saved;
+    });
   }
 
   async updateHeartbeat(patch) {
