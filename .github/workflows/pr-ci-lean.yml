@@ -305,6 +305,8 @@ jobs:
         run: node --test test/maxCiLogSummary.test.js
       - name: Durable expectation PostgreSQL gate (no skips)
         run: npm run test:max:expectations:postgres
+      - name: Verify attention lifecycle and crash recovery on real PostgreSQL
+        run: npm run test:max:attention:postgres
       - name: Run complete Max suite
         run: |
           set +e
