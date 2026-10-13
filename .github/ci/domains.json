@@ -93,6 +93,9 @@
       "packages/max/workspace/tests/paige"
     ],
     "anchor-outbound": [
+      "services/emailVerificationRecovery.js",
+      "test/emailVerificationRecovery",
+      "test/helpers/loadEmailVerificationRecovery.js",
       "services/governedOutbound",
       "services/anchorGovernedScheduler.js",
       "services/governedOutboundExecutionClock.js",
