@@ -291,6 +291,35 @@ class PostgresStateStore {
     `, [clientId]);
     return rows;
   }
+
+  async readExpectation(id, { clientId = this.clientId, prospectId, aoId } = {}) {
+    if (clientId == null || String(clientId) !== String(this.clientId)) return null;
+    const { rows } = await this.db.query(`
+      SELECT * FROM max_open_expectations
+      WHERE id = $1 AND client_id = $2
+        AND ($3::boolean = false OR prospect_id IS NOT DISTINCT FROM $4::uuid)
+        AND ($5::boolean = false OR ao_id IS NOT DISTINCT FROM $6::integer)
+    `, [id, this.clientId, prospectId !== undefined, prospectId ?? null, aoId !== undefined, aoId ?? null]);
+    return rows[0] || null;
+  }
+
+  async updateExpectation(id, patch = {}, { clientId = this.clientId, prospectId, aoId } = {}) {
+    // This contract only resolves expectations; it cannot change tenant, owner or evidence.
+    if (patch.status !== 'RESOLVED') throw new Error('Unsupported expectation update');
+    if (clientId == null || String(clientId) !== String(this.clientId)
+      || prospectId == null || aoId == null) return null;
+    const { rows } = await this.db.query(`
+      UPDATE max_open_expectations
+      SET status = 'RESOLVED',
+          resolved_at = COALESCE(resolved_at, NOW()),
+          updated_at = CASE WHEN status = 'RESOLVED' AND resolved_at IS NOT NULL
+            THEN updated_at ELSE NOW() END
+      WHERE id = $1 AND client_id = $2 AND prospect_id = $3 AND ao_id = $4
+        AND status IN ('OPEN', 'WAITING', 'OVERDUE', 'RESOLVED')
+      RETURNING *
+    `, [id, this.clientId, prospectId, aoId]);
+    return rows[0] || null;
+  }
 }
 
 module.exports = {

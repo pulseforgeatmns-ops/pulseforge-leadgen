@@ -1,6 +1,7 @@
 'use strict';
 
 const { ACTION_TYPE, VERIFICATION_STATUS, EXECUTION_STATUS } = require('./types');
+const { expectationScope, matchesExpectation } = require('./expectationScope');
 
 async function verifyActionIntent({ decisionStore, stateStore, intent, snapshot, options = {} }) {
   if (intent.execution_status === EXECUTION_STATUS.NO_ACTION_RECORDED) {
@@ -8,6 +9,9 @@ async function verifyActionIntent({ decisionStore, stateStore, intent, snapshot,
   }
   if (intent.execution_status === EXECUTION_STATUS.EXECUTION_BLOCKED) {
     return { ...intent, verification_status: VERIFICATION_STATUS.NOT_APPLICABLE };
+  }
+  if (intent.execution_status !== EXECUTION_STATUS.EXECUTED) {
+    return { ...intent, verification_status: VERIFICATION_STATUS.VERIFICATION_FAILED };
   }
 
   const actionType = intent.action_type;
@@ -33,13 +37,20 @@ async function verifyActionIntent({ decisionStore, stateStore, intent, snapshot,
 
   if (actionType === ACTION_TYPE.RESOLVE_EXPECTATION) {
     const expId = intent.output_payload?.expectation_id;
+    const scope = expectationScope(intent.client_id, snapshot);
     let exp = null;
-    if (expId && stateStore?.expectations) {
-      exp = stateStore.expectations.find(e => e.id === expId);
+    try {
+      if (scope && expId === snapshot.expectation.id && typeof stateStore?.readExpectation === 'function') {
+        exp = await stateStore.readExpectation(expId, scope);
+      }
+    } catch {
+      // A failed durable read is a failed verification, never evidence of success.
     }
-    if (exp && exp.status !== 'RESOLVED' && !options.skipExpectationRead) {
+    if (!matchesExpectation(exp, expId, scope) || exp.status !== 'RESOLVED'
+      || !exp.resolved_at || options.simulateVerificationFailure) {
       intent.verification_status = VERIFICATION_STATUS.VERIFICATION_FAILED;
       intent.execution_status = EXECUTION_STATUS.ACTION_VERIFICATION_FAILED;
+      intent.error_code = 'EXPECTATION_READBACK_FAILED';
       return intent;
     }
     intent.verification_status = VERIFICATION_STATUS.VERIFIED;
