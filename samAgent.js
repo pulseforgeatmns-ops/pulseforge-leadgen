@@ -103,7 +103,7 @@ async function sendSMS(prospectId, messageOverride = null) {
 }
 
 async function sendOpsAlertSMS(message, options = {}) {
-  const twilioClient = getTwilioClient();
+  const twilioClient = options.twilioClient || getTwilioClient();
   if (!twilioClient) return { sent: false, reason: 'twilio_not_configured' };
 
   const to = options.to || process.env.OPS_ALERT_PHONE;
@@ -111,9 +111,37 @@ async function sendOpsAlertSMS(message, options = {}) {
 
   try {
     const result = await twilioClient.messages.create({ body: message, from: FROM_NUMBER, to });
-    return { sent: true, messageSid: result.sid || null, to };
+    return {
+      sent: true,
+      messageSid: result.sid || null,
+      status: result.status || null,
+      acceptedAt: result.dateCreated ? new Date(result.dateCreated).toISOString() : new Date().toISOString(),
+      to,
+    };
   } catch (err) {
-    return { sent: false, reason: err.message, to };
+    return { sent: false, reason: err.message, code: err.code || null, status: err.status || null, to };
+  }
+}
+
+async function getOpsAlertSMSStatus(messageSid, options = {}) {
+  if (typeof messageSid !== 'string' || !/^SM[a-fA-F0-9]{32}$/.test(messageSid)) {
+    return { found: false, reason: 'invalid_message_sid' };
+  }
+  const twilioClient = options.twilioClient || getTwilioClient();
+  if (!twilioClient) return { found: false, reason: 'twilio_not_configured' };
+  try {
+    const result = await twilioClient.messages(messageSid).fetch();
+    return {
+      found: true,
+      messageSid: result.sid || messageSid,
+      status: result.status || null,
+      errorCode: result.errorCode || null,
+      errorMessage: result.errorMessage || null,
+      sentAt: result.dateSent ? new Date(result.dateSent).toISOString() : null,
+      updatedAt: result.dateUpdated ? new Date(result.dateUpdated).toISOString() : null,
+    };
+  } catch (err) {
+    return { found: false, reason: err.message, code: err.code || null, status: err.status || null };
   }
 }
 
@@ -614,7 +642,7 @@ async function run() {
   console.log(`\nSam complete — ${sent} SMS sent.`);
 }
 
-module.exports = { sendSMS, sendOpsAlertSMS, run };
+module.exports = { sendSMS, sendOpsAlertSMS, getOpsAlertSMSStatus, run };
 
 if (require.main === module) {
   run().catch(err => {
