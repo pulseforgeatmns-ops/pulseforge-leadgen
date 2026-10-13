@@ -147,42 +147,17 @@ async function discoverGovernedInventory(mission, opts = {}) {
   );
   if (!inventory.clean.length) return null;
   if (tenantId === '1') {
-    const fitCandidates = inventory.clean.map(row => {
-      const evidence = require('../utils/pulseforgeCashflowOffer')
-        .resolvePulseforgeRepairEvidence({ assessmentPayload: row.assessmentPayload, assessmentId: row.assessmentId });
-      return {
-        id: row.prospectId,
-        prospectId: row.prospectId,
-        companyId: row.companyId,
-        name: row.company,
-        website: row.website || row.domain,
-        location: 'United States',
-        industry: 'small_business_owner',
-        assessmentId: row.assessmentId,
-        assessmentPayload: row.assessmentPayload,
-        specificWebsiteIssue: evidence?.observation || null,
-        opportunityScore: row.opportunityScore,
-        readinessState: READINESS_STATES.UNKNOWN,
-        buyerReadiness: 'unknown',
-        signals: [],
-        evidenceRefs: evidence ? [{
-          id: String(evidence.finding.id || evidence.finding.ref || `${row.assessmentId}_finding`),
-          entityId: row.prospectId,
-          source: row.website || row.domain,
-          label: evidence.finding.summary,
-          observedAt: evidence.finding.observed_at || null,
-          provenance: {
-            kind: 'website_opportunity_assessment',
-            assessmentId: row.assessmentId,
-            evidenceClass: evidence.finding.evidence_class,
-          },
-        }] : [],
-        unknowns: ['Buyer intent, budget and willingness to proceed are unknown.'],
-      };
-    });
+    const fitCandidates = inventory.clean.map(row => ({
+      id: row.prospectId, prospectId: row.prospectId, companyId: row.companyId,
+      name: row.company, website: row.website || row.domain, email: row.email,
+      location: row.location, industry: row.industry, vertical: row.vertical,
+      readinessState: READINESS_STATES.UNKNOWN, buyerReadiness: 'unknown', signals: [],
+      evidenceRefs: [],
+      unknowns: ['Buyer intent, private follow-up workflow, budget and willingness to proceed are unknown.'],
+    }));
     return { payload: { fitCandidates, qualifiedCount: fitCandidates.length, candidateUniverse: fitCandidates,
-      candidateCount: fitCandidates.length, discoveryStatus: 'complete', source: 'pulseforge_website_repair_inventory',
-      unknowns: ['Observed website defects do not establish buyer intent.'] } };
+      candidateCount: fitCandidates.length, discoveryStatus: 'complete', source: 'pulseforge_review_inventory',
+      unknowns: ['Business fit does not establish a defect, revenue loss or buyer intent.'] } };
   }
   const ids = inventory.clean.map(row => row.prospectId);
   const { rows } = await opts.pool.query(`SELECT p.id,p.company_id,p.vertical,p.service_area_match,

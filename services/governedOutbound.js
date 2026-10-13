@@ -53,6 +53,10 @@ function service({
       || source.mission.planCancelled || /cancel/i.test(String(source.mission.status || ''))) fail('approved_source_mission_required');
     if (require('./governedOutboundTenant').createGovernedOutboundTenantContext(p.tenantId).usesTenantMailboxTransport
       && source.mission.stage !== 'ready') fail('ready_source_mission_required');
+    if (String(p.tenantId) === '1') {
+      const reason = require('../utils/pulseforgeCashflowOffer').pulseforgeMissionReason(source.mission);
+      if (reason) fail(reason);
+    }
     const scopeHash = hash(missionScope(source.mission));
     const reviewHash = hash({ policy: p, scopeHash });
     if (input.reviewHash !== reviewHash) return { reviewRequired: true, reviewHash, policy: p, scopeHash };
@@ -66,6 +70,10 @@ function service({
     const source = await adapters.loadMission(program.source_mission_id);
     if (!source?.mission || source.mission.planCancelled || /cancel/i.test(source.mission.status)
       || hash(missionScope(source.mission)) !== program.scope_hash) fail('source_scope_changed');
+    if (String(resolvedTenantId) === '1') {
+      const reason = require('../utils/pulseforgeCashflowOffer').pulseforgeMissionReason(source.mission);
+      if (reason) fail(reason);
+    }
     await adapters.validateTenant(program);
     return source;
   }
@@ -161,6 +169,11 @@ function service({
     if (program?.id !== id) fail('program_not_found');
     if (mode === 'active') {
       if (reviewHash !== program.policy_hash) fail('policy_review_required');
+      if (resolvedTenantId === '1') {
+        const source = await adapters.loadMission(program.source_mission_id);
+        const reason = require('../utils/pulseforgeCashflowOffer').pulseforgeMissionReason(source?.mission);
+        if (reason) fail(reason);
+      }
       if (windowReason(program.policy, now(), false) === 'authorization_expired') fail('authorization_expired');
     }
     await store.mode(program, mode, String(actor.id));
