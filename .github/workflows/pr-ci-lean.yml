@@ -313,7 +313,7 @@ jobs:
               }
             }
             console.error([...new Set(interesting)].slice(-500).join('\n'));
-            NODE
+          NODE
             exit 1
           fi
 
