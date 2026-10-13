@@ -136,7 +136,7 @@ async function discoverKnowledgeInventory(mission, opts = {}) {
 // contacts Scout has already qualified. Buyer readiness remains unknown.
 async function discoverGovernedInventory(mission, opts = {}) {
   const tenantId = String(mission.tenantId || mission.clientId || '');
-  if (!opts.pool || !opts.governedProgram || !['10', '13'].includes(tenantId)
+  if (!opts.pool || !opts.governedProgram || !['1', '10', '13', '17'].includes(tenantId)
     || mission.orchestrationMissionId !== opts.governedProgram.source_mission_id) return null;
   const program = opts.governedProgram;
   const { hash, missionScope } = require('../packages/acquisition-mission/DailyOutboundPolicy');
@@ -146,6 +146,44 @@ async function discoverGovernedInventory(mission, opts = {}) {
     opts.pool, store, mission, Number(tenantId), program.policy
   );
   if (!inventory.clean.length) return null;
+  if (tenantId === '1') {
+    const fitCandidates = inventory.clean.map(row => {
+      const evidence = require('../utils/pulseforgeCashflowOffer')
+        .resolvePulseforgeRepairEvidence({ assessmentPayload: row.assessmentPayload, assessmentId: row.assessmentId });
+      return {
+        id: row.prospectId,
+        prospectId: row.prospectId,
+        companyId: row.companyId,
+        name: row.company,
+        website: row.website || row.domain,
+        location: 'United States',
+        industry: 'small_business_owner',
+        assessmentId: row.assessmentId,
+        assessmentPayload: row.assessmentPayload,
+        specificWebsiteIssue: evidence?.observation || null,
+        opportunityScore: row.opportunityScore,
+        readinessState: READINESS_STATES.UNKNOWN,
+        buyerReadiness: 'unknown',
+        signals: [],
+        evidenceRefs: evidence ? [{
+          id: String(evidence.finding.id || evidence.finding.ref || `${row.assessmentId}_finding`),
+          entityId: row.prospectId,
+          source: row.website || row.domain,
+          label: evidence.finding.summary,
+          observedAt: evidence.finding.observed_at || null,
+          provenance: {
+            kind: 'website_opportunity_assessment',
+            assessmentId: row.assessmentId,
+            evidenceClass: evidence.finding.evidence_class,
+          },
+        }] : [],
+        unknowns: ['Buyer intent, budget and willingness to proceed are unknown.'],
+      };
+    });
+    return { payload: { fitCandidates, qualifiedCount: fitCandidates.length, candidateUniverse: fitCandidates,
+      candidateCount: fitCandidates.length, discoveryStatus: 'complete', source: 'pulseforge_website_repair_inventory',
+      unknowns: ['Observed website defects do not establish buyer intent.'] } };
+  }
   const ids = inventory.clean.map(row => row.prospectId);
   const { rows } = await opts.pool.query(`SELECT p.id,p.company_id,p.vertical,p.service_area_match,
     p.enrichment_provenance,c.name,c.website,c.domain,c.location FROM prospects p

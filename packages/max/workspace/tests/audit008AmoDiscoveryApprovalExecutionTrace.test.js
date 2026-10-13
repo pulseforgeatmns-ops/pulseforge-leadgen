@@ -131,6 +131,7 @@ describe('AUDIT-008 active AMO discovery approval execution trace', { concurrenc
       missionsEnabled: true,
       resolverEnabled: true,
       disableLlm: true,
+      scoutAcquisitionOpts: { allowFixtureFallback: true },
       ...engineOpts,
     });
 
@@ -189,7 +190,7 @@ describe('AUDIT-008 active AMO discovery approval execution trace', { concurrenc
 
     assert.equal(turn.workspaceOwnership.owner, WORKSPACE_OWNERS.ACTIVE_MISSION);
     assert.equal(turn.workspaceOwnership.missionRuntime, MISSION_RUNTIMES.AMO);
-    assert.equal(turn.resolution.action, 'executed');
+    assert.equal(turn.resolution.action, 'discovery_approved');
     assert.equal(turn.resolution.reason, 'acquisition_mission_discovery_approved');
     assert.equal(turn.route, 'intelligence');
     assert.notEqual(turn.route, 'mission');

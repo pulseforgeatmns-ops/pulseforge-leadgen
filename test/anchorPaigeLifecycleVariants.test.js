@@ -74,7 +74,7 @@ assert.match(fallbackVariants[0].body, /Want me to send over what we'd need to p
 assert.equal(fallbackVariants[0].attributableIntelligence.usedPersonalization, false);
 
 const nonAnchor = buildPerProspectVariants({
-  clientId: 1,
+  clientId: 2,
   max: {
     rankedTargets: [{ name: 'Pulseforge Cafe', candidateId: 'co-cafe' }],
   },

@@ -24,7 +24,7 @@ test('Anchor 10 and Babrun 13 are allowed governed authorization tenants', () =>
 
 test('unsupported governed tenant fails closed', () => {
   assert.throws(() => assertGovernedOutboundTenantRequired('99'), { code: 'unsupported_governed_outbound_tenant' });
-  assert.throws(() => resolveGovernedAuthorizationTenantId({ tenantId: '1' }), { code: 'unsupported_governed_outbound_tenant' });
+  assert.throws(() => resolveGovernedAuthorizationTenantId({ tenantId: '2' }), { code: 'unsupported_governed_outbound_tenant' });
 });
 
 test('missing governed tenant fails at boundary', () => {

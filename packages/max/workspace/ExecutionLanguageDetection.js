@@ -20,7 +20,13 @@ const {
   isOperationalStatusQuery,
   approvalWordInQuestionContextOnly,
 } = require('./OperatorMissionTurnIntent');
-const { selectExecutionDomain, EXECUTION_DOMAINS } = require('./ExecutionDomain');
+
+// ExecutionDomain also consumes this module when an active mission is locked.
+// Resolve it at call time so either module can be the first import without
+// capturing incomplete CommonJS exports from that cycle.
+function executionDomainModule() {
+  return require('./ExecutionDomain');
+}
 
 const MISSION_CREATE_COMMAND_RE =
   /\b(create|begin|start)\s+(?:a\s+)?(?:brand[- ]?new\s+)?(?:new\s+)?(?:acquisition\s+)?mission\b/i;
@@ -121,6 +127,7 @@ function isMissionExecutionCommand(text) {
   guardPostIntentParsing('isMissionExecutionCommand');
   const q = normalizeText(text);
   if (!q) return false;
+  const { selectExecutionDomain, EXECUTION_DOMAINS } = executionDomainModule();
   const domainDecision = selectExecutionDomain(q);
   if (domainDecision.domain === EXECUTION_DOMAINS.MISSION_DIAGNOSTICS) {
     return false;
