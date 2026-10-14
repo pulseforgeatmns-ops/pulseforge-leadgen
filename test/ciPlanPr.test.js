@@ -88,6 +88,14 @@ describe('CI plan PR selector (SPEC-CI-LEAN-001)', () => {
     }
   });
 
+  it('distribution runtime, UI, reference action, migrations and release gates select Signal', () => {
+    for (const file of ['services/signalDistribution/store.js', 'routes/signalDistributionReference.js',
+      'public/signal-distribution.html', 'migrations/2026-10-14-signal-distribution.sql',
+      'test/signalDistributionPostgres.test.js']) {
+      assert.ok(buildPlan([file]).suites.includes('signal-v1'), file);
+    }
+  });
+
   it('fail-closed selects the full safe set', () => {
     const plan = buildPlan([], { failClosed: true });
     assert.equal(plan.failClosed, true);
