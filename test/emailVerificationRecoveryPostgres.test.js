@@ -112,6 +112,7 @@ test('verification retry persistence and concurrency on disposable PostgreSQL', 
       } });
       assert.equal(result.verificationRetryValid, 0);
       assert.equal(result.verificationRetryFailed, 1);
+      assert.equal(result.verificationRetryFailureReasons.persistence_not_confirmed, 1);
       assert.deepEqual(await snapshot(), afterChange);
     });
   }
@@ -124,6 +125,7 @@ test('verification retry persistence and concurrency on disposable PostgreSQL', 
     } });
     assert.equal(result.verificationRetryValid, 0);
     assert.equal(result.verificationRetryFailed, 1);
+    assert.equal(result.verificationRetryFailureReasons.persistence_not_confirmed, 1);
     assert.equal(await snapshot(), undefined);
   });
 
@@ -139,6 +141,7 @@ test('verification retry persistence and concurrency on disposable PostgreSQL', 
     ]);
     assert.equal(results.reduce((sum, r) => sum + r.verificationRetryValid, 0), 1);
     assert.equal(results.reduce((sum, r) => sum + r.verificationRetryFailed, 0), 1);
+    assert.equal(results.reduce((sum, r) => sum + r.verificationRetryFailureReasons.persistence_not_confirmed, 0), 1);
     assert.equal((await snapshot()).notes.split('email verification retried').length - 1, 1);
   });
 
@@ -157,6 +160,7 @@ test('verification retry persistence and concurrency on disposable PostgreSQL', 
       const result = await retry;
       assert.equal(result.verificationRetryValid, 0);
       assert.equal(result.verificationRetryFailed, 1);
+      assert.equal(result.verificationRetryFailureReasons.persistence_not_confirmed, 1);
       const row = await snapshot();
       assert.equal(row.do_not_contact, true);
       assert.equal(row.email_verified, false);
@@ -178,11 +182,15 @@ test('verification retry persistence and concurrency on disposable PostgreSQL', 
   }
 
   await t.test('provider failure never changes stored metadata or claims success', async () => {
-    for (const verify of [async () => verification('unknown'), async () => { throw new Error('fixture timeout'); }]) {
+    for (const [reason, verify] of [
+      ['verification_failed', async () => verification('unknown')],
+      ['verification_exception', async () => { throw new Error('fixture timeout'); }],
+    ]) {
       await reset(); await seed();
       const before = await snapshot();
       const result = await retryUnverifiedEmails(pool, { clientId: 13, verify });
       assert.equal(result.verificationRetryFailed, 1);
+      assert.equal(result.verificationRetryFailureReasons[reason], 1);
       assert.equal(result.verificationRetryValid, 0);
       assert.deepEqual(await snapshot(), before);
     }
