@@ -153,7 +153,8 @@
     "rollout:preflight": "node scripts/rolloutPreflight.js",
     "test:rollout-preflight": "node --test test/rolloutPreflight.test.js",
     "test:rollout-preflight:postgres": "node --test test/rolloutPreflightPostgres.test.js",
-    "test:max:attention:postgres": "node --test test/maxAttentionRecoveryPostgres.test.js"
+    "test:max:attention:postgres": "node --test test/maxAttentionRecoveryPostgres.test.js",
+    "test:babrun-scout-intake": "node --test test/babrunScoutIntake.test.js test/babrunScoutIntakePostgres.test.js test/babrunContactResolution.test.js test/scoutInventoryCapacityRecovery.test.js"
   },
   "repository": {
     "type": "git",

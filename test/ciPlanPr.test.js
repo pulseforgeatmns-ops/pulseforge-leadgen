@@ -80,6 +80,14 @@ describe('CI plan PR selector (SPEC-CI-LEAN-001)', () => {
     }
   });
 
+  it('Babrun intake, shared classifier, promotion and fixture changes select the PostgreSQL-backed outbound gate', () => {
+    for (const file of ['leadgen.js', 'utils/babrunContactClassification.js', 'utils/babrunScoutContactEvidence.js',
+      'scripts/lib/babrunContactResolution.js', 'scripts/promoteUnenriched.js', 'test/babrunScoutIntake.test.js',
+      'test/babrunScoutIntakePostgres.test.js', 'test/helpers/babrunScoutIntake.js', 'test/fixtures/babrunScoutIntakeSchema.sql']) {
+      assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
+    }
+  });
+
   it('fail-closed selects the full safe set', () => {
     const plan = buildPlan([], { failClosed: true });
     assert.equal(plan.failClosed, true);
