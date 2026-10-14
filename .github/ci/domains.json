@@ -93,6 +93,13 @@
       "packages/max/workspace/tests/paige"
     ],
     "anchor-outbound": [
+      "leadgen.js",
+      "utils/babrunContactClassification.js",
+      "utils/babrunScoutContactEvidence.js",
+      "scripts/lib/babrunContactResolution.js",
+      "scripts/promoteUnenriched.js",
+      "test/helpers/babrunScoutIntake.js",
+      "test/fixtures/babrunScoutIntakeSchema.sql",
       "utils/canonicalBusinessTaxonomy.js",
       "utils/replenishmentVertical.js",
       "utils/pulseforgeCashflowOffer.js",

@@ -5,8 +5,10 @@
  * Never sends mail. Never schedules outreach. Never modifies Emmett capacity.
  */
 
+const { CONTACT_FINAL_STATE, clean, founderFirstName, founderLastName, localPart, emailDomain,
+  isGenericRoleEmail, isFounderLocalPartMatch, candidateRecord, mapVerificationResult, classifyCandidate,
+} = require('../../utils/babrunContactClassification');
 const { verifyEmail } = require('../../utils/emailVerifier');
-const { isRolePattern } = require('../../utils/emailValidation');
 const { classifyOutreachContactType, OUTREACH_CONTACT_TYPE } = require('../../utils/outreachContactType');
 const {
   stampEmailProvenance,
@@ -22,13 +24,6 @@ const tiered = require('../../tieredEnrichmentAgent');
 
 const TENANT_ID = '13';
 const CLIENT_ID = 13;
-
-const CONTACT_FINAL_STATE = Object.freeze({
-  VERIFIED_FOUNDER_EMAIL: 'VERIFIED_FOUNDER_EMAIL',
-  VERIFIED_ROLE_EMAIL: 'VERIFIED_ROLE_EMAIL',
-  REVIEW_REQUIRED: 'REVIEW_REQUIRED',
-  UNRESOLVED: 'UNRESOLVED',
-});
 
 /** Remaining seven — excludes Kaylee/KB (p012), Six Star (p024), MJ Electric (p025). */
 const BABRUN_CONTACT_TARGETS = Object.freeze([
@@ -76,44 +71,8 @@ const BABRUN_CONTACT_TARGETS = Object.freeze([
   },
 ]);
 
-const GENERIC_PREFIX_RE = /^(?:info|hello|contact|office|sales|support|admin|team)@/i;
 const EMAIL_RE = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
 const NOISE_EMAIL_RE = /(?:example\.com|sentry|wixpress|\.png$|\.jpg$|\.webp$|@www\.|you@|jane@|name@email)/i;
-
-function clean(value) {
-  return String(value || '').replace(/\s+/g, ' ').trim();
-}
-
-function founderFirstName(founder) {
-  return clean(founder).split(/\s+/)[0]?.toLowerCase() || '';
-}
-
-function founderLastName(founder) {
-  const parts = clean(founder).split(/\s+/).filter(Boolean);
-  return parts.length > 1 ? parts[parts.length - 1].toLowerCase().replace(/[^a-z]/g, '') : '';
-}
-
-function localPart(email) {
-  return clean(email).toLowerCase().split('@')[0] || '';
-}
-
-function emailDomain(email) {
-  return clean(email).toLowerCase().split('@')[1] || '';
-}
-
-function isGenericRoleEmail(email) {
-  return GENERIC_PREFIX_RE.test(clean(email).toLowerCase()) || isRolePattern(email);
-}
-
-function isFounderLocalPartMatch(email, founder) {
-  const local = localPart(email).replace(/[^a-z]/g, '');
-  const first = founderFirstName(founder).replace(/[^a-z]/g, '');
-  const last = founderLastName(founder);
-  if (!local || !first) return false;
-  if (local === first) return true;
-  if (last && (local === `${first}${last}` || local === `${first[0]}${last}`)) return true;
-  return false;
-}
 
 function isNoiseEmail(email) {
   const normalized = clean(email).toLowerCase();
@@ -167,40 +126,6 @@ function buildPatternCandidates(founder, domains) {
   return [...new Set(patterns.map((e) => e.toLowerCase()))];
 }
 
-function mapVerificationResult(result = {}) {
-  const status = clean(result.status).toLowerCase();
-  if (status === 'valid' || status === 'verified') {
-    return { deliverability: 'valid', verified: true, status, reason: result.reason };
-  }
-  if (status === 'role') {
-    return { deliverability: 'valid', verified: true, status, reason: 'role_pattern_mx_ok' };
-  }
-  if (status === 'invalid') {
-    return { deliverability: 'invalid', verified: false, status, reason: result.reason };
-  }
-  if (status === 'catchall' || status === 'risky') {
-    return { deliverability: status, verified: false, status, reason: result.reason };
-  }
-  if (result.reason === 'verifier_timeout') {
-    return { deliverability: 'timeout', verified: false, status: 'unknown', reason: result.reason };
-  }
-  return { deliverability: 'unknown', verified: false, status: status || 'unknown', reason: result.reason };
-}
-
-function candidateRecord(email, discoveryMethod, discoverySource, extras = {}) {
-  return {
-    email: clean(email).toLowerCase(),
-    discoveryMethod,
-    discoverySource,
-    patternGenerated: discoveryMethod === 'pattern_candidate',
-    founderAttribution: extras.founderAttribution === true,
-    firstParty: extras.firstParty === true,
-    publicFounderSource: extras.publicFounderSource === true,
-    roleGeneric: isGenericRoleEmail(email),
-    personalProvider: isPersonalEmailProviderDomain(emailDomain(email)),
-  };
-}
-
 function providerCandidateFromEnrichment(target = {}, enriched = {}) {
   const sources = (Array.isArray(enriched.source) ? enriched.source : [enriched.source])
     .map(value => clean(value).toLowerCase())
@@ -215,47 +140,6 @@ function providerCandidateFromEnrichment(target = {}, enriched = {}) {
     enriched.sourceUrl || provider,
     { founderAttribution: true }
   );
-}
-
-function classifyCandidate(candidate, verification, founder) {
-  if (!candidate?.email) return CONTACT_FINAL_STATE.UNRESOLVED;
-  if (!verification?.verified) {
-    if (verification?.deliverability === 'invalid') {
-      return CONTACT_FINAL_STATE.UNRESOLVED;
-    }
-    if (
-      verification?.deliverability === 'unknown'
-      || verification?.deliverability === 'timeout'
-      || verification?.deliverability === 'risky'
-      || verification?.deliverability === 'catchall'
-    ) {
-      return CONTACT_FINAL_STATE.REVIEW_REQUIRED;
-    }
-    return CONTACT_FINAL_STATE.UNRESOLVED;
-  }
-
-  const founderOnFirstParty = candidate.firstParty
-    && isFounderLocalPartMatch(candidate.email, founder);
-  const attributedFounderRole = candidate.founderAttribution === true
-    && candidate.patternGenerated !== true
-    && isFounderLocalPartMatch(candidate.email, founder);
-  const hasFounderEvidence = candidate.publicFounderSource
-    || founderOnFirstParty
-    || attributedFounderRole;
-
-  if (hasFounderEvidence && !candidate.roleGeneric) {
-    return CONTACT_FINAL_STATE.VERIFIED_FOUNDER_EMAIL;
-  }
-  if (candidate.roleGeneric || isGenericRoleEmail(candidate.email)) {
-    return CONTACT_FINAL_STATE.VERIFIED_ROLE_EMAIL;
-  }
-  if (candidate.personalProvider && candidate.firstParty) {
-    return CONTACT_FINAL_STATE.REVIEW_REQUIRED;
-  }
-  if (candidate.patternGenerated) {
-    return CONTACT_FINAL_STATE.REVIEW_REQUIRED;
-  }
-  return CONTACT_FINAL_STATE.REVIEW_REQUIRED;
 }
 
 function confidenceFor(classification, verification, candidate) {
