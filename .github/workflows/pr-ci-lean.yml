@@ -137,6 +137,8 @@ jobs:
       - uses: ./.github/actions/setup-postgres-environment
       - run: npm ci --ignore-scripts
       - run: npm run test:anchor-outbound
+      - name: Places failure cache and attribution regressions (mocked, no providers)
+        run: node --test test/placesFailureCache.test.js test/placesCostAttribution.test.js
       - name: Verification retry persistence and race regressions (no live verifier)
         env:
           DATABASE_URL: postgresql://localhost:1/pulseforge_test_only

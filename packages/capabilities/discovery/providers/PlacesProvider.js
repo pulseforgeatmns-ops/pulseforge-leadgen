@@ -377,6 +377,7 @@ async function fetchPlacesPage(querySpec, apiKey, fetchImpl, pageToken = null) {
     const latencyMs = Date.now() - started;
     const httpStatus = traced.httpStatus;
     if (!traced.ok) {
+      const failureStatus = traced.applicationFailure === true ? traced.googleStatus : null;
       if (typeof traced.commitRecord === 'function') {
         await traced.commitRecord({
           businessesReturned: 0,
@@ -391,12 +392,12 @@ async function fetchPlacesPage(querySpec, apiKey, fetchImpl, pageToken = null) {
         attempt: {
           query: q,
           httpStatus,
-          googleStatus: null,
-          googleError: `http_${httpStatus}`,
+          googleStatus: failureStatus,
+          googleError: failureStatus || `http_${httpStatus}`,
           resultCount: 0,
           latencyMs,
           retries: 0,
-          quota: null,
+          quota: failureStatus === 'OVER_QUERY_LIMIT' ? { status: failureStatus } : null,
         },
       };
     }

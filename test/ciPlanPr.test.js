@@ -95,4 +95,13 @@ describe('CI plan PR selector (SPEC-CI-LEAN-001)', () => {
     assert.ok(plan.suites.includes('revenue-postgres'));
     assert.ok(plan.suites.length >= 8);
   });
+
+  it('Places cache, client, provider and focused tests select the outbound gate', () => {
+    for (const file of ['utils/placesApi.js', 'utils/placesQueryCache.js',
+      'services/scoutPublicSourcing.js',
+      'packages/capabilities/discovery/providers/PlacesProvider.js',
+      'test/placesFailureCache.test.js', 'test/placesCostAttribution.test.js']) {
+      assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
+    }
+  });
 });

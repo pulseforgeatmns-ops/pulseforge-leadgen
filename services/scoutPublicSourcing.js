@@ -387,6 +387,9 @@ function createScoutPlacesSearchProvider(deps = {}) {
         },
       });
       if (!traced.ok) {
+        if (traced.applicationFailure === true) {
+          throw new Error(`google_places_status_${traced.googleStatus}`);
+        }
         throw new Error(`google_places_http_${traced.httpStatus}`);
       }
       const data = traced.data || {};
