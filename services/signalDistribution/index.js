@@ -2,6 +2,7 @@
 const fs=require('node:fs');
 const path=require('node:path');
 const {DistributionStore}=require('./store');
+const {activationConfig}=require('./activation');
 const {DeliveryStore}=require('./deliveryStore');
 const {createDistributionWorker}=require('./worker');
 const {GeckoTerminalDistributionProvider}=require('./marketProvider');
@@ -15,7 +16,7 @@ function validateConfiguration(env) {
   const maxActive=Number(env.SIGNAL_DISTRIBUTION_MAX_ACTIVE||1);
   const milestoneMultiple=Number(env.SIGNAL_DISTRIBUTION_MILESTONE_MULTIPLE||2);
   if(!Number.isInteger(maxActive)||maxActive!==1||!Number.isFinite(milestoneMultiple)||milestoneMultiple<1)throw new Error('invalid_distribution_limits');
-  return {enabled:true,maxActive,milestoneMultiple};
+  return {enabled:true,maxActive,milestoneMultiple,activation:activationConfig(env,env.SIGNAL_DISTRIBUTION_TENANT_ID)};
 }
 async function startDistribution({pool,channelId,gate,env=process.env,fetchImpl=globalThis.fetch,setInterval:interval=setInterval,clearInterval:clear=clearInterval}={}) {
   const config=validateConfiguration(env);if(!config.enabled)return null;
@@ -36,7 +37,7 @@ async function startDistribution({pool,channelId,gate,env=process.env,fetchImpl=
   const tenantId=env.SIGNAL_DISTRIBUTION_TENANT_ID;
   const active=await pool.query("SELECT count(*)::int AS count FROM signal_distribution_monitors WHERE tenant_id=$1 AND namespace='operational' AND expires_at>clock_timestamp()",[tenantId]);
   if(active.rows[0].count>1)throw new Error('distribution_active_capacity_exceeds_tonight_limit');
-  const store=new DistributionStore(pool,{tenantId,channelId,maxActive:config.maxActive,milestoneMultiple:config.milestoneMultiple});
+  const store=new DistributionStore(pool,{tenantId,channelId,maxActive:config.maxActive,milestoneMultiple:config.milestoneMultiple,activation:config.activation});
   const deliveryStore=new DeliveryStore(pool);
   const enabled=channel=>env['SIGNAL_DISTRIBUTION_'+channel.toUpperCase()+'_ENABLED']==='1'&&gate().ok;
   const consented=channel=>env['SIGNAL_DISTRIBUTION_'+channel.toUpperCase()+'_CONSENT']==='1';
@@ -57,12 +58,13 @@ async function startDistribution({pool,channelId,gate,env=process.env,fetchImpl=
       const body=await response.json();return {accepted:true,receipt:body.messageId};
     }}));
   }
-  configureSharedRequestBudget({consume:lane=>store.consume(lane),backoff:until=>store.backoff(until)});
+  await store.initializeActivation();
+  configureSharedRequestBudget({shouldApply:()=>store.shouldApplyBudget(),remainingMs:()=>store.remainingMs(),consume:lane=>store.consume(lane),backoff:until=>store.backoff(until)});
   const worker=createDistributionWorker({store,gate,createProvider:()=>new GeckoTerminalDistributionProvider()});
   const dispatcher=createDistributionDispatcher({store:deliveryStore,adapters,enabled,consented});
   let sending=false;
   const tick=async()=>{
-    if(sending||!gate().ok)return;sending=true;
+    if(sending||!gate().ok||!await store.activeWindow())return;sending=true;
     try {
       await deliveryStore.syncTransitions({tenantId,namespace:'operational'});
       for(const channel of ['sms','email'])await dispatcher.sendOnce({tenantId,namespace:'operational',channel});

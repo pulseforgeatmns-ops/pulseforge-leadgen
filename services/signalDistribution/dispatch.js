@@ -1,4 +1,8 @@
 'use strict';
+const {performance}=require('node:perf_hooks');
+function assertSendFence(fence) {
+  if(!fence || !Number.isFinite(fence.deadline) || performance.now()>=fence.deadline) throw new Error('activation_window_closed');
+}
 // Importing this module never loads agents, credentials, databases or providers.
 function formatDistributionAlert(event) {
   const prefix = event.namespace === 'test' ? 'TEST ONLY — ' : '';
@@ -32,21 +36,25 @@ function formatDistributionSms(event) {
   return (header + details + 'Why:' + reasons.slice(0,Math.max(0,300-header.length-details.length-footer.length-4)) + footer).slice(0,300);
 }
 function createSmsAdapter({enabled = () => false, consented = () => false, destination, from, client} = {}) {
-  return { id: 'sms', async send(event) {
+  return { id: 'sms', async send(event, _deliveryId, fence) {
     if (event.namespace !== 'operational' || !enabled() || !consented() || !/^\+[1-9]\d{7,14}$/.test(destination || '')
       || !/^\+[1-9]\d{7,14}$/.test(from || '') || typeof client?.messages?.create !== 'function') throw new Error('transport_disabled');
     // Existing Twilio ops primitive, without samAgent's database/tenant imports.
-    const result = await client.messages.create({body: formatDistributionSms(event), from, to: destination});
+    const payload={body:formatDistributionSms(event),from,to:destination};
+    assertSendFence(fence);
+    const result = await client.messages.create(payload);
     if (typeof result?.sid !== 'string' || !result.sid || result.sid.length > 512) throw new Error('transport_unknown');
     return {accepted: true, receipt: result.sid};
   }};
 }
 function createEmailAdapter({enabled = () => false, consented = () => false, sendMail} = {}) {
-  return { id: 'email', async send(event, deliveryId) {
+  return { id: 'email', async send(event, deliveryId, fence) {
     if (event.namespace !== 'operational' || !enabled() || !consented() || typeof sendMail !== 'function') throw new Error('transport_disabled');
     // Inject the approved recipient-specific Brevo sender, never an outreach agent.
-    const result = await sendMail({id: deliveryId, subject: `[Signal] ${event.kind === 'MILESTONE_2X' ? `${(Number.isFinite(event.milestoneMultiple) ? event.milestoneMultiple : 'UNKNOWN')}x observed` : event.state}`,
-      textContent: formatDistributionAlert(event)});
+    const payload={id: deliveryId, subject: `[Signal] ${event.kind === 'MILESTONE_2X' ? `${(Number.isFinite(event.milestoneMultiple) ? event.milestoneMultiple : 'UNKNOWN')}x observed` : event.state}`,
+      textContent: formatDistributionAlert(event)};
+    assertSendFence(fence);
+    const result = await sendMail(payload);
     if (!result?.accepted || typeof result.receipt !== 'string' || !result.receipt || result.receipt.length > 512) throw new Error('transport_unknown');
     return result;
   }};
@@ -60,7 +68,13 @@ function createDistributionDispatcher({store, adapters = [], enabled = () => fal
     try {
       if (!enabled(channel) || !consented(channel) || row.namespace !== 'operational' || row.channel !== channel
         || String(row.tenant_id) !== String(tenantId)) throw new Error('transport_disabled');
-      const result = await adapter.send(row.payload, row.id);
+      const fenceStarted=performance.now();
+      const authorization=await store.authorizeSend(row.id);
+      if(!authorization.authorized)return {accepted:false,suppressed:true,reason:authorization.reason};
+      // Starting before the DB roundtrip makes the remaining-time estimate conservative.
+      const fence={deadline:fenceStarted+authorization.remainingMs};
+      assertSendFence(fence);
+      const result = await adapter.send(row.payload, row.id, fence);
       if (!result?.accepted || !result.receipt) throw new Error('transport_unknown');
       await store.accepted(row.id, result.receipt);
       return {accepted:true, received:false, displayed:false};

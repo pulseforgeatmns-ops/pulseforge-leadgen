@@ -171,8 +171,12 @@ class GeckoTerminalMarketDataProvider {
     while (attempt <= this.maxRetries) {
       await this._rateLimit();
       const sharedBudget = require('../../../services/signalDistribution/requestBudget');
-      const budget = this.requestBudget || (sharedBudget.isSharedRequestBudgetActive()
+      const candidateBudget = this.requestBudget || (sharedBudget.isSharedRequestBudgetActive()
         ? sharedBudget.sharedRequestBudget : null);
+      // Recheck the database-clock window on every attempt. Outside the window,
+      // preserve the pre-existing research/operator provider behavior.
+      const budget = candidateBudget && (typeof candidateBudget.shouldApply !== 'function'
+        || await candidateBudget.shouldApply('existing')) ? candidateBudget : null;
       if (budget && !await budget.consume('existing')) {
         throw new Error('distribution_request_budget_unavailable');
       }

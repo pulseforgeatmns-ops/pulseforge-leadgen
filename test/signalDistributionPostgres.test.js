@@ -13,8 +13,10 @@ test('distribution real PostgreSQL transaction/restart/concurrency/tenant/test/b
   const pool=createTrackedPostgresPool({connectionString:instance.connectionString});
   t.after(async()=>{await closePostgresFixture(pool,instance);});
   for(const name of ['2026-10-14-signal-distribution.sql','2026-10-14-signal-distribution-delivery.sql'])await pool.query(fs.readFileSync(path.join(__dirname,'../migrations',name),'utf8'));
-  let now=new Date('2026-10-14T12:00:00Z');
-  const config={tenantId:'1',channelId:'123',now:()=>now};
+  let now=new Date();
+  const activation={id:'window1',startsAt:new Date(+now-1000).toISOString(),endsAt:new Date(+now+3600000).toISOString(),smsLimit:5};
+  await pool.query('INSERT INTO signal_distribution_activations(id,tenant_id,namespace,starts_at,ends_at,sms_limit) VALUES($1,$2,$3,$4,$5,$6)',[activation.id,'1','operational',activation.startsAt,activation.endsAt,5]);
+  const config={tenantId:'1',channelId:'123',now:()=>now,activation};
   let store=new DistributionStore(pool,config);
   const event={sourceId:'telegram-front-runners',externalMessageId:'telegram:123:42',extractedCa:CA,occurredAt:now.toISOString(),ingestedAt:now.toISOString(),provenance:{dataClass:'EMPIRICAL',telegramChannelId:'123'}};
   const registrations=await Promise.all(Array.from({length:12},()=>store.register(event)));
@@ -29,7 +31,7 @@ test('distribution real PostgreSQL transaction/restart/concurrency/tenant/test/b
   const claims=await Promise.all(Array.from({length:8},()=>store.claim()));
   assert.equal(claims.filter(Boolean).length,1);
   const row=claims.find(Boolean);
-  const snapshot={tokenAddress:CA,pairId:CA,observedAt:now.toISOString(),providerTimestamp:null,priceUsd:1,liquidityUsd:1000,marketCapUsd:null,volume5mUsd:100,buys5m:10,sells5m:10,provenance:{dataClass:'EMPIRICAL'}};
+  const snapshot={tokenAddress:CA,pairId:CA,observedAt:new Date(+now-100).toISOString(),providerTimestamp:null,priceUsd:1,liquidityUsd:1000,marketCapUsd:null,volume5mUsd:100,buys5m:10,sells5m:10,provenance:{dataClass:'EMPIRICAL'}};
   await store.observe(row,snapshot);
   store=new DistributionStore(pool,config);
   assert.equal((await store.getMonitor({tenantId:'1',id:row.id})).state.observedPeakPriceUsd,1);
@@ -38,9 +40,10 @@ test('distribution real PostgreSQL transaction/restart/concurrency/tenant/test/b
   await store.setManualReference({id:row.id,priceUsd:1,recordedAt:new Date(+now-3600000).toISOString(),provenance:'EXPLICIT_MANUAL_OPERATOR'});
   const savedReference=(await store.getMonitor({tenantId:'1',id:row.id})).state.reference;
   assert.equal(savedReference.recordedAt,new Date(+now-3600000).toISOString());
-  assert.equal(savedReference.savedAt,now.toISOString());
+  assert.ok(Date.parse(savedReference.savedAt)>=+now);
   await assert.rejects(()=>store.setManualReference({id:row.id,priceUsd:2,recordedAt:now.toISOString(),provenance:'EXPLICIT_MANUAL_OPERATOR'}),/already_set/);
-  now=new Date(+now+61000);
+  now=new Date();
+  await pool.query("UPDATE signal_distribution_monitors SET next_poll_at=clock_timestamp()-interval '1 second'");
   const next=await store.claim();
   await store.observe(next,{...snapshot,priceUsd:2,observedAt:now.toISOString()});
   await assert.rejects(()=>store.observe(next,{...snapshot,priceUsd:2,observedAt:now.toISOString()}),/lease_lost/);
@@ -53,7 +56,8 @@ test('distribution real PostgreSQL transaction/restart/concurrency/tenant/test/b
   const sends=await Promise.all(Array.from({length:5},()=>deliveries.claim({tenantId:'1',namespace:'operational',channel:'sms'})));
   assert.equal(sends.filter(Boolean).length,2);
   assert.equal(new Set(sends.filter(Boolean).map(r=>r.id)).size,2);
-  now=new Date(+now+31000);
+  now=new Date();
+  await pool.query("UPDATE signal_distribution_deliveries SET lease_until=clock_timestamp()-interval '1 second' WHERE status='SENDING'");
   assert.equal(await deliveries.claim({tenantId:'1',namespace:'operational',channel:'sms'}),null);
   assert.equal((await deliveries.getDeliveries({tenantId:'1',namespace:'operational',monitorId:row.id})).some(r=>r.status==='UNKNOWN'),true);
   const budgetResults=await Promise.all(Array.from({length:20},()=>store.consume('distribution')));
@@ -65,8 +69,51 @@ test('distribution real PostgreSQL transaction/restart/concurrency/tenant/test/b
   await pool.query("UPDATE signal_distribution_request_attempts SET attempted_at=clock_timestamp()-interval '61 seconds'");
   await pool.query("INSERT INTO signal_distribution_request_attempts(lane,attempted_at) SELECT 'distribution',clock_timestamp()-interval '2 minutes' FROM generate_series(1,73)");
   assert.equal(await restarted.consume('distribution'),false);
-  const testStore=new DistributionStore(pool,{...config,namespace:'test'});
+  const testActivation={...activation,id:'test-window'};
+  await pool.query('INSERT INTO signal_distribution_activations(id,tenant_id,namespace,starts_at,ends_at,sms_limit) VALUES($1,$2,$3,$4,$5,$6)',[testActivation.id,'1','test',activation.startsAt,activation.endsAt,5]);
+  const testStore=new DistributionStore(pool,{...config,namespace:'test',activation:testActivation});
   const registeredTest=await testStore.register({...event,occurredAt:now.toISOString(),ingestedAt:now.toISOString()});
   assert.notEqual(registeredTest.id,row.id);
   assert.equal(await deliveries.claim({tenantId:'1',namespace:'test',channel:'sms'}),null);
+});
+
+test('activation uses DB clock, immutable restart scope and end fences',{timeout:90000},async t=>{
+ const instance=await startDisposablePostgres('signal-window-');
+ const pool=createTrackedPostgresPool({connectionString:instance.connectionString});
+ t.after(()=>closePostgresFixture(pool,instance));
+ await pool.query(fs.readFileSync(path.join(__dirname,'../migrations/2026-10-14-signal-distribution.sql'),'utf8'));
+ const dbNow=+(await pool.query('SELECT clock_timestamp() AS now')).rows[0].now;
+ const activation={id:'future-window',startsAt:new Date(dbNow+60000).toISOString(),endsAt:new Date(dbNow+3600000).toISOString(),smsLimit:5};
+ const config={tenantId:'1',channelId:'123',activation,now:()=>new Date('2099-01-01')};
+ const store=new DistributionStore(pool,config);
+ await store.initializeActivation();
+ await new DistributionStore(pool,config).initializeActivation();
+ await assert.rejects(()=>new DistributionStore(pool,{...config,activation:{...activation,smsLimit:6}}).initializeActivation(),/configuration_changed/);
+ await assert.rejects(()=>new DistributionStore(pool,{...config,activation:{...activation,id:'overlap'}}).initializeActivation(),/overlap/);
+ await assert.rejects(()=>new DistributionStore(pool,{...config,activation:{...activation,id:'past',startsAt:new Date(dbNow-1000).toISOString()}}).initializeActivation(),/must_start_in_future/);
+ assert.equal(await store.claim(),null);assert.equal(await store.consume('distribution'),false);assert.equal(await store.consume('existing'),true);
+ assert.equal((await pool.query('SELECT * FROM signal_distribution_request_attempts')).rowCount,0);
+ // Fixture clock movement only; runtime never updates an activation window.
+ await pool.query("UPDATE signal_distribution_activations SET starts_at=clock_timestamp()-interval '5 seconds' WHERE id=$1",[activation.id]);
+ const now=new Date();
+ const event={sourceId:'telegram-front-runners',externalMessageId:'telegram:123:9',extractedCa:CA,occurredAt:now.toISOString(),ingestedAt:now.toISOString(),provenance:{dataClass:'EMPIRICAL',telegramChannelId:'123'}};
+ assert.equal((await store.register({...event,occurredAt:new Date(+now-60000).toISOString()})).reason,'pre_activation_event');
+ const registered=await store.register(event);assert.equal(registered.created,true);
+ const monitor=await store.getMonitor({tenantId:'1',id:registered.id});assert.equal(+monitor.expires_at,Date.parse(activation.endsAt));
+ const claimed=await store.claim();assert.ok(claimed);
+ // Wait on the global row across cutoff: no post-end quota reservation.
+ const blocker=await pool.connect();await blocker.query('BEGIN');
+ await blocker.query('SELECT id FROM signal_distribution_request_budget WHERE id=1 FOR UPDATE');
+ await pool.query("UPDATE signal_distribution_activations SET ends_at=clock_timestamp()+interval '150 milliseconds' WHERE id=$1",[activation.id]);
+ await blocker.query('SELECT id FROM signal_distribution_monitors WHERE id=$1 FOR UPDATE',[registered.id]);
+ const pendingReference=store.setManualReference({id:registered.id,priceUsd:1,recordedAt:now.toISOString(),provenance:'EXPLICIT_MANUAL_OPERATOR'});
+ const referenceDenied=assert.rejects(()=>pendingReference,/reference_missing/);
+ const delayed=store.consume('distribution');
+ await blocker.query('SELECT pg_sleep(0.2)');await blocker.query('COMMIT');blocker.release();
+ assert.equal(await delayed,false);await referenceDenied;
+ assert.equal((await pool.query('SELECT * FROM signal_distribution_request_attempts')).rowCount,0);
+ await pool.query("UPDATE signal_distribution_activations SET starts_at=clock_timestamp()-interval '1 hour',ends_at=clock_timestamp()-interval '1 millisecond' WHERE id=$1",[activation.id]);
+ assert.equal(await store.claim(),null);assert.equal(await store.consume('distribution'),false);assert.equal(await store.shouldApplyBudget(),false);assert.equal(await store.consume('existing'),true);
+ await assert.rejects(()=>store.observe(claimed,{tokenAddress:CA}),/window_closed/);
+ assert.equal((await store.register(event)).reason,'activation_window_closed');
 });

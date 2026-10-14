@@ -92,13 +92,53 @@ class DeliveryStore {
     const r = await this.pool.query(`WITH candidate AS (SELECT d.id FROM signal_distribution_deliveries d
       JOIN signal_distribution_monitors m ON m.id=d.monitor_id AND m.tenant_id=d.tenant_id AND m.namespace=d.namespace
       JOIN signal_distribution_transitions t ON t.id=d.transition_id AND t.tenant_id=d.tenant_id AND t.namespace=d.namespace
+      JOIN signal_distribution_activations a ON a.id=m.activation_id AND a.tenant_id=m.tenant_id AND a.namespace=m.namespace
       WHERE d.tenant_id=$1 AND d.namespace=$2 AND d.channel=$3 AND d.status='PENDING'
+      AND clock_timestamp()>=a.starts_at AND clock_timestamp()<a.ends_at
       AND m.expires_at>$4 AND t.created_at>$4::timestamptz-interval '5 minutes'
       AND (d.payload->>'kind'<>'RISK_TRANSITION' OR m.state->>'riskState'=d.payload->>'state')
       ORDER BY d.created_at,d.id FOR UPDATE OF d SKIP LOCKED LIMIT 1)
       UPDATE signal_distribution_deliveries d SET status='SENDING',attempts=attempts+1,
       lease_until=$4::timestamptz+interval '30 seconds' FROM candidate c WHERE d.id=c.id RETURNING d.*`,
     [String(tenantId),namespace,channel,this.now()]); return r.rows[0] || null;
+  }
+  async authorizeSend(id) {
+    const client=await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const found=await client.query(`SELECT d.*,a.id AS activation_id,a.starts_at,a.ends_at,a.sms_limit,a.sms_reserved,
+        m.expires_at,m.state->>'riskState' AS current_state,t.created_at AS transition_created_at
+        FROM signal_distribution_deliveries d
+        JOIN signal_distribution_monitors m ON m.id=d.monitor_id AND m.tenant_id=d.tenant_id AND m.namespace=d.namespace
+        JOIN signal_distribution_transitions t ON t.id=d.transition_id AND t.tenant_id=d.tenant_id AND t.namespace=d.namespace
+        JOIN signal_distribution_activations a ON a.id=m.activation_id AND a.tenant_id=m.tenant_id AND a.namespace=m.namespace
+        WHERE d.id=$1 FOR UPDATE OF d,a`,[id]);
+      const row=found.rows[0];
+      const now=(await client.query('SELECT clock_timestamp() AS now')).rows[0].now;
+      let reason=null;
+      if(!row || row.status!=='SENDING' || row.namespace!=='operational' || row.send_authorized_at) {
+        await client.query('COMMIT');return {authorized:false,reason:'delivery_not_authorizable'};
+      }
+      if(+now<+new Date(row.starts_at)||+now>=+new Date(row.ends_at))reason='activation_window_closed';
+      else if(+new Date(row.lease_until)<=+now||+new Date(row.expires_at)<=+now
+        ||+new Date(row.transition_created_at)<=+now-300000)reason='expired_delivery';
+      else if(row.payload.kind==='RISK_TRANSITION'&&row.current_state!==row.payload.state)reason='superseded_delivery';
+      if(!reason&&row.channel==='sms') {
+        const reserved=await client.query(`UPDATE signal_distribution_activations SET sms_reserved=sms_reserved+1
+          WHERE id=$1 AND tenant_id=$2 AND namespace=$3 AND sms_limit BETWEEN 0 AND 20
+          AND sms_reserved<sms_limit AND clock_timestamp()>=starts_at AND clock_timestamp()<ends_at RETURNING id`,
+        [row.activation_id,row.tenant_id,row.namespace]);
+        if(!reserved.rowCount)reason='sms_cap_or_window_closed';
+      }
+      if(reason) {
+        await client.query("UPDATE signal_distribution_deliveries SET status='SUPPRESSED',suppression_reason=$2,lease_until=NULL WHERE id=$1",[id,reason]);
+        await client.query('COMMIT');return {authorized:false,reason};
+      }
+      // Persist before provider invocation. Never refund an uncertain or unused reservation.
+      await client.query('UPDATE signal_distribution_deliveries SET send_authorized_at=$2 WHERE id=$1',[id,now]);
+      await client.query('COMMIT');
+      return {authorized:true,remainingMs:Math.max(0,+new Date(row.ends_at)-+now),endsAt:new Date(row.ends_at).toISOString()};
+    }catch(err){await client.query('ROLLBACK');throw err;}finally{client.release();}
   }
   async accepted(id, receipt) {
     if (typeof receipt !== 'string' || !receipt || receipt.length>512) throw new Error('invalid_receipt');
@@ -112,7 +152,7 @@ class DeliveryStore {
   async getDeliveries({tenantId,namespace,monitorId}) {
     validateScope({tenantId,namespace});
     const r = await this.pool.query(`SELECT id,monitor_id,transition_id,channel,status,suppression_reason,attempts,
-      created_at,accepted_at FROM signal_distribution_deliveries
+      created_at,accepted_at,send_authorized_at FROM signal_distribution_deliveries
       WHERE tenant_id=$1 AND namespace=$2 AND monitor_id=$3 ORDER BY created_at DESC,id LIMIT 100`,
     [String(tenantId),namespace,monitorId]); return r.rows;
   }

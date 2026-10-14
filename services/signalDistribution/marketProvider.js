@@ -2,6 +2,7 @@
 // Public endpoint/schema evidence: https://api.geckoterminal.com/docs/v2/swagger.json
 // Reviewed 2026-10-14; documented availability is not live coverage verification.
 // Pool reserve changes are not proof of LP withdrawals; addresses are not people.
+const { performance } = require('node:perf_hooks');
 const { sharedRequestBudget, budgetError } = require('./requestBudget');
 const ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const BASE = 'https://api.geckoterminal.com/api/v2/networks/solana';
@@ -28,9 +29,17 @@ class GeckoTerminalDistributionProvider {
   }
   async request(url) {
     if (!await this.requestBudget.consume('distribution')) throw budgetError();
+    // Subtract all DB lookup latency using a monotonic clock; never initiate
+    // a provider call after the authoritative activation deadline.
+    const checkedAt = performance.now();
+    if (typeof this.requestBudget.remainingMs !== 'function') throw new Error('distribution_activation_deadline_unknown');
+    const remaining = await this.requestBudget.remainingMs('distribution');
+    const available = remaining - (performance.now() - checkedAt);
+    if (!Number.isFinite(available) || available <= 0) throw new Error('distribution_activation_expired');
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), Math.min(this.timeoutMs, available));
     try {
+      if (performance.now() - checkedAt >= remaining) throw new Error('distribution_activation_expired');
       const response = await this.fetchFn(url, { headers: { Accept: 'application/json;version=20230203' }, signal: controller.signal, redirect: 'error' });
       if (response.status === 429) {
         const seconds = number(response.headers?.get?.('retry-after'));

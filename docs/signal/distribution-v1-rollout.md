@@ -9,7 +9,7 @@ independently of whether the operator bought. Operational tables never seed or
 modify cohorts, frozen research definitions, outcomes or blinded analysis.
 
 Tonight's bounded capacity is **one active token per configured tenant** (first eligible admission), for
-24 hours from the original caller timestamp. Repeated calls for that token do not
+the earlier of 24 hours from the original caller timestamp or the explicit activation-window end. Repeated calls for that token do not
 reset the baseline or TTL. Other tokens are recorded as capacity-deferred admissions,
 visible in the live view; they never silently replace the monitored token.
 Admission is reevaluated while the feed retains the event, but capacity does not
@@ -80,8 +80,7 @@ one database-clock minute. A denied reservation yields unavailable/deferred data
 never substituted historical evidence. Temporary quota reservation rows older than two hours are pruned; monitor evidence, snapshots, transitions, reference and delivery history are retained.
 
 Provider calls would use the existing free public endpoint (no new subscription).
-Existing Brevo and Twilio charges still apply. SMS bodies are restricted to at most 300 GSM7 single-septet characters (up to two concatenated segments). SMS count is event-dependent,
-not capped by provider polling. Per-monitor/channel five-minute cooldown suppresses
+Existing Brevo and Twilio charges still apply. SMS bodies are restricted to at most 300 GSM7 single-septet characters (up to two concatenated segments). SMS attempts are additionally limited by the durable activation allowance (default5, maximum20), separately from provider polling. Per-monitor/channel five-minute cooldown suppresses
 repeated risk notifications; new supported CRITICAL cause can bypass it.
 The atomic milestone is independent of risk cooldown. Operational test namespace
 never sends, even with transport flags. Accepted/error/ambiguous outcomes are
@@ -105,7 +104,8 @@ Sending stays disabled until destinations and possible usage charges are approve
    approved. GET routes never run migrations.
 4. Configure existing SIGNAL_OPERATOR_ENABLED=1, valid operation gate/channel/feed,
    SIGNAL_DISTRIBUTION_ENABLED=1, numeric SIGNAL_DISTRIBUTION_TENANT_ID,
-   SIGNAL_DISTRIBUTION_SHARED_BUDGET_APPROVED=1, MAX_ACTIVE=1, and trusted APP_URL.
+   SIGNAL_DISTRIBUTION_SHARED_BUDGET_APPROVED=1, MAX_ACTIVE=1, trusted APP_URL,
+   explicit future WINDOW_START/WINDOW_END (maximum24h), and approved SMS_MAX_MESSAGES.
    APPLY_MIGRATIONS defaults off. Invalid distribution activation logs a blocker
    while existing operator startup continues without the new monitor.
 5. First deploy with SMS/EMAIL ENABLED and CONSENT flags absent. Review real
@@ -144,3 +144,48 @@ wrapper for this sandbox. No shared database URL or service was used.
 The final combined run passed 201 tests, 0 failed, 0 skipped, including Signal regression, distribution unit/route/DOM lifecycle/persistence, CI path planning and startup smoke. Actual Chromium visual QA was blocked before page load by this environment's process-singleton Unix socket restriction. No visual pass or screenshots are claimed; the loopback-only browser QA script is retained for a supported environment.
 This does not prove live supported fields, deployment compatibility, provider
 latency or handset receipt. Those remain separate approval-gated rollout checks.
+
+## Bounded activation window and SMS allowance (required)
+
+In addition to the default-off enable flag, activation requires explicit
+`SIGNAL_DISTRIBUTION_WINDOW_START` and `SIGNAL_DISTRIBUTION_WINDOW_END` ISO timestamps
+with a timezone. No actual times are supplied by the build. Duration must be
+positive and at most 24 hours. First initialization must precede the start by
+PostgreSQL's clock; restarting the exact persisted window is allowed, but changing
+its SMS allowance is rejected. Overlapping windows for the same tenant/namespace
+are rejected. A new future window requires separate operational approval.
+
+Only genuine caller events whose original occurredAt is at or after window start
+are admitted. Buffered older calls cannot start a monitor. The first eligible CA
+uses the single active slot; other admissions are visibly deferred. Each monitor
+expires at the earlier of call+24h or window end. The shared research start time
+is unchanged. No automatic renewal or next-window enrollment exists.
+
+DB-clock admission, claim, observation and quota checks enforce expiry. Provider
+and delivery transports additionally check a conservative monotonic deadline
+immediately before invocation. No new distribution requests or notifications are
+initiated once that deadline closes. Requests initiated before it may finish
+later; observations arriving after closure are rejected. The DB-only view labels
+expired monitors even when the browser clock is skewed. Legacy rows without an
+activation are not eligible for polling or sending.
+
+`SIGNAL_DISTRIBUTION_SMS_MAX_MESSAGES` defaults to **5**, permits integer **0..20**,
+and is immutable per persisted activation. A DB transaction reserves one allowance
+for each SMS send authorization across processes, before provider invocation.
+Restarts, failures, UNKNOWN outcomes, crashes and unused reservations do not refund
+it. Both risk and milestone SMS use this same cap. This limits message attempts,
+not dollars or segments: the compact 300-character GSM7 body can use up to two
+segments. Provider pricing/recipient approval is still required. Email remains
+separately consented and window-bound. TEST records still never send.
+
+Outside the configured window, participating existing Gecko consumers return to
+their original pacing without recording shared quota attempts. During the window,
+all consuming processes must install the same durable budget; global6/min can
+defer scheduled research captures. No change to empirical definitions or
+replacement of missed historical captures is authorized. Do not claim the global
+cap if another live consumer has not been coordinated.
+
+Migrations now also add activation rows/monitor linkage and per-delivery
+send-authorization timestamps. Apply the reviewed additive SQL with activation
+off, then approve exact tenant, start, end, recipients and message allowance.
+Neither merging the draft nor applying SQL authorizes configuring these values.

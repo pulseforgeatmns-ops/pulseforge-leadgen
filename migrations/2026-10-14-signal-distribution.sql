@@ -30,3 +30,15 @@ CREATE TABLE IF NOT EXISTS signal_distribution_observations (
  observed_at TIMESTAMPTZ NOT NULL, payload JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL,
  UNIQUE(monitor_id,observed_at), FOREIGN KEY(monitor_id,tenant_id,namespace) REFERENCES signal_distribution_monitors(id,tenant_id,namespace)
 );
+
+-- Immutable, explicitly configured operational windows. Legacy rows remain inert.
+CREATE TABLE IF NOT EXISTS signal_distribution_activations (
+ id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, namespace TEXT NOT NULL CHECK(namespace IN ('operational','test')),
+ starts_at TIMESTAMPTZ NOT NULL, ends_at TIMESTAMPTZ NOT NULL,
+ sms_limit INTEGER NOT NULL CHECK(sms_limit BETWEEN 0 AND 20), sms_reserved INTEGER NOT NULL DEFAULT 0 CHECK(sms_reserved >= 0 AND sms_reserved <= sms_limit),
+ CHECK(ends_at > starts_at AND ends_at <= starts_at + interval '24 hours'), UNIQUE(id,tenant_id,namespace)
+);
+ALTER TABLE signal_distribution_monitors ADD COLUMN IF NOT EXISTS activation_id TEXT;
+DO $$ BEGIN
+ ALTER TABLE signal_distribution_monitors ADD CONSTRAINT signal_distribution_monitor_activation_fk FOREIGN KEY(activation_id,tenant_id,namespace) REFERENCES signal_distribution_activations(id,tenant_id,namespace);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;

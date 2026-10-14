@@ -16,7 +16,7 @@ function payload(overrides = {}) {
 }
 function setup(data = payload()) {
   let at = Date.parse('2026-10-14T13:00:00Z'); const calls = []; const lanes = []; const cooldowns = [];
-  const requestBudget = { consume: async lane => { lanes.push(lane); return true; }, backoff: async at => cooldowns.push(at) };
+  const requestBudget = { remainingMs: async()=>60000, consume: async lane => { lanes.push(lane); return true; }, backoff: async at => cooldowns.push(at) };
   const p = new GeckoTerminalDistributionProvider({ now: () => new Date(at), requestBudget,
     fetchFn: async (url, options) => { calls.push({url,options}); return { ok: true, json: async () => data }; } });
   return { p, calls, lanes, cooldowns, advance: ms => { at += ms; }, requestBudget };
@@ -78,7 +78,7 @@ test('env request alone never disrupts existing adapter before budget activation
 });
 test('unconfigured shared budget fails closed, configuration delegates without captured old references', async () => {
   assert.equal(await sharedRequestBudget.consume('distribution'),false);
-  const seen=[];configureSharedRequestBudget({consume:async lane=>{seen.push(lane);return true;},backoff:async at=>seen.push(at)});
+  const seen=[];configureSharedRequestBudget({remainingMs:async()=>60000,shouldApply:async()=>true,consume:async lane=>{seen.push(lane);return true;},backoff:async at=>seen.push(at)});
   assert.equal(await sharedRequestBudget.consume('existing'),true);await sharedRequestBudget.backoff(123);
   assert.deepEqual(seen,['existing',123]);
 });
@@ -94,6 +94,37 @@ test('existing adapter 429 consumes once and stops retry loop when globally budg
 });
 test('already-created existing adapter joins shared budget only after activation', async () => {
   let fetched=0;const p=new GeckoTerminalMarketDataProvider({rateLimitMs:0,fetchFn:async()=>{fetched++;throw new Error('unexpected_network');}});
-  configureSharedRequestBudget({consume:async lane=>{assert.equal(lane,'existing');return false;},backoff:async()=>{}});
+  configureSharedRequestBudget({remainingMs:async()=>60000,shouldApply:async()=>true,consume:async lane=>{assert.equal(lane,'existing');return false;},backoff:async()=>{}});
   await assert.rejects(p.getLiveTokenSnapshot(token),/budget_unavailable/);assert.equal(fetched,0);
+});
+test('DB-clock window controls existing calls dynamically; outside it original retries remain intact', async () => {
+  let active=false,consumed=0,calls=0,checks=0;
+  configureSharedRequestBudget({remainingMs:async()=>60000,shouldApply:async lane=>{assert.equal(lane,'existing');checks++;return active;},consume:async()=>{consumed++;return false;},backoff:async()=>{}});
+  const p=new GeckoTerminalMarketDataProvider({rateLimitMs:0,maxRetries:1,fetchFn:async()=>{
+    calls++;return calls===1?{ok:false,status:429,text:async()=> '{}'}:{ok:true,status:200,text:async()=>JSON.stringify({data:{attributes:{address:token,price_usd:'1'}}})};
+  }});
+  await p.getLiveTokenSnapshot(token);assert.equal(calls,2);assert.equal(consumed,0);assert.equal(checks,2);
+  active=true;await assert.rejects(p.getLiveTokenSnapshot(token),/budget_unavailable/);assert.equal(calls,2);assert.equal(consumed,1);
+  active=false;await p.getLiveTokenSnapshot(token);assert.equal(calls,3);assert.equal(consumed,1);
+});
+test('DB activation uncertainty never silently bypasses quota; absent activation check is rejected',async()=>{
+ assert.throws(()=>configureSharedRequestBudget({consume:async()=>true,backoff:async()=>{}}),/budget_invalid/);
+ let calls=0;configureSharedRequestBudget({remainingMs:async()=>60000,shouldApply:async()=>{throw Error('db_window_unavailable');},consume:async()=>true,backoff:async()=>{}});
+ const p=new GeckoTerminalMarketDataProvider({rateLimitMs:0,fetchFn:async()=>{calls++;}});
+ await assert.rejects(p.getLiveTokenSnapshot(token),/db_window_unavailable/);assert.equal(calls,0);
+ configureSharedRequestBudget({remainingMs:async()=>60000,shouldApply:async()=>null,consume:async()=>true,backoff:async()=>{}});
+ await assert.rejects(p.getLiveTokenSnapshot(token),/activation_state_unknown/);assert.equal(calls,0);
+});
+test('distribution remains failclosed after activation ends rather than taking existing bypass',async()=>{
+ configureSharedRequestBudget({remainingMs:async()=>60000,shouldApply:async()=>false,consume:async lane=>{assert.equal(lane,'distribution');return false;},backoff:async()=>{}});
+ let calls=0;const p=new GeckoTerminalDistributionProvider({fetchFn:async()=>{calls++;}});
+ await assert.rejects(p.getSnapshot({tokenAddress:token,poolAddress:pool}),/budget_unavailable/);assert.equal(calls,0);
+});
+test('distribution network initiation fenced by DB remaining window with monotonic latency deduction',async()=>{
+ const {p,calls}=setup();p.requestBudget.remainingMs=async()=>0;
+ await assert.rejects(p.getSnapshot({tokenAddress:token,poolAddress:pool}),/activation_expired/);assert.equal(calls.length,0);
+ p.requestBudget.remainingMs=async()=>{await new Promise(r=>setTimeout(r,10));return 1;};
+ await assert.rejects(p.getSnapshot({tokenAddress:token,poolAddress:pool}),/activation_expired/);assert.equal(calls.length,0);
+ p.requestBudget.remainingMs=async()=>NaN;
+ await assert.rejects(p.getSnapshot({tokenAddress:token,poolAddress:pool}),/activation_expired/);assert.equal(calls.length,0);
 });

@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS signal_distribution_deliveries (
   attempts INTEGER NOT NULL DEFAULT 0,
   lease_until TIMESTAMPTZ,
   accepted_at TIMESTAMPTZ,
+  send_authorized_at TIMESTAMPTZ,
   provider_receipt TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(tenant_id,namespace,transition_id,channel),
@@ -22,3 +23,5 @@ CREATE INDEX IF NOT EXISTS signal_distribution_delivery_claim
   ON signal_distribution_deliveries(tenant_id,namespace,channel,created_at) WHERE status='PENDING';
 CREATE INDEX IF NOT EXISTS signal_distribution_delivery_cooldown
   ON signal_distribution_deliveries(tenant_id,namespace,monitor_id,channel,created_at);
+
+ALTER TABLE signal_distribution_deliveries ADD COLUMN IF NOT EXISTS send_authorized_at TIMESTAMPTZ;

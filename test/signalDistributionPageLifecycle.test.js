@@ -38,3 +38,6 @@ test('executed reference form: errors allow explicit retry; invalid/future value
 test('executed saved reference separates entered time and forward saved boundary, without save form',()=>{
  const h=setup();const target=new Element('div');h.monitor.state.reference={priceUsd:1,recordedAt:'2026-10-14T10:00:00Z',savedAt:'2026-10-14T13:00:00Z',provenance:'EXPLICIT_MANUAL_OPERATOR'};h.context.renderReference(target,h.monitor);assert.equal(target.all().some(e=>e.tag==='form'),false);assert.match(target.textContent,/Entered reference time: 2026-10-14T10/);assert.match(target.textContent,/forward observation boundary: 2026-10-14T13/);assert.match(target.textContent,/earlier samples are not recomputed/);
 });
+test('DB-reported EXPIRED hides reference form even when browser clock sees future expiry',()=>{
+ const h=setup();h.monitor.monitoring_status='EXPIRED';h.monitor.activation_id='window-1';const target=new Element('div');h.context.renderReference(target,h.monitor);assert.equal(target.all().some(e=>e.tag==='form'),false);assert.match(target.textContent,/expired monitors/);
+});

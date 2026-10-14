@@ -65,3 +65,14 @@ and savedAt are shown separately.
   visually verified mobile usability.
 
 See distribution-v1-rollout.md for thresholds, rate limits, 24h TTL and activation.
+
+### Activation-window safety extension
+Explicit timezone windows (maximum24h), immutable restart configuration, DB-clock
+admission/end fencing, prewindow caller rejection and durable SMS authorization
+counts were added after the original green draft. Real PostgreSQL tests cover
+concurrent reservations (8 contenders, cap5), restart/no refunds, skewed app clocks,
+claim-before-end/authorize-after-end denial and no legacy-window sends. Provider
+unit tests cover expiry between DB permission and invocation; existing consumer
+pacing bypasses the distribution budget outside the window. Browser visual QA
+remains unexecuted; DOM lifecycle tests additionally cover DB-expired status with
+a skewed browser clock. Final exact-head CI is required after this extension.
