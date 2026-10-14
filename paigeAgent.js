@@ -1,6 +1,6 @@
 require('dotenv').config();
 const pool = require('./db');
-const Anthropic = require('@anthropic-ai/sdk');
+const Anthropic = require('./utils/meteredAnthropic').forAgent('paige');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { buildMiraContext } = require('./utils/miraContext');
 const { getActiveGuardrails } = require('./utils/agentLessons');
@@ -13,7 +13,7 @@ const ANCHOR_PUBLIC_CTA_DOCTRINE = ANCHOR_FACILITY_ASSESSMENT_CTA_GUIDANCE
   .map((line) => `- ${line}`)
   .join('\n');
 
-const client = new Anthropic();
+const client = new Anthropic(undefined, { tenantId: () => CLIENT_ID });
 const AGENT_NAME = 'paige';
 
 function resolvePaigeWriterModel(env = process.env) {
@@ -3322,3 +3322,4 @@ if (require.main === module) {
     process.exit(1);
   });
 }
+
