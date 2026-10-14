@@ -1,8 +1,9 @@
 require('dotenv').config();
 const pool = require('./db');
 const axios = require('axios');
-const Anthropic = require('@anthropic-ai/sdk');
+const Anthropic = require('./utils/meteredAnthropic').forAgent('max');
 const { randomUUID } = require('crypto');
+const { getApiUsageReport, formatApiUsageBrief } = require('./services/apiUsageService');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { getAvailableActionAgents, getEnabledAgents, isAgentEnabled } = require('./utils/agentAvailability');
 const { getExpansionReport } = require('./scoutExpansion');
@@ -16,7 +17,7 @@ const { DIGEST_IDENTITY } = require('./packages/max/identity/MaxIdentity');
 const { listAssessmentsForClient } = require('./services/websiteOpportunityPersistence');
 const { buildMaxWebOpportunityDigest } = require('./utils/webOpportunityMaxPrioritization');
 
-const client = new Anthropic();
+const client = new Anthropic(undefined, { tenantId: () => CLIENT_ID });
 const AGENT_NAME = 'max';
 const CLIENT_ID = getRuntimeClientId();
 let CLIENT_CONFIG = null;
@@ -2844,6 +2845,16 @@ async function run(args = {}) {
       console.log(`[Max] generateInsights returned (type=${typeof rawInsights}, length=${typeof rawInsights === 'string' ? rawInsights.length : 'n/a'})`);
       const verifiedInsights = await verifyDigestProspects(rawInsights, snapshot);
       let insights = injectPatternsSection(verifiedInsights, patternAnalysis.dailyInsights);
+      if (CLIENT_ID === 1) {
+        try {
+          const usage = await getApiUsageReport({ db: pool });
+          insights += `\n\n${formatApiUsageBrief(usage)}`;
+          result.api_usage = { alerts: usage.alerts, billing: usage.billing.status };
+        } catch (_err) {
+          insights += '\n\nAPI spending visibility is unavailable; current costs and caps could not be verified.';
+          result.api_usage = { status: 'unavailable' };
+        }
+      }
       try {
         const shadowData = await getShadowDigestData({ db: pool, clientId: CLIENT_ID, hours: 24 });
         const shadowBlock = formatShadowDigest(shadowData);
@@ -2952,3 +2963,4 @@ if (require.main === module) {
     process.exit(1);
   });
 }
+

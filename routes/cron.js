@@ -1,5 +1,5 @@
 const express = require('express');
-const Anthropic = require('@anthropic-ai/sdk');
+const Anthropic = require('../utils/meteredAnthropic').forAgent('cron_summary');
 const router = express.Router();
 // No missing-secret bypass and no GET mutation. These stay separate from legacy
 // agent enablement: the durable program is the delegated authority, not autosend.
@@ -814,3 +814,4 @@ module.exports.handleInspectAnchorCanonicalOutboundCron = handleInspectAnchorCan
 module.exports.handleRecoverAnchorCanonicalOutboundCron = handleRecoverAnchorCanonicalOutboundCron;
 module.exports.isScoutPlacesDiagnosticAgent = isScoutPlacesDiagnosticAgent;
 module.exports.CRON_SPECIAL_HANDLERS = CRON_SPECIAL_HANDLERS;
+

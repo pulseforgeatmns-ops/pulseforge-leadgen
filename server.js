@@ -77,6 +77,7 @@ ensureCallDispositionSchema().catch(err => console.error('[callDisposition] init
 ensureMiraSchema().catch(err => console.error('[mira] init error:', err.message));
 ensureLifecycleSchema(pool).catch(err => console.error('[lifecycle] init error:', err.message));
 ensurePlacesAttributionSchema().catch(err => console.error('[placesAttribution] init error:', err.message));
+require('./utils/apiSpendControl').ensureApiUsageSchema().catch(() => console.warn('[api-usage] Ledger initialization unavailable; paid calls require a working ledger.'));
 ensureAnchorPortalSchema().catch(err => console.error('[anchorPortal] init error:', err.message));
 ensureSignalSchema(pool).catch(err => console.error('[signal-v1] schema init error:', err.message));
 require('./services/signalV1ShadowScheduler').startSignalV1ShadowScheduler();
@@ -263,6 +264,7 @@ app.use('/', require('./routes/tenantWorkspace'));
 app.use('/', require('./routes/registration'));
 app.use('/', require('./routes/pilotOnboarding'));
 app.use('/', require('./routes/workspace'));
+app.use('/', require('./routes/apiUsage'));
 app.use('/', require('./routes/maxChat'));
 app.use('/', require('./routes/maxWorkspace'));
 app.use('/', require('./routes/maxStateIngestion'));
@@ -937,3 +939,4 @@ try {
   console.error('LISTEN FAILED:', err);
   throw err;
 }
+
