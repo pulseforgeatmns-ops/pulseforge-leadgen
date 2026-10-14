@@ -252,7 +252,9 @@ for (const failure of ['changed state', 'missing row', 'read error', 'wrong tena
     const result = await evaluate(store, decisions, attention);
     assert.equal(result.duplicate, true);
     assertFailed(result.decision);
-    if (!['legacy receipt', 'missing intent', 'unfinished intent'].includes(failure)) assert.equal(reads, 1);
+    if (!['legacy receipt', 'missing intent', 'unfinished intent'].includes(failure)) {
+      assert.equal(reads, failure === 'changed state' ? 2 : 1, 'canonical refresh precedes replay verification');
+    }
     assert.equal(decisions.decisions[0].verification_status, 'VERIFICATION_FAILED');
     assert.equal(decisions.actionIntents.length, failure === 'missing intent' ? 0 : 1);
     if (decisions.actionIntents.length) assert.equal(decisions.actionIntents[0].verification_status, 'VERIFICATION_FAILED');
@@ -276,7 +278,7 @@ test('replay may repair unfinished decision bookkeeping from a verified durable 
   assert.equal(replay.duplicate, true);
   assert.equal(replay.decision.execution_status, 'EXECUTED');
   assert.equal(replay.decision.verification_status, 'VERIFIED');
-  assert.equal(reads, 1);
+  assert.equal(reads, 2, 'canonical refresh and independent verification readback');
   assert.equal(decisions.actionIntents.length, 1);
 });
 

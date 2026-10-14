@@ -20,6 +20,14 @@ class MemoryDecisionStore {
     ) || null;
   }
 
+  async listIngestionResolutionDecisions({ clientId, ingestionId }) {
+    if (String(clientId) !== String(this.clientId) || !ingestionId) return [];
+    return this.decisions.filter(d => String(d.client_id) === String(clientId)
+      && d.trigger?.type === 'NEW_EVIDENCE' && d.trigger?.payload?.ingestion_id === ingestionId
+      && d.subject_type === 'expectation' && d.selected_action?.action_type === 'RESOLVE_EXPECTATION'
+      && d.execution_status !== EXECUTION_STATUS.SUPERSEDED).map(d => structuredClone(d));
+  }
+
   async findActiveDecision({ clientId, subjectType, subjectId, actionType }) {
     return this.decisions.find(d =>
       d.client_id === clientId

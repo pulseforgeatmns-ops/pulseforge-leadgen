@@ -27,7 +27,9 @@ function selectAction({ snapshot, candidates, trigger, now = new Date() }) {
 
   const missingOwner = snapshot.epistemic?.account_owner === EPISTEMIC.UNKNOWN;
   const missingWindow = snapshot.expectation && snapshot.epistemic?.expectation_window === EPISTEMIC.UNKNOWN;
-  if (missingOwner || (snapshot.expectation && missingWindow && trigger?.type !== DECISION_TRIGGER.NEW_EVIDENCE)) {
+  const unavailableContext = snapshot.context_status === 'unavailable'
+    || snapshot.activity_read_status === 'unavailable';
+  if (unavailableContext || missingOwner || missingWindow) {
     const abstain = candidates.find(c => c.action_type === ACTION_TYPE.ABSTAIN_INSUFFICIENT_EVIDENCE);
     for (const c of candidates) {
       if (c.action_type !== ACTION_TYPE.ABSTAIN_INSUFFICIENT_EVIDENCE) {
@@ -40,8 +42,16 @@ function selectAction({ snapshot, candidates, trigger, now = new Date() }) {
       rationale: 'Required evidence is missing; abstaining rather than inventing certainty.',
       confidence: 0.9,
       outcome: EXECUTION_STATUS.INSUFFICIENT_EVIDENCE,
-      assumptions: ['Ownership or expectation window not canonically known'],
+      assumptions: ['Ownership, expectation window or activity history not canonically known'],
     };
+  }
+
+  if (snapshot.expectation?.status === 'RESOLVED') {
+    const noop = candidates.find(c => c.action_type === ACTION_TYPE.NO_ACTION);
+    return { selected: noop, notSelected: candidates.filter(c => c !== noop)
+      .map(c => ({ ...c, reason: 'Canonical expectation is already resolved' })),
+    rationale: 'Canonical expectation is already resolved.', confidence: 0.95,
+    outcome: EXECUTION_STATUS.NO_ACTION_RECORDED, assumptions };
   }
 
   if (trigger?.type === DECISION_TRIGGER.NEW_EVIDENCE && snapshot.has_resolving_activity) {
@@ -78,6 +88,18 @@ function selectAction({ snapshot, candidates, trigger, now = new Date() }) {
       outcome: EXECUTION_STATUS.NO_ACTION_RECORDED,
       assumptions,
       reevaluate_after: wait?.reevaluate_after || snapshot.expectation.expected_window?.ends_at,
+    };
+  }
+
+  if (snapshot.expectation && snapshot.has_resolving_activity) {
+    return {
+      selected: candidates.find(c => c.action_type === ACTION_TYPE.NO_ACTION),
+      notSelected: candidates.filter(c => c.action_type !== ACTION_TYPE.NO_ACTION)
+        .map(c => ({ ...c, reason: 'Supported evidence exists; resolution requires a NEW_EVIDENCE trigger' })),
+      rationale: 'Supported activity is present; do not create an unsupported missing-activity follow-up.',
+      confidence: 0.9,
+      outcome: EXECUTION_STATUS.NO_ACTION_RECORDED,
+      assumptions,
     };
   }
 

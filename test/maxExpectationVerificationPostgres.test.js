@@ -2,11 +2,10 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const fs = require('node:fs');
-const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { Pool } = require('pg');
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
+const { applyCanonicalAoFixture, seedAoActivity } = require('./helpers/canonicalAoPostgres');
 const { PostgresStateStore } = require('../packages/max/stateIngestion');
 const { PostgresDecisionStore, evaluateOperationalDecision } = require('../packages/max/decisionExecution');
 const { PostgresAttentionStore } = require('../packages/max/attention/store/postgresStore');
@@ -17,23 +16,8 @@ test('real PostgreSQL: scoped expectation resolution, truthful failure and resta
   const instance = await startDisposablePostgres('max-expectation-');
   const db = new Pool({ connectionString: instance.connectionString });
   t.after(async () => { await db.end(); await instance.stop(); });
-  await db.query(`
-    CREATE TABLE clients (id integer PRIMARY KEY);
-    CREATE TABLE users (id integer PRIMARY KEY);
-    CREATE TABLE companies (id uuid PRIMARY KEY, name text);
-    CREATE TABLE prospects (id uuid PRIMARY KEY, client_id integer, company_id uuid,
-      assigned_ao_id integer);
-    INSERT INTO clients VALUES (1), (2);
-    INSERT INTO users VALUES (10), (11);
-  `);
-  for (const name of ['state-ingestion', 'decision-execution', 'attention']) {
-    await db.query(fs.readFileSync(path.join(__dirname, '..', 'migrations', `2026-10-05-max-reliability-${name}.sql`), 'utf8'));
-  }
+  await applyCanonicalAoFixture(db);
 
-  // Activity selection is an explicit test input. Production readProspect does not
-  // currently hydrate ao_prospect_activity; this suite proves real store persistence,
-  // not the production activity-to-resolution ingestion path.
-  const resolvingEvidence = new Map();
   async function seed({ clientId = 1, aoId = 10, resolving = true } = {}) {
     const prospectId = randomUUID();
     await db.query('INSERT INTO prospects (id, client_id, assigned_ao_id) VALUES ($1,$2,$3)',
@@ -42,15 +26,12 @@ test('real PostgreSQL: scoped expectation resolution, truthful failure and resta
     const expectation = await stateStore.createExpectation({ client_id: clientId, prospect_id: prospectId,
       ao_id: aoId, expectation_type: 'inbound_call', status: 'OVERDUE',
       expected_window: { ends_at: '2026-09-01T00:00:00.000Z' } });
-    resolvingEvidence.set(expectation.id, resolving);
+    if (resolving) await seedAoActivity(db, expectation);
     return expectation;
   }
   async function evaluate(expectation, stateDb = db, triggerType = 'NEW_EVIDENCE') {
     const stateStore = new PostgresStateStore(stateDb, { clientId: 1 });
-    const storedProspect = await stateStore.readProspect(expectation.prospect_id);
-    const prospect = storedProspect && { ...storedProspect, activities: resolvingEvidence.get(expectation.id)
-      ? [{ kind: 'meeting_scheduled', at: '2026-10-05T08:00:00.000Z' }] : [] };
-    return evaluateOperationalDecision({ clientId: 1, trigger: { type: triggerType, payload: {} }, expectation, prospect,
+    return evaluateOperationalDecision({ clientId: 1, trigger: { type: triggerType, payload: {} }, expectation,
       stateStore,
       decisionStore: new PostgresDecisionStore(db, { clientId: 1 }),
       attentionStore: new PostgresAttentionStore(db, { clientId: 1 }),
@@ -77,7 +58,7 @@ test('real PostgreSQL: scoped expectation resolution, truthful failure and resta
     const expectation = await seed({ resolving: false });
     const prior = await evaluate(expectation, db, 'EXPECTATION_OVERDUE');
     assert.equal(prior.decision.execution_status, 'EXECUTED');
-    resolvingEvidence.set(expectation.id, true);
+    await seedAoActivity(db, expectation);
     const calls = [];
     const stateDb = { query: async (sql, args) => { calls.push(sql); return db.query(sql, args); } };
     const result = await evaluate(expectation, stateDb);
@@ -129,7 +110,7 @@ test('real PostgreSQL: scoped expectation resolution, truthful failure and resta
       assert.equal(result.duplicate, true);
       assert.notEqual(result.decision.execution_status, 'EXECUTED');
       assert.equal(result.decision.verification_status, 'VERIFICATION_FAILED');
-      if (!['legacy unscoped receipt', 'missing intent'].includes(failure)) assert.equal(reads, 1);
+      assert.equal(reads, failure === 'changed state' ? 2 : 1, 'refresh precedes replay readback when canonical scope is available');
       const saved = (await db.query('SELECT * FROM max_operational_decisions WHERE id=$1', [first.decision.id])).rows[0];
       assert.equal(saved.verification_status, 'VERIFICATION_FAILED');
       const attention = (await db.query('SELECT * FROM max_attention_items WHERE source_decision_id=$1', [first.decision.id])).rows;
@@ -180,14 +161,25 @@ test('real PostgreSQL: scoped expectation resolution, truthful failure and resta
         }
         return db.query(sql, args);
       } };
-      await assertDurableFailure(await evaluate(expectation, stateDb));
+      const result = await evaluate(expectation, stateDb);
+      if (['missing', 'wrong tenant', 'wrong AO'].includes(failure)) {
+        assert.equal(result.decision.selected_action.action_type, 'ABSTAIN_INSUFFICIENT_EVIDENCE');
+        assert.equal(result.decision.execution_status, 'INSUFFICIENT_EVIDENCE');
+        assert.equal(result.intent, null, 'missing or mismatched canonical pre-read must never reach resolution');
+        const saved = (await db.query('SELECT * FROM max_operational_decisions WHERE id=$1', [result.decision.id])).rows[0];
+        assert.equal(saved.execution_status, 'INSUFFICIENT_EVIDENCE');
+        assert.equal((await db.query('SELECT count(*)::int AS count FROM max_operational_action_intents WHERE decision_id=$1', [result.decision.id])).rows[0].count, 0);
+        assert.equal((await db.query('SELECT status FROM max_attention_items WHERE source_decision_id=$1', [result.decision.id])).rows[0].status, 'ACTIVE');
+      } else {
+        await assertDurableFailure(result);
+      }
     });
   }
 
   await t.test('failed resolution never supersedes existing persisted follow-up', async () => {
     const expectation = await seed({ resolving: false });
     const prior = await evaluate(expectation, db, 'EXPECTATION_OVERDUE');
-    resolvingEvidence.set(expectation.id, true);
+    await seedAoActivity(db, expectation);
     const result = await evaluate(expectation, { query: async (sql, args) => {
       if (/UPDATE max_open_expectations/.test(sql)) return { rows: [], rowCount: 0 };
       return db.query(sql, args);

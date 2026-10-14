@@ -21,6 +21,19 @@ class PostgresDecisionStore {
     return rows[0] ? this._hydrateDecision(rows[0]) : null;
   }
 
+  async listIngestionResolutionDecisions({ clientId, ingestionId }) {
+    if (String(clientId) !== String(this.clientId) || !ingestionId) return [];
+    const { rows } = await this.db.query(`
+      SELECT * FROM max_operational_decisions
+      WHERE client_id = $1 AND trigger_type = 'NEW_EVIDENCE'
+        AND trigger_payload->>'ingestion_id' = $2 AND subject_type = 'expectation'
+        AND selected_action->>'action_type' = 'RESOLVE_EXPECTATION'
+        AND execution_status <> 'SUPERSEDED'
+      ORDER BY created_at, id
+    `, [this.clientId, ingestionId]);
+    return rows.map(row => this._hydrateDecision(row));
+  }
+
   async findActiveDecision({ clientId, subjectType, subjectId, actionType }) {
     const { rows } = await this.db.query(`
       SELECT * FROM max_operational_decisions

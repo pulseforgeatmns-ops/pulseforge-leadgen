@@ -251,6 +251,7 @@ test('active-duplicate AO replay checks current owner even when pipeline omits c
   assert.equal((await runAttentionCycle(context)).evaluated, 1);
   assert.equal(context.decisionStore.aoTasks[0].owner_id, 10);
   context.stateStore.prospects[0].assigned_ao_id = 11;
+  context.stateStore.expectations[0].ao_id = 11;
   // Equal due time preserves ACTIVE, changing the trigger to SCHEDULED_REVIEW.
   // This deliberately exercises findActiveDecision, not exact idempotency replay.
   await context.attentionStore.updateAttention('attention-1', { next_review_at: now.toISOString() });
