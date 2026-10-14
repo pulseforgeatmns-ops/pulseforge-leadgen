@@ -647,25 +647,42 @@ async function handleScoutPlacesDiagnostic(req, res) {
   }
 }
 
+function maxAttentionCronResult(result) {
+  const response = { ...result, ok: !(result.failed > 0 || result.error) };
+  // Keep run/item identifiers and counters, but not database/provider exception
+  // messages. The scheduler's durable run record retains the detailed errors.
+  if (result.error) response.error = 'max_attention_cycle_failed';
+  if (result.telemetry) {
+    response.telemetry = Object.fromEntries(Object.entries(result.telemetry).map(([key, value]) => [
+      key,
+      key.startsWith('release_error_') ? 'attention_claim_release_failed'
+        : key.startsWith('error_') ? 'attention_item_failed' : value,
+    ]));
+  }
+  return response;
+}
+
 async function handleMaxAttentionCycleCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
   if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
+  res.set('Cache-Control', 'no-store');
   try {
     const { runAttentionSchedulerAllClients } = require('../services/maxAttentionService');
     const clientId = normalizeClientId(req.query.client_id || req.query.clientId);
     const now = req.query.now || req.body?.now ? new Date(req.query.now || req.body.now) : new Date();
     if (clientId != null) {
       const { runAttentionScheduler } = require('../services/maxAttentionService');
-      const result = await runAttentionScheduler(clientId, { now });
-      return res.set('Cache-Control', 'no-store').json({ ok: true, client_id: clientId, ...result });
+      const result = maxAttentionCronResult(await runAttentionScheduler(clientId, { now }));
+      return res.status(result.ok ? 200 : 500).json({ client_id: clientId, ...result });
     }
-    const results = await runAttentionSchedulerAllClients({ now });
-    return res.set('Cache-Control', 'no-store').json({ ok: true, results });
+    const results = (await runAttentionSchedulerAllClients({ now })).map(maxAttentionCronResult);
+    const ok = results.every(result => result.ok);
+    return res.status(ok ? 200 : 500).json({ ok, results });
   } catch (err) {
-    console.error('[cron] max-attention-cycle error:', err.message);
-    return res.status(500).json({ ok: false, error: err.message });
+    console.error('[cron] max-attention-cycle failed');
+    return res.status(500).json({ ok: false, error: 'max_attention_cycle_failed' });
   }
 }
 
