@@ -182,7 +182,7 @@ describe('AUDIT-063 places cost attribution', () => {
             cacheMiss: true,
             cacheStrategy: 'memory_ttl',
           },
-          { db }
+          { db, reserveApiCall: async () => "test-reservation", settleApiCall: async () => {} }
         );
       }
     );
@@ -216,7 +216,7 @@ describe('AUDIT-063 places cost attribution', () => {
         fetchImpl,
         record: { caller: 'PlacesProvider', feature: PLACES_FEATURES.DISCOVERY },
       },
-      { db }
+      { db, reserveApiCall: async () => "test-reservation", settleApiCall: async () => {} }
     );
     await legacyTextSearch(
       {
@@ -225,7 +225,7 @@ describe('AUDIT-063 places cost attribution', () => {
         fetchImpl,
         record: { caller: 'PlacesProvider', feature: PLACES_FEATURES.DISCOVERY },
       },
-      { db }
+      { db, reserveApiCall: async () => "test-reservation", settleApiCall: async () => {} }
     );
 
     assert.equal(db.rows.length, 2);
@@ -254,7 +254,7 @@ describe('AUDIT-063 places cost attribution', () => {
         deferRecord: true,
         record: { caller: 'PlacesProvider', feature: PLACES_FEATURES.DISCOVERY },
       },
-      { db }
+      { db, reserveApiCall: async () => "test-reservation", settleApiCall: async () => {} }
     );
     await traced.commitRecord({ businessesAccepted: 1, candidatesCreated: 1 });
 
@@ -263,3 +263,4 @@ describe('AUDIT-063 places cost attribution', () => {
     assert.equal(db.rows[0].businesses_accepted, 1);
   });
 });
+

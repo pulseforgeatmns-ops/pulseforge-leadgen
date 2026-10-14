@@ -12,7 +12,7 @@ const DEFAULT_ANCHOR_CLIENT_ID = 1;
 let _anthropic = null;
 function getAnthropic() {
   if (!_anthropic) {
-    const Anthropic = require('@anthropic-ai/sdk');
+    const Anthropic = require('./meteredAnthropic').forAgent('mira_anchor');
     _anthropic = new Anthropic();
   }
   return _anthropic;
@@ -524,3 +524,4 @@ module.exports = {
   buildCandidateBlock,
   JACOB_CONTEXT,
 };
+

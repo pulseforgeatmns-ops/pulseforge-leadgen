@@ -6,7 +6,7 @@ const { test, describe, afterEach } = require('node:test');
 const PAIGE_AGENT_PATH = require.resolve('../paigeAgent');
 const PAIGE_EXEC_PATH = require.resolve('../services/paigeSocialContentExecution');
 const DB_PATH = require.resolve('../db');
-const ANTHROPIC_PATH = require.resolve('@anthropic-ai/sdk');
+const ANTHROPIC_PATH = require.resolve('../utils/meteredAnthropic');
 
 function loadPaigeAgent({ env = {}, anthropicFactory } = {}) {
   const savedEnv = {};
@@ -99,7 +99,7 @@ function loadPaigeAgent({ env = {}, anthropicFactory } = {}) {
     id: ANTHROPIC_PATH,
     filename: ANTHROPIC_PATH,
     loaded: true,
-    exports: anthropicFactory || FakeAnthropic,
+    exports: { forAgent: () => anthropicFactory || FakeAnthropic },
   };
 
   const paigeAgent = require('../paigeAgent');
@@ -361,3 +361,4 @@ describe('Paige writer/evaluator model selection', () => {
     assert.equal(result.execution?.publish, undefined);
   });
 });
+
