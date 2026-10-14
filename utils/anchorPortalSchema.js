@@ -137,6 +137,15 @@ async function ensureAnchorPortalTables() {
     )
   `);
 
+  // Additive upgrades preserve existing locations, service history and issue statuses.
+  await pool.query('ALTER TABLE anchor_portal_visits ADD COLUMN IF NOT EXISTS completed_by INTEGER REFERENCES users(id)');
+  await pool.query('ALTER TABLE anchor_portal_visits ADD COLUMN IF NOT EXISTS request_id TEXT');
+  await pool.query('ALTER TABLE anchor_portal_issues ADD COLUMN IF NOT EXISTS issue_type TEXT');
+  await pool.query('ALTER TABLE anchor_portal_issues ADD COLUMN IF NOT EXISTS request_id TEXT');
+  await pool.query("ALTER TABLE anchor_portal_evidence ADD COLUMN IF NOT EXISTS purpose TEXT NOT NULL DEFAULT 'service'");
+  await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_anchor_portal_report_request ON anchor_portal_visits (completed_by, request_id) WHERE request_id IS NOT NULL');
+  await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_anchor_portal_issue_request ON anchor_portal_issues (reported_by_user_id, request_id) WHERE request_id IS NOT NULL');
+
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_anchor_portal_visits_location_scheduled
       ON anchor_portal_visits (location_id, scheduled_at DESC)
@@ -201,8 +210,8 @@ async function insertScopeForLocation(locationId, sections = demoScopeSections()
   }
 }
 
-async function copyScopeToVisitItems(visitId, locationId) {
-  const { rows } = await pool.query(
+async function copyScopeToVisitItems(visitId, locationId, db = pool) {
+  const { rows } = await db.query(
     `SELECT s.title AS section_title, i.label AS item_label, i.sort_order
      FROM anchor_portal_scope_sections s
      JOIN anchor_portal_scope_items i ON i.section_id = s.id
@@ -211,7 +220,7 @@ async function copyScopeToVisitItems(visitId, locationId) {
     [locationId]
   );
   for (const row of rows) {
-    await pool.query(
+    await db.query(
       `INSERT INTO anchor_portal_visit_items
          (visit_id, section_title, item_label, sort_order, outcome)
        VALUES ($1, $2, $3, $4, 'pending')`,
@@ -255,7 +264,8 @@ async function seedDemoPortalData() {
   );
   if (existing.length) return { seeded: false, locationId: existing[0].id };
 
-  const demoPassword = process.env.ANCHOR_PORTAL_DEMO_PASSWORD || 'AnchorDemo2026!';
+  const demoPassword = process.env.ANCHOR_PORTAL_DEMO_PASSWORD;
+  if (!demoPassword || demoPassword.length < 16) throw new Error('Explicit demo setup requires a configured password of at least 16 characters.');
 
   const nextService = new Date();
   nextService.setDate(nextService.getDate() + ((3 - nextService.getDay() + 7) % 7) || 3);
@@ -388,7 +398,7 @@ async function seedDemoPortalData() {
   return { seeded: true, locationId, demoPassword };
 }
 
-async function ensureAnchorPortalSchema({ seedDemo = true } = {}) {
+async function ensureAnchorPortalSchema({ seedDemo = false } = {}) {
   await refreshUsersRoleConstraint();
   await ensureAnchorPortalTables();
   if (seedDemo) {

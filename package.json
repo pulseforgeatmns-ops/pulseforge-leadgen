@@ -157,7 +157,10 @@
     "test:max:attention:postgres": "node --test test/maxAttentionRecoveryPostgres.test.js",
     "test:babrun-scout-intake": "node --test test/babrunScoutIntake.test.js test/babrunScoutIntakePostgres.test.js test/babrunContactResolution.test.js test/scoutInventoryCapacityRecovery.test.js",
     "api:usage:audit": "node scripts/apiUsageAudit.js",
-    "test:api-usage": "node --test test/apiUsageControl.test.js test/apiUsageControlPostgres.test.js test/placesCostAttribution.test.js"
+    "test:api-usage": "node --test test/apiUsageControl.test.js test/apiUsageControlPostgres.test.js test/placesCostAttribution.test.js",
+    "test:anchor-portal": "node --test test/anchorPortal.test.js test/anchorPortalSecurity.test.js test/anchorPortalUiSafety.test.js test/anchorPortalAcceptancePostgres.test.js",
+    "test:anchor-portal:browser": "node --test test/browser/anchorPortalUi.test.js test/browser/anchorPortalBrowserAcceptance.test.js",
+    "anchor:portal:demo": "node scripts/demoExeterPortalLocal.js --disposable-local"
   },
   "repository": {
     "type": "git",

@@ -125,6 +125,8 @@ function captureBrevoRawBody(req, _res, buf) {
 // This public form owns its body limit, CORS, and native-form responses.
 app.use('/', require('./routes/substralAssessment'));
 app.use('/', require('./routes/studioSubstralOperator'));
+// Portal photos use bounded raster data URLs. Keep this limit scoped to portal APIs.
+app.use('/api/anchor-portal', express.json({ limit: '8mb' }));
 app.use(express.json({ verify: captureBrevoRawBody }));
 app.use(express.urlencoded({ extended: true, verify: captureBrevoRawBody }));
 app.use(cors());
