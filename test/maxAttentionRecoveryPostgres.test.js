@@ -2,11 +2,10 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const fs = require('node:fs');
-const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { Pool } = require('pg');
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
+const { applyCanonicalAoFixture } = require('./helpers/canonicalAoPostgres');
 const { PostgresStateStore } = require('../packages/max/stateIngestion/store/postgresStore');
 const { PostgresDecisionStore } = require('../packages/max/decisionExecution/store/postgresStore');
 const { PostgresAttentionStore } = require('../packages/max/attention/store/postgresStore');
@@ -18,18 +17,7 @@ test('PostgreSQL attention lifecycle, fencing and atomic restart recovery', { ti
   const instance = await startDisposablePostgres('max-attention-');
   const db = new Pool({ connectionString: instance.connectionString });
   t.after(async () => { await db.end(); await instance.stop(); });
-  await db.query(`
-    CREATE TABLE clients (id integer PRIMARY KEY);
-    CREATE TABLE users (id integer PRIMARY KEY);
-    CREATE TABLE companies (id uuid PRIMARY KEY, name text);
-    CREATE TABLE prospects (id uuid PRIMARY KEY, client_id integer, company_id uuid,
-      assigned_ao_id integer, status text, acquisition_metadata jsonb);
-    INSERT INTO clients VALUES (1), (2);
-    INSERT INTO users VALUES (10);
-  `);
-  for (const name of ['state-ingestion', 'decision-execution', 'attention']) {
-    await db.query(fs.readFileSync(path.join(__dirname, '..', 'migrations', `2026-10-05-max-reliability-${name}.sql`), 'utf8'));
-  }
+  await applyCanonicalAoFixture(db);
   const now = new Date('2026-10-13T12:00:00Z');
   function stores(pool = db, clientId = 1) {
     return { clientId, now, stateStore: new PostgresStateStore(pool, { clientId }),

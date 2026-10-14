@@ -131,7 +131,7 @@ test('3 scheduler scan alone does not resolve WAITING attention', async () => {
   assert.notEqual(after.status, ATTENTION_STATUS.RESOLVED);
 });
 
-test('4 ingestion wakes attention before re-evaluation', async () => {
+test('4 explicitly scoped ingestion wakes attention before re-evaluation', async () => {
   const store = seedState({ expectations: [openExpectation()] });
   const decisionStore = new MemoryDecisionStore({ clientId: 1 });
   const attentionStore = new MemoryAttentionStore({ clientId: 1 });
@@ -152,7 +152,7 @@ test('4 ingestion wakes attention before re-evaluation', async () => {
   await wakeAttentionForIngestion({
     attentionStore,
     clientId: 1,
-    ingestionResult: ingest,
+    ingestionResult: { ...ingest, prospect: { id: 'prospect-exeter' } },
     stateStore: store,
     now: new Date('2026-10-05T08:05:00.000Z'),
   });

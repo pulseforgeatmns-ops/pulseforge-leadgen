@@ -72,6 +72,15 @@ async function evaluateOwnedAttentionItem({
     now,
   });
 
+  // Unavailable canonical context is retryable. Do not consume the review or
+  // erase its due time because uncertainty was truthfully recorded as abstention.
+  if (result.snapshot?.context_status === 'unavailable'
+    || result.snapshot?.activity_read_status === 'unavailable') {
+    throw Object.assign(new Error('Attention canonical context is unavailable'), {
+      code: 'ATTENTION_CONTEXT_UNAVAILABLE',
+    });
+  }
+
   // Old processes could have persisted a decision before creating its task. Never
   // turn that ambiguous replay into success or re-execute the consequential action.
   if (['PENDING', 'AUTHORIZED', 'EXECUTING', 'EXECUTION_FAILURE', 'ACTION_VERIFICATION_FAILED']

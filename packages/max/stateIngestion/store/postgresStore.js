@@ -146,6 +146,36 @@ class PostgresStateStore {
     return rows[0] || null;
   }
 
+  async readProspectActivities(prospectId, { clientId = this.clientId, aoId } = {}) {
+    if (clientId == null || String(clientId) !== String(this.clientId) || !prospectId || aoId == null) {
+      return { status: 'unavailable', activities: [], source: 'ao_prospect_activity' };
+    }
+    try {
+      // Start from the owned canonical prospect. A LEFT JOIN sentinel proves
+      // empty history; no sentinel means the subject/ownership disappeared.
+      const { rows } = await this.db.query(`
+        SELECT p.id AS scoped_prospect_id, p.client_id AS scoped_client_id,
+               p.assigned_ao_id AS scoped_ao_id,
+               a.id, a.tenant_id, a.prospect_id, a.ao_id, a.activity_type,
+               a.outcome, a.metadata, a.created_at
+        FROM prospects p
+        LEFT JOIN ao_prospect_activity a ON a.prospect_id = p.id
+          AND a.tenant_id = p.client_id AND a.ao_id = p.assigned_ao_id
+        WHERE p.client_id = $1 AND p.id = $2 AND p.assigned_ao_id = $3
+        ORDER BY a.created_at, a.id
+      `, [this.clientId, prospectId, aoId]);
+      if (!rows.length || rows.some(row => String(row.scoped_client_id) !== String(clientId)
+        || row.scoped_prospect_id !== prospectId || String(row.scoped_ao_id) !== String(aoId))) {
+        return { status: 'unavailable', activities: [], source: 'ao_prospect_activity' };
+      }
+      const { normalizeAoActivity } = require('../../decisionExecution/activityEvidence');
+      return { status: 'complete', activities: rows.filter(row => row.id).map(normalizeAoActivity),
+        source: 'ao_prospect_activity', scope: { clientId, prospectId, aoId } };
+    } catch {
+      return { status: 'unavailable', activities: [], source: 'ao_prospect_activity' };
+    }
+  }
+
   async applyMutation(mutation) {
     if (mutation.safety_class === 'C') {
       mutation.commit_status = 'blocked';
@@ -283,12 +313,15 @@ class PostgresStateStore {
     return rows[0];
   }
 
-  async listOpenExpectations({ clientId = this.clientId } = {}) {
+  async listOpenExpectations({ clientId = this.clientId, prospectId, includeResolved = false } = {}) {
+    if (clientId == null || String(clientId) !== String(this.clientId)) return [];
     const { rows } = await this.db.query(`
       SELECT * FROM max_open_expectations
-      WHERE client_id = $1 AND status IN ('OPEN','WAITING','OVERDUE')
-      ORDER BY updated_at DESC
-    `, [clientId]);
+      WHERE client_id = $1 AND (status IN ('OPEN','WAITING','OVERDUE')
+        OR ($3::boolean AND status = 'RESOLVED'))
+        AND ($2::uuid IS NULL OR prospect_id = $2)
+      ORDER BY updated_at DESC, id
+    `, [this.clientId, prospectId ?? null, Boolean(includeResolved && prospectId)]);
     return rows;
   }
 
@@ -298,7 +331,9 @@ class PostgresStateStore {
       SELECT * FROM max_open_expectations
       WHERE id = $1 AND client_id = $2
         AND ($3::boolean = false OR prospect_id IS NOT DISTINCT FROM $4::uuid)
-        AND ($5::boolean = false OR ao_id IS NOT DISTINCT FROM $6::integer)
+        AND ($5::boolean = false OR (ao_id IS NOT DISTINCT FROM $6::integer
+          AND EXISTS (SELECT 1 FROM prospects p WHERE p.id = max_open_expectations.prospect_id
+            AND p.client_id = $2 AND p.assigned_ao_id = $6)))
     `, [id, this.clientId, prospectId !== undefined, prospectId ?? null, aoId !== undefined, aoId ?? null]);
     return rows[0] || null;
   }
@@ -316,6 +351,8 @@ class PostgresStateStore {
             THEN updated_at ELSE NOW() END
       WHERE id = $1 AND client_id = $2 AND prospect_id = $3 AND ao_id = $4
         AND status IN ('OPEN', 'WAITING', 'OVERDUE', 'RESOLVED')
+        AND EXISTS (SELECT 1 FROM prospects p WHERE p.id = max_open_expectations.prospect_id
+          AND p.client_id = $2 AND p.assigned_ao_id = $4)
       RETURNING *
     `, [id, this.clientId, prospectId, aoId]);
     return rows[0] || null;
