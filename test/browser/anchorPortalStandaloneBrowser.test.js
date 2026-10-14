@@ -5,13 +5,13 @@ const crypto = require('node:crypto');
 const bcrypt = require('bcryptjs');
 const { Pool } = require('pg');
 const { startDisposablePostgres } = require('../helpers/disposablePostgres');
-const { initialize } = require('../../standalone/anchor-portal/initialize');
+const { initializeSchema, provisionDemo } = require('../../standalone/anchor-portal/initialize');
 const { createApp } = require('../../standalone/anchor-portal/runtime');
 const { config,MARKER } = require('../../standalone/anchor-portal/config');
 const { verifyDatabase } = require('../../standalone/anchor-portal/database');
 const { illustrativePhoto } = require('../../standalone/anchor-portal/fixtures');
 let pg,pool,server,base,fixture,password,hashes,store;
-const keys=['client','operator','cleaner','unassigned','foreignOperator','foreignClient'];
+const keys=['client','operator'];
 before(async()=>{
  pg=await startDisposablePostgres('portal-standalone-');
  const admin=new Pool({connectionString:pg.connectionString});
@@ -19,7 +19,8 @@ before(async()=>{
  pool=new Pool({connectionString:pg.connectionString.replace(/\/postgres$/,'/anchor_portal_synthetic')});
  password=crypto.randomBytes(32).toString('base64url');
  const hash=await bcrypt.hash(password,12); hashes=Object.fromEntries(keys.map(k=>[k,hash]));
- fixture=await initialize(pool,MARKER,hashes);
+ await initializeSchema(pool,MARKER);
+ fixture=await provisionDemo(pool,MARKER,hashes,new Date(Date.now()+3600000));
  // Reserve selected loopback listener before constructing canonical configuration.
  const express=require('express');const outer=express();
  server=await new Promise(resolve=>{const s=outer.listen(0,'127.0.0.1',()=>resolve(s));});

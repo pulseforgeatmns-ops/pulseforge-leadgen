@@ -21,6 +21,11 @@ async function createApp(cfg, pool, { sessionMs = 30 * 60 * 1000 } = {}) {
     if (req.get('host') !== new URL(cfg.origin).host || (cfg.mode === 'hosted' && !req.secure)) return res.sendStatus(400);
     next();
   });
+  app.use(async (_req,res,next)=>{
+    try{const {rows:[state]}=await pool.query('SELECT expires_at FROM portal_demo_marker');
+      if(!state?.expires_at||new Date(state.expires_at)<=new Date())return res.status(410).json({error:'demo_expired'});next();
+    }catch(error){next(error);}
+  });
   const store = new PgStore({ pool, tableName:'portal_sessions', createTableIfMissing:false, pruneSessionInterval: 900 });
   app.use(session({ name:cookieName, store, secret:cfg.secret, resave:false, saveUninitialized:false, rolling:false, cookie:{ httpOnly:true, sameSite:'strict', secure:cfg.mode === 'hosted', maxAge:sessionMs } }));
   app.use(express.json({ limit:'8mb' }));
@@ -43,13 +48,13 @@ async function createApp(cfg, pool, { sessionMs = 30 * 60 * 1000 } = {}) {
       entry.count++; attempts.set(req.ip,entry);
       const { email,password } = req.body || {};
       if (typeof email !== 'string' || typeof password !== 'string' || email.length > 254 || password.length < 1 || Buffer.byteLength(password) > 72) return res.status(401).json({ error:'invalid_login' });
-      const { rows } = await pool.query('SELECT id,password_hash FROM users WHERE lower(email)=$1 AND active=TRUE', [email.toLowerCase().trim()]);
+      const { rows } = await pool.query('SELECT id,password_hash,valid_until FROM users WHERE lower(email)=$1 AND active=TRUE AND valid_until>NOW()', [email.toLowerCase().trim()]);
       const validPassword = await bcrypt.compare(password, rows[0]?.password_hash || dummyHash);
       if (!rows[0] || !validPassword) return res.status(401).json({ error:'invalid_login' });
       await new Promise((resolve,reject) => req.session.regenerate(e => e ? reject(e) : resolve()));
       attempts.delete(req.ip);
       req.session.userId = rows[0].id;
-      req.session.expiresAt = now + sessionMs;
+      req.session.expiresAt = Math.min(now + sessionMs,new Date(rows[0].valid_until).getTime());
       req.session.csrf = crypto.randomBytes(32).toString('hex');
       await new Promise((resolve,reject) => req.session.save(e => e ? reject(e) : resolve()));
       res.json({ ok:true });
@@ -59,7 +64,7 @@ async function createApp(cfg, pool, { sessionMs = 30 * 60 * 1000 } = {}) {
   async function requireAuth(req,res,next) {
     try {
       if (!req.session.userId || req.session.expiresAt <= Date.now()) return req.path.startsWith('/api/') ? res.status(401).json({error:'unauthorized'}) : res.redirect('/login');
-      const { rows } = await pool.query('SELECT id,name,email,role,client_id,active FROM users WHERE id=$1 AND active=TRUE',[req.session.userId]);
+      const { rows } = await pool.query('SELECT id,name,email,role,client_id,active FROM users WHERE id=$1 AND active=TRUE AND valid_until>NOW()',[req.session.userId]);
       if (!rows[0]) return res.status(401).json({error:'unauthorized'});
       req.user=rows[0]; next();
     } catch(error) { next(error); }
@@ -85,6 +90,6 @@ if (require.main === module) {
       const close = () => server.close(() => pool.end().then(() => process.exit(0)));
       process.once('SIGTERM',close); process.once('SIGINT',close);
     } catch(error) { await pool.end(); throw error; }
-  })().catch(() => { console.error('Portal startup refused. Check explicit configuration and initialized synthetic database.'); process.exitCode=1; });
+  })().catch(error => { if(error.code==='PORTAL_SETUP_PENDING')console.error('Portal setup pending: approved unexpired demo accounts required.'); console.error('Portal startup refused. Check explicit configuration and initialized synthetic database.'); process.exitCode=1; });
 }
 module.exports = { createApp };

@@ -15,8 +15,9 @@ Every setting is required; no credential defaults or fallbacks:
 - PORTAL_MODE: `local` (127.0.0.1 listener) or `hosted` (0.0.0.0 behind trusted HTTPS ingress).
 - PORT: selected listening port, supplied by hosting platform for hosted mode.
 - PORTAL_ORIGIN: canonical origin only. Local must be `http://127.0.0.1:<PORT>`; hosted must be HTTPS.
-- PORTAL_DATABASE_URL: dedicated PostgreSQL database named exactly `anchor_portal_synthetic`. No query parameters or fallback to DATABASE_URL. Local host must be 127.0.0.1. Hosted mode requires database authentication and verified TLS.
+- PORTAL_DATABASE_URL: dedicated PostgreSQL database named exactly `anchor_portal_synthetic`. No query parameters or fallback to DATABASE_URL. Local host must be 127.0.0.1. Hosted mode requires database authentication, a DNS hostname and verified TLS; IP-literal hosts are refused.
 - PORTAL_SESSION_SECRET: independently provisioned random secret, at least 32 random bytes encoded as hex.
+- PORTAL_DATABASE_CA: optional authentic public CA PEM for the dedicated database. Verified TLS remains mandatory; no private keys, hostname override or insecure fallback.
 - PORTAL_SYNTHETIC_MARKER: `anchor-portal-synthetic-only-v1`.
 
 Main-app database/auth/provider variables, generic credential variables and unknown PORTAL_* variables are rejected. Never copy production environment variables. Do not put secrets in commands, repository files, logs, chat or this README. HTTPS database connectivity must be established without disabling certificate verification.
@@ -25,11 +26,28 @@ Main-app database/auth/provider variables, generic credential variables and unkn
 
 Before any deployment: obtain explicit approval for service/database creation, costs and exact target. Real credential/secret creation is a separate secure user handoff; no real credentials were generated here.
 
-The one-off `initialize.js --initialize-synthetic-only` reads a JSON object of six externally provisioned bcrypt cost-12 hashes from secure stdin: client, operator, cleaner, unassigned, foreignOperator, foreignClient. It accepts no plaintext passwords, generates no fallback passwords, and prints no hashes. Use distinct secrets for each account; do not reuse the shared ephemeral hash pattern used by automated tests.
+Provisioning is split into two explicit commands:
 
-It requires the exact marker, named database, public schema and an entirely empty database, creates only synthetic users/locations/reports/issues/illustrative images plus sessions, and commits all fixtures atomically. A repeat or unexpected existing data refuses rather than overwriting. Runtime refuses missing/extra tables, shadow tables, upgrade drift, non-demo locations and non-synthetic user domains. This is a demonstration, not a mechanism for importing or processing real customer/student data.
+1. `node standalone/anchor-portal/initialize.js --schema-only` requires the exact marker, named database, public schema and an entirely empty database. It creates schema only, with zero account and location rows. The runtime refuses to listen with `Portal setup pending: approved unexpired demo accounts required.` This is infrastructure preparation, not a login-ready demo.
+2. Only after explicit approval to create the two accounts, `node standalone/anchor-portal/initialize.js --provision-approved-demo` reads secure stdin JSON containing `hashes` (client and operator bcrypt cost-12 hashes) and `expires_at` (an explicit UTC timestamp in the approved hosting window, at most 48 hours from provisioning). It requires untouched schema-only state, creates exactly those two accounts and one labelled synthetic building with sample reports/issues/photos, and commits atomically. No plaintext passwords, generated defaults, foreign-tenant or attack-test accounts are accepted by this command.
 
-Run the runtime with `node standalone/anchor-portal/runtime.js` only after provisioning and marker/schema verification. It performs no migration/seeding at startup. Use a dedicated least-privilege runtime database role (portal reads/writes and session operations only), separate from the initializer's DDL role; permission/credential provisioning needs approval.
+The proposed accounts are client@exeter-fixture.invalid (facility_client, assigned to the single demo building) and operator@exeter-fixture.invalid (manager, synthetic tenant 10 only). No admin or cleaner account is required. Approval of infrastructure, database access or a session secret is not approval to create these accounts. Distinct account secrets must be supplied through a secure user provisioning step; do not put them in commands, logs, files, chat or this README.
+
+The explicit window is checked before every HTTP request; expired deployments reject reads, login and writes. Account validity is checked at login and every authenticated request, and sessions cannot outlive the account deadline. Startup also refuses schema-only, missing, expired or invalid account state. A new window is not auto-created; reprovisioning or renewal requires separate approval. Infrastructure cleanup is a separately tracked operation; expiry blocks access but does not stop hosting charges.
+
+Runtime performs no migration/seeding. Use a dedicated least-privilege runtime database role (portal reads/writes and session operations only), separate from the initializer's DDL role. Schema-only setup does not create database roles. Runtime validates marker, table inventory, additive upgrade fields, synthetic identities/location flags and readiness. No real customer or student data belongs here.
+
+## Trusted Railway database certificates
+
+The official PostgreSQL template creates deployment-specific certificates, not a universal public Railway CA. Current source stores public root.crt and server.crt under /var/lib/postgresql/data/certs and includes localhost plus RAILWAY_PRIVATE_DOMAIN in the server SAN. Source is not proof of a deployed certificate:
+https://raw.githubusercontent.com/railwayapp-templates/postgres-ssl/main/init-ssl.sh
+
+Through authenticated access to the exact approved demo deployment, retrieve only root.crt and server.crt using supported Railway SSH/read-only deployed-file access. Never retrieve root.key or server.key. Registering a new SSH key or creating ongoing access needs explicit approval. Record the deployment identity and public certificate fingerprint, verify chain and validity, and confirm the intended private database hostname appears in the actual server SAN. Put the authentic root PEM in PORTAL_DATABASE_CA. Node/pg still validates the live chain and actual connection hostname. Do not use the public proxy hostname if absent from SAN, substitute localhost, or disable validation.
+
+Supported Railway access: https://docs.railway.com/cli/ssh
+Node hostname validation: https://nodejs.org/api/tls.html#tlscheckserveridentityhostname-cert
+
+If authentic retrieval or hostname coverage cannot be established, hold deployment and report the blocker. A certificate reissue or new trust/access change requires approval. Provider renewal may rotate the root; treat a new root as a new provenance verification, never automatically trust an unknown replacement.
 
 ## Hosted review before use
 
@@ -48,4 +66,4 @@ Use only synthetic records and original illustrative images. The fixture has thr
 - `npm run test:anchor-portal:standalone:browser` for real browser login, report/photo view and logout. Requires Chromium, PostgreSQL and permitted local sockets.
 - Existing `npm run test:anchor-portal:browser` exercises desktop/mobile portal workflows.
 
-Tests always create their own disposable local PostgreSQL; random test passwords remain in memory and are never printed. Browser requests are restricted to the test loopback origin plus data/blob images. Local API/auth/regression verification passed. Browser verification is currently blocked by the execution sandbox's Chromium socket restriction; this is not a browser pass. Docker build and real hosted ingress/database TLS remain unverified deployment gates.
+Tests always create their own disposable local PostgreSQL; random test passwords remain in memory and are never printed. Browser requests are restricted to the test loopback origin plus data/blob images. Local API/auth/regression verification passed. Browser verification is currently blocked by the execution sandbox's Chromium socket restriction; this is not a browser pass. Dedicated Docker build and browser login/report-photo/logout passed CI on the original PR925 head; each correction must pass those gates again. Actual hosted ingress/database TLS and phone testing remain unverified deployment gates.

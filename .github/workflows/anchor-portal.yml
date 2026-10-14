@@ -11,6 +11,7 @@ on:
       - 'test/browser/anchorPortal*'
       - 'standalone/anchor-portal/**'
       - 'test/helpers/exeterPortalHarness.js'
+      - 'test/helpers/standaloneAcceptanceFixture.js'
       - 'scripts/demoExeterPortalLocal.js'
       - 'migrations/*anchor-portal*'
       - 'server.js'
