@@ -45,6 +45,7 @@ const {
   retryUnverifiedEmails,
   emptyVerificationRetryTelemetry,
   mergeVerificationRetryTelemetry,
+  verificationRetryFailureReasons,
 } = require('./emailVerificationRecovery');
 const {
   evaluatePreparationRefill,
@@ -1301,6 +1302,8 @@ async function runMaxOutboundControlLoop(options = {}) {
     verificationRetryRisky: Number(verificationRetry.verificationRetryRisky || 0),
     verificationRetryInvalid: Number(verificationRetry.verificationRetryInvalid || 0),
     verificationRetryFailed: Number(verificationRetry.verificationRetryFailed || 0),
+    verificationRetryFailureReasons: verificationRetryFailureReasons(verificationRetry.verificationRetryFailureReasons),
+    verificationRetryLoadFailed: Number(verificationRetry.verificationRetryLoadFailed || 0),
     yield: scout?.yield || null,
     lossBuckets: scout?.lossBuckets || null,
     funnel,
