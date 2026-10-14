@@ -8,6 +8,8 @@ on:
       - 'utils/anchorPortalImages.js'
       - 'public/anchor-portal*'
       - 'test/anchorPortal*'
+      - 'test/browser/anchorPortal*'
+      - 'standalone/anchor-portal/**'
       - 'test/helpers/exeterPortalHarness.js'
       - 'scripts/demoExeterPortalLocal.js'
       - 'migrations/*anchor-portal*'
@@ -21,7 +23,7 @@ permissions:
 jobs:
   portal:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -32,5 +34,23 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Isolated portal persistence, security and UI state gate
         run: npm run test:anchor-portal
+      - name: Standalone real authentication and synthetic persistence gate
+        run: npm run test:anchor-portal:standalone
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
+      - name: Standalone real-browser login and logout gate
+        env:
+          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
+        run: npm run test:anchor-portal:standalone:browser
+      - name: Dedicated image build (no push or deployment)
+        run: docker build -f standalone/anchor-portal/Dockerfile -t anchor-portal-ci .
+      - name: Dedicated image refuses missing configuration
+        run: |
+          set +e
+          output=$(docker run --rm anchor-portal-ci 2>&1)
+          status=$?
+          set -e
+          test "$status" -eq 1
+          printf '%s\n' "$output" | grep -F 'Portal startup refused.'
       - name: Global entrypoint syntax smoke
         run: npm run test:global-smoke
