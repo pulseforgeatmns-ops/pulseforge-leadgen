@@ -18,6 +18,7 @@ class GeckoTerminalMarketDataProvider {
     this.maxRetries = options.maxRetries ?? 5;
     this.timeoutMs = options.timeoutMs ?? 10000;
     this._lastFetchAt = 0;
+    this.requestBudget = options.requestBudget || null;
     this.now = options.now || (() => new Date());
   }
 
@@ -169,6 +170,12 @@ class GeckoTerminalMarketDataProvider {
     let attempt = 0;
     while (attempt <= this.maxRetries) {
       await this._rateLimit();
+      const sharedBudget = require('../../../services/signalDistribution/requestBudget');
+      const budget = this.requestBudget || (sharedBudget.isSharedRequestBudgetActive()
+        ? sharedBudget.sharedRequestBudget : null);
+      if (budget && !await budget.consume('existing')) {
+        throw new Error('distribution_request_budget_unavailable');
+      }
       const res = await this.fetchFn(url, {
         headers: { Accept: 'application/json' },
         signal: AbortSignal.timeout(this.timeoutMs),
@@ -181,6 +188,10 @@ class GeckoTerminalMarketDataProvider {
         throw new Error(`GeckoTerminal non-JSON response (${res.status}): ${text.slice(0, 200)}`);
       }
       if (res.status === 429 || json?.status?.error_code === 429) {
+        if (budget) {
+          await budget.backoff(Date.now() + 60000);
+          throw new Error('distribution_provider_rate_limited');
+        }
         attempt += 1;
         const backoff = this.rateLimitMs * (attempt + 1);
         await new Promise(r => setTimeout(r, backoff));

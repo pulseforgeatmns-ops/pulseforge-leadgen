@@ -290,6 +290,17 @@ app.use('/', require('./routes/walkthrough'));
 app.use('/', require('./routes/anchorPortal'));
 app.use('/', require('./routes/leadQualificationReviews'));
 app.use('/', require('./routes/signalV1'));
+app.use('/', require('./routes/signalDistributionReference').createDistributionReferenceRouter({
+  Router:express.Router,requireAuth,requireRole,
+  getStore:()=>require('./services/signalDistribution').getStore(),
+  enabled:()=>process.env.SIGNAL_DISTRIBUTION_ENABLED==='1',
+}));
+app.use('/', require('./routes/signalDistribution').createDistributionRouter({
+  Router:express.Router,requireAuth,requireRole,
+  getStore:()=>require('./services/signalDistribution').getStore(),
+  getDeliveryStore:()=>require('./services/signalDistribution').getDeliveryStore(),
+  enabled:()=>process.env.SIGNAL_DISTRIBUTION_ENABLED==='1',
+}));
 
 // TEMP: one-shot GBP account/location lookup. CRON_SECRET-gated so it can be
 // curled without a session cookie. REMOVE AFTER MSHI IDs ARE CAPTURED.
