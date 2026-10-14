@@ -19,6 +19,7 @@ const {
   buildCacheKey,
   lookup,
   storeResult,
+  shareInFlight,
   DEFAULT_STRATEGY,
 } = require('./placesQueryCache');
 
@@ -180,6 +181,9 @@ async function legacyTextSearch(params = {}, deps = {}) {
   const cacheKey = buildCacheKey({
     endpoint: PLACES_ENDPOINTS.TEXT_SEARCH,
     normalizedQuery: recordBase.normalizedQuery,
+    query: params.query,
+    pageToken: params.pageToken,
+    apiKey: params.apiKey,
   });
   const started = Date.now();
 
@@ -205,8 +209,14 @@ async function legacyTextSearch(params = {}, deps = {}) {
   }
 
   let result;
+  let reused = false;
   try {
-    result = await guardedPlacesCall(recordBase, deps, () => executeLegacyTextSearch(params));
+    const execute = () => guardedPlacesCall(recordBase, deps, () => executeLegacyTextSearch(params));
+    const pending = useCache && recordBase.normalizedQuery
+      ? shareInFlight(`${cacheKey}:timeout:${params.timeout ?? 30000}`, execute)
+      : { promise: execute(), reused: false };
+    reused = pending.reused;
+    result = await pending.promise;
   } catch (err) {
     if (err.apiUsageNoNetwork) throw err;
     await recordCall(
@@ -221,16 +231,23 @@ async function legacyTextSearch(params = {}, deps = {}) {
       deps,
       started,
       {
-        cacheHit: false,
-        cacheMiss: Boolean(useCache && recordBase.normalizedQuery),
+        cacheHit: reused,
+        cacheMiss: !reused && Boolean(useCache && recordBase.normalizedQuery),
         cacheKey: useCache ? cacheKey : null,
-        cacheStrategy: useCache ? DEFAULT_STRATEGY : null,
+        cacheStrategy: reused ? 'memory_inflight' : useCache ? DEFAULT_STRATEGY : null,
       }
     );
     throw err;
   }
 
-  if (useCache && recordBase.normalizedQuery && result.ok) {
+  if (reused) {
+    await recordCall(recordBase, result, params, deps, started, {
+      cacheHit: true, cacheMiss: false, cacheAge: 0, cacheKey, cacheStrategy: 'memory_inflight',
+    });
+    return result;
+  }
+
+  if (useCache && recordBase.normalizedQuery && result.ok && ['OK', 'ZERO_RESULTS'].includes(result.googleStatus)) {
     storeResult(cacheKey, result, PLACES_ENDPOINTS.TEXT_SEARCH);
   }
 
@@ -269,6 +286,7 @@ async function legacyPlaceDetails(params = {}, deps = {}) {
     endpoint: PLACES_ENDPOINTS.PLACE_DETAILS,
     placeId: params.placeId,
     fieldMask: params.fields,
+    apiKey: params.apiKey,
   });
   const started = Date.now();
 
@@ -294,8 +312,14 @@ async function legacyPlaceDetails(params = {}, deps = {}) {
   }
 
   let result;
+  let reused = false;
   try {
-    result = await guardedPlacesCall(recordBase, deps, () => executeLegacyPlaceDetails(params));
+    const execute = () => guardedPlacesCall(recordBase, deps, () => executeLegacyPlaceDetails(params));
+    const pending = useCache && params.placeId
+      ? shareInFlight(`${cacheKey}:timeout:${params.timeout ?? 30000}`, execute)
+      : { promise: execute(), reused: false };
+    reused = pending.reused;
+    result = await pending.promise;
   } catch (err) {
     if (err.apiUsageNoNetwork) throw err;
     await recordCall(
@@ -310,16 +334,23 @@ async function legacyPlaceDetails(params = {}, deps = {}) {
       deps,
       started,
       {
-        cacheHit: false,
-        cacheMiss: Boolean(useCache && params.placeId),
+        cacheHit: reused,
+        cacheMiss: !reused && Boolean(useCache && params.placeId),
         cacheKey: useCache ? cacheKey : null,
-        cacheStrategy: useCache ? DEFAULT_STRATEGY : null,
+        cacheStrategy: reused ? 'memory_inflight' : useCache ? DEFAULT_STRATEGY : null,
       }
     );
     throw err;
   }
 
-  if (useCache && params.placeId && result.ok) {
+  if (reused) {
+    await recordCall(recordBase, result, params, deps, started, {
+      cacheHit: true, cacheMiss: false, cacheAge: 0, cacheKey, cacheStrategy: 'memory_inflight',
+    });
+    return result;
+  }
+
+  if (useCache && params.placeId && result.ok && result.googleStatus === 'OK') {
     storeResult(cacheKey, result, PLACES_ENDPOINTS.PLACE_DETAILS);
   }
 
