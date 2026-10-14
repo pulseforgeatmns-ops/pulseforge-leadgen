@@ -48,6 +48,8 @@ test('real browser signs in, loads portal, signs out and cannot reuse session', 
   await page.waitForSelector('#userLabel');await page.waitForFunction(()=>document.querySelector('#userLabel').textContent.includes('Synthetic'));
   await page.click('[data-tab="history"]');await page.waitForSelector('[data-visit]');
   await page.click('[data-visit]');await page.waitForSelector('.gallery img');
+  // DOM insertion precedes lazy image fetch/decode; exercise the visible image.
+  await page.$eval('.gallery img',async img=>{img.scrollIntoView();await img.decode();});
   assert.equal(await page.$eval('.gallery img',i=>i.complete&&i.naturalWidth>0),true);
   await page.goto(base+'/logout');await page.click('#logout');await page.waitForSelector('#login:not([hidden])');
   await page.goto(base+'/portal/anchor');await page.waitForSelector('#login');assert.deepEqual(errors,[]);
