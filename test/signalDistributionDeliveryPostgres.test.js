@@ -1,12 +1,12 @@
 'use strict';
 // Non-skipping release gate, disposable local PostgreSQL only; no external URL.
 const test=require('node:test');const assert=require('node:assert/strict');
-const fs=require('node:fs');const path=require('node:path');const {Pool}=require('pg');
+const fs=require('node:fs');const path=require('node:path');const {createTrackedPostgresPool,closePostgresFixture}=require('./helpers/closePostgresPool');
 const {startDisposablePostgres}=require('./helpers/disposablePostgres');
 const {DeliveryStore}=require('../services/signalDistribution/deliveryStore');
 test('delivery PostgreSQL: concurrent dedupe, namespace isolation, channel receipts, cooldown and expiry',async t=>{
- const pg=await startDisposablePostgres('signal-delivery-');const pool=new Pool({connectionString:pg.connectionString,max:8});
- t.after(async()=>{await pool.end();await pg.stop();});
+ const pg=await startDisposablePostgres('signal-delivery-');const pool=createTrackedPostgresPool({connectionString:pg.connectionString,max:8});
+ t.after(async()=>{await closePostgresFixture(pool,pg);});
  for(const name of ['2026-10-14-signal-distribution.sql','2026-10-14-signal-distribution-delivery.sql']) await pool.query(fs.readFileSync(path.join(__dirname,'../migrations',name),'utf8'));
  let now=new Date('2026-10-14T13:00:00Z');const store=new DeliveryStore(pool,{now:()=>now});
  const monitor=async(id,namespace='operational',tenant='1')=>pool.query(`INSERT INTO signal_distribution_monitors

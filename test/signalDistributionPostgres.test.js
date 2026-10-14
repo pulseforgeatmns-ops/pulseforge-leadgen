@@ -3,15 +3,15 @@ const test=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
-const {Pool}=require('pg');
+const {createTrackedPostgresPool,closePostgresFixture}=require('./helpers/closePostgresPool');
 const {startDisposablePostgres}=require('./helpers/disposablePostgres');
 const {DistributionStore}=require('../services/signalDistribution/store');
 const {DeliveryStore}=require('../services/signalDistribution/deliveryStore');
 const CA='So11111111111111111111111111111111111111112';
 test('distribution real PostgreSQL transaction/restart/concurrency/tenant/test/budget gate',{timeout:90000},async t=>{
   const instance=await startDisposablePostgres('signal-distribution-');
-  const pool=new Pool({connectionString:instance.connectionString});
-  t.after(async()=>{await pool.end();await instance.stop();});
+  const pool=createTrackedPostgresPool({connectionString:instance.connectionString});
+  t.after(async()=>{await closePostgresFixture(pool,instance);});
   for(const name of ['2026-10-14-signal-distribution.sql','2026-10-14-signal-distribution-delivery.sql'])await pool.query(fs.readFileSync(path.join(__dirname,'../migrations',name),'utf8'));
   let now=new Date('2026-10-14T12:00:00Z');
   const config={tenantId:'1',channelId:'123',now:()=>now};
