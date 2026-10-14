@@ -2,36 +2,25 @@
 
 const pool = require('../db');
 const { bcrypt } = require('../middleware/auth');
-const { ROLE_CHECK } = require('./userRoles');
+const { withSchemaTransaction, refreshUsersRoleConstraintOnClient, refreshUsersRoleConstraint: refreshRoles } = require('./usersRoleConstraint');
 
 const ANCHOR_OPERATOR_CLIENT_ID = 10;
 const DEMO_LOCATION_SLUG = 'demo-riverside-law';
 
 async function refreshUsersRoleConstraint() {
-  await pool.query('SELECT pg_advisory_lock(91720260518)');
-  try {
-    const { rows: existing } = await pool.query(`
-      SELECT con.conname
-      FROM pg_constraint con
-      JOIN pg_class cls ON cls.oid = con.conrelid
-      WHERE cls.relname = 'users'
-        AND con.contype = 'c'
-        AND pg_get_constraintdef(con.oid) ILIKE '%role%'
-    `);
-    for (const row of existing) {
-      await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS "${row.conname}"`);
-    }
-    await pool.query(`
-      ALTER TABLE users ADD CONSTRAINT users_role_check
-      CHECK (role IN (${ROLE_CHECK}))
-    `);
-  } finally {
-    await pool.query('SELECT pg_advisory_unlock(91720260518)');
-  }
+  return refreshRoles(pool);
 }
 
-async function ensureAnchorPortalTables() {
-  await pool.query(`
+async function ensureAnchorPortalTables(db = pool) {
+  const { rows: [schema] } = await db.query('SELECT current_schema() AS name');
+  if (schema.name !== 'public') throw new Error('Portal creation schema must be public; explicit operator review required');
+  // Reject shadow tables rather than applying portal DDL to another schema.
+  for (const name of ['locations', 'scope_sections', 'scope_items', 'user_locations', 'visits', 'visit_items', 'issues', 'evidence']) {
+    const { rows } = await db.query(`SELECT n.nspname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.oid=to_regclass($1)`, [`anchor_portal_${name}`]);
+    if (rows.length && rows[0].nspname !== 'public') throw new Error('Portal tables must resolve to public; explicit operator review required');
+  }
+
+  await db.query(`
     CREATE TABLE IF NOT EXISTS anchor_portal_locations (
       id SERIAL PRIMARY KEY,
       operator_client_id INTEGER NOT NULL DEFAULT ${ANCHOR_OPERATOR_CLIENT_ID},
@@ -44,7 +33,7 @@ async function ensureAnchorPortalTables() {
     )
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS anchor_portal_scope_sections (
       id SERIAL PRIMARY KEY,
       location_id INTEGER NOT NULL REFERENCES anchor_portal_locations(id) ON DELETE CASCADE,
@@ -53,7 +42,7 @@ async function ensureAnchorPortalTables() {
     )
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS anchor_portal_scope_items (
       id SERIAL PRIMARY KEY,
       section_id INTEGER NOT NULL REFERENCES anchor_portal_scope_sections(id) ON DELETE CASCADE,
@@ -62,7 +51,7 @@ async function ensureAnchorPortalTables() {
     )
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS anchor_portal_user_locations (
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       location_id INTEGER NOT NULL REFERENCES anchor_portal_locations(id) ON DELETE CASCADE,
@@ -70,7 +59,7 @@ async function ensureAnchorPortalTables() {
     )
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS anchor_portal_visits (
       id SERIAL PRIMARY KEY,
       location_id INTEGER NOT NULL REFERENCES anchor_portal_locations(id) ON DELETE CASCADE,
@@ -85,7 +74,7 @@ async function ensureAnchorPortalTables() {
     )
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS anchor_portal_visit_items (
       id SERIAL PRIMARY KEY,
       visit_id INTEGER NOT NULL REFERENCES anchor_portal_visits(id) ON DELETE CASCADE,
@@ -99,7 +88,7 @@ async function ensureAnchorPortalTables() {
     )
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS anchor_portal_issues (
       id SERIAL PRIMARY KEY,
       location_id INTEGER NOT NULL REFERENCES anchor_portal_locations(id) ON DELETE CASCADE,
@@ -123,7 +112,7 @@ async function ensureAnchorPortalTables() {
     )
   `);
 
-  await pool.query(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS anchor_portal_evidence (
       id SERIAL PRIMARY KEY,
       visit_id INTEGER REFERENCES anchor_portal_visits(id) ON DELETE CASCADE,
@@ -138,22 +127,73 @@ async function ensureAnchorPortalTables() {
   `);
 
   // Additive upgrades preserve existing locations, service history and issue statuses.
-  await pool.query('ALTER TABLE anchor_portal_visits ADD COLUMN IF NOT EXISTS completed_by INTEGER REFERENCES users(id)');
-  await pool.query('ALTER TABLE anchor_portal_visits ADD COLUMN IF NOT EXISTS request_id TEXT');
-  await pool.query('ALTER TABLE anchor_portal_issues ADD COLUMN IF NOT EXISTS issue_type TEXT');
-  await pool.query('ALTER TABLE anchor_portal_issues ADD COLUMN IF NOT EXISTS request_id TEXT');
-  await pool.query("ALTER TABLE anchor_portal_evidence ADD COLUMN IF NOT EXISTS purpose TEXT NOT NULL DEFAULT 'service'");
-  await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_anchor_portal_report_request ON anchor_portal_visits (completed_by, request_id) WHERE request_id IS NOT NULL');
-  await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_anchor_portal_issue_request ON anchor_portal_issues (reported_by_user_id, request_id) WHERE request_id IS NOT NULL');
+  await db.query('ALTER TABLE anchor_portal_visits ADD COLUMN IF NOT EXISTS completed_by INTEGER REFERENCES users(id)');
+  await db.query('ALTER TABLE anchor_portal_visits ADD COLUMN IF NOT EXISTS request_id TEXT');
+  await db.query('ALTER TABLE anchor_portal_issues ADD COLUMN IF NOT EXISTS issue_type TEXT');
+  await db.query('ALTER TABLE anchor_portal_issues ADD COLUMN IF NOT EXISTS request_id TEXT');
+  await db.query("ALTER TABLE anchor_portal_evidence ADD COLUMN IF NOT EXISTS purpose TEXT NOT NULL DEFAULT 'service'");
+  await db.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_anchor_portal_report_request ON anchor_portal_visits (completed_by, request_id) WHERE request_id IS NOT NULL');
+  await db.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_anchor_portal_issue_request ON anchor_portal_issues (reported_by_user_id, request_id) WHERE request_id IS NOT NULL');
 
-  await pool.query(`
+  await db.query(`
     CREATE INDEX IF NOT EXISTS idx_anchor_portal_visits_location_scheduled
       ON anchor_portal_visits (location_id, scheduled_at DESC)
   `);
-  await pool.query(`
+  await db.query(`
     CREATE INDEX IF NOT EXISTS idx_anchor_portal_issues_location_status
       ON anchor_portal_issues (location_id, status, created_at DESC)
   `);
+}
+
+// IF NOT EXISTS alone does not establish readiness on a pre-existing schema.
+async function verifyAnchorPortalUpgrade(db) {
+  const expected = [
+    ['anchor_portal_visits', 'completed_by', 'integer', false],
+    ['anchor_portal_visits', 'request_id', 'text', false],
+    ['anchor_portal_issues', 'issue_type', 'text', false],
+    ['anchor_portal_issues', 'request_id', 'text', false],
+    ['anchor_portal_evidence', 'purpose', 'text', true],
+  ];
+  for (const [table, column, type, notNull] of expected) {
+    const { rows: [actual] } = await db.query(`
+      SELECT format_type(a.atttypid, a.atttypmod) AS type, a.attnotnull AS not_null,
+             pg_get_expr(d.adbin, d.adrelid) AS default_value
+      FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+      WHERE a.attrelid=to_regclass($1) AND a.attname=$2 AND NOT a.attisdropped
+    `, [table, column]);
+    if (!actual || actual.type !== type || actual.not_null !== notNull
+        || (column === 'purpose' && actual.default_value !== "'service'::text")) {
+      throw new Error(`Portal schema mismatch: ${table}.${column}`);
+    }
+  }
+  const { rows: foreignKeys } = await db.query(`
+    SELECT 1 FROM pg_constraint c
+    WHERE c.conrelid='anchor_portal_visits'::regclass AND c.contype='f' AND c.convalidated
+      AND c.confrelid='users'::regclass
+      AND c.conkey=ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid=c.conrelid AND attname='completed_by')]
+      AND c.confkey=ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid=c.confrelid AND attname='id')]
+      AND c.confdeltype='a' AND c.confupdtype='a'
+  `);
+  if (!foreignKeys.length) throw new Error('Portal schema mismatch: completed_by foreign key');
+  for (const [table, name, author] of [
+    ['anchor_portal_visits', 'idx_anchor_portal_report_request', 'completed_by'],
+    ['anchor_portal_issues', 'idx_anchor_portal_issue_request', 'reported_by_user_id'],
+  ]) {
+    const { rows: [index] } = await db.query(`
+      SELECT i.indisunique, i.indisvalid, i.indisready, i.indnkeyatts, i.indnatts,
+        pg_get_expr(i.indpred,i.indrelid) AS predicate,
+        ARRAY(SELECT a.attname::text FROM unnest(i.indkey) WITH ORDINALITY k(attnum,ord)
+          JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum ORDER BY k.ord) AS columns
+      FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid
+      WHERE i.indrelid=to_regclass($1) AND c.relname=$2
+    `, [table, name]);
+    if (!index || !index.indisunique || !index.indisvalid || !index.indisready
+        || index.indnkeyatts !== 2 || index.indnatts !== 2
+        || index.predicate !== '(request_id IS NOT NULL)'
+        || JSON.stringify(index.columns) !== JSON.stringify([author, 'request_id'])) {
+      throw new Error(`Portal schema mismatch: ${name}`);
+    }
+  }
 }
 
 function demoScopeSections() {
@@ -399,8 +439,11 @@ async function seedDemoPortalData() {
 }
 
 async function ensureAnchorPortalSchema({ seedDemo = false } = {}) {
-  await refreshUsersRoleConstraint();
-  await ensureAnchorPortalTables();
+  await withSchemaTransaction(pool, async client => {
+    await refreshUsersRoleConstraintOnClient(client);
+    await ensureAnchorPortalTables(client);
+    await verifyAnchorPortalUpgrade(client);
+  });
   if (seedDemo) {
     return seedDemoPortalData();
   }
@@ -412,6 +455,7 @@ module.exports = {
   DEMO_LOCATION_SLUG,
   ensureAnchorPortalSchema,
   ensureAnchorPortalTables,
+  verifyAnchorPortalUpgrade,
   refreshUsersRoleConstraint,
   copyScopeToVisitItems,
   demoScopeSections,

@@ -58,7 +58,14 @@ const { ensureSignalSchema } = require('./packages/signal-v1');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
-initAuth().catch(err => console.error('[auth] init error:', err.message));
+const { createAnchorPortalReadiness } = require('./utils/anchorPortalReadiness');
+const anchorPortalReadiness = createAnchorPortalReadiness({
+  initAuth,
+  ensureSchema: () => ensureAnchorPortalSchema(),
+  onError: err => console.error('[anchorPortal] startup blocked:', err.message),
+});
+// Mount before session, body parsing, static assets and all portal route handlers.
+app.use(anchorPortalReadiness.middleware);
 ensureClientArchitecture()
   .then(() => ensureEmmettAutosendSchema())
   .then(enforceMiraClientState)
@@ -78,7 +85,6 @@ ensureMiraSchema().catch(err => console.error('[mira] init error:', err.message)
 ensureLifecycleSchema(pool).catch(err => console.error('[lifecycle] init error:', err.message));
 ensurePlacesAttributionSchema().catch(err => console.error('[placesAttribution] init error:', err.message));
 require('./utils/apiSpendControl').ensureApiUsageSchema().catch(() => console.warn('[api-usage] Ledger initialization unavailable; paid calls require a working ledger.'));
-ensureAnchorPortalSchema().catch(err => console.error('[anchorPortal] init error:', err.message));
 ensureSignalSchema(pool).catch(err => console.error('[signal-v1] schema init error:', err.message));
 require('./services/signalV1ShadowScheduler').startSignalV1ShadowScheduler();
 require('./services/signalOperator/optionalController').startOptionalPilotController();

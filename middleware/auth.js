@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const pool = require('../db');
 
 const { USER_ROLES: ROLES, ROLE_CHECK } = require('../utils/userRoles');
+const { refreshUsersRoleConstraint } = require('../utils/usersRoleConstraint');
 const { bindRequestIdentity } = require('../utils/requestIdentity');
 let initPromise;
 
@@ -34,26 +35,7 @@ async function ensureUsersTable() {
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ');
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS password_change_required BOOLEAN NOT NULL DEFAULT FALSE');
   await pool.query('UPDATE users SET email_verified = TRUE WHERE email_verified IS NULL');
-  await pool.query('SELECT pg_advisory_lock(91720260517)');
-  try {
-    const { rows: existing } = await pool.query(`
-      SELECT con.conname
-      FROM pg_constraint con
-      JOIN pg_class cls ON cls.oid = con.conrelid
-      WHERE cls.relname = 'users'
-        AND con.contype = 'c'
-        AND pg_get_constraintdef(con.oid) ILIKE '%role%'
-    `);
-    for (const row of existing) {
-      await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS "${row.conname}"`);
-    }
-    await pool.query(`
-      ALTER TABLE users ADD CONSTRAINT users_role_check
-      CHECK (role IN (${ROLE_CHECK}))
-    `);
-  } finally {
-    await pool.query('SELECT pg_advisory_unlock(91720260517)');
-  }
+  await refreshUsersRoleConstraint(pool);
 }
 
 async function getUserCount() {
