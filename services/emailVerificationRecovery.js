@@ -15,6 +15,29 @@ const RETRYABLE_STATES = Object.freeze([
   'verifier_timeout',
   'stale_verification',
 ]);
+// Fixed branch labels only. Never copy provider reasons, errors or candidate
+// data into telemetry. A failed CAS does not reveal which snapshot field moved.
+const VERIFICATION_RETRY_FAILURE_REASONS = Object.freeze([
+  'verification_failed',
+  'adapter_unavailable',
+  'candidate_ineligible',
+  'persistence_not_confirmed',
+  'verification_exception',
+  'persistence_exception',
+  'unexpected_exception',
+]);
+
+function verificationRetryFailureReasons(counts = {}) {
+  return Object.fromEntries(VERIFICATION_RETRY_FAILURE_REASONS.map(reason => {
+    const count = counts?.[reason];
+    return [reason, Number.isSafeInteger(count) && count >= 0 ? count : 0];
+  }));
+}
+
+function recordRetryFailure(telemetry, reason) {
+  telemetry.verificationRetryFailed += 1;
+  telemetry.verificationRetryFailureReasons[reason] += 1;
+}
 
 function emptyVerificationRetryTelemetry() {
   return {
@@ -24,6 +47,10 @@ function emptyVerificationRetryTelemetry() {
     verificationRetryRisky: 0,
     verificationRetryInvalid: 0,
     verificationRetryFailed: 0,
+    verificationRetryFailureReasons: verificationRetryFailureReasons(),
+    // A failed candidate read happens before attempts, so it must not inflate
+    // verificationRetryFailed or the per-attempt failure reason totals.
+    verificationRetryLoadFailed: 0,
     skipped: {
       verification_never_attempted: 0,
       verifier_unavailable: 0,
@@ -45,9 +72,16 @@ function mergeVerificationRetryTelemetry(target, delta = {}) {
     'verificationRetryRisky',
     'verificationRetryInvalid',
     'verificationRetryFailed',
+    'verificationRetryLoadFailed',
   ]) {
     target[key] = Number(target[key] || 0) + Number(delta[key] || 0);
   }
+  const failures = verificationRetryFailureReasons(target.verificationRetryFailureReasons);
+  const added = verificationRetryFailureReasons(delta.verificationRetryFailureReasons);
+  for (const reason of VERIFICATION_RETRY_FAILURE_REASONS) {
+    failures[reason] = Math.min(Number.MAX_SAFE_INTEGER, failures[reason] + added[reason]);
+  }
+  target.verificationRetryFailureReasons = failures;
   target.skipped = target.skipped || emptyVerificationRetryTelemetry().skipped;
   for (const [reason, count] of Object.entries(delta.skipped || {})) {
     target.skipped[reason] = Number(target.skipped[reason] || 0) + Number(count || 0);
@@ -189,7 +223,10 @@ async function retryUnverifiedEmails(pool, {
 } = {}) {
   const tenantId = validatedClientId(clientId);
   const telemetry = emptyVerificationRetryTelemetry();
-  const rows = await loadUnverifiedProspects(pool, { clientId: tenantId, limit }).catch(() => []);
+  const rows = await loadUnverifiedProspects(pool, { clientId: tenantId, limit }).catch(() => {
+    telemetry.verificationRetryLoadFailed += 1;
+    return [];
+  });
   telemetry.emailNotVerified = rows.length;
 
   for (const row of rows) {
@@ -200,26 +237,35 @@ async function retryUnverifiedEmails(pool, {
     }
 
     telemetry.verificationRetryAttempted += 1;
+    let failureReason = 'unexpected_exception';
     try {
       if (Number(row.client_id) !== tenantId || row.do_not_contact === true || row.email_verified === true) {
-        throw new Error('Verification retry candidate no longer belongs to the eligible tenant scope');
+        recordRetryFailure(telemetry, 'candidate_ineligible');
+        continue;
       }
       const email = String(row.email).trim().toLowerCase();
+      if (typeof verify !== 'function') {
+        recordRetryFailure(telemetry, 'adapter_unavailable');
+        continue;
+      }
+      failureReason = 'verification_exception';
       const verification = await verify(email, {
         email,
         source: ['verification_retry'],
         now,
       });
+      failureReason = 'unexpected_exception';
       const outcome = classifyRetryOutcome(verification);
       if (outcome === 'failed') {
-        telemetry.verificationRetryFailed += 1;
+        recordRetryFailure(telemetry, 'verification_failed');
         continue;
       }
+      failureReason = 'persistence_exception';
       const persisted = await persistVerifiedRetry(pool, tenantId, row, email, outcome === 'valid'
         ? verification
         : { ...verification, emailVerified: false, doNotContact: true });
       if (!persisted) {
-        telemetry.verificationRetryFailed += 1;
+        recordRetryFailure(telemetry, 'persistence_not_confirmed');
       } else if (outcome === 'valid') {
         telemetry.verificationRetryValid += 1;
       } else if (outcome === 'risky') {
@@ -228,7 +274,7 @@ async function retryUnverifiedEmails(pool, {
         telemetry.verificationRetryInvalid += 1;
       }
     } catch (_err) {
-      telemetry.verificationRetryFailed += 1;
+      recordRetryFailure(telemetry, failureReason);
     }
   }
 
@@ -238,6 +284,8 @@ async function retryUnverifiedEmails(pool, {
 module.exports = {
   RETRYABLE_STATES,
   STALE_VERIFICATION_MS,
+  VERIFICATION_RETRY_FAILURE_REASONS,
+  verificationRetryFailureReasons,
   emptyVerificationRetryTelemetry,
   mergeVerificationRetryTelemetry,
   classifyUnverifiedReason,

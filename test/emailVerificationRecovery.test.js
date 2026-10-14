@@ -8,6 +8,9 @@ const {
   isRetryableUnverifiedReason,
   retryUnverifiedEmails,
   emptyVerificationRetryTelemetry,
+  mergeVerificationRetryTelemetry,
+  verificationRetryFailureReasons,
+  VERIFICATION_RETRY_FAILURE_REASONS,
 } = require('./helpers/loadEmailVerificationRecovery')();
 
 test('email verification classifier separates retryable from unsafe states', () => {
@@ -112,6 +115,7 @@ for (const rowCount of [0, 2, undefined]) {
     }) });
     assert.equal(result.verificationRetryValid, 0);
     assert.equal(result.verificationRetryFailed, 1);
+    assert.equal(result.verificationRetryFailureReasons.persistence_not_confirmed, 1);
   });
 }
 
@@ -201,6 +205,7 @@ test('wrong tenant and no-longer-eligible loaded candidates cannot invoke the ve
       verify: async () => assert.fail('out-of-scope candidate must not verify') });
     assert.equal(result.verificationRetryValid, 0);
     assert.equal(result.verificationRetryFailed, 1);
+    assert.equal(result.verificationRetryFailureReasons.candidate_ineligible, 1);
     assert.equal(pool.writes.length, 0);
   }
 });
@@ -215,6 +220,7 @@ for (const outcome of ['valid', 'risky', 'catchall', 'invalid']) {
         assert.equal(result[`verificationRetry${name}`], rowCount === 1 && expected === name ? 1 : 0);
       }
       assert.equal(result.verificationRetryFailed, rowCount === 1 ? 0 : 1);
+      assert.equal(result.verificationRetryFailureReasons.persistence_not_confirmed, rowCount === 1 ? 0 : 1);
       assert.equal(pool.writes[0].args[1], outcome === 'valid');
       assert.equal(pool.writes[0].args[7], outcome !== 'valid');
     });
@@ -252,6 +258,111 @@ test('persistence exception counts failure once and later candidates can still s
   assert.equal(result.verificationRetryAttempted, 2);
   assert.equal(result.verificationRetryValid, 1);
   assert.equal(result.verificationRetryFailed, 1);
+  assert.equal(result.verificationRetryFailureReasons.persistence_exception, 1);
+});
+
+function assertFailureReasons(result, expected) {
+  assert.deepEqual(JSON.parse(JSON.stringify(result.verificationRetryFailureReasons)), {
+    ...Object.fromEntries(VERIFICATION_RETRY_FAILURE_REASONS.map(reason => [reason, 0])), ...expected,
+  });
+  assert.equal(Object.values(result.verificationRetryFailureReasons).reduce((sum, count) => sum + count, 0),
+    result.verificationRetryFailed);
+}
+
+test('each actual failure branch gets one fixed reason without additional verifier or database calls', async () => {
+  const cases = [
+    ['verification_failed', { verify: async () => verification('unknown') }, 1, 0],
+    ['verification_failed', { verify: async () => ({ ...verification('unknown'),
+      verifierResponse: { reason: 'verifier_timeout', error: 'fetch_unavailable' } }) }, 1, 0],
+    ['verification_failed', { verify: async () => ({ ...verification('unknown'),
+      verifierResponse: { reason: 'verifier_unavailable' } }) }, 1, 0],
+    ['adapter_unavailable', { verify: null }, 0, 0],
+    ['adapter_unavailable', { verify: {} }, 0, 0],
+    ['candidate_ineligible', { row: candidate({ client_id: 10 }) }, 0, 0],
+    ['persistence_not_confirmed', { rowCount: 0 }, 1, 1],
+    ['persistence_not_confirmed', { rowCount: 2 }, 1, 1],
+    ['verification_exception', { verify: async () => { throw new Error('fixture verifier exception'); } }, 1, 0],
+    ['persistence_exception', { writeError: true }, 1, 1],
+    ['unexpected_exception', { verify: async () => null }, 1, 0],
+  ];
+  for (const [reason, fixture, expectedVerifications, expectedWrites] of cases) {
+    let reads = 0; let writes = 0; let verifications = 0;
+    const pool = { query: async sql => {
+      if (!/UPDATE prospects/i.test(sql)) { reads += 1; return { rows: [fixture.row || candidate()] }; }
+      writes += 1;
+      if (fixture.writeError) throw new Error('fixture persistence exception');
+      return { rowCount: fixture.rowCount ?? 1 };
+    } };
+    const verify = Object.hasOwn(fixture, 'verify') ? fixture.verify : async () => verification();
+    const result = await retryUnverifiedEmails(pool, { clientId: 13, verify: typeof verify === 'function'
+      ? async (...args) => { verifications += 1; return verify(...args); } : verify });
+    assertFailureReasons(result, { [reason]: 1 });
+    assert.equal(result.verificationRetryAttempted, 1);
+    assert.equal(result.verificationRetryValid, 0);
+    assert.equal(result.verificationRetryRisky, 0);
+    assert.equal(result.verificationRetryInvalid, 0);
+    assert.equal(result.verificationRetryLoadFailed, 0);
+    assert.equal(reads, 1);
+    assert.equal(verifications, expectedVerifications);
+    assert.equal(writes, expectedWrites);
+  }
+});
+
+test('pre-attempt candidate read failures remain separate from attempted retry failures', async () => {
+  let reads = 0;
+  const result = await retryUnverifiedEmails({ query: async () => {
+    reads += 1; throw new Error('fixture read exception');
+  } }, { clientId: 13, verify: async () => assert.fail('failed read must not verify') });
+  assertFailureReasons(result, {});
+  assert.equal(result.verificationRetryLoadFailed, 1);
+  assert.equal(result.emailNotVerified, 0);
+  assert.equal(result.verificationRetryAttempted, 0);
+  assert.equal(reads, 1);
+});
+
+test('only fixed numeric failure counts survive sanitization and merging with legacy telemetry', () => {
+  const target = { verificationRetryAttempted: 2, verificationRetryFailed: 2 };
+  mergeVerificationRetryTelemetry(target, { verificationRetryAttempted: 1, verificationRetryFailed: 1,
+    verificationRetryLoadFailed: 1, verificationRetryFailureReasons: { verification_exception: 1,
+      'fixture-secret@example.test': 12, unexpected_exception: 'fixture-secret',
+      persistence_exception: -1, adapter_unavailable: Infinity, candidate_ineligible: 0.5 } });
+  assert.equal(target.verificationRetryAttempted, 3);
+  assert.equal(target.verificationRetryFailed, 3);
+  assert.equal(target.verificationRetryLoadFailed, 1);
+  assert.equal(target.verificationRetryFailureReasons.verification_exception, 1);
+  assert.equal(Object.keys(target.verificationRetryFailureReasons).length, VERIFICATION_RETRY_FAILURE_REASONS.length);
+  assert.doesNotMatch(JSON.stringify(target), /fixture-secret/);
+  // Historical aggregate failures remain unknown; never invent their cause.
+  assert.equal(Object.values(target.verificationRetryFailureReasons).reduce((sum, count) => sum + count, 0), 1);
+  const fresh = emptyVerificationRetryTelemetry();
+  mergeVerificationRetryTelemetry(fresh, { verificationRetryAttempted: 2, verificationRetryFailed: 2,
+    verificationRetryFailureReasons: { verification_exception: 1, persistence_not_confirmed: 1 } });
+  mergeVerificationRetryTelemetry(fresh, fresh);
+  assertFailureReasons(fresh, { verification_exception: 1, persistence_not_confirmed: 1 });
+  assert.equal(verificationRetryFailureReasons(null).verification_failed, 0);
+  assert.equal(verificationRetryFailureReasons({ verification_failed: Number.MAX_SAFE_INTEGER + 1 }).verification_failed, 0);
+});
+
+test('fake credentials in provider throws or raw results never enter recovery logs or failure telemetry', async () => {
+  const secret = 'fixture-api-key-DO-NOT-LOG';
+  const sensitive = `https://fixture.invalid/?key=${secret}&email=private@fixture.example`;
+  const logs = [];
+  const safeConsole = Object.fromEntries(['log', 'info', 'warn', 'error', 'debug'].map(method =>
+    [method, (...args) => logs.push(args)]));
+  const isolated = require('./helpers/loadEmailVerificationRecovery')({ console: safeConsole });
+  for (const [reason, verify] of [
+    ['verification_exception', async () => { throw new Error(sensitive); }],
+    ['verification_failed', async () => ({ ...verification('unknown'), verifierResponse: {
+      reason: sensitive, error: secret, payload: { email: 'private@fixture.example' },
+    } })],
+  ]) {
+    const pool = tracePool(candidate());
+    const result = await isolated.retryUnverifiedEmails(pool, { clientId: 13, verify });
+    assertFailureReasons(result, { [reason]: 1 });
+    assert.equal(pool.writes.length, 0);
+    assert.doesNotMatch(JSON.stringify(result), /fixture-api-key|private@|https:\/\/|payload/);
+  }
+  assert.deepEqual(logs, []);
 });
 
 test('retrying a previously verified fixture counts no duplicate success', async () => {
