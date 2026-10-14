@@ -83,6 +83,8 @@ function boot(t) {
   vm.runInNewContext(startup, {
     process: { env: process.env, on() {} }, console,
     require(name) {
+      if (name === 'express') return () => ({ use(middleware) { assert.equal(typeof middleware, 'function'); } });
+      if (name === './utils/anchorPortalReadiness') return require('../utils/anchorPortalReadiness');
       if (name === './db') return pool;
       if (name === './services/governedOutboundTenant') return tenants;
       if (name === './services/anchorGovernedScheduler') return {
