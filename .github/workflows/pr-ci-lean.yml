@@ -65,7 +65,7 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Global production startup smoke
-        run: node --test test/globalProductionStartupSmoke.test.js
+        run: npm run test:global-smoke
 
   signal-v1:
     name: Signal V1 core

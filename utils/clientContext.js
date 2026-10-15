@@ -105,7 +105,18 @@ function getRequestClientId(req) {
   );
 }
 
-async function ensureClientArchitecture() {
+// Share concurrent work only; later calls retain the legacy recheck behavior.
+let clientArchitectureInFlight;
+function ensureClientArchitecture() {
+  if (!clientArchitectureInFlight) {
+    clientArchitectureInFlight = Promise.resolve()
+      .then(ensureClientArchitectureOnce)
+      .finally(() => { clientArchitectureInFlight = undefined; });
+  }
+  return clientArchitectureInFlight;
+}
+
+async function ensureClientArchitectureOnce() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS clients (
       id serial primary key

@@ -25,7 +25,7 @@ jobs:
         include:
           - id: global
             label: Global startup smoke
-            run: node --test test/globalProductionStartupSmoke.test.js
+            run: npm run test:global-smoke
             postgres: false
           - id: signal-v1
             label: Signal V1 core
