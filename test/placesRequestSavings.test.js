@@ -103,15 +103,28 @@ describe('Places request savings', () => {
     assert.equal(t.reservations.length, 2);
   });
 
-  it('quota errors are not retained as cached successes', async () => {
+  it('quota errors stay failure-held until TTL expiry, then permit a fresh request', async () => {
     const t = telemetry();
     let calls = 0;
     const fetchImpl = async () => response(++calls === 1 ? { status: 'OVER_QUERY_LIMIT' } : { status: 'OK', results: [{ place_id: 'recovered' }] });
     const args = { query: 'warehouses Test City NH', apiKey: 'test-account', fetchImpl };
-    await legacyTextSearch(args, t.deps);
-    const result = await legacyTextSearch(args, t.deps);
-    assert.equal(result.data.results[0].place_id, 'recovered');
-    assert.equal(calls, 2);
+    const originalNow = Date.now;
+    let now = 100000;
+    Date.now = () => now;
+    try {
+      await legacyTextSearch(args, t.deps);
+      const held = await legacyTextSearch(args, t.deps);
+      assert.equal(held.ok, false);
+      assert.equal(held.applicationFailure, true);
+      assert.deepEqual(held.data, { status: 'OVER_QUERY_LIMIT' });
+      assert.equal(calls, 1);
+      assert.equal(t.reservations.length, 1);
+      now += require('../utils/placesQueryCache').DEFAULT_TTL_MS + 1;
+      const result = await legacyTextSearch(args, t.deps);
+      assert.equal(result.data.results[0].place_id, 'recovered');
+      assert.equal(calls, 2);
+      assert.equal(t.reservations.length, 2);
+    } finally { Date.now = originalNow; }
   });
 
   it('explicit cache bypass keeps separate paid attempts', async () => {
