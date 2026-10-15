@@ -44,13 +44,13 @@ function evaluateDeployGates(report = {}) {
       detail: `${workspaceComparable}/${DEPLOY_GATES.MIN_COMPARABLE_WORKSPACE_ROWS} comparable workspace rows` },
     { id: 'min_ao_comparable', pass: aoComparable >= DEPLOY_GATES.MIN_COMPARABLE_AO_ROWS,
       detail: `${aoComparable}/${DEPLOY_GATES.MIN_COMPARABLE_AO_ROWS} comparable AO rows` },
-    { id: 'error_timeout_rate', pass: errorRate == null || errorRate <= DEPLOY_GATES.MAX_ERROR_OR_TIMEOUT_RATE,
+    { id: 'error_timeout_rate', pass: errorRate != null && errorRate <= DEPLOY_GATES.MAX_ERROR_OR_TIMEOUT_RATE,
       detail: errorRate == null ? 'no rows' : `${(errorRate * 100).toFixed(1)}% (max ${DEPLOY_GATES.MAX_ERROR_OR_TIMEOUT_RATE * 100}%)` },
     { id: 'dangerous_approval_clarification_7d', pass: dangerous7d <= DEPLOY_GATES.MAX_DANGEROUS_APPROVAL_CLARIFICATION_MISMATCHES_7D,
       detail: `${dangerous7d} in last 7 days` },
     { id: 'pending_guard_evidence', pass: !DEPLOY_GATES.REQUIRE_PENDING_GUARD_EVIDENCE || guardEvidence > 0,
       detail: `${guardEvidence} persisted guard evidence row(s)` },
-    { id: 'inspection_status_match_rate', pass: inspectionMatchRate == null || inspectionMatchRate >= DEPLOY_GATES.MIN_INSPECTION_STATUS_MATCH_RATE,
+    { id: 'inspection_status_match_rate', pass: typeof inspectionMatchRate === 'number' && Number.isFinite(inspectionMatchRate) && inspectionMatchRate >= DEPLOY_GATES.MIN_INSPECTION_STATUS_MATCH_RATE,
       detail: inspectionMatchRate == null ? 'insufficient inspection/status sample' : `${(inspectionMatchRate * 100).toFixed(1)}%` },
   ];
 
