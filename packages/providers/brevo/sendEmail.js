@@ -6,6 +6,7 @@
  */
 
 const axios = require('axios');
+const { withEmailAuthorization } = require('../../../utils/callEligibility');
 
 /**
  * @param {object} input
@@ -68,37 +69,42 @@ async function sendEmail(input = {}) {
   if (input.idempotencyKey) payload.headers = { 'Idempotency-Key': String(input.idempotencyKey) };
 
   try {
-    if (input.providerBoundary && typeof input.providerBoundary.markCrossed === 'function') {
-      input.providerBoundary.markCrossed();
-    }
-    const res = await axios.post('https://api.brevo.com/v3/smtp/email', payload, {
-      headers: { 'api-key': apiKey, 'Content-Type': 'application/json' },
-      timeout: 15000,
+    const identity = input.outreachAuthorization || {};
+    if (!identity.prospectId || !identity.clientId) throw Object.assign(new Error('CRM identity is required before outreach'), { code: 'outreach_identity_required' });
+    const pool = identity.pool || require('../../../db');
+    return await withEmailAuthorization(pool, [{ prospectId: identity.prospectId, clientId: identity.clientId }], async () => {
+      if (input.providerBoundary && typeof input.providerBoundary.markCrossed === 'function') {
+        input.providerBoundary.markCrossed();
+      }
+      const res = await axios.post('https://api.brevo.com/v3/smtp/email', payload, {
+        headers: { 'api-key': apiKey, 'Content-Type': 'application/json' },
+        timeout: 15000,
+      });
+
+      const messageId =
+        res.data?.messageId
+        || res.data?.messageID
+        || res.data?.message_id
+        || res.data?.messageIds?.[0]
+        || res.headers?.['message-id']
+        || res.headers?.['x-message-id']
+        || null;
+
+      return {
+        success: true,
+        messageId,
+        providerMessageId: messageId,
+        brevoResponse: res.data || null,
+      };
     });
-
-    const messageId =
-      res.data?.messageId
-      || res.data?.messageID
-      || res.data?.message_id
-      || res.data?.messageIds?.[0]
-      || res.headers?.['message-id']
-      || res.headers?.['x-message-id']
-      || null;
-
-    return {
-      success: true,
-      messageId,
-      providerMessageId: messageId,
-      brevoResponse: res.data || null,
-    };
   } catch (err) {
     const errorDetail = err.response?.data || err.message;
     const providerErrorMessage = typeof errorDetail === 'string'
       ? errorDetail
       : JSON.stringify(errorDetail);
-    const providerErrorCode = err.response?.status
+    const providerErrorCode = err.code || (err.response?.status
       ? `brevo_http_${err.response.status}`
-      : 'brevo_request_failed';
+      : 'brevo_request_failed');
     return {
       success: false,
       error: providerErrorMessage,

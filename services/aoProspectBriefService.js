@@ -9,6 +9,7 @@ const {
   buildProspectBriefSections,
 } = require('../utils/aoProspectBrief');
 const { logAoAuditEvent } = require('../utils/aoAuditEvents');
+const { activityReadModel } = require('../utils/spreadsheetCrmEvidence');
 
 async function fetchOpenTaskForProspect({ prospectId, clientId, aoOwnerId }) {
   const { rows } = await pool.query(`
@@ -26,13 +27,13 @@ async function fetchOpenTaskForProspect({ prospectId, clientId, aoOwnerId }) {
 
 async function fetchRecentActivity({ prospectId, clientId, db = pool }) {
   const { rows } = await db.query(`
-    SELECT activity_type, outcome, notes, created_at
+    SELECT activity_type, outcome, notes, created_at, metadata
     FROM ao_prospect_activity
     WHERE prospect_id = $1::uuid AND tenant_id = $2
     ORDER BY created_at DESC
-    LIMIT 20
   `, [prospectId, clientId]);
-  return rows;
+  return rows.map(activityReadModel)
+    .sort((a, b) => String(b.occurredAt || '').localeCompare(String(a.occurredAt || ''))).slice(0, 20);
 }
 
 async function fetchAoDisplayName(aoOwnerId, db = pool) {
@@ -139,6 +140,7 @@ async function requestProspectBrief({
 }
 
 module.exports = {
+  fetchRecentActivity,
   buildProspectBriefById,
   buildLeadBriefById,
   requestProspectBrief,

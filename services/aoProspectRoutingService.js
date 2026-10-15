@@ -279,6 +279,8 @@ function buildRecommendedAngle({ prospect, motion }) {
 }
 
 function buildFirstAction({ prospect, motion }) {
+  if (prospect?.ao_outreach_review_required) return 'Separate outreach review required before any contact.';
+  if (prospect?.ao_call_suppressed && motion !== 'SUPPRESS') return 'Calls suppressed. Review permitted non-call follow-up; do not call this prospect.';
   if (motion === 'SUPPRESS') return 'Stop outreach. Cancel active AO work and require an authorized suppression release before rerouting.';
   if (motion === 'EMAIL_LED') return 'Send intro email to identify who handles cleaning vendors.';
   if (motion === 'HYBRID') return 'Call the office. If no answer, send intro email. If nearby, walk in with a leave-behind.';

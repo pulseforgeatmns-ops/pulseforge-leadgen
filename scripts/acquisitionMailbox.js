@@ -110,7 +110,8 @@ async function main() {
       subject,
       body,
       metadata: { operatorCommand: 'acquisition:mailbox:test-send' },
-    }, { store });
+    }, { store, purpose: !args['prospect-id'] && !args['mission-id'] && !args['outreach-asset-id']
+      ? 'mailbox_verification' : undefined });
     printJson({ sent: result.sent, duplicate: result.duplicate, message: result.message, thread: result.thread });
     return;
   }
