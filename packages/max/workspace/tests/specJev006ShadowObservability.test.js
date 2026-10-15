@@ -93,3 +93,20 @@ test('review report surfaces dangerous approval vs clarification pairs', () => {
   assert.equal(report.dangerous_mismatches.length, 1);
   assert.match(JSON.stringify(report.summary.mismatch_pairs), /clarification->approval/);
 });
+
+test('deployment gates fail closed on absent or invalid reliability and accuracy samples', () => {
+  const cases = [
+    { summary: { total: 0, by_source: {} } },
+    { summary: { total: 100, errors: 0, timeouts: 0, inspection_status_match_rate: null, by_source: {} } },
+    { summary: { total: 100, errors: 0, timeouts: 0, inspection_status_match_rate: Number.NaN, by_source: {} } },
+  ];
+  for (const report of cases) {
+    const result = evaluateDeployGates(report);
+    assert.equal(result.passed, false);
+    assert.equal(result.recommendation, 'shadow_only');
+    const accuracyGate = result.gates.find(gate => gate.id === 'inspection_status_match_rate');
+    assert.equal(accuracyGate.pass, false);
+  }
+  const noRows = evaluateDeployGates(cases[0]);
+  assert.equal(noRows.gates.find(gate => gate.id === 'error_timeout_rate').pass, false);
+});
