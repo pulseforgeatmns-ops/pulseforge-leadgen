@@ -1,7 +1,7 @@
 'use strict';
 
-const pool = require('../db');
-const { bcrypt } = require('../middleware/auth');
+function createPortalSchema(pool) {
+const bcrypt = require('bcryptjs');
 const { withSchemaTransaction, refreshUsersRoleConstraintOnClient, refreshUsersRoleConstraint: refreshRoles } = require('./usersRoleConstraint');
 
 const ANCHOR_OPERATOR_CLIENT_ID = 10;
@@ -450,7 +450,7 @@ async function ensureAnchorPortalSchema({ seedDemo = false } = {}) {
   return { seeded: false };
 }
 
-module.exports = {
+return {
   ANCHOR_OPERATOR_CLIENT_ID,
   DEMO_LOCATION_SLUG,
   ensureAnchorPortalSchema,
@@ -462,3 +462,18 @@ module.exports = {
   insertScopeForLocation,
   seedDemoPortalData,
 };
+
+}
+let defaultInstance;
+function defaults() { return defaultInstance ||= createPortalSchema(require('../db')); }
+module.exports = { createPortalSchema };
+Object.defineProperty(module.exports, 'ANCHOR_OPERATOR_CLIENT_ID', { enumerable: true, get: () => defaults().ANCHOR_OPERATOR_CLIENT_ID });
+Object.defineProperty(module.exports, 'DEMO_LOCATION_SLUG', { enumerable: true, get: () => defaults().DEMO_LOCATION_SLUG });
+Object.defineProperty(module.exports, 'ensureAnchorPortalSchema', { enumerable: true, get: () => defaults().ensureAnchorPortalSchema });
+Object.defineProperty(module.exports, 'ensureAnchorPortalTables', { enumerable: true, get: () => defaults().ensureAnchorPortalTables });
+Object.defineProperty(module.exports, 'verifyAnchorPortalUpgrade', { enumerable: true, get: () => defaults().verifyAnchorPortalUpgrade });
+Object.defineProperty(module.exports, 'refreshUsersRoleConstraint', { enumerable: true, get: () => defaults().refreshUsersRoleConstraint });
+Object.defineProperty(module.exports, 'copyScopeToVisitItems', { enumerable: true, get: () => defaults().copyScopeToVisitItems });
+Object.defineProperty(module.exports, 'demoScopeSections', { enumerable: true, get: () => defaults().demoScopeSections });
+Object.defineProperty(module.exports, 'insertScopeForLocation', { enumerable: true, get: () => defaults().insertScopeForLocation });
+Object.defineProperty(module.exports, 'seedDemoPortalData', { enumerable: true, get: () => defaults().seedDemoPortalData });

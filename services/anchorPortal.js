@@ -1,11 +1,11 @@
 'use strict';
 
-const pool = require('../db');
+function createPortalService(pool) {
 const { validateRaster } = require('../utils/anchorPortalImages');
 const {
   ANCHOR_OPERATOR_CLIENT_ID,
   copyScopeToVisitItems,
-} = require('../utils/anchorPortalSchema');
+} = require('../utils/anchorPortalSchema').createPortalSchema(pool);
 
 class AnchorPortalError extends Error {
   constructor(code, message, status = 400) {
@@ -668,7 +668,7 @@ async function getOperatorSummary(user) {
   };
 }
 
-module.exports = {
+return {
   AnchorPortalError,
   assertLocationAccess,
   isOperator,
@@ -694,3 +694,32 @@ module.exports = {
   getOperatorSummary,
   ANCHOR_OPERATOR_CLIENT_ID,
 };
+
+}
+let defaultInstance;
+function defaults() { return defaultInstance ||= createPortalService(require('../db')); }
+module.exports = { createPortalService };
+Object.defineProperty(module.exports, 'AnchorPortalError', { enumerable: true, get: () => defaults().AnchorPortalError });
+Object.defineProperty(module.exports, 'assertLocationAccess', { enumerable: true, get: () => defaults().assertLocationAccess });
+Object.defineProperty(module.exports, 'isOperator', { enumerable: true, get: () => defaults().isOperator });
+Object.defineProperty(module.exports, 'isCleaner', { enumerable: true, get: () => defaults().isCleaner });
+Object.defineProperty(module.exports, 'isFacilityClient', { enumerable: true, get: () => defaults().isFacilityClient });
+Object.defineProperty(module.exports, 'listLocationsForUser', { enumerable: true, get: () => defaults().listLocationsForUser });
+Object.defineProperty(module.exports, 'getLocationScope', { enumerable: true, get: () => defaults().getLocationScope });
+Object.defineProperty(module.exports, 'replaceLocationScope', { enumerable: true, get: () => defaults().replaceLocationScope });
+Object.defineProperty(module.exports, 'getVisitWithItems', { enumerable: true, get: () => defaults().getVisitWithItems });
+Object.defineProperty(module.exports, 'listVisits', { enumerable: true, get: () => defaults().listVisits });
+Object.defineProperty(module.exports, 'getTodayVisitForCleaner', { enumerable: true, get: () => defaults().getTodayVisitForCleaner });
+Object.defineProperty(module.exports, 'startVisit', { enumerable: true, get: () => defaults().startVisit });
+Object.defineProperty(module.exports, 'updateVisitItem', { enumerable: true, get: () => defaults().updateVisitItem });
+Object.defineProperty(module.exports, 'addVisitEvidence', { enumerable: true, get: () => defaults().addVisitEvidence });
+Object.defineProperty(module.exports, 'completeVisit', { enumerable: true, get: () => defaults().completeVisit });
+Object.defineProperty(module.exports, 'createVisit', { enumerable: true, get: () => defaults().createVisit });
+Object.defineProperty(module.exports, 'validatePhoto', { enumerable: true, get: () => defaults().validatePhoto });
+Object.defineProperty(module.exports, 'assertPortalUser', { enumerable: true, get: () => defaults().assertPortalUser });
+Object.defineProperty(module.exports, 'listIssues', { enumerable: true, get: () => defaults().listIssues });
+Object.defineProperty(module.exports, 'createIssue', { enumerable: true, get: () => defaults().createIssue });
+Object.defineProperty(module.exports, 'updateIssue', { enumerable: true, get: () => defaults().updateIssue });
+Object.defineProperty(module.exports, 'getClientHome', { enumerable: true, get: () => defaults().getClientHome });
+Object.defineProperty(module.exports, 'getOperatorSummary', { enumerable: true, get: () => defaults().getOperatorSummary });
+Object.defineProperty(module.exports, 'ANCHOR_OPERATOR_CLIENT_ID', { enumerable: true, get: () => defaults().ANCHOR_OPERATOR_CLIENT_ID });
