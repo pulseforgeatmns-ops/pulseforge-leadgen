@@ -1,0 +1,36 @@
+name: Anchor service portal safety
+on:
+  pull_request:
+    paths:
+      - 'routes/anchorPortal.js'
+      - 'services/anchorPortal.js'
+      - 'utils/anchorPortalSchema.js'
+      - 'utils/anchorPortalImages.js'
+      - 'public/anchor-portal*'
+      - 'test/anchorPortal*'
+      - 'test/helpers/exeterPortalHarness.js'
+      - 'scripts/demoExeterPortalLocal.js'
+      - 'migrations/*anchor-portal*'
+      - 'server.js'
+      - 'middleware/auth.js'
+      - 'package*.json'
+      - '.github/workflows/anchor-portal.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  portal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: ./.github/actions/setup-postgres-environment
+      - run: npm ci --ignore-scripts
+      - name: Isolated portal persistence, security and UI state gate
+        run: npm run test:anchor-portal
+      - name: Global entrypoint syntax smoke
+        run: npm run test:global-smoke

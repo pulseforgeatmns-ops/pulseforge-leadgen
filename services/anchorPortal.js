@@ -1,6 +1,7 @@
 'use strict';
 
 const pool = require('../db');
+const { validateRaster } = require('../utils/anchorPortalImages');
 const {
   ANCHOR_OPERATOR_CLIENT_ID,
   copyScopeToVisitItems,
@@ -31,49 +32,96 @@ function isFacilityClient(user) {
   return CLIENT_ROLES.has(user?.role);
 }
 
+function assertPortalUser(user) {
+  const platformAdmin = user?.role === 'admin' && user.client_id == null && user.id;
+  if (!user?.id || user.active === false || (!platformAdmin && Number(user.client_id) !== ANCHOR_OPERATOR_CLIENT_ID)) {
+    throw new AnchorPortalError('forbidden', 'You do not have access to this portal.', 403);
+  }
+}
+
 async function userLocationIds(userId) {
   const { rows } = await pool.query(
-    `SELECT location_id FROM anchor_portal_user_locations WHERE user_id = $1`,
-    [userId]
-  );
+    `SELECT ul.location_id FROM anchor_portal_user_locations ul
+     JOIN anchor_portal_locations l ON l.id = ul.location_id
+     WHERE ul.user_id = $1 AND l.operator_client_id = $2`, [userId, ANCHOR_OPERATOR_CLIENT_ID]);
   return rows.map(r => r.location_id);
 }
 
 async function assertLocationAccess(user, locationId) {
+  assertPortalUser(user);
   const id = Number(locationId);
-  if (!Number.isInteger(id) || id <= 0) {
-    throw new AnchorPortalError('invalid_location', 'Invalid location.', 400);
-  }
-  if (isOperator(user)) return id;
-  if (!user?.id) throw new AnchorPortalError('forbidden', 'Forbidden.', 403);
-  const allowed = await userLocationIds(user.id);
-  if (!allowed.includes(id)) {
+  if (!Number.isInteger(id) || id <= 0) throw new AnchorPortalError('invalid_location', 'Invalid location.', 400);
+  const { rows } = await pool.query(
+    `SELECT id FROM anchor_portal_locations WHERE id = $1 AND operator_client_id = $2`,
+    [id, ANCHOR_OPERATOR_CLIENT_ID]);
+  if (!rows.length || (!isOperator(user) && !(await userLocationIds(user.id)).includes(id))) {
     throw new AnchorPortalError('forbidden', 'You do not have access to this location.', 403);
   }
   return id;
 }
 
 async function listLocationsForUser(user) {
-  if (isOperator(user)) {
-    const { rows } = await pool.query(
-      `SELECT id, name, slug, address, is_demo, next_scheduled_at
-       FROM anchor_portal_locations
-       WHERE operator_client_id = $1
-       ORDER BY is_demo DESC, name ASC`,
-      [ANCHOR_OPERATOR_CLIENT_ID]
-    );
-    return rows;
-  }
-  if (!user?.id) return [];
+  assertPortalUser(user);
   const { rows } = await pool.query(
     `SELECT l.id, l.name, l.slug, l.address, l.is_demo, l.next_scheduled_at
      FROM anchor_portal_locations l
-     JOIN anchor_portal_user_locations ul ON ul.location_id = l.id
-     WHERE ul.user_id = $1
-     ORDER BY l.name ASC`,
-    [user.id]
-  );
+     WHERE l.operator_client_id = $1
+       AND ($2::boolean OR EXISTS (SELECT 1 FROM anchor_portal_user_locations ul WHERE ul.location_id = l.id AND ul.user_id = $3))
+     ORDER BY l.is_demo DESC, l.name ASC`,
+    [ANCHOR_OPERATOR_CLIENT_ID, isOperator(user), user.id]);
   return rows;
+}
+
+async function transaction(fn) {
+  const db = await pool.connect();
+  try { await db.query('BEGIN'); const result = await fn(db); await db.query('COMMIT'); return result; }
+  catch (err) { await db.query('ROLLBACK'); throw err; }
+  finally { db.release(); }
+}
+
+function textValue(value, max = 5000) {
+  const text = String(value ?? '').trim();
+  if (text.length > max) throw new AnchorPortalError('invalid_text', `Text must be at most ${max} characters.`);
+  return text;
+}
+
+function validatePhoto(value, caption = '') {
+  const match = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/]+={0,2})$/.exec(String(value || ''));
+  if (!match || match[2].length % 4 !== 0) throw new AnchorPortalError('invalid_photo', 'Choose a JPEG, PNG, or WebP image.');
+  const bytes = Buffer.from(match[2], 'base64');
+  if (!bytes.length || bytes.length > 1800000 || bytes.toString('base64') !== match[2]) {
+    throw new AnchorPortalError('invalid_photo', 'Photo must be no larger than 1.8 MB.');
+  }
+  try { validateRaster(bytes, match[1]); }
+  catch (_) { throw new AnchorPortalError('invalid_photo', 'Choose a complete JPEG, PNG, or WebP photo up to 12 megapixels.'); }
+  return { data_url: String(value), mime_type: `image/${match[1]}`, caption: textValue(caption, 300) || null };
+}
+
+function validatePhotos(photos) {
+  if (photos == null) return [];
+  if (!Array.isArray(photos) || photos.length > 3) throw new AnchorPortalError('invalid_photo', 'Choose up to three photos.');
+  return photos.map(photo => validatePhoto(photo.data_url, photo.caption));
+}
+
+async function insertEvidence(db, { visitId = null, issueId = null, purpose = 'service', photos }) {
+  for (const photo of photos) await db.query(
+    `INSERT INTO anchor_portal_evidence (visit_id, issue_id, kind, mime_type, data_url, caption, purpose)
+     VALUES ($1, $2, 'photo', $3, $4, $5, $6)`,
+    [visitId, issueId, photo.mime_type, photo.data_url, photo.caption, purpose]);
+}
+
+async function assertVisitWriter(user, visit) {
+  await assertLocationAccess(user, visit.location_id);
+  if (!isOperator(user) && (!isCleaner(user) || (visit.cleaner_id && visit.cleaner_id !== user.id))) {
+    throw new AnchorPortalError('forbidden', 'This service report is not assigned to you.', 403);
+  }
+}
+
+function requestId(value) {
+  if (!value) return null;
+  const id = String(value);
+  if (!/^[a-zA-Z0-9_-]{8,100}$/.test(id)) throw new AnchorPortalError('invalid_request', 'Invalid request identifier.');
+  return id;
 }
 
 async function getLocationScope(locationId) {
@@ -147,15 +195,18 @@ function formatVisitRow(row) {
     completed_at: row.completed_at,
     status: row.status,
     visit_notes: row.visit_notes,
+    completed_by: row.completed_by,
+    completed_by_name: row.completed_by_name || row.cleaner_name,
   };
 }
 
 async function getVisitWithItems(visitId) {
   const { rows } = await pool.query(
-    `SELECT v.*, l.name AS location_name, u.name AS cleaner_name
+    `SELECT v.*, l.name AS location_name, u.name AS cleaner_name, cu.name AS completed_by_name
      FROM anchor_portal_visits v
      JOIN anchor_portal_locations l ON l.id = v.location_id
      LEFT JOIN users u ON u.id = v.cleaner_id
+     LEFT JOIN users cu ON cu.id = v.completed_by
      WHERE v.id = $1`,
     [visitId]
   );
@@ -171,7 +222,7 @@ async function getVisitWithItems(visitId) {
   );
 
   const { rows: evidence } = await pool.query(
-    `SELECT id, kind, mime_type, caption, created_at,
+    `SELECT id, kind, mime_type, caption, created_at, purpose,
             CASE WHEN length(data_url) > 120 THEN left(data_url, 80) || '…' ELSE data_url END AS data_url_preview,
             data_url
      FROM anchor_portal_evidence
@@ -186,6 +237,7 @@ async function getVisitWithItems(visitId) {
     evidence: evidence.map(e => ({
       id: e.id,
       kind: e.kind,
+      purpose: e.purpose,
       mime_type: e.mime_type,
       caption: e.caption,
       created_at: e.created_at,
@@ -195,15 +247,17 @@ async function getVisitWithItems(visitId) {
 }
 
 async function listVisits(user, { locationId, limit = 20 } = {}) {
+  assertPortalUser(user);
   const locId = locationId ? await assertLocationAccess(user, locationId) : null;
   const max = Math.min(Math.max(Number(limit) || 20, 1), 50);
 
   if (isOperator(user) && !locId) {
     const { rows } = await pool.query(
-      `SELECT v.*, l.name AS location_name, u.name AS cleaner_name
+      `SELECT v.*, l.name AS location_name, u.name AS cleaner_name, cu.name AS completed_by_name
        FROM anchor_portal_visits v
        JOIN anchor_portal_locations l ON l.id = v.location_id
        LEFT JOIN users u ON u.id = v.cleaner_id
+     LEFT JOIN users cu ON cu.id = v.completed_by
        WHERE l.operator_client_id = $1
        ORDER BY COALESCE(v.completed_at, v.scheduled_at) DESC
        LIMIT $2`,
@@ -216,10 +270,11 @@ async function listVisits(user, { locationId, limit = 20 } = {}) {
   if (!locations.length) return [];
 
   const { rows } = await pool.query(
-    `SELECT v.*, l.name AS location_name, u.name AS cleaner_name
+    `SELECT v.*, l.name AS location_name, u.name AS cleaner_name, cu.name AS completed_by_name
      FROM anchor_portal_visits v
      JOIN anchor_portal_locations l ON l.id = v.location_id
      LEFT JOIN users u ON u.id = v.cleaner_id
+     LEFT JOIN users cu ON cu.id = v.completed_by
      WHERE v.location_id = ANY($1::int[])
      ORDER BY COALESCE(v.completed_at, v.scheduled_at) DESC
      LIMIT $2`,
@@ -229,6 +284,7 @@ async function listVisits(user, { locationId, limit = 20 } = {}) {
 }
 
 async function getTodayVisitForCleaner(user) {
+  assertPortalUser(user);
   if (!isCleaner(user) && !isOperator(user)) {
     throw new AnchorPortalError('forbidden', 'Cleaner access only.', 403);
   }
@@ -241,12 +297,13 @@ async function getTodayVisitForCleaner(user) {
     `SELECT v.id
      FROM anchor_portal_visits v
      WHERE v.location_id = ANY($1::int[])
+       AND ($2::boolean OR v.cleaner_id IS NULL OR v.cleaner_id = $3)
        AND v.status IN ('scheduled', 'in_progress')
        AND v.scheduled_at::date <= (NOW() AT TIME ZONE 'America/New_York')::date
        AND v.scheduled_at::date >= (NOW() AT TIME ZONE 'America/New_York')::date - INTERVAL '1 day'
      ORDER BY v.scheduled_at ASC
      LIMIT 1`,
-    [locations]
+    [locations, isOperator(user), user.id]
   );
   if (!rows.length) return null;
   return getVisitWithItems(rows[0].id);
@@ -254,120 +311,136 @@ async function getTodayVisitForCleaner(user) {
 
 async function startVisit(user, visitId) {
   const visit = await getVisitWithItems(visitId);
-  if (!visit) throw new AnchorPortalError('not_found', 'Visit not found.', 404);
-  await assertLocationAccess(user, visit.location_id);
-  if (!isCleaner(user) && !isOperator(user)) {
-    throw new AnchorPortalError('forbidden', 'Only cleaners can start visits.', 403);
-  }
-  if (visit.status === 'completed') {
-    throw new AnchorPortalError('invalid_state', 'Visit is already completed.', 409);
-  }
-
-  const { rows: itemRows } = await pool.query(
-    `SELECT COUNT(*)::int AS count FROM anchor_portal_visit_items WHERE visit_id = $1`,
-    [visitId]
-  );
-  if (itemRows[0].count === 0) {
-    await copyScopeToVisitItems(visitId, visit.location_id);
-  }
-
-  await pool.query(
-    `UPDATE anchor_portal_visits
-     SET status = 'in_progress',
-         started_at = COALESCE(started_at, NOW()),
-         cleaner_id = COALESCE(cleaner_id, $2)
-     WHERE id = $1`,
-    [visitId, isCleaner(user) ? user.id : visit.cleaner_id]
-  );
+  if (!visit) throw new AnchorPortalError('not_found', 'Service report not found.', 404);
+  await assertVisitWriter(user, visit);
+  await transaction(async db => {
+    const { rows: [locked] } = await db.query('SELECT * FROM anchor_portal_visits WHERE id=$1 FOR UPDATE', [visitId]);
+    assertMutableVisit(user, locked);
+    const { rows } = await db.query('SELECT COUNT(*)::int AS count FROM anchor_portal_visit_items WHERE visit_id=$1', [visitId]);
+    if (!rows[0].count) await copyScopeToVisitItems(visitId, visit.location_id, db);
+    await db.query(`UPDATE anchor_portal_visits SET status='in_progress', started_at=COALESCE(started_at,NOW()),
+      cleaner_id=COALESCE(cleaner_id,$2) WHERE id=$1`, [visitId, isCleaner(user) ? user.id : visit.cleaner_id]);
+  });
   return getVisitWithItems(visitId);
+}
+
+function assertMutableVisit(user, visit) {
+  if (isCleaner(user) && visit.cleaner_id && visit.cleaner_id !== user.id) throw new AnchorPortalError('forbidden', 'This service report is assigned to another team member.', 403);
+  if (!['scheduled','in_progress'].includes(visit.status)) throw new AnchorPortalError('invalid_state', 'This service report is already completed or cancelled.', 409);
 }
 
 async function updateVisitItem(user, visitId, itemId, payload) {
   const visit = await getVisitWithItems(visitId);
-  if (!visit) throw new AnchorPortalError('not_found', 'Visit not found.', 404);
-  await assertLocationAccess(user, visit.location_id);
-  if (!isCleaner(user) && !isOperator(user)) {
-    throw new AnchorPortalError('forbidden', 'Only cleaners can update checklist items.', 403);
-  }
-  if (visit.status === 'completed') {
-    throw new AnchorPortalError('invalid_state', 'Visit is already completed.', 409);
-  }
-
+  if (!visit) throw new AnchorPortalError('not_found', 'Service report not found.', 404);
+  await assertVisitWriter(user, visit);
   const outcome = String(payload.outcome || '').trim();
-  const allowed = ['completed', 'unable_to_complete', 'issue_detected', 'not_applicable', 'pending'];
-  if (!allowed.includes(outcome)) {
-    throw new AnchorPortalError('invalid_outcome', 'Invalid checklist outcome.', 400);
-  }
-  const reason = String(payload.exception_reason || '').trim();
-  if (OUTCOMES_REQUIRING_REASON.has(outcome) && !reason) {
-    throw new AnchorPortalError('reason_required', 'Exception outcomes require a reason.', 400);
-  }
-
-  const { rowCount } = await pool.query(
-    `UPDATE anchor_portal_visit_items
-     SET outcome = $3,
-         exception_reason = $4,
-         completed_at = CASE WHEN $3 IN ('completed', 'unable_to_complete', 'issue_detected', 'not_applicable')
-           THEN COALESCE(completed_at, NOW()) ELSE NULL END
-     WHERE id = $1 AND visit_id = $2`,
-    [itemId, visitId, outcome, OUTCOMES_REQUIRING_REASON.has(outcome) ? reason : null]
-  );
-  if (!rowCount) throw new AnchorPortalError('not_found', 'Checklist item not found.', 404);
-
-  if (visit.status === 'scheduled') {
-    await pool.query(
-      `UPDATE anchor_portal_visits SET status = 'in_progress', started_at = COALESCE(started_at, NOW())
-       WHERE id = $1`,
-      [visitId]
-    );
-  }
+  if (!['completed','unable_to_complete','issue_detected','not_applicable','pending'].includes(outcome)) throw new AnchorPortalError('invalid_outcome', 'Invalid checklist outcome.');
+  const reason = textValue(payload.exception_reason, 2000);
+  if (OUTCOMES_REQUIRING_REASON.has(outcome) && !reason) throw new AnchorPortalError('reason_required', 'Exception outcomes require a reason.');
+  await transaction(async db => {
+    const { rows: [locked] } = await db.query('SELECT * FROM anchor_portal_visits WHERE id=$1 FOR UPDATE', [visitId]);
+    assertMutableVisit(user, locked);
+    const { rowCount } = await db.query(`UPDATE anchor_portal_visit_items SET outcome=$3, exception_reason=$4,
+      completed_at=CASE WHEN $3='pending' THEN NULL ELSE COALESCE(completed_at,NOW()) END WHERE id=$1 AND visit_id=$2`,
+      [itemId,visitId,outcome,OUTCOMES_REQUIRING_REASON.has(outcome)?reason:null]);
+    if (!rowCount) throw new AnchorPortalError('not_found', 'Checklist item not found.', 404);
+    await db.query(`UPDATE anchor_portal_visits SET status='in_progress', started_at=COALESCE(started_at,NOW()),
+      cleaner_id=COALESCE(cleaner_id,$2) WHERE id=$1`, [visitId, isCleaner(user)?user.id:null]);
+  });
   return getVisitWithItems(visitId);
 }
 
-async function addVisitEvidence(user, visitId, { data_url, mime_type, caption }) {
+async function addVisitEvidence(user, visitId, { data_url, caption }) {
   const visit = await getVisitWithItems(visitId);
-  if (!visit) throw new AnchorPortalError('not_found', 'Visit not found.', 404);
-  await assertLocationAccess(user, visit.location_id);
-  if (!isCleaner(user) && !isOperator(user)) {
-    throw new AnchorPortalError('forbidden', 'Forbidden.', 403);
-  }
-  const url = String(data_url || '').trim();
-  if (!url.startsWith('data:image/') || url.length > 2_500_000) {
-    throw new AnchorPortalError('invalid_photo', 'Photo must be a reasonable image data URL.', 400);
-  }
-  await pool.query(
-    `INSERT INTO anchor_portal_evidence (visit_id, kind, mime_type, data_url, caption)
-     VALUES ($1, 'photo', $2, $3, $4)`,
-    [visitId, mime_type || null, url, caption || null]
-  );
+  if (!visit) throw new AnchorPortalError('not_found', 'Service report not found.', 404);
+  await assertVisitWriter(user, visit);
+  const photo = validatePhoto(data_url, caption);
+  await transaction(async db => {
+    const { rows: [locked] } = await db.query('SELECT * FROM anchor_portal_visits WHERE id=$1 FOR UPDATE', [visitId]);
+    assertMutableVisit(user, locked);
+    await insertEvidence(db, { visitId, photos: [photo] });
+  });
   return getVisitWithItems(visitId);
 }
 
-async function completeVisit(user, visitId, { visit_notes } = {}) {
+async function completeVisit(user, visitId, { visit_notes, photos, items: updates } = {}) {
   const visit = await getVisitWithItems(visitId);
-  if (!visit) throw new AnchorPortalError('not_found', 'Visit not found.', 404);
-  await assertLocationAccess(user, visit.location_id);
-  if (!isCleaner(user) && !isOperator(user)) {
-    throw new AnchorPortalError('forbidden', 'Only cleaners can complete visits.', 403);
-  }
-
-  const pending = visit.items.filter(i => i.outcome === 'pending');
-  if (pending.length) {
-    throw new AnchorPortalError('incomplete_checklist', 'All checklist items must be marked before completing.', 400);
-  }
-
-  await pool.query(
-    `UPDATE anchor_portal_visits
-     SET status = 'completed',
-         completed_at = NOW(),
-         visit_notes = COALESCE($2, visit_notes)
-     WHERE id = $1`,
-    [visitId, visit_notes || null]
-  );
+  if (!visit) throw new AnchorPortalError('not_found', 'Service report not found.', 404);
+  await assertVisitWriter(user, visit);
+  const validated = validatePhotos(photos);
+  const notes = textValue(visit_notes);
+  await transaction(async db => {
+    const { rows: [locked] } = await db.query('SELECT * FROM anchor_portal_visits WHERE id = $1 FOR UPDATE', [visitId]);
+    if (isCleaner(user) && locked.cleaner_id && locked.cleaner_id !== user.id) throw new AnchorPortalError('forbidden', 'This report is assigned to another team member.', 403);
+    if (locked.status === 'completed') return;
+    if (locked.status !== 'in_progress') throw new AnchorPortalError('invalid_state', 'Start this service report before completing it.', 409);
+    if (updates != null) {
+      if (!Array.isArray(updates) || updates.length > 200) throw new AnchorPortalError('invalid_items', 'Invalid service checklist.');
+      for (const item of updates) {
+        const outcome = item.outcome;
+        const reason = textValue(item.exception_reason, 2000);
+        if (!['completed','unable_to_complete','issue_detected','not_applicable'].includes(outcome)) throw new AnchorPortalError('invalid_outcome', 'Choose an outcome for each checklist item.');
+        if (OUTCOMES_REQUIRING_REASON.has(outcome) && !reason) throw new AnchorPortalError('reason_required', 'Explain every incomplete task or issue.');
+        const { rowCount } = await db.query(`UPDATE anchor_portal_visit_items SET outcome=$3, exception_reason=$4, completed_at=COALESCE(completed_at,NOW()) WHERE id=$1 AND visit_id=$2`,
+          [item.id, visitId, outcome, OUTCOMES_REQUIRING_REASON.has(outcome) ? reason : null]);
+        if (!rowCount) throw new AnchorPortalError('invalid_items', 'Checklist item does not belong to this service report.');
+      }
+    }
+    const { rows: items } = await db.query('SELECT outcome FROM anchor_portal_visit_items WHERE visit_id = $1', [visitId]);
+    if (!items.length || items.some(item => item.outcome === 'pending')) throw new AnchorPortalError('incomplete_checklist', 'All checklist items must be marked before completing.');
+    await insertEvidence(db, { visitId, photos: validated });
+    await db.query(`UPDATE anchor_portal_visits SET status = 'completed', completed_at = NOW(),
+      completed_by = $2, cleaner_id = COALESCE(cleaner_id, $2), visit_notes = $3 WHERE id = $1`, [visitId, user.id, notes || null]);
+  });
   return getVisitWithItems(visitId);
 }
 
-async function listIssues(user, { locationId, status } = {}) {
+async function createVisit(user, payload) {
+  const locationId = await assertLocationAccess(user, payload.location_id);
+  if (!isOperator(user) && !isCleaner(user)) throw new AnchorPortalError('forbidden', 'Service team access only.', 403);
+  const date = new Date(payload.service_date);
+  if (!payload.service_date || !Number.isFinite(+date) || +date > Date.now() + 60000) throw new AnchorPortalError('invalid_date', 'Choose a valid service date that is not in the future.');
+  const notes = textValue(payload.visit_notes);
+  const areas = payload.areas;
+  if (!Array.isArray(areas) || !areas.length || areas.length > 50) throw new AnchorPortalError('invalid_areas', 'Select between one and 50 facility areas.');
+  const items = areas.map(area => {
+    const title = textValue(area.title, 200);
+    const note = textValue(area.notes, 1000);
+    const outcome = area.outcome || 'completed';
+    if (!title || !['completed','unable_to_complete','issue_detected','not_applicable'].includes(outcome)) throw new AnchorPortalError('invalid_areas', 'Each area needs a name and valid outcome.');
+    if (OUTCOMES_REQUIRING_REASON.has(outcome) && !note) throw new AnchorPortalError('reason_required', 'Please explain the service exception.');
+    return {title, note, outcome};
+  });
+  const photos = validatePhotos(payload.photos);
+  const key = requestId(payload.request_id);
+  const id = await transaction(async db => {
+    if (key) {
+      await db.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`portal-report:${user.id}:${key}`]);
+      const { rows } = await db.query('SELECT id, location_id FROM anchor_portal_visits WHERE completed_by = $1 AND request_id = $2', [user.id, key]);
+      if (rows.length) {
+        if (rows[0].location_id !== locationId) throw new AnchorPortalError('request_conflict', 'This request was already used for a different building.', 409);
+        return rows[0].id;
+      }
+    }
+    const { rows: [visit] } = await db.query(`INSERT INTO anchor_portal_visits
+      (location_id, cleaner_id, completed_by, scheduled_at, started_at, completed_at, status, visit_notes, request_id)
+      VALUES ($1,$2,$2,$3,$3,$3,'completed',$4,$5) RETURNING id`, [locationId, user.id, date.toISOString(), notes || null, key]);
+    for (let index = 0; index < items.length; index++) {
+      const item = items[index];
+      await db.query(`INSERT INTO anchor_portal_visit_items
+        (visit_id, section_title, item_label, sort_order, outcome, exception_reason, completed_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7)`, [visit.id, item.title, item.note || 'Area service recorded', index, item.outcome,
+        OUTCOMES_REQUIRING_REASON.has(item.outcome) ? item.note : null, date.toISOString()]);
+    }
+    await insertEvidence(db, { visitId: visit.id, photos });
+    return visit.id;
+  });
+  return getVisitWithItems(id);
+}
+
+async function listIssues(user, { locationId, status, offset = 0 } = {}) {
+  assertPortalUser(user);
+  if (status === 'in_progress') status = 'acknowledged';
   const locId = locationId ? await assertLocationAccess(user, locationId) : null;
   const locations = locId
     ? [locId]
@@ -379,11 +452,14 @@ async function listIssues(user, { locationId, status } = {}) {
 
   const params = [locations];
   let statusClause = '';
-  if (status) {
+  if (status === 'active') statusClause = " AND i.status IN ('open','acknowledged')";
+  else if (status) {
     params.push(status);
     statusClause = ` AND i.status = $${params.length}`;
   }
 
+  const pageOffset = Math.min(100000, Math.max(0, Math.trunc(Number(offset) || 0)));
+  params.push(pageOffset);
   const { rows } = await pool.query(
     `SELECT i.*, l.name AS location_name, ru.name AS reported_by_name
      FROM anchor_portal_issues i
@@ -392,105 +468,94 @@ async function listIssues(user, { locationId, status } = {}) {
      WHERE i.location_id = ANY($1::int[])${statusClause}
      ORDER BY
        CASE i.status WHEN 'open' THEN 0 WHEN 'acknowledged' THEN 1 ELSE 2 END,
-       i.created_at DESC
-     LIMIT 100`,
+       i.created_at DESC, i.id DESC
+     LIMIT 100 OFFSET $${params.length}`,
     params
   );
+  const ids = rows.map(issue => issue.id);
+  if (ids.length) {
+    const { rows: evidence } = await pool.query(`SELECT id, issue_id, kind, mime_type, data_url, caption, purpose, created_at
+      FROM anchor_portal_evidence WHERE issue_id = ANY($1::int[]) ORDER BY created_at, id`, [ids]);
+    for (const issue of rows) issue.evidence = evidence.filter(photo => photo.issue_id === issue.id);
+  }
   return rows;
+}
+
+async function getIssue(user, issueId) {
+  const { rows: [issue] } = await pool.query('SELECT * FROM anchor_portal_issues WHERE id=$1', [issueId]);
+  if (!issue) throw new AnchorPortalError('not_found', 'Issue not found.', 404);
+  await assertLocationAccess(user, issue.location_id);
+  const { rows: evidence } = await pool.query(`SELECT id, issue_id, kind, mime_type, data_url, caption, purpose, created_at FROM anchor_portal_evidence WHERE issue_id=$1 ORDER BY created_at,id`, [issueId]);
+  return {...issue,evidence};
 }
 
 async function createIssue(user, payload) {
   const locationId = await assertLocationAccess(user, payload.location_id);
-  const description = String(payload.description || '').trim();
-  if (description.length < 8) {
-    throw new AnchorPortalError('invalid_description', 'Please describe the issue.', 400);
+  const description = textValue(payload.description);
+  if (description.length < 8) throw new AnchorPortalError('invalid_description', 'Please describe the problem in at least eight characters.');
+  const photo = payload.photo_data_url ? validatePhoto(payload.photo_data_url, payload.photo_caption) : null;
+  const severity = payload.severity || 'medium';
+  if (!['low','medium','high'].includes(severity)) throw new AnchorPortalError('invalid_severity', 'Choose a valid urgency.');
+  const title = textValue(payload.title, 200) || null;
+  const room = textValue(payload.room_category, 200) || null;
+  const type = textValue(payload.issue_type, 100) || 'Other';
+  const key = requestId(payload.request_id);
+  if (payload.visit_id) {
+    const visit = await getVisitWithItems(payload.visit_id);
+    if (!visit || visit.location_id !== locationId) throw new AnchorPortalError('invalid_visit', 'Service report does not belong to this building.');
   }
-
-  let source = 'client';
-  if (isCleaner(user)) source = 'cleaner';
-  if (isOperator(user)) source = 'operator';
-
-  const severity = ['low', 'medium', 'high'].includes(payload.severity) ? payload.severity : 'medium';
-
-  const { rows } = await pool.query(
-    `INSERT INTO anchor_portal_issues
-       (location_id, visit_id, reported_by_user_id, source, title, description,
-        room_category, severity, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'open')
-     RETURNING *`,
-    [
-      locationId,
-      payload.visit_id || null,
-      user?.id || null,
-      source,
-      payload.title || null,
-      description,
-      payload.room_category || null,
-      severity,
-    ]
-  );
-  const issue = rows[0];
-
-  const photo = String(payload.photo_data_url || '').trim();
-  if (photo.startsWith('data:image/') && photo.length <= 2_500_000) {
-    await pool.query(
-      `INSERT INTO anchor_portal_evidence (issue_id, kind, mime_type, data_url, caption)
-       VALUES ($1, 'photo', $2, $3, $4)`,
-      [issue.id, payload.photo_mime_type || null, photo, payload.photo_caption || null]
-    );
-  }
-  return issue;
+  const issue = await transaction(async db => {
+    if (key) {
+      await db.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`portal-issue:${user.id}:${key}`]);
+      const { rows } = await db.query('SELECT * FROM anchor_portal_issues WHERE reported_by_user_id = $1 AND request_id = $2', [user.id, key]);
+      if (rows.length) {
+        if (rows[0].location_id !== locationId) throw new AnchorPortalError('request_conflict', 'This request was already used for a different building.', 409);
+        return rows[0];
+      }
+    }
+    const { rows: [created] } = await db.query(`INSERT INTO anchor_portal_issues
+      (location_id,visit_id,reported_by_user_id,source,title,description,room_category,severity,status,issue_type,request_id)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'open',$9,$10) RETURNING *`,
+      [locationId,payload.visit_id || null,user.id,isOperator(user)?'operator':isCleaner(user)?'cleaner':'client',title,description,room,severity,type,key]);
+    if (photo) await insertEvidence(db, {issueId:created.id,purpose:'reported',photos:[photo]});
+    return created;
+  });
+  return getIssue(user, issue.id);
 }
 
 async function updateIssue(user, issueId, payload) {
-  if (!isOperator(user)) {
-    throw new AnchorPortalError('forbidden', 'Operators only.', 403);
-  }
-  const { rows } = await pool.query(`SELECT * FROM anchor_portal_issues WHERE id = $1`, [issueId]);
-  const issue = rows[0];
+  assertPortalUser(user);
+  if (!isOperator(user)) throw new AnchorPortalError('forbidden', 'Service manager access only.', 403);
+  const { rows: [issue] } = await pool.query('SELECT * FROM anchor_portal_issues WHERE id = $1', [issueId]);
   if (!issue) throw new AnchorPortalError('not_found', 'Issue not found.', 404);
-
-  const status = payload.status || issue.status;
-  if (!['open', 'acknowledged', 'resolved'].includes(status)) {
-    throw new AnchorPortalError('invalid_status', 'Invalid status.', 400);
-  }
-
-  const acknowledgedAt = status === 'open'
-    ? null
-    : (issue.acknowledged_at || (status !== 'open' ? new Date().toISOString() : null));
-  const resolvedAt = status === 'resolved'
-    ? (payload.resolved_at || issue.resolved_at || new Date().toISOString())
-    : null;
-
-  const { rows: updated } = await pool.query(
-    `UPDATE anchor_portal_issues
-     SET status = $2,
-         acknowledged_at = $3,
-         acknowledged_by = CASE WHEN $2 IN ('acknowledged', 'resolved')
-           THEN COALESCE(acknowledged_by, $4) ELSE NULL END,
-         assigned_to = COALESCE($5, assigned_to),
-         resolution = COALESCE($6, resolution),
-         resolved_at = $7
-     WHERE id = $1
-     RETURNING *`,
-    [
-      issueId,
-      status,
-      acknowledgedAt,
-      user.id,
-      payload.assigned_to || null,
-      payload.resolution || null,
-      resolvedAt,
-    ]
-  );
-  return updated[0];
+  await assertLocationAccess(user, issue.location_id);
+  const resolution = textValue(payload.resolution);
+  const photo = payload.resolution_photo_data_url ? validatePhoto(payload.resolution_photo_data_url, payload.resolution_photo_caption) : null;
+  await transaction(async db => {
+    const { rows: [locked] } = await db.query('SELECT * FROM anchor_portal_issues WHERE id = $1 FOR UPDATE', [issueId]);
+    const status = payload.status === 'in_progress' ? 'acknowledged' : (payload.status || locked.status);
+    if (!['open','acknowledged','resolved'].includes(status)) throw new AnchorPortalError('invalid_status', 'Invalid issue status.');
+    if (status === 'resolved' && !resolution && !locked.resolution) throw new AnchorPortalError('resolution_required', 'Add a resolution note.');
+    if (photo && status !== 'resolved') throw new AnchorPortalError('invalid_status', 'Photo proof belongs to a resolved issue.');
+    await db.query(`UPDATE anchor_portal_issues SET status=$2,
+      acknowledged_at=CASE WHEN $2='open' THEN NULL ELSE COALESCE(acknowledged_at,NOW()) END,
+      acknowledged_by=CASE WHEN $2='open' THEN NULL ELSE COALESCE(acknowledged_by,$3) END,
+      resolution=COALESCE(NULLIF($4,''),resolution),
+      resolved_at=CASE WHEN $2='resolved' THEN COALESCE(resolved_at,NOW()) ELSE NULL END
+      WHERE id=$1`, [issueId,status,user.id,resolution]);
+    if (photo) {
+      const { rows } = await db.query(`SELECT id FROM anchor_portal_evidence WHERE issue_id=$1 AND purpose='resolution' AND data_url=$2`, [issueId,photo.data_url]);
+      if (!rows.length) await insertEvidence(db,{issueId,purpose:'resolution',photos:[photo]});
+    }
+  });
+  return getIssue(user, issue.id);
 }
 
 async function getClientHome(user, locationId) {
   const locId = await assertLocationAccess(user, locationId);
 
   const { rows: locRows } = await pool.query(
-    `SELECT id, name, address, next_scheduled_at FROM anchor_portal_locations WHERE id = $1`,
+    `SELECT id, name, address, is_demo, next_scheduled_at FROM anchor_portal_locations WHERE id = $1`,
     [locId]
   );
   const location = locRows[0];
@@ -505,10 +570,12 @@ async function getClientHome(user, locationId) {
   );
 
   const { rows: recentVisits } = await pool.query(
-    `SELECT id, status, completed_at, scheduled_at
-     FROM anchor_portal_visits
-     WHERE location_id = $1
-     ORDER BY COALESCE(completed_at, scheduled_at) DESC
+    `SELECT v.id, v.status, v.completed_at, v.scheduled_at, cu.name AS completed_by_name, u.name AS cleaner_name
+     FROM anchor_portal_visits v
+     LEFT JOIN users cu ON cu.id = v.completed_by
+     LEFT JOIN users u ON u.id = v.cleaner_id
+     WHERE v.location_id = $1
+     ORDER BY COALESCE(v.completed_at, v.scheduled_at) DESC
      LIMIT 8`,
     [locId]
   );
@@ -519,6 +586,7 @@ async function getClientHome(user, locationId) {
 
   const { rows: issueStats } = await pool.query(
     `SELECT
+       COUNT(*) FILTER (WHERE status IN ('open','acknowledged'))::int AS active_count,
        COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '90 days')::int AS reported_90d,
        COUNT(*) FILTER (WHERE status = 'resolved' AND created_at > NOW() - INTERVAL '90 days')::int AS resolved_90d
      FROM anchor_portal_issues
@@ -554,7 +622,7 @@ async function getClientHome(user, locationId) {
     last_service: lastCompleted[0]?.completed_at || null,
     next_service: location.next_scheduled_at,
     service_status: serviceStatus,
-    open_issues_count: openIssues.length + acknowledgedIssues.length,
+    open_issues_count: issueStats[0]?.active_count || 0,
     recent_quality: {
       visits_window: 8,
       visits_completed: completedCount,
@@ -616,6 +684,9 @@ module.exports = {
   updateVisitItem,
   addVisitEvidence,
   completeVisit,
+  createVisit,
+  validatePhoto,
+  assertPortalUser,
   listIssues,
   createIssue,
   updateIssue,

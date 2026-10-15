@@ -19,6 +19,8 @@ const {
   updateVisitItem,
   addVisitEvidence,
   completeVisit,
+  createVisit,
+  assertPortalUser,
   listIssues,
   createIssue,
   updateIssue,
@@ -29,7 +31,33 @@ const {
 const router = express.Router();
 
 const PORTAL_ROLES = ['admin', 'manager', 'cleaner', 'facility_client'];
-const portalAuth = [requireAuth, requireRole(...PORTAL_ROLES)];
+function expectedOrigin(req) {
+  if (process.env.APP_URL) {
+    try {
+      const url = new URL(process.env.APP_URL);
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return null;
+      return url.origin;
+    } catch (_) { return null; }
+  }
+  // Development harness only. Production must configure its canonical APP_URL;
+  // never trust caller-supplied X-Forwarded-Proto to authorize a mutation.
+  const host = req.get('host');
+  return /^(127\.0\.0\.1|localhost|\[::1\])(?::[0-9]+)?$/.test(host || '') ? `${req.protocol}://${host}` : null;
+}
+
+const portalAuth = [requireAuth, requireRole(...PORTAL_ROLES), (req, res, next) => {
+  try {
+    assertPortalUser(req.user);
+    if (req.session?.impersonation?.active) throw new AnchorPortalError('forbidden', 'Exit impersonation before using the service portal.', 403);
+    res.set('Cache-Control', 'no-store');
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+      const origin = req.get('origin');
+      if (origin && origin !== expectedOrigin(req)) throw new AnchorPortalError('forbidden', 'Use this portal to save changes.', 403);
+      if (req.body && !req.is('application/json')) throw new AnchorPortalError('invalid_content_type', 'Send service changes as JSON.', 415);
+    }
+    next();
+  } catch (err) { handleError(res, err); }
+}];
 
 function handleError(res, err) {
   if (err instanceof AnchorPortalError) {
@@ -139,6 +167,11 @@ router.get('/api/anchor-portal/visits', ...portalAuth, async (req, res) => {
   }
 });
 
+router.post('/api/anchor-portal/visits', ...portalAuth, async (req, res) => {
+  try { return res.status(201).json({ visit: await createVisit(req.user, req.body || {}) }); }
+  catch (err) { return handleError(res, err); }
+});
+
 router.get('/api/anchor-portal/visits/today', ...portalAuth, async (req, res) => {
   try {
     const visit = await getTodayVisitForCleaner(req.user);
@@ -200,6 +233,7 @@ router.get('/api/anchor-portal/issues', ...portalAuth, async (req, res) => {
     const issues = await listIssues(req.user, {
       locationId: req.query.location_id,
       status: req.query.status,
+      offset: req.query.offset,
     });
     return res.json({ issues });
   } catch (err) {
@@ -226,3 +260,4 @@ router.patch('/api/anchor-portal/issues/:id', ...portalAuth, async (req, res) =>
 });
 
 module.exports = router;
+module.exports.expectedOrigin = expectedOrigin;
