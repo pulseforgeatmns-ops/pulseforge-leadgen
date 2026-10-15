@@ -36,7 +36,7 @@ test('zero-yield search generations use distinct approved concepts and provider 
   assert.deepEqual(queries, ['HOA Management Manchester NH']);
 });
 
-test('Manchester restaurant FOH is admitted while BOH-only businesses stay separate', () => {
+test('Manchester restaurants are admitted without requiring a FOH scope decision', () => {
   const context = {
     missionSegments: ['restaurant_foh'],
     missionCities: ['manchester'],
@@ -53,7 +53,7 @@ test('Manchester restaurant FOH is admitted while BOH-only businesses stay separ
     name: 'Queen City Commissary', domain: 'qc-kitchen.example', location: 'Manchester, NH',
     description: 'Commercial kitchen and food production facility',
   }, context);
-  assert.deepEqual(boh, { admitted: false, reason: 'restaurant_boh_only' });
+  assert.equal(boh.admitted, false); // No evidence this industrial facility is a restaurant.
 });
 
 test('Babrun promotion writes founder classification only for verified attributable first-party email', () => {
@@ -162,4 +162,40 @@ test('Anchor successor mission adds only bounded restaurant FOH scope and preser
   assert.ok(next.constraints.some(value => /Back-of-house/.test(value)));
   assert.equal(next.structuredMission.immutable, true);
   assert.equal(JSON.stringify(source), before);
+});
+
+test('restaurant prospects can mention kitchens without promising kitchen-cleaning services', () => {
+  const context = { missionSegments: ['restaurant_foh'], allowedCities: ['manchester'] };
+  const candidate = { name: 'Queen City Ghost Kitchen', domain: 'qck.example', location: 'Manchester, NH', vertical: 'restaurant', industry: 'restaurant' };
+  assert.equal(evaluateReplenishmentAdmission(candidate, context).admitted, true);
+  assert.equal(evaluateReplenishmentAdmission({ ...candidate, name: 'Queen City Foods', industry: 'ghost kitchen' }, context).admitted, true);
+  assert.equal(evaluateReplenishmentAdmission({ ...candidate, name: 'Elm Bistro' }, context).admitted, true);
+  assert.equal(evaluateReplenishmentAdmission({ ...candidate, name: 'Ghost Kitchen and Diner' }, context).admitted, true);
+  assert.equal(evaluateReplenishmentAdmission(candidate, { ...context, missionSegments: ['small_business_owner'] }).admitted, true);
+  assert.equal(evaluateReplenishmentAdmission({ ...candidate, name: 'Elm Restaurant', description: 'Water damage restoration company' }, context).reason, 'contradictory_business_type');
+  assert.equal(evaluateReplenishmentAdmission({ ...candidate, name: 'Elm Bistro', location: 'Boston, MA' }, context).reason, 'outside_geography');
+  assert.equal(evaluateReplenishmentAdmission({ ...candidate, name: 'Elm Bistro' }, { ...context, missionSegments: ['short_term_rental'] }).reason, 'segment_mismatch');
+});
+
+
+test('canonical restaurant mission accepts ordinary restaurants and rejects industrial nonrestaurants', () => {
+  const context = { missionSegments: ['restaurant'], allowedCities: ['manchester'] };
+  const base = { name: 'Elm Street', domain: 'elm.example', location: 'Manchester, NH', vertical: 'restaurant' };
+  for (const description of ['', 'Restaurant kitchen needs assessment', 'Ghost kitchen restaurant']) {
+    assert.equal(evaluateReplenishmentAdmission({ ...base, description }, context).admitted, true);
+  }
+  assert.equal(evaluateReplenishmentAdmission({ ...base, name: 'Food Manufacturing Plant' }, context).reason, 'contradictory_business_type');
+  assert.equal(evaluateReplenishmentAdmission({ ...base, vertical: 'property_manager' }, context).reason, 'segment_mismatch');
+  assert.equal(evaluateReplenishmentAdmission({ ...base, location: 'Boston, MA' }, context).reason, 'outside_geography');
+});
+
+
+test('restaurant and legacy restaurant_foh discovery searches businesses without FOH wording', () => {
+  const adapter = { id: 'places', sourceType: 'public_business_data', available: () => true };
+  for (const segment of ['restaurant', 'restaurant_foh']) {
+    const plan = buildDiscoveryPlan({ ...searchDefinition(0), segments: [segment] }, { adapters: [adapter] });
+    assert.ok(plan.concepts.includes('Restaurant'));
+    assert.ok(plan.concepts.every(concept => !/front.of.house|\bfoh\b/i.test(concept)));
+    assert.ok(plan.workloads.every(workload => /Manchester/i.test(workload.city)));
+  }
 });
