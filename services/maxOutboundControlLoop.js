@@ -1,6 +1,6 @@
 'use strict';
 
-const { scoutRampDiagnostic, controlCycleDiagnostic, emitDiagnostic } = require('./outboundControlDiagnostics');
+const { admissionReceiptDiagnostic, providerReceiptDiagnostic, scoutRampDiagnostic, controlCycleDiagnostic, emitDiagnostic } = require('./outboundControlDiagnostics');
 const { governedContactReason, founderFirst, contactEvidence } = require('../utils/governedContactEligibility');
 
 const { canonicalOutboundEmailIneligibilityReason, normalizeDomain } = require('../utils/canonicalEmailEligibility');
@@ -827,6 +827,7 @@ async function defaultScoutRamp({
   let discoveryBackoff = null;
   let searchGeneration = 0;
   let persisted = { inserted: 0, admission: createReplenishmentAdmissionCounters() };
+  let admissionMeasured = false;
 
   const recoveredExistingCount = Number(existingRecovery?.payload?.qualifiedCount || 0);
   if (promoted < plan.deficit && recoveredExistingCount <= 0) {
@@ -874,6 +875,7 @@ async function defaultScoutRamp({
                 investigateBusinessEvidence: true,
               },
             });
+            admissionMeasured = true;
             return persisted;
           },
           enablePlaces: true,
@@ -922,6 +924,7 @@ async function defaultScoutRamp({
     enrichmentBatches: first.summaries,
     discoveredQueued: persisted.inserted,
     admission: persisted.admission || null,
+    admissionMeasured,
     yield: yieldReport,
     discovery,
     discoveryAttempted,
@@ -1294,6 +1297,8 @@ async function runMaxOutboundControlLoop(options = {}) {
     scoutSearchFingerprint: searchFingerprint,
     scoutSearchGeneration: Number(scout?.searchGeneration || 0),
     scoutDiscoveryAttempted: Boolean(scout?.discoveryAttempted),
+    scoutProviderReceipt: providerReceiptDiagnostic(store.tenantId, cycleId, scout?.discovery),
+    scoutAdmissionReceipt: admissionReceiptDiagnostic(store.tenantId, cycleId, scout?.admission, scout?.admissionMeasured),
     scoutBackoff: scout?.discoveryBackoff || null,
     aoRefill: aoRefill ? {
       assigned: Number(aoRefill.assigned?.length || 0),

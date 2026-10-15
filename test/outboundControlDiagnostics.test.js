@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { scoutRampDiagnostic, controlCycleDiagnostic, discoveryDiagnostic } = require('../services/outboundControlDiagnostics');
+const { admissionReceiptDiagnostic, providerReceiptDiagnostic, scoutRampDiagnostic, controlCycleDiagnostic, discoveryDiagnostic } = require('../services/outboundControlDiagnostics');
 const { runMaxOutboundControlLoop } = require('../services/maxOutboundControlLoop');
 const cycleId = 'moc_13_1234567890abcdef';
 
@@ -37,20 +37,21 @@ test('provider category and backoff are deterministic', () => {
   }
   assert.equal(discoveryDiagnostic({ kind: 'backoff' }).blocker, 'backoff');
 });
-async function run(tenantId, failEvent = false, rawSentToday = 0, failEnvelope = false) {
-  const logs = []; let persisted = false;
+async function run(tenantId, failEvent = false, rawSentToday = 0, failEnvelope = false, discovery, admissionFixture = {}) {
+  const logs = []; let persisted = false; let event;
   const result = await runMaxOutboundControlLoop({
     cycleId: `moc_${tenantId}_1234567890abcdef`, tenantId,
     pool: { query: async () => { throw new Error('Unexpected database call'); } },
-    store: { tenantId, clientId: Number(tenantId), envelope: async () => { if (failEnvelope) throw new Error('fixture read unavailable'); return null; }, event: async () => { if (failEvent) throw new Error('event_failure'); persisted = true; } },
+    store: { tenantId, clientId: Number(tenantId), envelope: async () => { if (failEnvelope) throw new Error('fixture read unavailable'); return null; }, event: async (_type, _key, payload) => { event = payload; if (failEvent) throw new Error('event_failure'); persisted = true; } },
     program: { id: 'outbound_fixture', tenant_id: tenantId, mode: 'active', policy: { dailyCap: 2 } },
     source: { id: 'fixture', payload: { structuredMission: { market: { segment: 'small_business_owners' }, geography: { region: 'United States', scope: 'nationwide' } } } },
     infrastructure: { cap: 2, snapshot: { sentToday: rawSentToday }, assessed: { governor: { outcome: 'proceed' } }, operating: { planningDailyCapacity: 2, dispatchCapacityNow: 2, authorizationLimitedCapacity: 2 } },
     inventory: { clean: [], excluded: [], exclusionCounts: {}, scope: {} },
-    timestamps: {}, funnel: {}, execute: false,
+    timestamps: {}, funnel: {}, execute: discovery ? true : false,
+    ...(discovery ? { scoutRamp: async () => ({ discovery, ...admissionFixture }), inventoryAfter: { clean: [], excluded: [], exclusionCounts: {}, scope: {} } } : {}),
     logger: { log: (label, value) => { assert.equal(persisted, true); logs.push([label, JSON.parse(value)]); } },
   });
-  return { result, logs };
+  return { result, logs, event };
 }
 test('actual measured summary follows successful event write and stays tenant scoped', async () => {
   const [a, b] = await Promise.all([run('13'), run('10')]);
@@ -91,4 +92,76 @@ test('failed preparation read logs unknown without changing legacy fallback cont
   const { result, logs } = await run('13', false, 0, true);
   assert.equal(result.pendingPrepared, 0);
   assert.equal(logs[0][1].pendingPrepared, null);
+});
+
+
+test('provider receipts preserve unknown versus zero and never infer network from executed', () => {
+  const unknown = providerReceiptDiagnostic('13', cycleId, null);
+  assert.equal(unknown.reportsAvailable, false);
+  assert.deepEqual(unknown.providers, []);
+  const p = providerReceiptDiagnostic('13', cycleId, { result: { payload: { providerExecution: [{ providerId: 'google_maps', status: 'failed', rawResultCount: 0, execution: { executed: true, queries: [{ googleStatus: 'REQUEST_DENIED', httpStatus: 200, resultCount: 0 }] } }] } } }).providers[0];
+  assert.equal(p.rawResultCount, 0); assert.equal(p.mappedCandidateCount, null);
+  assert.equal(p.queries[0].origin, 'unknown'); assert.equal(p.queries[0].cacheHit, null);
+});
+test('provider receipt bounds and sanitizes malicious fields and explicit cache origins', () => {
+  const secret = 'secret@example.com https://evil.test/token';
+  const report = { providerId: secret, status: secret, rawResultCount: -1, executedAt: secret, error: secret, execution: { executed: secret, queries: Array.from({ length: 25 }, (_, i) => ({ query: secret, googleError: secret, googleStatus: secret, httpStatus: 900, resultCount: NaN, cacheHit: i === 0 ? true : false })), errors: [{ code: secret, message: secret }] } };
+  const result = providerReceiptDiagnostic('13', cycleId, { result: { startedAt: secret, payload: { providerExecution: Array(25).fill(report) } } });
+  assert.equal(result.providers.length, 20); assert.equal(result.reportsTruncated, true);
+  assert.equal(result.providers[0].queries.length, 20); assert.equal(result.providers[0].queriesTruncated, true);
+  assert.equal(result.providers[0].queries[0].origin, 'cache');
+  assert.equal(result.providers[0].queries[1].origin, 'uncached');
+  assert.equal(result.providers[0].rawResultCount, null);
+  assert.ok(!JSON.stringify(result).includes('secret'));
+});
+test('actual control event durably includes sanitized tenant/cycle provider receipt', async () => {
+  const discovery = { kind: 'investigated', result: { status: 'partial', startedAt: '2026-10-15T15:45:10.000Z', errors: [{ code: 'insufficient_coverage', message: 'private' }], payload: { providerExecution: [{ providerId: 'google_maps', status: 'failed', execution: { errors: [{ code: 'google_places_status_REQUEST_DENIED', message: 'private' }] } }] } } };
+  const { event } = await run('13', false, 0, false, discovery, { admissionMeasured: true, admission: { evaluated: 92, fit: 0, rejected: { outside_geography: 92 } } });
+  assert.equal(event.scoutAdmissionReceipt.measured, true);
+  assert.equal(event.scoutAdmissionReceipt.tenantId, '13');
+  assert.equal(event.scoutAdmissionReceipt.cycleId, cycleId);
+  assert.equal(event.scoutAdmissionReceipt.rejected.outside_geography, 92);
+  assert.equal(event.scoutAdmissionReceipt.recordedRejectedTotal, 92);
+  assert.equal(event.scoutProviderReceipt.tenantId, '13');
+  assert.equal(event.scoutProviderReceipt.cycleId, cycleId);
+  assert.equal(event.scoutProviderReceipt.providers[0].errors[0].code, 'google_places_status_REQUEST_DENIED');
+  assert.ok(!JSON.stringify(event.scoutProviderReceipt).includes('private'));
+  const other = providerReceiptDiagnostic('10', 'moc_10_1234567890abcdef', { kind: 'backoff' });
+  assert.equal(other.tenantId, '10'); assert.deepEqual(other.providers, []);
+});
+
+test('canonical SPEC-184 provider counts and empty status survive projection', () => {
+  const { normalizeProviderExecutionRecord } = require('../packages/scout/coverage/ProviderExecution');
+  const canonical = normalizeProviderExecutionRecord({ providerId: 'google_maps', status: 'empty', rawResultCount: 0, mappedCandidateCount: 0, execution: { executed: true, totals: { queries: 1, results: 0 }, queries: [{ googleStatus: 'ZERO_RESULTS', httpStatus: 200 }] } });
+  const p = providerReceiptDiagnostic('13', cycleId, { result: { payload: { providerExecution: [canonical] } } }).providers[0];
+  assert.equal(p.rawResultCount, 0); assert.equal(p.mappedCandidateCount, 0);
+  assert.equal(p.status, 'empty'); assert.equal(p.queries[0].origin, 'unknown');
+});
+
+test('admission receipt preserves unavailable versus measured zero and reconciles recorded reasons', () => {
+  const { createReplenishmentAdmissionCounters } = require('../utils/replenishmentVertical');
+  const a = createReplenishmentAdmissionCounters();
+  const unavailable = admissionReceiptDiagnostic('13', cycleId, a, false);
+  assert.equal(unavailable.counts.evaluated, null); assert.equal(unavailable.rejected.outside_geography, null);
+  assert.equal(unavailable.recordedRejectedTotal, null);
+  a.discovered = 92; a.evaluated = 92; a.rejected.outside_geography = 90; a.rejected.segment_mismatch = 2;
+  const measured = admissionReceiptDiagnostic('13', cycleId, a, true);
+  assert.equal(measured.recordedRejectedTotal, 92); assert.equal(measured.counts.fit, 0);
+  assert.equal(measured.rejected.outside_geography, 90); assert.equal(measured.unrecognizedReasonCount, 0);
+  a.rejected['secret@example.com'] = 3;
+  const unknownReason = admissionReceiptDiagnostic('13', cycleId, a, true);
+  assert.equal(unknownReason.recordedRejectedTotal, 95); assert.equal(unknownReason.unrecognizedReasonCount, 3);
+  assert.ok(!JSON.stringify(unknownReason).includes('secret'));
+  a.rejected.segment_mismatch = 'private';
+  assert.equal(admissionReceiptDiagnostic('13', cycleId, a, true).recordedRejectedTotal, null);
+});
+test('actual Scout ramp marks admission measured only when persistence callback completed', async () => {
+  const { defaultScoutRamp } = require('../services/maxOutboundControlLoop');
+  const program = { id: 'fixture', tenant_id: '13', policy: {} };
+  const source = { payload: { structuredMission: { market: { segment: 'small_business_owner' }, geography: { region: 'United States', scope: 'nationwide', cities: [] } } } };
+  for (const invoke of [false, true]) {
+    const result = await defaultScoutRamp({ cycleId, pool: { query: async () => { throw Error('unexpected DB'); } }, store: { tenantId: '13', clientId: 13 }, program, source, plan: { deficit: 1 }, skipVerificationRetry: true, enrichment: { run: async () => ({ considered: 0 }) }, recoverExistingInventory: async () => ({}), loadDiscoveryBackoff: async () => null, runDiscovery: async (_input, options) => { if (invoke) await options.persistCompanies({ companies: [] }); return { kind: 'investigated', result: { status: 'partial' } }; }, logger: { log() {} } });
+    assert.equal(result.admissionMeasured, invoke);
+    assert.equal(admissionReceiptDiagnostic('13', cycleId, result.admission, result.admissionMeasured).counts.evaluated, invoke ? 0 : null);
+  }
 });

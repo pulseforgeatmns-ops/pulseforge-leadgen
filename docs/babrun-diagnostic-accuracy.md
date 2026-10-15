@@ -15,3 +15,38 @@ See `babrun-read-only-diagnostic-snapshot.md` for the separate, unexecuted produ
 ## Validation
 
 Final focused diagnostic, inventory, Babrun sustainable inventory, tenant generalization, refill, CI-selector and startup set: 64 passed, zero failed/skipped with external network disabled. Independent review approved after raw malformed-send-count and event-write/no-op corrections; its focused offline set passed 31 tests. An additional route suite was blocked by the reviewer's network-denial guard at loopback DNS/listen, not counted as a pass. Full repository suite, live provider behavior and production runtime were not tested. Existing raw warning/error logging outside these new projections remains unchanged; this is not a global logging sanitization claim.
+
+## Durable provider observations
+
+The existing `max_outbound_control` event now includes `scoutProviderReceipt`, a
+bounded projection of the current cycle's Scout result. It keeps tenant/cycle
+correlation, fixed status/provider/error-code categories, numeric counts, valid
+UTC timestamps, and at most 20 providers / 20 queries / 20 errors per collection.
+No raw queries, messages, contacts, URLs, payloads or credentials are retained.
+Missing reports and numeric fields remain unknown; explicit zero remains zero.
+
+This does not install the optional specialist tables or change the ephemeral
+Scout store. It records only an observation of the already-returned result into
+the existing control event. Duplicate event writes may still no-op under the
+existing store contract. No provider lookup, retry, cache lifetime, contact gate,
+criteria, sending decision or rate is changed.
+
+`executed` preserves the provider's Boolean, not proof of network activity or
+paid usage. Current Places attempts do not carry cache metadata, so origin is
+`unknown`; explicit cacheHit true/false is reported as cache/uncached only if
+present. Neither status nor HTTP status proves a fresh request. Existing provider
+raw/mapped result counts may be initialized defaults on failure and must be read
+alongside execution/errors; a zero alone is not successful zero-result discovery.
+A backoff/no-provider cycle never carries a previous cycle's receipt.
+
+The same event also carries `scoutAdmissionReceipt`. Admission is marked measured
+only after the existing persistence/admission callback completes successfully;
+preallocated zero counters on backoff or incomplete discovery remain unknown.
+Fixed numeric rejection keys include outside_geography and the existing fit,
+ownership and offer-exclusion reasons. Their original values are not rewritten.
+`recordedRejectedTotal` sums the actual recorded numeric reason values;
+unrecognized reasons contribute only to an aggregate count without exposing
+arbitrary keys. This total is not automatically equal to evaluated minus fit:
+already-usable, queued, recovery and backoff paths have distinct counts. Missing
+fields stay null and invalid counts invalidate the aggregate rather than imply
+zero. No retrospective reason is invented for historical events.
