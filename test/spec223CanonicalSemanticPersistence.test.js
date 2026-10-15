@@ -5,8 +5,8 @@ const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const { after, before, beforeEach, describe, it } = require('node:test');
-const { Pool } = require('pg');
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
+const { createTrackedPostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
 const {
   commitCanonicalSemanticBatch,
   deriveInterpretationBatchKey,
@@ -97,7 +97,7 @@ describe('SPEC-223B canonical semantic write boundary', () => {
 
   before(async () => {
     postgres = await startDisposablePostgres('spec-223b-pg-');
-    pool = new Pool({ connectionString: postgres.connectionString });
+    pool = createTrackedPostgresPool({ connectionString: postgres.connectionString });
     await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;
       CREATE TABLE clients (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
       CREATE TABLE tenant_workspaces (client_id INTEGER PRIMARY KEY REFERENCES clients(id), tenant_key TEXT NOT NULL UNIQUE);
@@ -126,7 +126,7 @@ describe('SPEC-223B canonical semantic write boundary', () => {
     await pool.query(`TRUNCATE canonical_interpretation_batches CASCADE`);
   });
 
-  after(async () => { await pool.end(); await postgres.stop(); });
+  after(async () => { await closePostgresFixture(pool, postgres); });
 
   it('A. commits a complete structured Babrun batch', async () => {
     const source = await evidence(1, 'Babrun offers leadership coaching.');

@@ -280,6 +280,9 @@ async function startMode({ aoOwnerId, clientId, mode, aoName, taskId, conversati
     }
     const task = await getTaskForFollowUp(taskId, aoOwnerId);
     if (!task) return { error: 'Follow-up task not found', status: 404 };
+    if (task.call_prohibited) {
+      return { error: 'Phone action held: verify CRM identity and call permission first', status: 409, code: 'CALL_SUPPRESSED' };
+    }
     if (task.next_action !== 'phone_follow_up') {
       return { error: 'This task is not a phone follow-up', status: 400 };
     }

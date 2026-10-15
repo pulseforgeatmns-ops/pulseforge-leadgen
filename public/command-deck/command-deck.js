@@ -56,22 +56,18 @@
   let workspaceAskInFlight = false;
   let mxPendingComposerFiles = [];
   let mxComposerMemory = null;
-  let mxComposerConversationId = sessionStorage.getItem('mxComposerConversationId') || null;
+  let mxComposerConversationId = null;
+  const spreadsheetReview = window.PulseforgeSpreadsheetReview.create({
+    fetch: (...args) => fetch(...args),
+    host: () => document.getElementById('mxSpreadsheetProposal'),
+    scopeHost: () => document.getElementById('mxSpreadsheetScope'),
+    onMessage: text => appendSystemMessage(text),
+    getTenantId: () => window.PulseforgeTenantCoordinator?.getActiveClientId(),
+  });
 
-  function loadMxComposerMemory() {
-    try {
-      const raw = sessionStorage.getItem('mxComposerMemory');
-      mxComposerMemory = raw ? JSON.parse(raw) : null;
-    } catch (_err) {
-      mxComposerMemory = null;
-    }
-  }
-
-  function saveMxComposerMemory(mem) {
-    if (!mem) return;
-    mxComposerMemory = mem;
-    sessionStorage.setItem('mxComposerMemory', JSON.stringify(mem));
-  }
+  // Do not restore cross-tenant composer context from unscoped browser storage.
+  function loadMxComposerMemory() {}
+  function saveMxComposerMemory(mem) { mxComposerMemory = mem || null; }
 
   function renderMxComposerChips() {
     const host = document.getElementById('mxComposerChips');
@@ -108,9 +104,11 @@
     loadMxComposerMemory();
     if (!mxComposerConversationId) {
       mxComposerConversationId = `mx-${Date.now()}`;
-      sessionStorage.setItem('mxComposerConversationId', mxComposerConversationId);
     }
     const form = new FormData();
+    const isSpreadsheet = mxPendingComposerFiles.some(entry => inferMxAttachmentType(entry.file) === 'spreadsheet');
+    if (isSpreadsheet) await spreadsheetReview.appendScope(form);
+    const reviewEpoch = spreadsheetReview.token();
     form.append('text', question || '');
     form.append('conversation_id', mxComposerConversationId);
     if (confirm) form.append('confirm', 'true');
@@ -125,7 +123,9 @@
     if (!res.ok) {
       throw new Error(data.message || data.error || 'Composer failed');
     }
-    if (data.conversation_memory) saveMxComposerMemory(data.conversation_memory);
+    if (isSpreadsheet && reviewEpoch !== spreadsheetReview.token()) throw new Error('Review scope changed; upload again in this workspace.');
+    if (data.conversation_memory && !data.spreadsheet_proposal) saveMxComposerMemory(data.conversation_memory);
+    spreadsheetReview.accept(data, reviewEpoch);
     return data;
   }
 
@@ -4767,6 +4767,13 @@
     else appendOperatorMessage(`[${mxPendingComposerFiles.length} attachment(s)]`);
     resetAskInput();
 
+    if (!hasAttachments && spreadsheetReview.hasPending()) {
+      try { await spreadsheetReview.handleText(q); }
+      catch (err) { appendSystemMessage(err.message); }
+      finally { workspaceAskInFlight = false; if (els.mxAskSend) els.mxAskSend.disabled = false; }
+      return;
+    }
+
     if (hasAttachments) {
       try {
         const data = await submitMxComposer(q, { confirm: /^confirm$/i.test(q) });
@@ -5256,6 +5263,7 @@
     askWorkspace(els.mxAskInput?.value || '');
   });
 
+  spreadsheetReview.loadScope().catch(err => appendSystemMessage(err.message));
   const mxComposerPlus = document.getElementById('mxComposerPlus');
   const mxComposerMenu = document.getElementById('mxComposerMenu');
   mxComposerPlus?.addEventListener('click', (event) => {
@@ -5402,6 +5410,9 @@
   }
 
   async function onTenantChanged() {
+    spreadsheetReview.clear(); mxComposerMemory = null; mxComposerConversationId = null;
+    mxPendingComposerFiles = []; renderMxComposerChips();
+    spreadsheetReview.loadScope().catch(err => appendSystemMessage(err.message));
     invalidateWorkspaceForTenantChange();
     try {
       await loadDeck();

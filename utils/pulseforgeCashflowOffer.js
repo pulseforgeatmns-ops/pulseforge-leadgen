@@ -1,5 +1,7 @@
 'use strict';
 
+const { serviceTradeVerticals } = require('./canonicalBusinessTaxonomy');
+
 const PULSEFORGE_CLIENT_ID = 1;
 const PULSEFORGE_TENANT_ID = '1';
 // New identity: existing reviewed repair-sprint missions are historical records.
@@ -65,8 +67,8 @@ function pulseforgeTargetReason(row = {}) {
   const excluded = pulseforgeFirstTouchExclusionReason(row, { tenantId: '1', firstTouch: true });
   if (excluded) return excluded;
   if (row.service_area_match === false) return 'service_area_not_confirmed';
-  const industries = [row.vertical, row.industry].map(asText).join(' ');
-  if (!/\b(?:plumb(?:ing|er|ers)?|heating|hvac|air[ _-]conditioning)\b/i.test(industries.replace(/_/g, ' '))) return 'mission_segment_mismatch';
+  const industries = [row.vertical, row.industry].flatMap(serviceTradeVerticals);
+  if (!industries.some(vertical => PULSEFORGE_TARGET_INDUSTRIES.includes(vertical))) return 'mission_segment_mismatch';
   // Generic service_area_match=true may belong to an older/nationwide mission.
   // Require attributable geography rather than reusing that boolean as consent.
   const locations = [row.company_location, row.location, typeof row.service_area_match === 'string' ? row.service_area_match : ''].filter(Boolean);

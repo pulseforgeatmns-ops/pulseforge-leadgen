@@ -14,6 +14,11 @@ const {
   segmentToSearchKey,
 } = require('../../acquisition-mission/MissionNaming');
 const {
+  FOUNDER_LED_SMALL_BUSINESS_VERTICALS,
+  SERVICE_TRADE_TAXONOMY,
+  serviceTradeVerticals,
+  serviceTradeMissionVerticals,
+  serviceTradeSearchTerms,
   founderLedSmallBusinessSearchTerms,
   founderLedSmallBusinessCustomerTypes,
 } = require('../../../utils/canonicalBusinessTaxonomy');
@@ -299,6 +304,42 @@ function cloneList(value) {
  */
 function buildSemanticMarketDefinition(input = {}) {
   const mission = input.mission || {};
+  const plan = missionPlanFromInput(mission);
+  const suppliedScope = input.eligibleSubsegments || plan.market?.eligibleSubsegments || input.segments;
+  const boundedSegments = Array.isArray(suppliedScope) ? suppliedScope : [];
+  const trades = serviceTradeMissionVerticals(boundedSegments);
+  const knownSegment = segment => serviceTradeVerticals(segment).length
+    || FOUNDER_LED_SMALL_BUSINESS_VERTICALS.includes(normalizeSegmentKey(segment))
+    || MARKET_SEMANTIC_MODELS[normalizeKnownSegmentKey(segment)]
+    || ['property_manager', 'str_manager', 'commercial_office', 'realtor', 'real_estate', 'restaurant_foh'].includes(normalizeSegmentKey(segment));
+  const unsupportedTradeScope = boundedSegments.some(segment => serviceTradeVerticals(segment).length)
+    && !boundedSegments.every(knownSegment);
+  // Mixed legacy audiences (for example Babrun's cleaning/painting/HVAC)
+  // retain their existing semantic model. Only an explicit trade-only scope
+  // selects this projection; unsupported additions fail closed.
+  if (trades.length || unsupportedTradeScope) {
+    return {
+      ...DEFAULT_SEMANTIC_MODEL,
+      market: 'Service Trade Businesses',
+      geography: asText(input.geography) || null,
+      customerTypes: trades.map(vertical => SERVICE_TRADE_TAXONOMY[vertical].customerType),
+      decisionMakers: ['Owner', 'Manager'],
+      businessModels: [],
+      terminology: serviceTradeSearchTerms(trades),
+      adjacentMarkets: [],
+      exclusions: [],
+      buyingSignals: [],
+      expectedEvidence: ['website', 'contacts', 'business_fit'],
+      operatorSegment: trades.join(', '),
+      segments: trades,
+      segmentKey: trades.join('_') || 'unsupported_service_trade_segment',
+      segmentResolutionSource: 'mission_objective',
+      source: 'explicit_service_trade_scope',
+      explicitTradeScope: true,
+      scopeError: trades.length ? null : 'Unsupported service trade segment.',
+      revisionHistory: [],
+    };
+  }
   const canonical =
     input.segmentKey && MARKET_SEMANTIC_MODELS[input.segmentKey]
       ? { segmentKey: input.segmentKey, source: input.segmentSource || 'mission_objective' }
@@ -383,6 +424,19 @@ function reviseMarketDefinition(marketDefinition = {}, context = {}) {
     revisionHistory: cloneList(marketDefinition.revisionHistory),
   };
 
+  if (marketDefinition.explicitTradeScope) {
+    const allowed = marketDefinition.segments || [];
+    const inScope = value => {
+      const trades = serviceTradeVerticals(value);
+      return trades.length && trades.every(vertical => allowed.includes(vertical));
+    };
+    context = {
+      ...context,
+      dominantTerminology: inScope(context.dominantTerminology) ? context.dominantTerminology : null,
+      addedTerminology: (context.addedTerminology || []).filter(inScope),
+      promoteToCustomerType: inScope(context.promoteToCustomerType) ? context.promoteToCustomerType : null,
+    };
+  }
   const dominantTerminology = asText(context.dominantTerminology);
   const addedTerms = Array.isArray(context.addedTerminology) ? context.addedTerminology : [];
   const removedTerms = Array.isArray(context.removedTerminology) ? context.removedTerminology : [];

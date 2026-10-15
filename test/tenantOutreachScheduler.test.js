@@ -878,3 +878,22 @@ describe('SPEC-252 scheduling vs execution eligibility phases', () => {
     assert.equal(duplicate.schedule.status, SCHEDULE_STATUS.SCHEDULED);
   });
 });
+
+it('import approval cannot dispatch a previously scheduled email while outreach review is required', async () => {
+  const fixture = await authorizeFixture();
+  fixture.scheduleStore.prospects.set('tenant-a:prospect-1', {
+    tenantId: 'tenant-a', prospectId: 'prospect-1', email: 'buyer@example.com',
+    doNotContact: false, ao_outreach_review_required: true, active: true,
+  });
+  const eligibility = await evaluateSendEligibility(fixture.authorizeResult.schedule, {
+    scheduleStore: fixture.scheduleStore, mailboxStore: fixture.store, now: fixture.executionNow,
+  });
+  assert.equal(eligibility.eligible, false);
+  assert.equal(eligibility.reason, 'outreach_review_required');
+  const transport = fakeTransport();
+  await executeScheduledSend(fixture.authorizeResult.schedule, {
+    scheduleStore: fixture.scheduleStore, mailboxStore: fixture.store, transport,
+    secretResolver: fakeSecretResolver, now: fixture.executionNow,
+  });
+  assert.equal(transport.calls.length, 0);
+});

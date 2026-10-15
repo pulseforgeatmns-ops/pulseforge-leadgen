@@ -7,7 +7,7 @@
  */
 
 const { asText } = require('../../max/scoutAcquisition/Types');
-const { founderLedSmallBusinessSearchTerms } = require('../../../utils/canonicalBusinessTaxonomy');
+const { founderLedSmallBusinessSearchTerms, serviceTradeSearchTerms } = require('../../../utils/canonicalBusinessTaxonomy');
 
 const SEGMENT_CONCEPTS = Object.freeze({
   small_business_owners: Object.freeze(founderLedSmallBusinessSearchTerms()),
@@ -151,7 +151,8 @@ function expandConcepts(searchDefinition = {}, marketDefinition = null) {
       for (const concept of rotations[generation % rotations.length]) concepts.add(concept);
       continue;
     }
-    const mapped = SEGMENT_CONCEPTS[key];
+    const tradeTerms = serviceTradeSearchTerms([segment]);
+    const mapped = tradeTerms.length ? tradeTerms : SEGMENT_CONCEPTS[key];
     if (mapped) {
       for (const concept of mapped) concepts.add(concept);
     } else {

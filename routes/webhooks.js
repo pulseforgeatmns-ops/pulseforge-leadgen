@@ -844,7 +844,7 @@ router.post('/webhooks/bland', async (req, res) => {
 
     if (!fullText || status !== 'completed') return;
 
-    const Anthropic = require('@anthropic-ai/sdk');
+    const Anthropic = require('../utils/meteredAnthropic').forAgent('call_webhook');
     const anthropic = new Anthropic();
 
     const parseRes = await anthropic.messages.create({
@@ -937,3 +937,4 @@ Respond with JSON only — no explanation:
 });
 
 module.exports = router;
+

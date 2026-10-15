@@ -8,7 +8,10 @@ const {
   isRetryableUnverifiedReason,
   retryUnverifiedEmails,
   emptyVerificationRetryTelemetry,
-} = require('../services/emailVerificationRecovery');
+  mergeVerificationRetryTelemetry,
+  verificationRetryFailureReasons,
+  VERIFICATION_RETRY_FAILURE_REASONS,
+} = require('./helpers/loadEmailVerificationRecovery')();
 
 test('email verification classifier separates retryable from unsafe states', () => {
   assert.equal(classifyUnverifiedReason({ email: 'ops@pm.example' }), 'verification_never_attempted');
@@ -46,9 +49,9 @@ test('verification retry promotes only valid results and never risky/invalid', a
       if (/FROM prospects/i.test(sql) && /email_verified/i.test(sql)) {
         return {
           rows: [
-            { id: 1, email: 'never@pm.example', email_verified: false },
-            { id: 2, email: 'risky@pm.example', email_verified: false, email_status: 'risky' },
-            { id: 3, email: 'stale@pm.example', email_verified: false, email_status: 'unknown',
+            { id: 1, client_id: 10, email: 'never@pm.example', email_verified: false },
+            { id: 2, client_id: 10, email: 'risky@pm.example', email_verified: false, email_status: 'risky' },
+            { id: 3, client_id: 10, email: 'stale@pm.example', email_verified: false, email_status: 'unknown',
               verifier_checked_at: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString() },
           ],
         };
@@ -100,4 +103,278 @@ test('empty verification retry telemetry starts at zero', () => {
   const empty = emptyVerificationRetryTelemetry();
   assert.equal(empty.verificationRetryValid, 0);
   assert.equal(empty.verificationRetryAttempted, 0);
+});
+
+for (const rowCount of [0, 2, undefined]) {
+  test(`does not claim a valid verification when persistence rowCount is ${rowCount}`, async () => {
+    const pool = { query: async sql => /UPDATE prospects/i.test(sql)
+      ? { rowCount, rows: [] }
+      : { rows: [{ id: 13, client_id: 13, email: 'owner@customer.example', email_verified: false }] } };
+    const result = await retryUnverifiedEmails(pool, { clientId: 13, verify: async () => ({
+      emailVerified: true, emailStatus: 'valid', doNotContact: false,
+    }) });
+    assert.equal(result.verificationRetryValid, 0);
+    assert.equal(result.verificationRetryFailed, 1);
+    assert.equal(result.verificationRetryFailureReasons.persistence_not_confirmed, 1);
+  });
+}
+
+const CHECKED_AT = '2026-10-13T19:00:00.123456Z';
+function candidate(overrides = {}) {
+  return { id: 'prospect-fixture', client_id: 13, email: 'Owner@Customer.Example ',
+    email_verified: false, email_status: 'unknown', email_verification_method: 'fixture_before',
+    verifier_response: { reason: 'verifier_timeout' },
+    verifier_response_snapshot: '{"reason":"verifier_timeout"}',
+    verifier_checked_at: CHECKED_AT, verified_at: CHECKED_AT,
+    do_not_contact: false, company_id: 'company-fixture', ...overrides };
+}
+function verification(outcome = 'valid') {
+  return { emailVerified: outcome === 'valid', emailStatus: outcome,
+    emailVerificationMethod: 'fixture_after', verifierResponse: { status: outcome },
+    verifiedAt: CHECKED_AT, verifierCheckedAt: CHECKED_AT, doNotContact: false, reject: false };
+}
+function tracePool(row, result = { rowCount: 1, rows: [] }) {
+  const reads = [];
+  const writes = [];
+  return { reads, writes, query: async (sql, args) => {
+    if (/UPDATE prospects/i.test(sql)) { writes.push({ sql, args }); return result; }
+    reads.push({ sql, args });
+    return { rows: [row] };
+  } };
+}
+
+for (const clientId of [1, 10, 13, 17, '13']) {
+  test(`verification read and guarded write stay on requested tenant ${JSON.stringify(clientId)}`, async () => {
+    const row = candidate({ client_id: Number(clientId) });
+    const pool = tracePool(row);
+    const result = await retryUnverifiedEmails(pool, { clientId, verify: async (email, input) => {
+      assert.equal(email, 'owner@customer.example');
+      assert.equal(input.email, email);
+      return verification();
+    } });
+    assert.equal(result.verificationRetryValid, 1);
+    assert.equal(result.verificationRetryFailed, 0);
+    assert.equal(pool.reads[0].args[0], Number(clientId));
+    const { sql, args } = pool.writes[0];
+    assert.match(sql, /WHERE id = \$1 AND client_id = \$10/);
+    assert.doesNotMatch(sql, /client_id\s*=\s*10\b/);
+    assert.equal(args[9], Number(clientId));
+    assert.equal(args[10], 'owner@customer.example');
+    assert.deepEqual(Array.from(args.slice(11)), [false, 'fixture_before', CHECKED_AT, 'unknown',
+      '{"reason":"verifier_timeout"}', CHECKED_AT, 'company-fixture', false]);
+    assert.match(pool.reads[0].sql, /verifier_response::text AS verifier_response_snapshot/);
+    assert.match(pool.reads[0].sql, /verifier_checked_at::text AS verifier_checked_at/);
+    assert.match(pool.reads[0].sql, /verified_at::text AS verified_at/);
+    assert.match(pool.reads[0].sql, /ORDER BY prospects\.verifier_checked_at/);
+    for (const clause of [
+      'LOWER(BTRIM(email)) = $11',
+      'COALESCE(do_not_contact, false) = false',
+      'COALESCE(email_verified, false) = false',
+      'email_verified IS NOT DISTINCT FROM $12',
+      'email_verification_method IS NOT DISTINCT FROM $13',
+      'verified_at IS NOT DISTINCT FROM $14::timestamptz',
+      'email_status IS NOT DISTINCT FROM $15',
+      'verifier_response IS NOT DISTINCT FROM $16::jsonb',
+      'verifier_checked_at IS NOT DISTINCT FROM $17::timestamptz',
+      'company_id IS NOT DISTINCT FROM $18',
+      'do_not_contact IS NOT DISTINCT FROM $19',
+    ]) assert.ok(sql.includes(clause), `missing write guard: ${clause}`);
+    assert.doesNotMatch(sql, /SET[\s\S]*(?:acquisition_metadata|enrichment_provenance|policy_hash|owner_id)\s*=/);
+  });
+}
+
+test('omitting clientId preserves the Anchor default', async () => {
+  const pool = tracePool(candidate({ client_id: 10 }));
+  assert.equal((await retryUnverifiedEmails(pool, { verify: async () => verification() })).verificationRetryValid, 1);
+  assert.equal(pool.reads[0].args[0], 10);
+  assert.equal(pool.writes[0].args[9], 10);
+});
+
+test('invalid tenant IDs fail before reads, verifier calls or updates', async () => {
+  for (const clientId of [null, '', '13suffix', '1e1', '13.5', true, [], {}, 0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    const pool = { query: async () => assert.fail('invalid tenant must not query') };
+    await assert.rejects(retryUnverifiedEmails(pool, { clientId,
+      verify: async () => assert.fail('invalid tenant must not verify') }), /positive integer clientId/);
+  }
+});
+
+test('wrong tenant and no-longer-eligible loaded candidates cannot invoke the verifier', async () => {
+  for (const change of [{ client_id: 10 }, { client_id: undefined }, { do_not_contact: true }, { email_verified: true }]) {
+    const pool = tracePool(candidate(change));
+    const result = await retryUnverifiedEmails(pool, { clientId: 13,
+      verify: async () => assert.fail('out-of-scope candidate must not verify') });
+    assert.equal(result.verificationRetryValid, 0);
+    assert.equal(result.verificationRetryFailed, 1);
+    assert.equal(result.verificationRetryFailureReasons.candidate_ineligible, 1);
+    assert.equal(pool.writes.length, 0);
+  }
+});
+
+for (const outcome of ['valid', 'risky', 'catchall', 'invalid']) {
+  for (const rowCount of [0, 1, 2, undefined]) {
+    test(`${outcome} counts only one persisted row (rowCount ${rowCount})`, async () => {
+      const pool = tracePool(candidate(), { rowCount });
+      const result = await retryUnverifiedEmails(pool, { clientId: 13, verify: async () => verification(outcome) });
+      const expected = outcome === 'catchall' ? 'Risky' : outcome[0].toUpperCase() + outcome.slice(1);
+      for (const name of ['Valid', 'Risky', 'Invalid']) {
+        assert.equal(result[`verificationRetry${name}`], rowCount === 1 && expected === name ? 1 : 0);
+      }
+      assert.equal(result.verificationRetryFailed, rowCount === 1 ? 0 : 1);
+      assert.equal(result.verificationRetryFailureReasons.persistence_not_confirmed, rowCount === 1 ? 0 : 1);
+      assert.equal(pool.writes[0].args[1], outcome === 'valid');
+      assert.equal(pool.writes[0].args[7], outcome !== 'valid');
+    });
+  }
+}
+
+test('provider timeout, unavailable, unknown and thrown errors preserve stored verification metadata', async () => {
+  for (const verify of [
+    async () => ({ ...verification('unknown'), verifierResponse: { reason: 'verifier_timeout' } }),
+    async () => ({ ...verification('unknown'), verifierResponse: { reason: 'verifier_unavailable' } }),
+    async () => verification('unknown'),
+    async () => { throw new Error('fixture provider failed'); },
+    async () => null,
+  ]) {
+    const row = candidate();
+    const original = structuredClone(row);
+    const pool = tracePool(row);
+    const result = await retryUnverifiedEmails(pool, { clientId: 13, verify });
+    assert.equal(result.verificationRetryAttempted, 1);
+    assert.equal(result.verificationRetryValid, 0);
+    assert.equal(result.verificationRetryFailed, 1);
+    assert.equal(pool.writes.length, 0);
+    assert.deepEqual(row, original);
+  }
+});
+
+test('persistence exception counts failure once and later candidates can still succeed', async () => {
+  let calls = 0;
+  const pool = { query: async sql => {
+    if (!/UPDATE prospects/i.test(sql)) return { rows: [candidate(), candidate({ id: 'next' })] };
+    if (++calls === 1) throw new Error('fixture write error');
+    return { rowCount: 1 };
+  } };
+  const result = await retryUnverifiedEmails(pool, { clientId: 13, verify: async () => verification() });
+  assert.equal(result.verificationRetryAttempted, 2);
+  assert.equal(result.verificationRetryValid, 1);
+  assert.equal(result.verificationRetryFailed, 1);
+  assert.equal(result.verificationRetryFailureReasons.persistence_exception, 1);
+});
+
+function assertFailureReasons(result, expected) {
+  assert.deepEqual(JSON.parse(JSON.stringify(result.verificationRetryFailureReasons)), {
+    ...Object.fromEntries(VERIFICATION_RETRY_FAILURE_REASONS.map(reason => [reason, 0])), ...expected,
+  });
+  assert.equal(Object.values(result.verificationRetryFailureReasons).reduce((sum, count) => sum + count, 0),
+    result.verificationRetryFailed);
+}
+
+test('each actual failure branch gets one fixed reason without additional verifier or database calls', async () => {
+  const cases = [
+    ['verification_failed', { verify: async () => verification('unknown') }, 1, 0],
+    ['verification_failed', { verify: async () => ({ ...verification('unknown'),
+      verifierResponse: { reason: 'verifier_timeout', error: 'fetch_unavailable' } }) }, 1, 0],
+    ['verification_failed', { verify: async () => ({ ...verification('unknown'),
+      verifierResponse: { reason: 'verifier_unavailable' } }) }, 1, 0],
+    ['adapter_unavailable', { verify: null }, 0, 0],
+    ['adapter_unavailable', { verify: {} }, 0, 0],
+    ['candidate_ineligible', { row: candidate({ client_id: 10 }) }, 0, 0],
+    ['persistence_not_confirmed', { rowCount: 0 }, 1, 1],
+    ['persistence_not_confirmed', { rowCount: 2 }, 1, 1],
+    ['verification_exception', { verify: async () => { throw new Error('fixture verifier exception'); } }, 1, 0],
+    ['persistence_exception', { writeError: true }, 1, 1],
+    ['unexpected_exception', { verify: async () => null }, 1, 0],
+  ];
+  for (const [reason, fixture, expectedVerifications, expectedWrites] of cases) {
+    let reads = 0; let writes = 0; let verifications = 0;
+    const pool = { query: async sql => {
+      if (!/UPDATE prospects/i.test(sql)) { reads += 1; return { rows: [fixture.row || candidate()] }; }
+      writes += 1;
+      if (fixture.writeError) throw new Error('fixture persistence exception');
+      return { rowCount: fixture.rowCount ?? 1 };
+    } };
+    const verify = Object.hasOwn(fixture, 'verify') ? fixture.verify : async () => verification();
+    const result = await retryUnverifiedEmails(pool, { clientId: 13, verify: typeof verify === 'function'
+      ? async (...args) => { verifications += 1; return verify(...args); } : verify });
+    assertFailureReasons(result, { [reason]: 1 });
+    assert.equal(result.verificationRetryAttempted, 1);
+    assert.equal(result.verificationRetryValid, 0);
+    assert.equal(result.verificationRetryRisky, 0);
+    assert.equal(result.verificationRetryInvalid, 0);
+    assert.equal(result.verificationRetryLoadFailed, 0);
+    assert.equal(reads, 1);
+    assert.equal(verifications, expectedVerifications);
+    assert.equal(writes, expectedWrites);
+  }
+});
+
+test('pre-attempt candidate read failures remain separate from attempted retry failures', async () => {
+  let reads = 0;
+  const result = await retryUnverifiedEmails({ query: async () => {
+    reads += 1; throw new Error('fixture read exception');
+  } }, { clientId: 13, verify: async () => assert.fail('failed read must not verify') });
+  assertFailureReasons(result, {});
+  assert.equal(result.verificationRetryLoadFailed, 1);
+  assert.equal(result.emailNotVerified, 0);
+  assert.equal(result.verificationRetryAttempted, 0);
+  assert.equal(reads, 1);
+});
+
+test('only fixed numeric failure counts survive sanitization and merging with legacy telemetry', () => {
+  const target = { verificationRetryAttempted: 2, verificationRetryFailed: 2 };
+  mergeVerificationRetryTelemetry(target, { verificationRetryAttempted: 1, verificationRetryFailed: 1,
+    verificationRetryLoadFailed: 1, verificationRetryFailureReasons: { verification_exception: 1,
+      'fixture-secret@example.test': 12, unexpected_exception: 'fixture-secret',
+      persistence_exception: -1, adapter_unavailable: Infinity, candidate_ineligible: 0.5 } });
+  assert.equal(target.verificationRetryAttempted, 3);
+  assert.equal(target.verificationRetryFailed, 3);
+  assert.equal(target.verificationRetryLoadFailed, 1);
+  assert.equal(target.verificationRetryFailureReasons.verification_exception, 1);
+  assert.equal(Object.keys(target.verificationRetryFailureReasons).length, VERIFICATION_RETRY_FAILURE_REASONS.length);
+  assert.doesNotMatch(JSON.stringify(target), /fixture-secret/);
+  // Historical aggregate failures remain unknown; never invent their cause.
+  assert.equal(Object.values(target.verificationRetryFailureReasons).reduce((sum, count) => sum + count, 0), 1);
+  const fresh = emptyVerificationRetryTelemetry();
+  mergeVerificationRetryTelemetry(fresh, { verificationRetryAttempted: 2, verificationRetryFailed: 2,
+    verificationRetryFailureReasons: { verification_exception: 1, persistence_not_confirmed: 1 } });
+  mergeVerificationRetryTelemetry(fresh, fresh);
+  assertFailureReasons(fresh, { verification_exception: 1, persistence_not_confirmed: 1 });
+  assert.equal(verificationRetryFailureReasons(null).verification_failed, 0);
+  assert.equal(verificationRetryFailureReasons({ verification_failed: Number.MAX_SAFE_INTEGER + 1 }).verification_failed, 0);
+});
+
+test('fake credentials in provider throws or raw results never enter recovery logs or failure telemetry', async () => {
+  const secret = 'fixture-api-key-DO-NOT-LOG';
+  const sensitive = `https://fixture.invalid/?key=${secret}&email=private@fixture.example`;
+  const logs = [];
+  const safeConsole = Object.fromEntries(['log', 'info', 'warn', 'error', 'debug'].map(method =>
+    [method, (...args) => logs.push(args)]));
+  const isolated = require('./helpers/loadEmailVerificationRecovery')({ console: safeConsole });
+  for (const [reason, verify] of [
+    ['verification_exception', async () => { throw new Error(sensitive); }],
+    ['verification_failed', async () => ({ ...verification('unknown'), verifierResponse: {
+      reason: sensitive, error: secret, payload: { email: 'private@fixture.example' },
+    } })],
+  ]) {
+    const pool = tracePool(candidate());
+    const result = await isolated.retryUnverifiedEmails(pool, { clientId: 13, verify });
+    assertFailureReasons(result, { [reason]: 1 });
+    assert.equal(pool.writes.length, 0);
+    assert.doesNotMatch(JSON.stringify(result), /fixture-api-key|private@|https:\/\/|payload/);
+  }
+  assert.deepEqual(logs, []);
+});
+
+test('retrying a previously verified fixture counts no duplicate success', async () => {
+  let saved = false;
+  const pool = { query: async sql => {
+    if (!/UPDATE prospects/i.test(sql)) return { rows: saved ? [] : [candidate()] };
+    saved = true;
+    return { rowCount: 1 };
+  } };
+  const options = { clientId: 13, verify: async () => verification() };
+  assert.equal((await retryUnverifiedEmails(pool, options)).verificationRetryValid, 1);
+  const repeated = await retryUnverifiedEmails(pool, options);
+  assert.equal(repeated.verificationRetryAttempted, 0);
+  assert.equal(repeated.verificationRetryValid, 0);
 });

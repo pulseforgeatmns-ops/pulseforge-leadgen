@@ -12,6 +12,51 @@ const { decisionIdempotencyKey, newDecisionId } = require('./fingerprints');
 const { createTelemetryCounters, bump } = require('./telemetry');
 const { markOverdueExpectations } = require('../stateIngestion/expectations');
 const { evaluateAgentOutput } = require('./delegation');
+const { expectationScope, matchesExpectation } = require('./expectationScope');
+
+async function reverifyResolutionReplay({ decision, snapshot, stateStore, decisionStore }) {
+  let intent = null;
+  try {
+    intent = await decisionStore.findActionIntentByIdempotency?.(decision.client_id, decision.idempotency_key);
+  } catch {
+    // An unavailable receipt cannot establish that a previous action succeeded.
+  }
+  const boundIntent = intent && intent.decision_id === decision.id
+    && String(intent.client_id) === String(decision.client_id)
+    && intent.idempotency_key === decision.idempotency_key
+    && intent.action_type === 'RESOLVE_EXPECTATION';
+  const originalScope = expectationScope(decision.client_id, decision.canonical_state_snapshot);
+  const currentScope = expectationScope(decision.client_id, snapshot);
+  if (boundIntent) {
+    const previous = { ...intent };
+    if (!originalScope || !currentScope || decision.canonical_state_snapshot?.expectation?.id !== decision.subject_id
+      || !matchesExpectation(snapshot.expectation, decision.subject_id, originalScope)) {
+      intent = { ...intent, execution_status: EXECUTION_STATUS.ACTION_VERIFICATION_FAILED,
+        verification_status: 'VERIFICATION_FAILED', error_code: 'EXPECTATION_REPLAY_SCOPE_INVALID' };
+    } else {
+      // Readback only: never execute an action again to repair an uncertain receipt.
+      intent = await verifyActionIntent({ decisionStore, stateStore, intent: { ...intent }, snapshot });
+      if (intent.verification_status !== 'VERIFIED'
+        && ![EXECUTION_STATUS.EXECUTION_FAILURE, EXECUTION_STATUS.ACTION_VERIFICATION_FAILED].includes(intent.execution_status)) {
+        intent = { ...intent, execution_status: EXECUTION_STATUS.ACTION_VERIFICATION_FAILED,
+          error_code: 'EXPECTATION_REPLAY_UNCONFIRMED' };
+      }
+    }
+    if (intent.execution_status !== previous.execution_status
+      || intent.verification_status !== previous.verification_status || intent.error_code !== previous.error_code) {
+      await decisionStore.persistActionIntent(intent);
+    }
+  } else {
+    intent = null;
+  }
+  const executionStatus = intent?.execution_status || EXECUTION_STATUS.ACTION_VERIFICATION_FAILED;
+  const verificationStatus = intent?.verification_status || 'VERIFICATION_FAILED';
+  if (decision.execution_status !== executionStatus || decision.verification_status !== verificationStatus) {
+    decision = { ...decision, execution_status: executionStatus, verification_status: verificationStatus };
+    await decisionStore.persistDecision(decision);
+  }
+  return { decision, intent };
+}
 
 function computePriority({ snapshot, trigger }) {
   const rel = snapshot.relationship || {};
@@ -38,11 +83,11 @@ async function evaluateOperationalDecision({
   telemetry: telemetryInput,
 }) {
   const telemetry = telemetryInput || createTelemetryCounters();
-  const { snapshot, supportingEvidence, prospect: resolvedProspect, expectation: resolvedExp, owner } =
-    await buildUnderstanding({ stateStore, trigger, expectation, prospect });
+  const { snapshot, supportingEvidence, prospect: resolvedProspect, owner, requestedExpectationId } =
+    await buildUnderstanding({ stateStore, clientId, trigger, expectation, prospect, now });
 
-  const subjectType = resolvedExp ? SUBJECT_TYPE.EXPECTATION : SUBJECT_TYPE.PROSPECT;
-  const subjectId = resolvedExp?.id || resolvedProspect?.id || trigger?.payload?.subject_id || 'unknown';
+  const subjectType = requestedExpectationId ? SUBJECT_TYPE.EXPECTATION : SUBJECT_TYPE.PROSPECT;
+  const subjectId = requestedExpectationId || resolvedProspect?.id || trigger?.payload?.subject_id || 'unknown';
 
   const candidates = baseCandidates({ snapshot, trigger, now });
   const selection = selectAction({ snapshot, candidates, trigger, now });
@@ -64,14 +109,40 @@ async function evaluateOperationalDecision({
     triggerState,
   });
 
-  const existing = await decisionStore.findDecisionByIdempotency(clientId, idempotencyKey);
+  let existing = null;
+  // Canonical refresh may now show RESOLVED or unavailable. Find the original
+  // resolution receipt for readback-only replay rather than execute another action.
+  if (requestedExpectationId && trigger.type === DECISION_TRIGGER.NEW_EVIDENCE
+    && selected?.action_type !== 'RESOLVE_EXPECTATION') {
+    const resolutionKey = decisionIdempotencyKey({ clientId, triggerType: trigger.type,
+      subjectType, subjectId, actionType: 'RESOLVE_EXPECTATION', triggerState });
+    existing = await decisionStore.findDecisionByIdempotency(clientId, resolutionKey);
+  }
+  if (!existing) existing = await decisionStore.findDecisionByIdempotency(clientId, idempotencyKey);
   if (existing) {
     bump(telemetry, 'duplicate_evaluations_resolved');
+    let replay = { decision: existing, intent: null };
+    if (existing.selected_action?.action_type === 'RESOLVE_EXPECTATION'
+      && existing.execution_status !== EXECUTION_STATUS.SUPERSEDED) {
+      replay = await reverifyResolutionReplay({ decision: existing, snapshot, stateStore, decisionStore });
+      // A failed supersession/attention write can be safely retried from a
+      // verified durable resolution intent, without executing resolution again.
+      if (replay.decision.execution_status === EXECUTION_STATUS.EXECUTED
+        && replay.decision.verification_status === 'VERIFIED') {
+        await decisionStore.supersedeActiveDecisions({ clientId, subjectType, subjectId,
+          supersededBy: replay.decision.id });
+      }
+      if (attentionStore) {
+        const { syncAttentionFromDecision } = require('../attention/syncFromDecision');
+        await syncAttentionFromDecision({ attentionStore, decision: replay.decision, snapshot, now });
+      }
+    }
     return {
       duplicate: true,
-      decision: existing,
-      receipt: buildDecisionReceipt({ decision: existing, intent: null, snapshot }),
+      ...replay,
+      receipt: buildDecisionReceipt({ decision: replay.decision, intent: replay.intent, snapshot }),
       telemetry,
+      snapshot,
     };
   }
 
@@ -133,15 +204,6 @@ async function evaluateOperationalDecision({
 
   let intent = null;
   if (authority.authorized && execution_status === EXECUTION_STATUS.AUTHORIZED) {
-    if (selection.alsoSupersede) {
-      await decisionStore.supersedeActiveDecisions({
-        clientId,
-        subjectType,
-        subjectId,
-        supersededBy: decision.id,
-      });
-      bump(telemetry, 'decisions_superseded');
-    }
     const execResult = await executeActionIntent({
       decisionStore,
       stateStore,
@@ -165,11 +227,21 @@ async function evaluateOperationalDecision({
       snapshot,
       options: {
         simulateVerificationFailure: decisionStore.simulateVerificationFailure,
-        skipExpectationRead: !stateStore.updateExpectation && !stateStore.expectations,
       },
     });
     await decisionStore.persistActionIntent(intent);
+    decision.execution_status = intent.execution_status;
     decision.verification_status = intent.verification_status;
+    if (selection.alsoSupersede && intent.execution_status === EXECUTION_STATUS.EXECUTED
+      && intent.verification_status === 'VERIFIED') {
+      await decisionStore.supersedeActiveDecisions({
+        clientId,
+        subjectType,
+        subjectId,
+        supersededBy: decision.id,
+      });
+      bump(telemetry, 'decisions_superseded');
+    }
     if (intent.verification_status === 'VERIFIED') bump(telemetry, 'actions_verified');
     if (intent.execution_status === EXECUTION_STATUS.ACTION_VERIFICATION_FAILED) {
       bump(telemetry, 'verification_failures');
@@ -241,51 +313,104 @@ async function reevaluateOnIngestion({
       clarification_required: ingestionResult.clarification_required || null,
     };
   }
-  if (attentionStore && ingestionResult) {
-    const { wakeAttentionForIngestion } = require('../attention/wake');
-    await wakeAttentionForIngestion({
-      attentionStore,
-      clientId,
-      ingestionResult,
-      stateStore,
-      now,
-    });
+  const prospectIds = [...new Set([ingestionResult.prospect, ...(ingestionResult.prospects || [])]
+    .filter(Boolean).map(p => p.id).filter(Boolean))];
+  let fallbackExpectations = null;
+  const contexts = [];
+  try {
+    if (!prospectIds.length) {
+      // A scope-less retry may have resolved its only open expectation already.
+      // Recover the previously established subject solely from this ingestion's
+      // durable resolution receipts, never from unrelated terminal history.
+      const receipts = ingestionResult.ingestion_id && decisionStore.listIngestionResolutionDecisions
+        ? await decisionStore.listIngestionResolutionDecisions({ clientId,
+          ingestionId: ingestionResult.ingestion_id }) : [];
+      if (!Array.isArray(receipts)) return { skipped: true, reason: 'canonical_context_unavailable' };
+      const recordedScopes = [];
+      for (const receipt of receipts) {
+        const scope = expectationScope(clientId, receipt.canonical_state_snapshot);
+        if (String(receipt.client_id) !== String(clientId) || receipt.subject_type !== SUBJECT_TYPE.EXPECTATION
+          || receipt.selected_action?.action_type !== 'RESOLVE_EXPECTATION'
+          || receipt.trigger?.type !== DECISION_TRIGGER.NEW_EVIDENCE
+          || receipt.trigger?.payload?.ingestion_id !== ingestionResult.ingestion_id
+          || !scope || receipt.canonical_state_snapshot.expectation.id !== receipt.subject_id) {
+          return { skipped: true, reason: 'canonical_context_unavailable' };
+        }
+        recordedScopes.push(scope.prospectId);
+      }
+      const scopes = [...new Set(recordedScopes)];
+      if (scopes.length > 1) return { skipped: true, reason: 'ambiguous_ingestion_subject' };
+      if (!scopes.length) {
+        fallbackExpectations = await stateStore.listOpenExpectations({ clientId });
+        if (!Array.isArray(fallbackExpectations)) return { skipped: true, reason: 'canonical_context_unavailable' };
+        scopes.push(...new Set(fallbackExpectations.map(e => e.prospect_id).filter(Boolean)));
+      }
+      if (scopes.length !== 1) return { skipped: true, reason: 'ambiguous_ingestion_subject' };
+      prospectIds.push(scopes[0]);
+    }
+    // Preflight every target before any wake/write. Reads failing here have no
+    // effects; execution failures below propagate and cannot masquerade as skips.
+    for (const prospectId of prospectIds) {
+      const prospect = await stateStore.readProspect(prospectId);
+      if (!prospect || String(prospect.client_id) !== String(clientId)) {
+        return { skipped: true, reason: 'canonical_context_unavailable' };
+      }
+      let expectations = fallbackExpectations
+        || await stateStore.listOpenExpectations({ clientId, prospectId, includeResolved: true });
+      if (!Array.isArray(expectations) || expectations.some(e => String(e.client_id) !== String(clientId)
+        || e.prospect_id !== prospectId)) return { skipped: true, reason: 'canonical_context_unavailable' };
+      const replayScoped = [];
+      for (const expectation of expectations) {
+        if (expectation.status !== 'RESOLVED') { replayScoped.push(expectation); continue; }
+        // Recover only this ingestion's partially persisted resolution receipt.
+        // Old resolved history is not a new operational obligation.
+        if (!ingestionResult.ingestion_id) continue;
+        const key = decisionIdempotencyKey({ clientId, triggerType: DECISION_TRIGGER.NEW_EVIDENCE,
+          subjectType: SUBJECT_TYPE.EXPECTATION, subjectId: expectation.id,
+          actionType: 'RESOLVE_EXPECTATION', triggerState: {
+            expectation_status: expectation.status, overdue: false,
+            window_open: expectation.expected_window || {},
+          } });
+        const receipt = await decisionStore.findDecisionByIdempotency(clientId, key);
+        if (receipt?.trigger?.payload?.ingestion_id === ingestionResult.ingestion_id) replayScoped.push(expectation);
+      }
+      expectations = replayScoped;
+      for (const expectation of expectations.length ? expectations : [null]) {
+        const { snapshot } = await buildUnderstanding({ clientId, stateStore, prospect, expectation, now,
+          trigger: { type: DECISION_TRIGGER.NEW_EVIDENCE, payload: { prospect_id: prospectId,
+            expectation_id: expectation?.id || null } } });
+        if (snapshot.context_status !== 'complete' || snapshot.activity_read_status !== 'complete') {
+          return { skipped: true, reason: 'canonical_context_unavailable' };
+        }
+      }
+      contexts.push({ prospect, expectations });
+    }
+  } catch {
+    return { skipped: true, reason: 'canonical_context_unavailable' };
   }
-  let prospect = ingestionResult.prospect || null;
-  const openExp = (stateStore.expectations || []).find(e =>
-    ['OPEN', 'WAITING', 'OVERDUE'].includes(e.status)
-  );
-  if (!prospect && openExp) {
-    prospect = await stateStore.readProspect(openExp.prospect_id);
-  }
-  if (!prospect) return null;
-  const trigger = {
-    type: DECISION_TRIGGER.NEW_EVIDENCE,
-    payload: {
-      ingestion_id: ingestionResult.ingestion_id,
-      prospect_id: prospect.id,
-      evidence: ingestionResult.telemetry,
-    },
-  };
-  const scopedExp = (stateStore.expectations || []).find(e =>
-    e.prospect_id === prospect.id && ['OPEN', 'WAITING', 'OVERDUE'].includes(e.status)
-  );
   const telemetry = createTelemetryCounters();
-  if (ingestionResult.operatorCorrection) {
-    bump(telemetry, 'human_corrections');
+  if (ingestionResult.operatorCorrection) bump(telemetry, 'human_corrections');
+  const results = [];
+  for (const { prospect, expectations } of contexts) {
+    if (attentionStore) {
+      const { wakeAttentionForIngestion } = require('../attention/wake');
+      await wakeAttentionForIngestion({ attentionStore, clientId, ingestionResult: {
+        ...ingestionResult, prospect,
+      }, expectations, now });
+    }
+    for (const expectation of expectations.length ? expectations : [null]) {
+      results.push(await evaluateOperationalDecision({
+        clientId, stateStore, decisionStore, attentionStore, prospect, expectation, now, telemetry,
+        trigger: { type: DECISION_TRIGGER.NEW_EVIDENCE, payload: {
+          ingestion_id: ingestionResult.ingestion_id,
+          prospect_id: prospect.id,
+          expectation_id: expectation?.id || null,
+          evidence: ingestionResult.telemetry,
+        } },
+      }));
+    }
   }
-  const result = await evaluateOperationalDecision({
-    clientId,
-    trigger,
-    stateStore,
-    decisionStore,
-    attentionStore,
-    prospect,
-    expectation: scopedExp || openExp,
-    now,
-    telemetry,
-  });
-  return result;
+  return results.length === 1 ? results[0] : { results, telemetry };
 }
 
 function rejectAgentDelegationOutput(delegation, output) {

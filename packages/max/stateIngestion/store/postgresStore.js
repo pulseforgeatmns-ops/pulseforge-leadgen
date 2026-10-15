@@ -17,25 +17,19 @@ class PostgresStateStore {
     await ensureMaxStateIngestionSchema(this.db);
   }
 
-  async snapshotContext() {
-    const [users, companies, prospects] = await Promise.all([
-      this.db.query(`SELECT id, name, email, role FROM users WHERE role IN ('sales', 'admin', 'manager') OR name ILIKE ANY(ARRAY['Tony','Rory'])`),
-      this.db.query(`SELECT id, name, client_id FROM companies WHERE client_id = $1`, [this.clientId]),
-      this.db.query(`
-        SELECT p.id, p.client_id, p.company_id, p.assigned_ao_id, p.status, p.ao_next_action,
-               p.acquisition_metadata, c.name AS company_name
-        FROM prospects p
-        LEFT JOIN companies c ON c.id = p.company_id
-        WHERE p.client_id = $1
-      `, [this.clientId]),
-    ]);
-    return {
-      clientId: this.clientId,
-      users: users.rows,
-      companies: companies.rows,
-      prospects: prospects.rows,
-      contacts: [],
-    };
+  async snapshotContext({ aoId = null } = {}) {
+    const values = [this.clientId, aoId];
+    const [users, companies, prospects, activities] = [
+      await this.db.query(`SELECT id, name, email, role, client_id FROM users WHERE client_id = $1 AND ($2::integer IS NULL OR id = $2)`, values),
+      await this.db.query(`SELECT c.* FROM companies c WHERE c.client_id = $1 AND ($2::integer IS NULL OR EXISTS (SELECT 1 FROM prospects p WHERE p.client_id=c.client_id AND p.company_id=c.id AND p.assigned_ao_id=$2)) ORDER BY c.id`, values),
+      await this.db.query(`SELECT p.*, c.name AS company_name FROM prospects p LEFT JOIN companies c ON c.id=p.company_id AND c.client_id=p.client_id WHERE p.client_id=$1 AND ($2::integer IS NULL OR p.assigned_ao_id=$2) ORDER BY p.id`, values),
+      await this.db.query(`SELECT a.* FROM ao_prospect_activity a JOIN prospects p ON p.id=a.prospect_id AND p.client_id=a.tenant_id WHERE a.tenant_id=$1 AND ($2::integer IS NULL OR p.assigned_ao_id=$2) ORDER BY a.id`, values),
+    ];
+    return { clientId: this.clientId, users: users.rows, companies: companies.rows,
+      prospects: prospects.rows.map(p => { const company=companies.rows.find(c=>String(c.id)===String(p.company_id)) || {}; return {...p, website:p.website || company.website || null, address:p.ao_source_address || p.address || p.location || company.address || company.location || null}; }), contacts: prospects.rows.filter(p => p.first_name || p.last_name).map(p => ({
+        id: p.id, prospect_id: p.id, name: [p.first_name,p.last_name].filter(Boolean).join(' '),
+        email: p.email, phone: p.phone, title: p.job_title,
+      })), activities: activities.rows };
   }
 
   async findAppliedClaim(fingerprint) {
@@ -144,6 +138,36 @@ class PostgresStateStore {
       WHERE p.id = $1 AND p.client_id = $2
     `, [id, this.clientId]);
     return rows[0] || null;
+  }
+
+  async readProspectActivities(prospectId, { clientId = this.clientId, aoId } = {}) {
+    if (clientId == null || String(clientId) !== String(this.clientId) || !prospectId || aoId == null) {
+      return { status: 'unavailable', activities: [], source: 'ao_prospect_activity' };
+    }
+    try {
+      // Start from the owned canonical prospect. A LEFT JOIN sentinel proves
+      // empty history; no sentinel means the subject/ownership disappeared.
+      const { rows } = await this.db.query(`
+        SELECT p.id AS scoped_prospect_id, p.client_id AS scoped_client_id,
+               p.assigned_ao_id AS scoped_ao_id,
+               a.id, a.tenant_id, a.prospect_id, a.ao_id, a.activity_type,
+               a.outcome, a.metadata, a.created_at
+        FROM prospects p
+        LEFT JOIN ao_prospect_activity a ON a.prospect_id = p.id
+          AND a.tenant_id = p.client_id AND a.ao_id = p.assigned_ao_id
+        WHERE p.client_id = $1 AND p.id = $2 AND p.assigned_ao_id = $3
+        ORDER BY a.created_at, a.id
+      `, [this.clientId, prospectId, aoId]);
+      if (!rows.length || rows.some(row => String(row.scoped_client_id) !== String(clientId)
+        || row.scoped_prospect_id !== prospectId || String(row.scoped_ao_id) !== String(aoId))) {
+        return { status: 'unavailable', activities: [], source: 'ao_prospect_activity' };
+      }
+      const { normalizeAoActivity } = require('../../decisionExecution/activityEvidence');
+      return { status: 'complete', activities: rows.filter(row => row.id).map(normalizeAoActivity),
+        source: 'ao_prospect_activity', scope: { clientId, prospectId, aoId } };
+    } catch {
+      return { status: 'unavailable', activities: [], source: 'ao_prospect_activity' };
+    }
   }
 
   async applyMutation(mutation) {
@@ -283,13 +307,49 @@ class PostgresStateStore {
     return rows[0];
   }
 
-  async listOpenExpectations({ clientId = this.clientId } = {}) {
+  async listOpenExpectations({ clientId = this.clientId, prospectId, includeResolved = false } = {}) {
+    if (clientId == null || String(clientId) !== String(this.clientId)) return [];
     const { rows } = await this.db.query(`
       SELECT * FROM max_open_expectations
-      WHERE client_id = $1 AND status IN ('OPEN','WAITING','OVERDUE')
-      ORDER BY updated_at DESC
-    `, [clientId]);
+      WHERE client_id = $1 AND (status IN ('OPEN','WAITING','OVERDUE')
+        OR ($3::boolean AND status = 'RESOLVED'))
+        AND ($2::uuid IS NULL OR prospect_id = $2)
+      ORDER BY updated_at DESC, id
+    `, [this.clientId, prospectId ?? null, Boolean(includeResolved && prospectId)]);
     return rows;
+  }
+
+  async readExpectation(id, { clientId = this.clientId, prospectId, aoId } = {}) {
+    if (clientId == null || String(clientId) !== String(this.clientId)) return null;
+    const { rows } = await this.db.query(`
+      SELECT * FROM max_open_expectations
+      WHERE id = $1 AND client_id = $2
+        AND ($3::boolean = false OR prospect_id IS NOT DISTINCT FROM $4::uuid)
+        AND ($5::boolean = false OR (ao_id IS NOT DISTINCT FROM $6::integer
+          AND EXISTS (SELECT 1 FROM prospects p WHERE p.id = max_open_expectations.prospect_id
+            AND p.client_id = $2 AND p.assigned_ao_id = $6)))
+    `, [id, this.clientId, prospectId !== undefined, prospectId ?? null, aoId !== undefined, aoId ?? null]);
+    return rows[0] || null;
+  }
+
+  async updateExpectation(id, patch = {}, { clientId = this.clientId, prospectId, aoId } = {}) {
+    // This contract only resolves expectations; it cannot change tenant, owner or evidence.
+    if (patch.status !== 'RESOLVED') throw new Error('Unsupported expectation update');
+    if (clientId == null || String(clientId) !== String(this.clientId)
+      || prospectId == null || aoId == null) return null;
+    const { rows } = await this.db.query(`
+      UPDATE max_open_expectations
+      SET status = 'RESOLVED',
+          resolved_at = COALESCE(resolved_at, NOW()),
+          updated_at = CASE WHEN status = 'RESOLVED' AND resolved_at IS NOT NULL
+            THEN updated_at ELSE NOW() END
+      WHERE id = $1 AND client_id = $2 AND prospect_id = $3 AND ao_id = $4
+        AND status IN ('OPEN', 'WAITING', 'OVERDUE', 'RESOLVED')
+        AND EXISTS (SELECT 1 FROM prospects p WHERE p.id = max_open_expectations.prospect_id
+          AND p.client_id = $2 AND p.assigned_ao_id = $4)
+      RETURNING *
+    `, [id, this.clientId, prospectId, aoId]);
+    return rows[0] || null;
   }
 }
 

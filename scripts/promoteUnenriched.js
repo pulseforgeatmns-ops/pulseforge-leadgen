@@ -144,7 +144,7 @@ function babrunPromotionContactResolution({ enriched = {}, verification = {}, of
     candidateRecord,
     classifyCandidate,
     mapVerificationResult,
-  } = require('./lib/babrunContactResolution');
+  } = require('../utils/babrunContactClassification');
   const sourceUrl = String(enriched.sourceUrl || '').trim() || null;
   const sourceDomain = sourceUrl
     ? require('../utils/canonicalEmailEligibility').normalizeDomain(sourceUrl)

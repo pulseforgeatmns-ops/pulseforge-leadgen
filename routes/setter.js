@@ -191,6 +191,7 @@ function mapLead(row) {
     is_synthetic: Boolean(row.is_synthetic),
     synthetic_label: row.synthetic_label || null,
     contact_prohibited: Boolean(row.is_synthetic || row.do_not_contact),
+    call_prohibited: Boolean(row.ao_outreach_review_required || row.ao_call_suppressed || row.is_synthetic || row.do_not_contact),
     is_hot: Boolean(row.is_hot),
     attempt_count: Number(row.attempt_count || 0),
     client_id: Number(row.client_id),
@@ -262,6 +263,8 @@ async function getLeads(where = '', params = [], limit = 250, orderBy = DEFAULT_
     FROM prospects p
     LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
     WHERE p.source = 'scout'
+      AND COALESCE(p.ao_call_suppressed, false) = false
+      AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
       AND COALESCE(p.setter_visible, false) = true
       AND (
         (COALESCE(p.is_synthetic, false) = false AND COALESCE(p.do_not_contact, false) = false)
@@ -991,6 +994,7 @@ router.patch(['/api/leads/:id/callback', '/leads/:id/callback'], requireSetterWr
     res.json({ success: true, lead: mapLead(result.prospect) });
   } catch (err) {
     if (err.code === 'PROSPECT_NOT_FOUND') return res.status(404).json({ error: 'Lead not found' });
+    if (err.code === 'CALL_SUPPRESSED') return res.status(409).json({ error: err.message, code: err.code });
     console.error('[setter] callback error:', err.message);
     res.status(500).json({ error: 'Unable to update callback' });
   }

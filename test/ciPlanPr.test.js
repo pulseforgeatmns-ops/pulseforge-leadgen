@@ -73,11 +73,78 @@ describe('CI plan PR selector (SPEC-CI-LEAN-001)', () => {
     });
   }
 
+  it('spreadsheet gate is selected for isolated parser, approval, UI, guard and fixture edits', () => {
+    const files = [
+      'packages/max/composer/adapters/spreadsheet.js',
+      'packages/max/composer/headerMap.js',
+      'packages/max/stateIngestion/spreadsheetProposalStore.js',
+      'routes/maxStateIngestion.js',
+      'services/maxSpreadsheetService.js',
+      'services/maxStateIngestionService.js',
+      'services/maxComposerService.js',
+      'public/shared/spreadsheetReview.js',
+      'public/shared/spreadsheetReview.css',
+      'public/ao-dashboard.html',
+      'public/command-deck/command-deck.js',
+      'utils/maxSpreadsheetAuthorization.js',
+      'utils/spreadsheetCrmEvidence.js',
+      'utils/callEligibility.js',
+      'utils/canonicalEmailEligibility.js',
+      'utils/sendingReadiness.js',
+      'test/maxSpreadsheetFixtureScenarios.test.js',
+      'test/spreadsheetCallSuppression.test.js',
+      'test/fixtures/anchor-cleaning-actual.xlsx',
+      'test/fixtures/maxSpreadsheetBaseSchema.sql',
+      'test/helpers/puppeteerTestBrowser.js',
+    ];
+    for (const file of files) {
+      const plan = buildPlan([file]);
+      assert.ok(plan.suites.includes('revenue-postgres'), `${file} must run the real spreadsheet gate`);
+      assert.equal(plan.suites.includes('signal-v1'), false, `${file} must preserve lean domain selection`);
+    }
+  });
+
   it('fail-closed selects the full safe set', () => {
     const plan = buildPlan([], { failClosed: true });
     assert.equal(plan.failClosed, true);
     assert.ok(plan.suites.includes('paige-social'));
     assert.ok(plan.suites.includes('revenue-postgres'));
     assert.ok(plan.suites.length >= 8);
+  });
+});
+
+// Exercise the actual workflow gate body so a skipped planned suite cannot be
+// mistaken for an intentionally unselected job that GitHub marks as skipped.
+describe('PR CI gate selected-suite enforcement', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const vm = require('node:vm');
+  const workflow = fs.readFileSync(path.join(__dirname, '../.github/workflows/pr-ci-lean.yml'), 'utf8');
+  const body = workflow.match(/node <<'NODE'\n([\s\S]*?)\n          NODE/)[1];
+  function run(suites, results) {
+    let exitCode = 0;
+    try {
+      vm.runInNewContext(body, {
+        process: {
+          env: { SUITES: JSON.stringify(suites), ...results },
+          exit: code => { exitCode = code; throw new Error('gate exit'); },
+        },
+        console: { log() {}, error() {} },
+      });
+    } catch (error) {
+      if (error.message !== 'gate exit') throw error;
+    }
+    return exitCode;
+  }
+  it('accepts successful selected jobs and skips only unselected jobs', () => {
+    assert.equal(run(['global', 'revenue-postgres'], { GLOBAL: 'success', REVENUE: 'success', SIGNAL: 'skipped' }), 0);
+  });
+  for (const outcome of ['skipped', 'cancelled', 'failure', undefined]) {
+    it(`blocks selected spreadsheet/Revenue PostgreSQL job result ${outcome || 'missing'}`, () => {
+      assert.equal(run(['global', 'revenue-postgres'], { GLOBAL: 'success', REVENUE: outcome }), 1);
+    });
+  }
+  it('rejects a selected unknown job', () => {
+    assert.equal(run(['not-wired'], {}), 1);
   });
 });

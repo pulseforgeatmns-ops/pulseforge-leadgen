@@ -10,7 +10,8 @@
  */
 
 const express = require('express');
-const Anthropic = require('@anthropic-ai/sdk');
+const { isApiUsageQuestion, parseApiSpendCommand, answerApiUsageQuestion } = require('../services/apiUsageService');
+const Anthropic = require('../utils/meteredAnthropic').forAgent('max_workspace');
 const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
 const {
@@ -118,6 +119,18 @@ router.post(
       const question = String(req.body?.question || '').trim();
       if (!question) {
         return res.status(400).json({ error: 'Question is required' });
+      }
+
+      if (isApiUsageQuestion(question) || parseApiSpendCommand(question)) {
+        if (parseApiSpendCommand(question)) {
+          try {
+            if (!req.get('origin') || new URL(req.get('origin')).host !== req.get('host')) return res.status(403).json({ error: 'same_origin_required' });
+          } catch { return res.status(403).json({ error: 'same_origin_required' }); }
+        }
+        const role = req.user?.role || req.session?.user?.role;
+        if (!['admin', 'manager'].includes(role)) return res.status(403).json({ error: 'api_usage_operator_only' });
+        res.set('Cache-Control', 'no-store');
+        return res.json(await answerApiUsageQuestion(question));
       }
 
       if (isClientRole(req)) {
@@ -251,3 +264,4 @@ function isClientRole(req) {
 }
 
 module.exports = router;
+

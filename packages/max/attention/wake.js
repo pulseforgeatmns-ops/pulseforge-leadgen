@@ -31,6 +31,7 @@ async function wakeAttentionForIngestion({
   clientId,
   ingestionResult,
   stateStore = null,
+  expectations = null,
   now = new Date(),
 }) {
   const evidence = [{
@@ -38,23 +39,16 @@ async function wakeAttentionForIngestion({
     ingestion_id: ingestionResult.ingestion_id,
     at: now.toISOString(),
   }];
-  let prospectId = ingestionResult?.prospect?.id || null;
-  if (!prospectId && stateStore?.expectations?.length) {
-    const open = stateStore.expectations.find(e =>
-      ['OPEN', 'WAITING', 'OVERDUE'].includes(e.status)
-    );
-    prospectId = open?.prospect_id || stateStore.expectations[0]?.prospect_id || null;
-  }
-  if (!prospectId && Array.isArray(stateStore?.prospects) && stateStore.prospects.length === 1) {
-    prospectId = stateStore.prospects[0].id;
-  }
+  const prospectId = ingestionResult?.prospect?.id || null;
   if (!prospectId) return [];
+  const scopedExpectations = expectations
+    || await stateStore?.listOpenExpectations?.({ clientId, prospectId }) || [];
   const all = await attentionStore.listUnresolved({ clientId });
   const related = all.filter(item => {
     if (item.subject_type === 'prospect' && item.subject_id === prospectId) return true;
     if (item.subject_type === 'expectation') {
-      const exp = (stateStore?.expectations || []).find(e => e.id === item.subject_id);
-      return exp?.prospect_id === prospectId;
+      const exp = scopedExpectations.find(e => e.id === item.subject_id);
+      return exp?.prospect_id === prospectId && String(exp.client_id) === String(clientId);
     }
     return false;
   });

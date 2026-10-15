@@ -3,7 +3,6 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { Pool } = require('pg');
 const axios = require('axios');
 function setEnv(t, key, value) {
   const before = process.env[key];
@@ -12,12 +11,13 @@ function setEnv(t, key, value) {
 }
 
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
+const { createTrackedPostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
 const { notifyWalkthrough } = require('../lib/walkthroughNotification');
 
 test('notification claims survive concurrency, reloads, retries and expiry', { skip: process.env.WALKTHROUGH_NOTIFICATION_TEST_POSTGRES !== 'true', timeout: 60000 }, async t => {
   const pg = await startDisposablePostgres('walkthrough-mail-');
-  const pool = new Pool({ connectionString: pg.connectionString });
-  t.after(async () => { await pool.end(); await pg.stop(); });
+  const pool = createTrackedPostgresPool({ connectionString: pg.connectionString });
+  t.after(async () => { await closePostgresFixture(pool, pg); });
   await pool.query('CREATE TABLE agent_actions (id INTEGER PRIMARY KEY, client_id INTEGER, action_type TEXT)');
   await pool.query("INSERT INTO agent_actions VALUES (1,10,'walkthrough_request'), (2,10,'walkthrough_request'), (3,11,'walkthrough_request')");
   const migration = fs.readFileSync(path.join(__dirname, '../migrations/2026-09-30-walkthrough-notification-claims.sql'), 'utf8');

@@ -8,6 +8,9 @@ const {
 } = require('./missionGeography');
 const {
   FOUNDER_LED_SMALL_BUSINESS_VERTICALS,
+  SERVICE_TRADE_TAXONOMY,
+  SERVICE_TRADE_VERTICALS,
+  serviceTradeVerticals,
   isSmallBusinessOwnerSegment,
 } = require('./canonicalBusinessTaxonomy');
 
@@ -18,6 +21,12 @@ const ENRICHABLE_SCOUT_VERTICALS = Object.freeze([
   'realtor',
   ...FOUNDER_LED_SMALL_BUSINESS_VERTICALS,
 ]);
+
+// Classification support is broader than legacy enrichment defaults. New trades
+// require an explicit mission-scoped enrichment selection.
+const CANONICAL_ENRICHABLE_SCOUT_VERTICALS = Object.freeze([...new Set([
+  ...ENRICHABLE_SCOUT_VERTICALS, ...SERVICE_TRADE_VERTICALS,
+])]);
 
 const STR_EVIDENCE = [
   /\bshort[\s-]?term rental\b/i,
@@ -68,7 +77,11 @@ const FOUNDER_LED_VERTICAL_EVIDENCE = Object.freeze({
   cleaning: [/\bcleaning (?:company|service|business)\b/i, /\bjanitorial (?:company|service)\b/i],
   landscaping: [/\blandscap(?:e|ing|er)\b/i, /\blawn care\b/i, /\bgrounds maintenance\b/i],
   painting: [/\bpainting (?:company|contractor|service)\b/i, /\bhouse painter\b/i],
-  hvac: [/\bhvac\b/i, /\bheating and cooling\b/i, /\bair conditioning contractor\b/i],
+  // More specific HVAC evidence precedes heating; membership in a mission is
+  // never evidence that a business performs another trade.
+  hvac: SERVICE_TRADE_TAXONOMY.hvac.evidence,
+  plumbing: SERVICE_TRADE_TAXONOMY.plumbing.evidence,
+  heating: SERVICE_TRADE_TAXONOMY.heating.evidence,
   electrician: [/\belectrical contractor\b/i, /\belectrician\b/i],
   home_services: [/\bhandyman\b/i, /\bhome repair\b/i, /\bhome services?\b/i],
   restaurant: [/\brestaurant\b/i, /\bfood service\b/i, /\bcatering\b/i],
@@ -109,10 +122,10 @@ const CONTRADICTORY_BUSINESS_TYPES = [
   { pattern: /\bdumpster rental\b/i, label: 'waste hauling' },
   { pattern: /\brestoration company\b/i, label: 'restoration/remediation' },
   { pattern: /\bwater damage restoration\b/i, label: 'restoration/remediation' },
-  { pattern: /\bhvac\b/i, label: 'HVAC contractor' },
+  { pattern: /\bhvac\b/i, label: 'HVAC contractor', vertical: 'hvac' },
   { pattern: /\broofing\b/i, label: 'roofing contractor' },
   { pattern: /\blandscap(?:e|ing)\b/i, label: 'landscaping contractor' },
-  { pattern: /\bplumb(?:er|ing)\b/i, label: 'plumbing contractor' },
+  { pattern: /\bplumb(?:er|ing)\b/i, label: 'plumbing contractor', vertical: 'plumbing' },
   { pattern: /\belectric(?:al|ian)\b/i, label: 'electrical contractor' },
 ];
 
@@ -178,8 +191,13 @@ function declaredCanonicalVertical(candidate = {}, context = {}) {
   for (const field of ['vertical', 'industry', 'segment']) {
     const raw = candidate[field];
     if (!raw || isSearchDerivedField(raw, context)) continue;
+    const trades = serviceTradeVerticals(raw);
+    if (trades.length) {
+      const allowed = missionCompatibleVerticals(context);
+      return trades.find(vertical => allowed.includes(vertical)) || trades[0];
+    }
     const normalized = normalizeVertical(raw);
-    if (ENRICHABLE_SCOUT_VERTICALS.includes(normalized)) return normalized;
+    if (CANONICAL_ENRICHABLE_SCOUT_VERTICALS.includes(normalized)) return normalized;
   }
   return null;
 }
@@ -208,9 +226,9 @@ function hasEvidence(text, patterns) {
   return patterns.some(pattern => pattern.test(text));
 }
 
-function detectContradictoryBusinessType(text) {
+function detectContradictoryBusinessType(text, allowedTrades = []) {
   for (const entry of CONTRADICTORY_BUSINESS_TYPES) {
-    if (entry.pattern.test(text)) return entry.label;
+    if (entry.pattern.test(text) && !allowedTrades.includes(entry.vertical)) return entry.label;
   }
   return null;
 }
@@ -244,14 +262,20 @@ function resolveReplenishmentVertical(candidate = {}, context = {}) {
 }
 
 function missionCompatibleVerticals(context = {}) {
-  if (Array.isArray(context.missionSegments) && context.missionSegments.length) {
-    return [...new Set(context.missionSegments.flatMap(segment => MISSION_VERTICALS[normalizeVertical(segment)] || []))];
+  const segments = Array.isArray(context.missionSegments) && context.missionSegments.length
+    ? context.missionSegments
+    : [context.missionSegment || context.segment || context.mission?.segment || ''];
+  // Retain the legacy unscoped default, without adding the new explicit trades.
+  if (segments.length === 1 && !normalizeVertical(segments[0])) {
+    return ['property_manager', 'str_manager', 'commercial_office', ...FOUNDER_LED_SMALL_BUSINESS_VERTICALS];
   }
-  const missionSegment = normalizeVertical(
-    context.missionSegment || context.segment || context.mission?.segment || ''
-  );
-  if (!missionSegment) return ENRICHABLE_SCOUT_VERTICALS.filter(vertical => vertical !== 'realtor');
-  return MISSION_VERTICALS[missionSegment] || ENRICHABLE_SCOUT_VERTICALS.filter(vertical => vertical !== 'realtor');
+  const mapped = segments.map(segment => {
+    const trades = serviceTradeVerticals(segment);
+    const key = normalizeVertical(segment);
+    return trades.length ? trades : (MISSION_VERTICALS[key] || (ENRICHABLE_SCOUT_VERTICALS.includes(key) ? [key] : []));
+  });
+  // A supplied but unsupported segment never falls back to the full audience.
+  return mapped.every(values => values.length) ? [...new Set(mapped.flat())] : [];
 }
 
 function isFounderLedSmallBusinessMission(context = {}) {
@@ -351,7 +375,16 @@ function evaluateReplenishmentAdmission(candidate = {}, context = {}) {
   }
 
   const vertical = resolveReplenishmentVertical(candidate, admissionContext);
-  const contradictory = detectContradictoryBusinessType(text);
+  // A verified heating/plumbing operator can perform both trades. Additional
+  // trade evidence is not contradictory once an evidenced trade intersects the
+  // mission; unrelated contractor types still reject below.
+  const allowedTrades = SERVICE_TRADE_VERTICALS.includes(vertical) && isMissionCompatible(vertical, context)
+    ? SERVICE_TRADE_VERTICALS : [];
+  if (allowedTrades.length && SERVICE_TRADE_VERTICALS.includes(vertical)
+    && /\b(?:suppliers?|supplies|distributors?|manufacturers?|hardware store|software|insurance|marketing agency)\b/i.test(text)) {
+    return { admitted: false, reason: 'contradictory_business_type', detail: 'non-operator trade business' };
+  }
+  const contradictory = detectContradictoryBusinessType(text, allowedTrades);
   if (contradictory && !(isFounderLedSmallBusinessMission(context) && vertical
     && isMissionCompatible(vertical, context))) {
     return { admitted: false, reason: 'contradictory_business_type', detail: contradictory };
@@ -360,7 +393,7 @@ function evaluateReplenishmentAdmission(candidate = {}, context = {}) {
     return { admitted: false, reason: 'unclassifiable_vertical' };
   }
 
-  if (!ENRICHABLE_SCOUT_VERTICALS.includes(vertical)) {
+  if (!CANONICAL_ENRICHABLE_SCOUT_VERTICALS.includes(vertical)) {
     return { admitted: false, reason: 'unclassifiable_vertical' };
   }
 
@@ -414,7 +447,7 @@ function recordReplenishmentRejection(counters, reason) {
 
 function isCanonicalEnrichableVertical(vertical) {
   const normalized = normalizeVertical(vertical);
-  return Boolean(normalized && ENRICHABLE_SCOUT_VERTICALS.includes(normalized));
+  return Boolean(normalized && CANONICAL_ENRICHABLE_SCOUT_VERTICALS.includes(normalized));
 }
 
 /** Pre-#711 replenishment rows with query-slug verticals must not block fresh canonical admission. */
@@ -457,6 +490,7 @@ function resolveLegacyReconciliationOutcome(admission = {}) {
 
 module.exports = {
   ENRICHABLE_SCOUT_VERTICALS,
+  CANONICAL_ENRICHABLE_SCOUT_VERTICALS,
   resolveReplenishmentVertical,
   evaluateReplenishmentAdmission,
   missionCompatibleVerticals,
