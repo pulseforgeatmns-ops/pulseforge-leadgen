@@ -17,6 +17,7 @@ const {
 } = require('./placesCostAttribution');
 const {
   buildCacheKey,
+  shareInFlight,
   lookup,
   storeResult,
   holdFailure,
@@ -279,6 +280,13 @@ async function legacyTextSearch(params = {}, deps = {}) {
   }
 
   const failure = legacyApplicationFailure(result);
+  if (reused) {
+    const sharedResult = failure ? failureResult(failure) : result;
+    await recordCall(recordBase, sharedResult, failure ? failedYieldParams(params) : params, deps, started, {
+      cacheHit: true, cacheMiss: false, cacheAge: 0, cacheKey, cacheStrategy: 'memory_inflight',
+    });
+    return sharedResult;
+  }
   if (useCache && recordBase.normalizedQuery && result.ok) {
     if (failure) holdFailure(cacheKey, failure, PLACES_ENDPOINTS.TEXT_SEARCH);
     else storeResult(cacheKey, result, PLACES_ENDPOINTS.TEXT_SEARCH);
@@ -393,6 +401,13 @@ async function legacyPlaceDetails(params = {}, deps = {}) {
   }
 
   const failure = legacyApplicationFailure(result);
+  if (reused) {
+    const sharedResult = failure ? failureResult(failure) : result;
+    await recordCall(recordBase, sharedResult, failure ? failedYieldParams(params) : params, deps, started, {
+      cacheHit: true, cacheMiss: false, cacheAge: 0, cacheKey, cacheStrategy: 'memory_inflight',
+    });
+    return sharedResult;
+  }
   if (useCache && params.placeId && result.ok) {
     if (failure) holdFailure(cacheKey, failure, PLACES_ENDPOINTS.PLACE_DETAILS);
     else storeResult(cacheKey, result, PLACES_ENDPOINTS.PLACE_DETAILS);

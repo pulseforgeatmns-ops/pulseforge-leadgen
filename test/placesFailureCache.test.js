@@ -17,6 +17,15 @@ const fakeDb = { async query(sql, values) {
 } };
 const dbPath = require.resolve('../db');
 require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: fakeDb };
+// Provider adapters use the default spend-control dependency. Keep their budget
+// reservations synthetic too; the real budget contract has its own test suite.
+const spendPath = require.resolve('../utils/apiSpendControl');
+const reservations = [];
+const settlements = [];
+require.cache[spendPath] = { id: spendPath, filename: spendPath, loaded: true, exports: {
+  reserveApiCall: async request => { reservations.push(request); return `synthetic-${reservations.length}`; },
+  settleApiCall: async (id, result) => { settlements.push({ id, result }); },
+} };
 const { legacyTextSearch, legacyPlaceDetails } = require('../utils/placesApi');
 const { withPlacesContext } = require('../utils/placesCostAttribution');
 const cache = require('../utils/placesQueryCache');
@@ -30,13 +39,13 @@ function denied() {
   return response('REQUEST_DENIED', { error_message: `${SECRET} ${RAW}`,
     results: [{ name: RAW }], result: { name: RAW, website: RAW } });
 }
-function key(query) { return cache.buildCacheKey({ endpoint: 'text_search', normalizedQuery: query }); }
+function key(query, apiKey) { return cache.buildCacheKey({ endpoint: 'text_search', query, apiKey }); }
 function assertSafe(value) {
   const text = JSON.stringify(value);
   assert.ok(!text.includes(SECRET)); assert.ok(!text.includes(RAW));
   assert.ok(!text.includes('error_message'));
 }
-beforeEach(() => { rows.length = 0; cache.clearPlacesQueryCache(); });
+beforeEach(() => { rows.length = 0; reservations.length = 0; settlements.length = 0; cache.clearPlacesQueryCache(); });
 
 test('fresh HTTP200 denial records once despite deferred yield, and repeats remain failure-held', async () => {
   let fetches = 0;
@@ -55,7 +64,8 @@ test('fresh HTTP200 denial records once despite deferred yield, and repeats rema
     assert.equal(row.googleStatus, 'REQUEST_DENIED'); assert.equal(row.businessesReturned, 0);
     assert.equal(row.businessesAccepted, 0); assert.equal(row.candidatesCreated, 0); assertSafe(row);
   }
-  const held = cache.lookup(key(params.query));
+  assert.equal(reservations.length, 1); assert.equal(settlements.length, 1);
+  const held = cache.lookup(key(params.query, params.apiKey));
   assert.equal(held.hit, true); assert.equal(held.payload, undefined);
   assert.deepEqual(held.failure, { httpStatus: 200, googleStatus: 'REQUEST_DENIED' }); assertSafe(held);
 });
@@ -72,6 +82,31 @@ test('legacy detail denial is also safe, recorded once and held without another 
   assert.equal(fetches, 1); assert.equal(rows.length, 2);
   assert.ok(rows.every(row => row.endpoint === 'place_details' && row.businessesReturned === 0));
   assertSafe(rows);
+});
+
+for (const endpoint of ['search', 'details']) test(`overlapping ${endpoint} denials preserve one reservation and safe per-tenant reuse receipts`, async () => {
+  let fetches = 0;
+  const params = { query: 'Synthetic concurrent denial', placeId: 'synthetic-shared-place',
+    fields: 'name,website', apiKey: SECRET, deferRecord: true,
+    yield: { businessesReturned: 99, candidatesCreated: 99 },
+    fetchImpl: async () => { fetches++; return denied(); } };
+  const request = endpoint === 'search' ? legacyTextSearch : legacyPlaceDetails;
+  const results = await Promise.all([13, 10, 17, 1].map(tenantId =>
+    withPlacesContext({ tenantId }, () => request(params, { db: fakeDb }))));
+  assert.equal(fetches, 1); assert.equal(reservations.length, 1); assert.equal(settlements.length, 1);
+  assert.equal(rows.length, 4); assert.equal(new Set(rows.map(row => row.tenant)).size, 4);
+  assert.equal(rows.filter(row => row.cacheHit).length, 3);
+  assert.equal(rows.filter(row => row.cacheMiss).length, 1);
+  for (const result of results) {
+    assert.equal(result.ok, false); assert.equal(result.applicationFailure, true);
+    assert.deepEqual(result.data, { status: 'REQUEST_DENIED' });
+    assert.equal(result.commitRecord, undefined); assertSafe(result);
+  }
+  assert.ok(rows.every(row => row.businessesReturned === 0 && row.candidatesCreated === 0));
+  assertSafe(rows);
+  await request(params, { db: fakeDb });
+  assert.equal(fetches, 1); assert.equal(reservations.length, 1);
+  assert.equal(rows.length, 5); assert.equal(rows[4].cacheHit, true);
 });
 
 test('old poisoned result is quarantined without refetch, TTL extension or raw payload retention', async () => {
