@@ -1,4 +1,6 @@
 'use strict';
+
+const { scoutRampDiagnostic, controlCycleDiagnostic, emitDiagnostic } = require('./outboundControlDiagnostics');
 const { governedContactReason, founderFirst, contactEvidence } = require('../utils/governedContactEligibility');
 
 const { canonicalOutboundEmailIneligibilityReason, normalizeDomain } = require('../utils/canonicalEmailEligibility');
@@ -773,6 +775,7 @@ async function runEnrichmentBatches(enrichment, pool, requested, tenantContext =
 }
 
 async function defaultScoutRamp({
+  cycleId = null,
   pool,
   store,
   program,
@@ -884,15 +887,10 @@ async function defaultScoutRamp({
     recovered: first.recovered + Number(persisted.admission?.recovered || 0) + recoveredExistingCount,
   });
 
-  logger.log?.('[max-outbound-control] Scout ramp', JSON.stringify({
-    requested: plan.deficit,
-    promoted,
-    recoveredExisting: recoveredExistingCount,
-    existingRecoverySource: existingRecovery?.payload?.source || null,
-    discoveredQueued: persisted.inserted,
-    admission: persisted.admission || null,
-    yield: yieldReport,
-    discovery: discovery?.kind || null,
+  emitDiagnostic(logger, '[max-outbound-control] Scout ramp', scoutRampDiagnostic({
+    tenantId: tenant.tenantId, cycleId, requested: plan.deficit, promoted,
+    recoveredExisting: recoveredExistingCount, discoveredQueued: persisted.inserted,
+    admission: persisted.admission, enrichment: first, discovery,
   }));
   const recoveredExisting = first.recovered + Number(persisted.admission?.recovered || 0) + recoveredExistingCount;
   const verificationRetry = skipVerificationRetry
@@ -932,13 +930,16 @@ async function capturePreparationObservability({
   now = new Date(),
 } = {}) {
   let pendingPrepared = 0;
+  let pendingPreparedMeasured = false;
   let lastSendAt = null;
   try {
     const day = clock(now).day;
     const envelope = typeof store.envelope === 'function' ? await store.envelope(day) : null;
+    if (typeof store.envelope === 'function' && !envelope) pendingPreparedMeasured = true;
     if (envelope && typeof store.items === 'function') {
       const items = await store.items(envelope.id);
       pendingPrepared = items.filter(row => row.status === 'pending').length;
+      pendingPreparedMeasured = true;
       for (const row of items) {
         if (!row.attempted_at) continue;
         const at = +new Date(row.attempted_at);
@@ -947,6 +948,7 @@ async function capturePreparationObservability({
     }
   } catch (_err) {
     pendingPrepared = 0;
+    pendingPreparedMeasured = false;
   }
   const remainingCap = remainingDispatchCapacity({
     dispatchCapacityNow: operating.dispatchCapacityNow ?? 0,
@@ -980,7 +982,7 @@ async function capturePreparationObservability({
     totalAuthorizationRemaining: operating.remainingTotalAuthorization,
     planningDailyCapacity: operating.planningDailyCapacity,
   });
-  return observabilityFromRefill(plan, {
+  return { pendingPreparedMeasured, ...observabilityFromRefill(plan, {
     sentToday,
     pendingPrepared,
     remainingDispatchCapacity: remainingCap,
@@ -990,7 +992,7 @@ async function capturePreparationObservability({
       candidateId: row.prospectId, prospectId: row.prospectId,
       source: 'inventory', outcome: 'rejected', reason: row.reason,
     })),
-  });
+  }) };
 }
 
 async function applyPreparationRefill({
@@ -1102,7 +1104,7 @@ async function runMaxOutboundControlLoop(options = {}) {
     const ramp = options.scoutRamp || defaultScoutRamp;
     scout = await ramp({
       pool, store, program, source, plan, logger, governedContext: governed,
-      searchFingerprint, now: controlNow,
+      searchFingerprint, now: controlNow, cycleId,
     });
   }
 
@@ -1224,10 +1226,7 @@ async function runMaxOutboundControlLoop(options = {}) {
 
   const ramp = typeof store.rampMetrics === 'function'
     ? await store.rampMetrics(program, clock(controlNow).day) : null;
-  await store.event('max_outbound_control', [
-    program.id,
-    cycleId,
-  ], {
+  const controlEvent = {
     programId: program.id,
     cycleId,
     ramp,
@@ -1256,6 +1255,9 @@ async function runMaxOutboundControlLoop(options = {}) {
     capacityReason: finalPlan.capacityReason,
     sentToday,
     pendingPrepared: preparation.pendingPrepared,
+    pendingPreparedMeasured: preparation.pendingPreparedMeasured === true,
+    sentTodayMeasured: Number.isSafeInteger(infrastructure?.snapshot?.sentToday)
+      && infrastructure.snapshot.sentToday >= 0,
     remainingDispatchCapacity: preparation.remainingDispatchCapacity,
     remainingScheduleSlots: preparation.remainingScheduleSlots,
     cleanInventory: preparation.cleanInventory,
@@ -1314,7 +1316,11 @@ async function runMaxOutboundControlLoop(options = {}) {
     lastRecoveryAt,
     lastSuccessfulReplenishmentAt,
     lastSuccessfulPromotionAt,
-  });
+  };
+  await store.event('max_outbound_control', [program.id, cycleId], controlEvent);
+  emitDiagnostic(logger, '[max-outbound-control] measured summary',
+    controlCycleDiagnostic(store.tenantId, controlEvent)
+  );
 
   return {
     cycleId,

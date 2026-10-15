@@ -115,6 +115,8 @@
       "utils/replenishmentVertical.js",
       "utils/pulseforgeCashflowOffer.js",
       "services/maxOutboundControlLoop.js",
+      "services/outboundControlDiagnostics.js",
+      "test/outboundControlDiagnostics.test.js",
       "packages/max/scoutAcquisition/",
       "packages/scout/coverage/",
       "packages/scout/intelligence/MarketDefinition.js",
