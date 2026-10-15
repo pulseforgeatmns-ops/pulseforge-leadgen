@@ -664,7 +664,8 @@ function maxAttentionCronResult(result) {
 
 async function handleMaxAttentionCycleCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  // Missing configuration must never grant scheduler execution authority.
+  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   res.set('Cache-Control', 'no-store');

@@ -67,7 +67,7 @@ async function withCronFixture(options, callback) {
     '../services/scoutPlacesDiagnostic': {},
     '../services/maxAttentionService': service,
   }, {
-    process: { env: { CRON_SECRET: options.secret === undefined ? 'route-test-secret' : options.secret } },
+    process: { env: { CRON_SECRET: Object.hasOwn(options, 'secret') ? options.secret : 'route-test-secret' } },
     console: { error: (...args) => calls.logs.push(args) },
   });
   const app = express();
@@ -162,18 +162,40 @@ for (const [name, options, expectedCycleCalls] of [
   });
 }
 
-test('wrong or absent cron secret denies dispatch before initialization', async () => {
+test('wrong or absent cron secret denies GET and POST dispatch before initialization', async () => {
   await withCronFixture({ result: successfulResult }, async ({ calls, request }) => {
-    for (const secret of ['wrong-secret', null]) {
-      const response = await request('client_id=11', undefined, { secret });
-      assert.equal(response.status, 401);
-      assert.deepEqual(response.body, { error: 'Unauthorized' });
+    for (const method of ['GET', 'POST']) {
+      for (const secret of ['wrong-secret', null, '']) {
+        const response = await request('client_id=11', undefined, { method, secret });
+        assert.equal(response.status, 401);
+        assert.deepEqual(response.body, { error: 'Unauthorized' });
+      }
     }
     assert.equal(calls.init.length, 0);
     assert.equal(calls.cycles.length, 0);
     assert.equal(calls.allClients, 0);
   });
 });
+
+for (const configuredSecret of [undefined, '']) {
+  test(`missing cron configuration (${configuredSecret === undefined ? 'unset' : 'empty'}) denies dispatch`, async () => {
+    await withCronFixture({ secret: configuredSecret, result: successfulResult }, async ({ calls, request }) => {
+      for (const method of ['GET', 'POST']) {
+        for (const secret of [null, '', 'route-test-secret']) {
+          const response = await request('client_id=11', undefined, { method, secret });
+          assert.equal(response.status, 401);
+          assert.deepEqual(response.body, { error: 'Unauthorized' });
+        }
+      }
+      const bodyResponse = await request('client_id=11', { secret: 'route-test-secret' }, { secret: null });
+      assert.equal(bodyResponse.status, 401);
+      assert.deepEqual(bodyResponse.body, { error: 'Unauthorized' });
+      assert.equal(calls.init.length, 0);
+      assert.equal(calls.cycles.length, 0);
+      assert.equal(calls.allClients, 0);
+    });
+  });
+}
 
 test('body secret and body time keep the existing authentication/time behavior', async () => {
   await withCronFixture({ result: successfulResult }, async ({ calls, request }) => {
