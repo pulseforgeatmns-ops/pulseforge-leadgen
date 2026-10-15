@@ -7,7 +7,7 @@ function bounded(task,ms) {
   return Promise.race([Promise.resolve().then(task),new Promise(resolve=>{timer=setTimeout(()=>resolve(null),ms);})])
     .finally(()=>clearTimeout(timer));
 }
-function createOperatorWorker({store,feedUrl,token,channelId,marketProvider,relay,gate,sendEnabled=()=>true,fetchImpl=globalThis.fetch,now=()=>new Date(),marketTimeoutMs=2000,sendAlert=sendSignalOperatorAlert}) {
+function createOperatorWorker({store,feedUrl,token,channelId,marketProvider,relay,gate,sendEnabled=()=>true,fetchImpl=globalThis.fetch,now=()=>new Date(),marketTimeoutMs=2000,onEvent=async()=>{},sendAlert=sendSignalOperatorAlert}) {
   const url=new URL(feedUrl);
   if(url.protocol!=='http:' || !url.hostname.endsWith('.railway.internal') || url.pathname!=='/operator-events'
     || url.username || url.password || url.search || url.hash || typeof token!=='string' || token.length<32) throw new Error('invalid_private_operator_feed');

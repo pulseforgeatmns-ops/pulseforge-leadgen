@@ -26,9 +26,11 @@ async function boot() {
   const worker=createOperatorWorker({store:new OperatorStore(pool,{channelId}),channelId,gate,sendEnabled,token,
     feedUrl:process.env.SIGNAL_OPERATOR_FEED_URL,
     marketProvider:new GeckoTerminalMarketDataProvider(),
+    onEvent:distribution ? event=>distribution.register(event) : undefined,
     relay:createBrevoRelay({enabled:sendEnabled(),consented:sendEnabled(),apiKey:process.env.BREVO_API_KEY,gate,
       operationalTestApproved:process.env.SIGNAL_OPERATOR_TRANSPORT_TEST_APPROVED==='1'})});
-  return {worker,stop:startOperatorTimers(worker)};
+  const stopOperator=startOperatorTimers(worker);
+  return {worker,stop:()=>{stopOperator();distribution?.stop();}};
 }
 function startSignalOperator() {
   if(!bootPromise)bootPromise=boot().catch(()=>{console.error('[signal-operator] startup blocked; verify approved configuration/readiness');return null;});
