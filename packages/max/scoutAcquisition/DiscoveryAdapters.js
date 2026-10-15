@@ -7,7 +7,7 @@
  */
 
 const { asText, nowIso, SOURCE_TYPES } = require('./Types');
-const { createPlacesProvider } = require('../../capabilities/discovery/providers/PlacesProvider');
+const { createPlacesProvider, createProviderExecution } = require('../../capabilities/discovery/providers/PlacesProvider');
 const {
   PLACES_FEATURES,
   TRIGGER_MODES,
@@ -248,12 +248,33 @@ async function discoverPlacesLegacySegment({
     }));
   const candidates = [];
   const errors = [];
+  const execution = createProviderExecution();
+  let attemptedQueries = 0;
+  let hasExecution = false;
   for (const query of queries) {
+    attemptedQueries++;
     try {
       const hits = await provider.search(query);
       for (const hit of hits || []) {
         const mapped = toDiscoveredCompany(hit, searchDefinition, 'public_business_places');
         if (mapped) candidates.push(mapped);
+      }
+      // Capture each segment before the provider overwrites lastExecution.
+      // Provider errors already contain only sanitized status/endpoint metadata.
+      const segmentExecution = provider.lastExecution;
+      if (segmentExecution) {
+        hasExecution = true;
+        execution.executed ||= segmentExecution.executed === true;
+        execution.abortReason = segmentExecution.abortReason || execution.abortReason;
+        execution.queries.push(...(segmentExecution.queries || []));
+        for (const key of ['queries', 'results', 'retries', 'latencyMs']) {
+          execution.totals[key] += Number(segmentExecution.totals?.[key]) || 0;
+        }
+        execution.quota = segmentExecution.quota || execution.quota;
+        const providerErrors = Array.isArray(segmentExecution.errors) ? segmentExecution.errors : [];
+        errors.push(...providerErrors);
+        execution.errors.push(...providerErrors);
+        if (providerErrors.some(error => error.googleStatus === 'REQUEST_DENIED')) break;
       }
     } catch (err) {
       errors.push({
@@ -267,8 +288,9 @@ async function discoverPlacesLegacySegment({
     source: 'public_business_places',
     sourceType: SOURCE_TYPES.PUBLIC_BUSINESS_DATA,
     candidates,
-    coverage: { queries: queries.length, legacy: true },
+    coverage: { queries: attemptedQueries, legacy: true },
     errors,
+    execution: hasExecution ? execution : null,
   });
 }
 

@@ -247,3 +247,177 @@ test('provider result limit remains twenty and successful details stay available
   const businesses = await provider.search({ industry: 'Synthetic limit', location: 'Synthetic city', limit: 100 });
   assert.equal(businesses.length, 20); assert.equal(fetches, 21); assert.equal(rows.length, 21);
 });
+
+test('detail denial is visible as provider failure rather than an empty successful search', async () => {
+  let fetches = 0;
+  const provider = createPlacesProvider({ apiKey: SECRET, fetchImpl: async url => {
+    fetches++;
+    if (String(url).includes('/details/')) return denied();
+    return response('OK', { results: [{ place_id: 'synthetic-detail-denial', name: 'Synthetic business' }] });
+  } });
+  for (let i = 0; i < 2; i++) {
+    assert.deepEqual(await provider.search({ industry: 'Synthetic details', location: 'Synthetic city' }), []);
+    assert.equal(provider.lastExecution.errors[0]?.code, 'google_places_status_REQUEST_DENIED');
+    assert.equal(provider.lastExecution.errors[0]?.endpoint, 'place_details');
+    assert.equal(provider.lastExecution.totals.retries, 0);
+    assertSafe(provider.lastExecution);
+  }
+  assert.equal(fetches, 2, 'both search and denied details must reuse their cache');
+});
+
+test('successful details without website remain a normal rejected hit, not a provider failure', async () => {
+  const provider = createPlacesProvider({ apiKey: SECRET, fetchImpl: async url =>
+    String(url).includes('/details/')
+      ? response('OK', { result: { name: 'Synthetic business', formatted_phone_number: 'synthetic-phone' } })
+      : response('OK', { results: [{ place_id: 'synthetic-no-site', name: 'Synthetic business' }] })
+  });
+  assert.deepEqual(await provider.search({ industry: 'Synthetic no website', location: 'Synthetic city' }), []);
+  assert.deepEqual(provider.lastExecution.errors, []);
+});
+
+test('partial details failures preserve successful website and business phone without inventing a person', async () => {
+  const provider = createPlacesProvider({ apiKey: SECRET, fetchImpl: async url => {
+    const u = new URL(url);
+    if (!u.pathname.includes('/details/')) return response('OK', { results: [
+      { place_id: 'synthetic-good', name: 'Synthetic good' }, { place_id: 'synthetic-bad', name: 'Synthetic bad' },
+    ] });
+    return u.searchParams.get('place_id') === 'synthetic-bad' ? denied()
+      : response('OK', { result: { name: 'Synthetic good', website: 'https://example.test', formatted_phone_number: 'synthetic-phone' } });
+  } });
+  const hits = await provider.search({ industry: 'Synthetic mixed', location: 'Synthetic city' });
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].website, 'example.test');
+  assert.equal(hits[0].phone, 'synthetic-phone');
+  assert.equal(hits[0].email, undefined);
+  assert.equal(hits[0].people, undefined);
+  assert.equal(provider.lastExecution.errors[0].endpoint, 'place_details');
+  assertSafe(provider.lastExecution);
+});
+
+test('detail authorization denial stops remaining details, pages, and generated queries in this invocation', async () => {
+  const calls = [];
+  const provider = createPlacesProvider({ apiKey: SECRET, fetchImpl: async url => {
+    calls.push(String(url));
+    if (String(url).includes('/details/')) return denied();
+    return response('OK', { results: [{ place_id: 'first' }, { place_id: 'must-not-fetch' }], next_page_token: 'must-not-page' });
+  } });
+  const evidenceRequest = { segment: 'property_management', evidenceType: 'contact_path',
+    geography: { cities: ['Manchester', 'Concord'], state: 'NH' } };
+  for (let i = 0; i < 2; i++) {
+    assert.deepEqual(await provider.collectEvidence(evidenceRequest), []);
+    assert.equal(provider.lastExecution.queries.length, 1);
+    assert.equal(provider.lastExecution.errors[0].endpoint, 'place_details');
+  }
+  assert.equal(calls.length, 2, 'one search + one details call; cached rerun makes no upstream requests');
+});
+
+test('Scout adapter and evidence contract expose detail denial as failed, not successful empty discovery', async () => {
+  const { createPlacesDiscoveryAdapter } = require('../packages/max/scoutAcquisition/DiscoveryAdapters');
+  const { normalizeProviderReport } = require('../packages/scout/coverage/ProviderEvidenceContract');
+  const provider = createPlacesProvider({ apiKey: SECRET, fetchImpl: async url =>
+    String(url).includes('/details/') ? denied()
+      : response('OK', { results: [{ place_id: 'synthetic-propagation', name: 'Synthetic business' }] }) });
+  const adapter = createPlacesDiscoveryAdapter({ placesProvider: provider });
+  const report = await adapter.discover({ tenantId: '13',
+    geography: { cities: ['Manchester'], state: 'NH', label: 'Manchester NH' },
+    segments: ['property_management'],
+    evidenceRequest: { segment: 'property_management', evidenceType: 'contact_path',
+      geography: { cities: ['Manchester'], state: 'NH' } } });
+  const normalized = normalizeProviderReport(report, { providerId: 'google_maps', evidenceType: 'contact_path' });
+  assert.equal(normalized.status, 'failed');
+  assert.equal(normalized.error, 'REQUEST_DENIED');
+  assert.deepEqual(normalized.evidenceProduced, []);
+  assert.equal(normalized.mappedCandidateCount, 0);
+  assert.equal(normalized.rawResultCount, 1);
+  assert.equal(normalized.execution.errors[0].endpoint, 'place_details');
+  assertSafe(normalized);
+});
+
+test('legacy Scout discovery stops segments on detail denial and exposes safe execution failure', async () => {
+  const { createPlacesDiscoveryAdapter } = require('../packages/max/scoutAcquisition/DiscoveryAdapters');
+  const { normalizeProviderReport } = require('../packages/scout/coverage/ProviderEvidenceContract');
+  let fetches = 0;
+  const provider = createPlacesProvider({ apiKey: SECRET, fetchImpl: async url => {
+    fetches++;
+    return String(url).includes('/details/') ? denied()
+      : response('OK', { results: [{ place_id: 'legacy-denial', name: 'Synthetic business' }] });
+  } });
+  const adapter = createPlacesDiscoveryAdapter({ placesProvider: provider });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const report = await adapter.discover({ tenantId: '13', geography: { label: 'Synthetic city' },
+      segments: ['first_segment', 'second_segment'] });
+    const normalized = normalizeProviderReport(report, { providerId: 'google_maps', evidenceType: 'contact_path' });
+    assert.equal(report.coverage.queries, 1);
+    assert.equal(normalized.status, 'failed');
+    assert.equal(normalized.error, 'REQUEST_DENIED');
+    assert.equal(normalized.rawResultCount, 1);
+    assert.equal(normalized.execution.errors[0].endpoint, 'place_details');
+    assert.deepEqual(normalized.candidates, []);
+    assertSafe(report); assertSafe(normalized);
+  }
+  assert.equal(fetches, 2, 'only first search and first detail; repeat is failure-held');
+});
+
+test('legacy Scout discovery preserves earlier valid candidates and aggregates execution before denial', async () => {
+  const { createPlacesDiscoveryAdapter } = require('../packages/max/scoutAcquisition/DiscoveryAdapters');
+  const { normalizeProviderReport } = require('../packages/scout/coverage/ProviderEvidenceContract');
+  const calls = [];
+  const provider = createPlacesProvider({ apiKey: SECRET, fetchImpl: async url => {
+    const u = new URL(url); calls.push(u.pathname);
+    if (!u.pathname.includes('/details/')) {
+      const id = u.searchParams.get('query').includes('first segment') ? 'legacy-good' : 'legacy-bad';
+      return response('OK', { results: [{ place_id: id, name: 'Synthetic business' }] });
+    }
+    return u.searchParams.get('place_id') === 'legacy-good'
+      ? response('OK', { result: { name: 'Synthetic good', website: 'https://example.test', formatted_phone_number: 'synthetic-phone' } })
+      : denied();
+  } });
+  const report = await createPlacesDiscoveryAdapter({ placesProvider: provider }).discover({
+    tenantId: '13', geography: { label: 'Synthetic city' }, segments: ['first_segment', 'second_segment', 'third_segment'] });
+  assert.equal(calls.length, 4);
+  assert.equal(report.coverage.queries, 2);
+  assert.equal(report.execution.queries.length, 2);
+  assert.equal(report.execution.totals.results, 2);
+  assert.equal(report.execution.totals.retries, 0);
+  assert.equal(report.candidates.length, 1);
+  assert.equal(report.candidates[0].website, 'example.test');
+  assert.equal(report.candidates[0].phone, 'synthetic-phone');
+  const normalized = normalizeProviderReport(report, { providerId: 'google_maps', evidenceType: 'contact_path' });
+  assert.equal(normalized.status, 'failed');
+  assert.equal(normalized.mappedCandidateCount, 1);
+  assert.equal(normalized.rawResultCount, 2);
+  assertSafe(report); assertSafe(normalized);
+});
+
+test('legacy Scout transport failure exposes only fixed diagnostics, never thrown provider secrets', async () => {
+  const { createPlacesDiscoveryAdapter } = require('../packages/max/scoutAcquisition/DiscoveryAdapters');
+  const { normalizeProviderReport } = require('../packages/scout/coverage/ProviderEvidenceContract');
+  const privateText = `${SECRET} ${RAW} person@example.test https://provider.test/?key=${SECRET}`;
+  const provider = createPlacesProvider({ apiKey: SECRET, fetchImpl: async () => { throw new Error(privateText); } });
+  const report = await createPlacesDiscoveryAdapter({ placesProvider: provider }).discover({
+    tenantId: '13', geography: { label: 'Synthetic city' }, segments: ['first_segment'] });
+  const normalized = normalizeProviderReport(report, { providerId: 'google_maps', evidenceType: 'contact_path' });
+  assert.equal(normalized.status, 'failed');
+  assert.equal(normalized.error, 'google_places_transport_failed');
+  assert.equal(report.execution.queries[0].googleError, 'google_places_transport_failed');
+  assertSafe(report); assertSafe(normalized);
+  assert.ok(!JSON.stringify([report, normalized]).includes('person@example.test'));
+  assert.ok(!JSON.stringify([report, normalized]).includes('provider.test'));
+});
+
+for (const status of ['OK', 'ZERO_RESULTS']) test(`legacy Scout ${status} ignores arbitrary error_message metadata`, async () => {
+  const { createPlacesDiscoveryAdapter } = require('../packages/max/scoutAcquisition/DiscoveryAdapters');
+  const { normalizeProviderReport } = require('../packages/scout/coverage/ProviderEvidenceContract');
+  const provider = createPlacesProvider({ apiKey: SECRET, fetchImpl: async () => response(status, {
+    results: [], error_message: `${SECRET} ${RAW} person@example.test https://provider.test/private`,
+  }) });
+  const report = await createPlacesDiscoveryAdapter({ placesProvider: provider }).discover({
+    tenantId: '13', geography: { label: 'Synthetic city' }, segments: ['first_segment'] });
+  const normalized = normalizeProviderReport(report, { providerId: 'google_maps', evidenceType: 'contact_path' });
+  assert.equal(normalized.status, 'empty');
+  assert.deepEqual(report.errors, []);
+  assert.equal(report.execution.queries[0].googleError, null);
+  assertSafe(report); assertSafe(normalized);
+  assert.ok(!JSON.stringify([report, normalized]).includes('person@example.test'));
+  assert.ok(!JSON.stringify([report, normalized]).includes('provider.test'));
+});

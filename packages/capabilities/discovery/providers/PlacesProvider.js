@@ -141,6 +141,8 @@ function createPlacesProvider(deps = {}) {
         totalLatency += searchResult.latencyMs || 0;
         if (searchResult.quota) quota = searchResult.quota;
         if (searchResult.error) errors.push(searchResult.error);
+        // Authorization failure applies to this provider invocation, not one business.
+        if (searchResult.error?.googleStatus === 'REQUEST_DENIED') break;
       }
 
       this.lastExecution = createProviderExecution({
@@ -303,9 +305,15 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
     for (const hit of page.results || []) {
       if (!hit.place_id || seenPlaceIds.has(hit.place_id)) continue;
       seenPlaceIds.add(hit.place_id);
-      const details = await fetchPlaceDetails(hit.place_id, apiKey, fetchImpl, {
+      const detailResult = await fetchPlaceDetails(hit.place_id, apiKey, fetchImpl, {
         requireWebsite,
       });
+      if (detailResult.error && !error) error = detailResult.error;
+      if (detailResult.error?.googleStatus === 'REQUEST_DENIED') {
+        error = detailResult.error;
+        break;
+      }
+      const details = detailResult.result;
       const website = details?.website || null;
       const accepted = !(requireWebsite && !website);
       if (!accepted) continue;
@@ -334,6 +342,7 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
       });
     }
 
+    if (error?.googleStatus === 'REQUEST_DENIED') break;
     nextPageToken = page.nextPageToken || null;
     if (!nextPageToken || acceptedForQuery >= limit) break;
   }
@@ -409,7 +418,8 @@ async function fetchPlacesPage(querySpec, apiKey, fetchImpl, pageToken = null) {
 
     const data = traced.data || {};
     const googleStatus = data.status || null;
-    const googleError = data.error_message || null;
+    // Raw provider prose can contain credentials or personal data, even on success.
+    const googleError = null;
     const ok = SUCCESS_GOOGLE_STATUS.has(googleStatus);
     const limit = Math.min(Number(querySpec.limit) || DEFAULT_LIMIT, DEFAULT_LIMIT);
     const results = ok ? (data.results || []).slice(0, limit) : [];
@@ -438,7 +448,7 @@ async function fetchPlacesPage(querySpec, apiKey, fetchImpl, pageToken = null) {
         query: q,
         httpStatus: null,
         googleStatus: null,
-        googleError: err.message || String(err),
+        googleError: 'google_places_transport_failed',
         resultCount: 0,
         latencyMs: Date.now() - started,
         retries: 0,
@@ -449,7 +459,7 @@ async function fetchPlacesPage(querySpec, apiKey, fetchImpl, pageToken = null) {
 }
 
 async function fetchPlaceDetails(placeId, apiKey, fetchImpl, opts = {}) {
-  if (!placeId) return null;
+  if (!placeId) return { result: null, error: null };
   const requireWebsite = opts.requireWebsite !== false;
   const traced = await legacyPlaceDetails({
     placeId,
@@ -467,7 +477,16 @@ async function fetchPlaceDetails(placeId, apiKey, fetchImpl, opts = {}) {
     if (typeof traced.commitRecord === 'function') {
       await traced.commitRecord({ businessesReturned: 0, businessesAccepted: 0 });
     }
-    return null;
+    // A detail failure is not evidence that the business has no website/contact.
+    // Keep the sanitized provider status visible without retrying or admitting it.
+    const googleStatus = traced.applicationFailure === true ? traced.googleStatus : null;
+    return { result: null, error: {
+      code: googleStatus ? `google_places_status_${googleStatus}` : 'google_places_details_failed',
+      message: googleStatus || `http_${traced.httpStatus}`,
+      endpoint: 'place_details',
+      httpStatus: traced.httpStatus,
+      googleStatus,
+    } };
   }
   const result = traced.data?.result || null;
   const website = result?.website || null;
@@ -479,7 +498,7 @@ async function fetchPlaceDetails(placeId, apiKey, fetchImpl, opts = {}) {
       candidatesCreated: accepted ? 1 : 0,
     });
   }
-  return result;
+  return { result, error: null };
 }
 
 function normalizeDomain(website) {
