@@ -7,6 +7,7 @@
     "test": "node --test test/*.test.js",
     "test:global-smoke": "node --test test/globalProductionStartupSmoke.test.js",
     "test:ci-plan": "node --test test/ciPlanPr.test.js",
+    "test:max:spreadsheet:reliability": "node --test test/maxSpreadsheetParserReliability.test.js test/maxSpreadsheetProposal.test.js test/maxSpreadsheetProposalPostgres.test.js test/maxSpreadsheetApprovalApi.test.js test/maxSpreadsheetReviewUi.test.js test/maxSpreadsheetReviewBrowser.test.js test/spreadsheetCallSuppression.test.js test/maxSpreadsheetCallConcurrency.test.js test/maxSpreadsheetFixtureScenarios.test.js test/maxSpreadsheetConsumers.test.js test/maxSpreadsheetConsumersPostgres.test.js test/maxSpreadsheetCallLockTimeout.test.js test/maxSpreadsheetTransactionFailure.test.js test/maxSpreadsheetAuthorization.test.js test/maxSpreadsheetCrossTenantContention.test.js",
     "test:decision": "node --test test/decisionService.test.js test/decisionShadowReview.test.js packages/max/workspace/tests/specJev001ShadowRouting.test.js packages/max/workspace/tests/specJev002ShadowReview.test.js packages/max/workspace/tests/specJev004PendingDecisionCaptureGuard.test.js packages/max/workspace/tests/specJev006ShadowObservability.test.js",
     "test:decision:postgres": "node --test test/decisionShadowPostgres.test.js",
     "decision:review": "node scripts/reviewDecisionShadow.js",
@@ -18,7 +19,8 @@
     "knowledge:e2e": "node scripts/knowledgeE2EValidation.js",
     "test:reasoning-runtime": "node --test packages/reasoning-runtime/tests/*.test.js",
     "test:market-strategy": "node --test packages/market-strategy/tests/*.test.js",
-    "test:signal-v1": "node --test packages/signal-v1/tests/*.test.js",
+    "test:signal-v1": "node --test packages/signal-v1/tests/*.test.js test/signalDistribution*.test.js",
+    "test:signal-distribution": "node --test test/signalDistribution*.test.js",
     "signal:telegram-caller-feed": "node services/telegramCallerFeed/server.js",
     "signal:telegram-auth": "node scripts/signalTelegramAuth.js",
     "signal:research-replay": "node scripts/signalResearchReplay.js",
@@ -154,7 +156,9 @@
     "test:rollout-preflight": "node --test test/rolloutPreflight.test.js",
     "test:rollout-preflight:postgres": "node --test test/rolloutPreflightPostgres.test.js",
     "test:max:attention:postgres": "node --test test/maxAttentionRecoveryPostgres.test.js",
-    "test:babrun-scout-intake": "node --test test/babrunScoutIntake.test.js test/babrunScoutIntakePostgres.test.js test/babrunContactResolution.test.js test/scoutInventoryCapacityRecovery.test.js"
+    "test:babrun-scout-intake": "node --test test/babrunScoutIntake.test.js test/babrunScoutIntakePostgres.test.js test/babrunContactResolution.test.js test/scoutInventoryCapacityRecovery.test.js",
+    "api:usage:audit": "node scripts/apiUsageAudit.js",
+    "test:api-usage": "node --test test/apiUsageControl.test.js test/apiUsageControlPostgres.test.js test/placesCostAttribution.test.js"
   },
   "repository": {
     "type": "git",

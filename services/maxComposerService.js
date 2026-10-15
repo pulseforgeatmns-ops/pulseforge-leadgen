@@ -13,6 +13,13 @@ async function createStore(clientId, db = pool) {
 }
 
 async function submitMaxComposerTurn(clientId, body = {}, { db = pool } = {}) {
+  const { hasSpreadsheetInput } = require('./maxSpreadsheetService');
+  if (hasSpreadsheetInput(body) || body.conversation_memory?.pendingSpreadsheetWorkbook
+      || body.conversationMemory?.pendingSpreadsheetWorkbook) {
+    throw Object.assign(new Error('Authenticated spreadsheet proposal route required'), {
+      code: 'server_proposal_required', statusCode: 409,
+    });
+  }
   const store = await createStore(clientId, db);
   const envelope = createMaxIngestionEnvelope({
     id: body.envelope_id || body.envelopeId,

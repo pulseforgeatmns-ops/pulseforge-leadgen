@@ -19,12 +19,17 @@ async function boot() {
   await require('../../packages/signal-v1/storage/ensureSignalSchema').ensureSignalSchema(pool);
   for(const name of ['2026-10-07-signal-v1-operator-outbox.sql','2026-10-07-signal-v1-operator-relay.sql'])
     await pool.query(fs.readFileSync(path.join(__dirname,'../../migrations',name),'utf8'));
+  let distribution=null;
+  try {distribution=await require('../signalDistribution').startDistribution({pool,channelId,gate});}
+  catch {console.error('[signal-distribution] activation blocked; existing operator continues without distribution monitor');}
   const sendEnabled=()=>process.env.SIGNAL_OPERATOR_RELAY_ENABLED==='1' && process.env.SIGNAL_OPERATOR_RELAY_CONSENT==='1';
   const worker=createOperatorWorker({store:new OperatorStore(pool,{channelId}),channelId,gate,sendEnabled,token,
     feedUrl:process.env.SIGNAL_OPERATOR_FEED_URL,
     marketProvider:new GeckoTerminalMarketDataProvider(),
+    onEvent:distribution ? event=>distribution.register(event) : undefined,
     relay:createBrevoRelay({enabled:sendEnabled(),consented:sendEnabled(),apiKey:process.env.BREVO_API_KEY,gate})});
-  return {worker,stop:startOperatorTimers(worker)};
+  const stopOperator=startOperatorTimers(worker);
+  return {worker,stop:()=>{stopOperator();distribution?.stop();}};
 }
 function startSignalOperator() {
   if(!bootPromise)bootPromise=boot().catch(()=>{console.error('[signal-operator] startup blocked; verify approved configuration/readiness');return null;});

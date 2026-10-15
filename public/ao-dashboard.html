@@ -961,6 +961,8 @@ body {
 }
 </style>
 <script src="/shared/maxVoiceRecorder.js"></script>
+<script src="/shared/spreadsheetReview.js"></script>
+<link rel="stylesheet" href="/shared/spreadsheetReview.css">
 </head>
 <body>
 <header class="ao-header">
@@ -1015,6 +1017,8 @@ body {
     </div>
     <div class="ao-chat" id="chat" role="log" aria-live="polite"></div>
     <div class="ao-compose-wrap">
+      <div id="spreadsheetScope"></div>
+      <div id="spreadsheetProposal"></div>
       <div class="ao-attach-chips" id="composerAttachmentChips" hidden></div>
       <form class="ao-compose" id="composeForm">
         <div class="ao-compose-plus-wrap">
@@ -1299,7 +1303,19 @@ const fileInputImage = document.getElementById('fileInputImage');
 const fileInputVoice = document.getElementById('fileInputVoice');
 let pendingComposerAttachments = [];
 let maxComposerMemory = null;
-let maxComposerConversationId = sessionStorage.getItem('maxComposerConversationId') || null;
+let maxComposerConversationId = null;
+const spreadsheetReview = window.PulseforgeSpreadsheetReview.create({
+  fetch: (...args) => fetch(...args),
+  host: () => document.getElementById('spreadsheetProposal'),
+  scopeHost: () => document.getElementById('spreadsheetScope'),
+  onMessage: text => addMsg(text, 'max'),
+});
+spreadsheetReview.loadScope().catch(err => addMsg(err.message, 'system'));
+document.addEventListener('pulseforge:tenant-changed', () => {
+  spreadsheetReview.clear(); maxComposerMemory = null; maxComposerConversationId = null;
+  pendingComposerAttachments = []; renderComposerAttachmentChips();
+  spreadsheetReview.loadScope().catch(err => addMsg(err.message, 'system'));
+});
 let conversationSessionId = null;
 let lastDoneConversationId = null;
 let wizardSessionId = null;
@@ -1851,20 +1867,9 @@ async function startMode(mode) {
   }
 }
 
-function loadMaxComposerMemory() {
-  try {
-    const raw = sessionStorage.getItem('maxComposerMemory');
-    maxComposerMemory = raw ? JSON.parse(raw) : null;
-  } catch (_err) {
-    maxComposerMemory = null;
-  }
-}
-
-function saveMaxComposerMemory(mem) {
-  if (!mem) return;
-  maxComposerMemory = mem;
-  sessionStorage.setItem('maxComposerMemory', JSON.stringify(mem));
-}
+// Composer context is page-local; never recover tenant/actor data from unscoped session storage.
+function loadMaxComposerMemory() {}
+function saveMaxComposerMemory(mem) { maxComposerMemory = mem || null; }
 
 function renderComposerAttachmentChips() {
   if (!composerAttachmentChips) return;
@@ -1910,9 +1915,11 @@ async function submitComposerTurn(text, { confirm = false, attachments = null, d
   loadMaxComposerMemory();
   if (!maxComposerConversationId) {
     maxComposerConversationId = `ao-${Date.now()}`;
-    sessionStorage.setItem('maxComposerConversationId', maxComposerConversationId);
   }
   const form = new FormData();
+  const isSpreadsheet = (attachments || pendingComposerAttachments).some(entry => inferComposerAttachmentType(entry.file || entry) === 'spreadsheet');
+  if (isSpreadsheet) await spreadsheetReview.appendScope(form);
+  const reviewEpoch = spreadsheetReview.token();
   form.append('text', text || '');
   form.append('conversation_id', maxComposerConversationId);
   if (confirm) form.append('confirm', 'true');
@@ -1933,7 +1940,9 @@ async function submitComposerTurn(text, { confirm = false, attachments = null, d
   if (!res.ok) {
     throw new Error(data.message || data.error || 'Composer submission failed');
   }
-  if (data.conversation_memory) saveMaxComposerMemory(data.conversation_memory);
+  if (isSpreadsheet && reviewEpoch !== spreadsheetReview.token()) throw new Error('Review scope changed; upload again in this workspace.');
+  if (data.conversation_memory && !data.spreadsheet_proposal) saveMaxComposerMemory(data.conversation_memory);
+  spreadsheetReview.accept(data, reviewEpoch);
   return data;
 }
 
@@ -2043,6 +2052,13 @@ async function sendMessage(text) {
   const hasAttachments = pendingComposerAttachments.length > 0;
   if (!trimmed && !hasAttachments) return;
 
+  if (!hasAttachments && spreadsheetReview.hasPending()) {
+    if (trimmed) addMsg(trimmed, 'user');
+    messageInput.value = '';
+    try { await spreadsheetReview.handleText(trimmed); } catch (err) { addMsg(err.message, 'system'); }
+    return;
+  }
+
   if (pendingVoiceReview && !wizardSessionId) {
     const save = /^(save|confirm|yes)$/i.test(trimmed);
     const correction = trimmed && !save;
@@ -2125,6 +2141,7 @@ async function sendMessage(text) {
 }
 
 async function startNewConversation() {
+  spreadsheetReview.clear(); maxComposerMemory = null; maxComposerConversationId = null;
   try {
     const result = await api('/api/max/new-conversation', {
       method: 'POST',
@@ -2203,12 +2220,12 @@ function taskCard(task) {
     : isDirectMail
       ? `<button class="primary" data-log-follow-up="${task.id}">Log with Max</button>`
       : '';
-  const callInsteadBtn = !isPhoneFollowUp && (isDirectMail || task.next_action === 'in_person_revisit')
+  const callInsteadBtn = !task.call_prohibited && !isPhoneFollowUp && (isDirectMail || task.next_action === 'in_person_revisit')
     ? `<button data-call-instead="${task.id}">Call Instead</button>`
     : '';
-  const callNowBtn = isPhoneFollowUp && task.contact_phone
+  const callNowBtn = !task.call_prohibited && isPhoneFollowUp && task.contact_phone
     ? `<a class="btn-link" href="tel:${String(task.contact_phone).replace(/[^\d+]/g, '')}" style="display:flex;align-items:center;justify-content:center;text-decoration:none">Call Now</a>`
-    : isPhoneFollowUp
+    : !task.call_prohibited && isPhoneFollowUp
       ? `<button data-call-instead="${task.id}">Add Phone</button>`
       : '';
   return `

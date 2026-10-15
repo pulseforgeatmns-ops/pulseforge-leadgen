@@ -2,6 +2,7 @@
 
 const { deriveDefaultStatus } = require('./aoCrmTypes');
 const { formatFollowUpTiming, todayISOInZone } = require('./aoAccountBriefing');
+const { sourceActivityDate } = require('./spreadsheetCrmEvidence');
 
 function hasValue(value) {
   if (value == null) return false;
@@ -63,9 +64,11 @@ function formatActivitySummary(activity = []) {
   const withNotes = activity.filter(row => hasValue(row.notes));
   if (!withNotes.length) return null;
   return withNotes.slice(0, 3).map(row => {
-    const when = row.created_at ? new Date(row.created_at).toISOString().slice(0, 10) : 'unknown date';
+    const historicalDate = sourceActivityDate(row);
+    const when = historicalDate || (row.created_at ? new Date(row.created_at).toISOString().slice(0, 10) : 'unknown date');
+    const recorded = historicalDate && row.created_at ? ` [recorded ${new Date(row.created_at).toISOString()}]` : '';
     const type = row.activity_type || 'note';
-    return `${when} (${type}): ${String(row.notes).trim()}`;
+    return `${when} (${type})${recorded}: ${String(row.notes)}`;
   }).join('\n');
 }
 

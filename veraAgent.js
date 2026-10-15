@@ -1,6 +1,6 @@
 require('dotenv').config();
 const axios = require('axios');
-const Anthropic = require('@anthropic-ai/sdk');
+const Anthropic = require('./utils/meteredAnthropic').forAgent('vera');
 const pool = require('./db');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 
@@ -345,3 +345,4 @@ if (require.main === module) {
     process.exit(1);
   });
 }
+

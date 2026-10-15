@@ -1,5 +1,5 @@
 require('dotenv').config();
-const Anthropic = require('@anthropic-ai/sdk');
+const Anthropic = require('./utils/meteredAnthropic').forAgent('penny');
 const pool = require('./db');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { isAgentEnabledForClient } = require('./utils/agentDispatchPolicy');
@@ -359,3 +359,4 @@ if (require.main === module) {
     process.exit(1);
   });
 }
+

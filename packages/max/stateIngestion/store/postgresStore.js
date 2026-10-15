@@ -17,25 +17,19 @@ class PostgresStateStore {
     await ensureMaxStateIngestionSchema(this.db);
   }
 
-  async snapshotContext() {
-    const [users, companies, prospects] = await Promise.all([
-      this.db.query(`SELECT id, name, email, role FROM users WHERE role IN ('sales', 'admin', 'manager') OR name ILIKE ANY(ARRAY['Tony','Rory'])`),
-      this.db.query(`SELECT id, name, client_id FROM companies WHERE client_id = $1`, [this.clientId]),
-      this.db.query(`
-        SELECT p.id, p.client_id, p.company_id, p.assigned_ao_id, p.status, p.ao_next_action,
-               p.acquisition_metadata, c.name AS company_name
-        FROM prospects p
-        LEFT JOIN companies c ON c.id = p.company_id
-        WHERE p.client_id = $1
-      `, [this.clientId]),
-    ]);
-    return {
-      clientId: this.clientId,
-      users: users.rows,
-      companies: companies.rows,
-      prospects: prospects.rows,
-      contacts: [],
-    };
+  async snapshotContext({ aoId = null } = {}) {
+    const values = [this.clientId, aoId];
+    const [users, companies, prospects, activities] = [
+      await this.db.query(`SELECT id, name, email, role, client_id FROM users WHERE client_id = $1 AND ($2::integer IS NULL OR id = $2)`, values),
+      await this.db.query(`SELECT c.* FROM companies c WHERE c.client_id = $1 AND ($2::integer IS NULL OR EXISTS (SELECT 1 FROM prospects p WHERE p.client_id=c.client_id AND p.company_id=c.id AND p.assigned_ao_id=$2)) ORDER BY c.id`, values),
+      await this.db.query(`SELECT p.*, c.name AS company_name FROM prospects p LEFT JOIN companies c ON c.id=p.company_id AND c.client_id=p.client_id WHERE p.client_id=$1 AND ($2::integer IS NULL OR p.assigned_ao_id=$2) ORDER BY p.id`, values),
+      await this.db.query(`SELECT a.* FROM ao_prospect_activity a JOIN prospects p ON p.id=a.prospect_id AND p.client_id=a.tenant_id WHERE a.tenant_id=$1 AND ($2::integer IS NULL OR p.assigned_ao_id=$2) ORDER BY a.id`, values),
+    ];
+    return { clientId: this.clientId, users: users.rows, companies: companies.rows,
+      prospects: prospects.rows.map(p => { const company=companies.rows.find(c=>String(c.id)===String(p.company_id)) || {}; return {...p, website:p.website || company.website || null, address:p.ao_source_address || p.address || p.location || company.address || company.location || null}; }), contacts: prospects.rows.filter(p => p.first_name || p.last_name).map(p => ({
+        id: p.id, prospect_id: p.id, name: [p.first_name,p.last_name].filter(Boolean).join(' '),
+        email: p.email, phone: p.phone, title: p.job_title,
+      })), activities: activities.rows };
   }
 
   async findAppliedClaim(fingerprint) {

@@ -125,6 +125,7 @@ async function loadCrmProspectsByIds(input = {}) {
 
   const { rows } = await pool.query(
     `SELECT id, email, email_status, email_verified, do_not_contact,
+            COALESCE((to_jsonb(prospects)->>'ao_outreach_review_required')::boolean,false) AS ao_outreach_review_required,
             enrichment_provenance,
             to_jsonb(prospects)->'acquisition_metadata' AS acquisition_metadata
        FROM prospects
@@ -150,6 +151,7 @@ const CRM_ENRICHMENT_PROSPECT_SELECT = `
        p.email_verified,
        p.email_verification_method,
        p.do_not_contact,
+       COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) AS ao_outreach_review_required,
        p.notes,
        p.vertical,
        p.website_url,

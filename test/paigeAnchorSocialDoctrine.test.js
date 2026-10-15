@@ -53,7 +53,7 @@ const PASSING_SCORE = {
 const ISOLATED_MODULE_PATHS = [
   require.resolve('../db'),
   require.resolve('../utils/miraContext'),
-  require.resolve('@anthropic-ai/sdk'),
+  require.resolve('../utils/meteredAnthropic'),
   require.resolve('../paigeAgent'),
 ];
 
@@ -154,7 +154,7 @@ function buildPaigeHarness({ draftSequence = [], simulateMiraUnavailable = false
     },
   };
 
-  const anthropicPath = require.resolve('@anthropic-ai/sdk');
+  const anthropicPath = require.resolve('../utils/meteredAnthropic');
   class FakeAnthropic {
     constructor() {
       this.messages = {
@@ -176,7 +176,7 @@ function buildPaigeHarness({ draftSequence = [], simulateMiraUnavailable = false
     id: anthropicPath,
     filename: anthropicPath,
     loaded: true,
-    exports: anthropicFactory || FakeAnthropic,
+    exports: { forAgent: () => anthropicFactory || FakeAnthropic },
   };
 
   delete require.cache[require.resolve('../paigeAgent')];
@@ -439,3 +439,4 @@ describe('Paige Anchor social doctrine reconciliation', () => {
     assert.doesNotMatch(JSON.stringify(err), /ANTHROPIC|prompt|secret/i);
   });
 });
+

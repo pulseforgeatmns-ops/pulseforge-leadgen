@@ -56,7 +56,7 @@ async function withCronFixture(options, callback) {
   };
   const router = loadFixtureModule('routes/cron.js', {
     express,
-    '@anthropic-ai/sdk': class {},
+    '../utils/meteredAnthropic': { forAgent: () => class {} },
     '../db': db,
     '../utils/clientContext': options.syntheticAllClients
       ? { normalizeClientId: () => null }
@@ -238,3 +238,4 @@ test('synthetic all-client fallback keeps empty results successful', async () =>
     assert.deepEqual(response.body, { ok: true, results: [] });
   });
 });
+

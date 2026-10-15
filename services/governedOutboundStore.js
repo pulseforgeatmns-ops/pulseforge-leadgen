@@ -237,6 +237,9 @@ class GovernedOutboundStore {
       ? 'ao_owned_alias' : null;
   }
   async suppression(item, ignoreMissionId = '', ignoreItemId = '') {
+    const admission = await this.one(`SELECT id FROM prospects p WHERE client_id=$2 AND id::text=$1
+      AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false)`, [String(item.prospectId || item.candidateId), this.clientId]);
+    if (admission) return 'outreach_review_required';
     const hit = await this.one(`SELECT state FROM acquisition_outbound_lifecycle WHERE tenant_id=$3 AND suppressed=true
       AND (email=$1 OR company_id=$2) LIMIT 1`, [item.email.toLowerCase(), String(item.companyId), this.tenantId]);
     if (hit) return hit.state;

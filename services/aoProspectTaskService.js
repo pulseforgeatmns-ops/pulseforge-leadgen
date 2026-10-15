@@ -326,7 +326,8 @@ async function listOpenTasks({ clientId, aoOwnerId = null, db = pool }) {
     ownerClause = `AND t.assigned_ao_id = $${params.length}`;
   }
   const { rows } = await db.query(`
-    SELECT t.*, u.name AS assigned_ao_name, p.prospect_motion, p.ao_fit_score
+    SELECT t.*, u.name AS assigned_ao_name, p.prospect_motion, p.ao_fit_score, p.ao_call_suppressed,
+      COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) AS ao_outreach_review_required
     FROM ao_prospect_tasks t
     JOIN users u ON u.id = t.assigned_ao_id
     JOIN prospects p ON p.id = t.prospect_id AND p.client_id = t.client_id
@@ -341,7 +342,11 @@ async function listOpenTasks({ clientId, aoOwnerId = null, db = pool }) {
       t.deadline ASC NULLS LAST,
       t.created_at ASC
   `, params);
-  return rows;
+  return rows.map(row => row.ao_outreach_review_required
+    ? { ...row, first_action: 'Separate outreach review required before any contact.', call_prohibited: true, outreach_review_required: true }
+    : row.ao_call_suppressed
+    ? { ...row, first_action: 'Calls suppressed. Review permitted non-call follow-up; do not call this prospect.', call_prohibited: true }
+    : row);
 }
 
 module.exports = {

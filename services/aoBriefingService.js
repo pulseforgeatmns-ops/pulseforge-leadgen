@@ -25,6 +25,8 @@ function todayISO(date = new Date()) {
 }
 
 function mapLeadRow(row) {
+  const callProhibited = !row.crm_call_allowed;
+  if (callProhibited && row.open_next_action === 'phone_follow_up') row = { ...row, open_next_action: 'identity_or_call_permission_review', contact_phone: null };
   const operationalState = deriveOperationalState(row);
   const intel = buildRelationshipIntel(row);
   const promotion = recommendCrmPromotion(row);
@@ -44,7 +46,8 @@ function mapLeadRow(row) {
     crm_prospect_id: row.crm_prospect_id || null,
     contact_name: row.contact_name,
     contact_title: row.contact_title,
-    contact_phone: row.contact_phone,
+    contact_phone: callProhibited ? null : row.contact_phone,
+    call_prohibited: callProhibited,
     contact_email: row.contact_email,
     is_decision_maker: row.is_decision_maker,
     original_visit_note: row.original_visit_note,
@@ -91,6 +94,10 @@ async function fetchEnrichedLeads(clientId, { campaignName = null, aoOwnerId = n
     SELECT
       l.*,
       u.name AS ao_name,
+      EXISTS (SELECT 1 FROM prospects p WHERE p.id = l.crm_prospect_id AND p.client_id = l.client_id
+        AND COALESCE(p.ao_call_suppressed, false) = false
+        AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
+        AND COALESCE(p.do_not_contact, false) = false AND COALESCE(p.is_synthetic, false) = false) AS crm_call_allowed,
       c.contact_name, c.contact_title, c.phone AS contact_phone, c.email AS contact_email,
       c.is_decision_maker,
       ot.id AS open_task_id,

@@ -1,5 +1,6 @@
 const express = require('express');
-const Anthropic = require('@anthropic-ai/sdk');
+const { isApiUsageQuestion, parseApiSpendCommand, answerApiUsageQuestion } = require('../services/apiUsageService');
+const Anthropic = require('../utils/meteredAnthropic').forAgent('max_chat');
 const pool = require('../db');
 const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
 const { getRequestClientId } = require('../utils/clientContext');
@@ -156,6 +157,16 @@ router.post('/api/max/ask', requireDashboardAuth, async (req, res) => {
   try {
     const question = String(req.body?.question || '').trim().slice(0, 100000);
     if (!question) return res.status(400).json({ error: 'Question is required' });
+
+    if (isApiUsageQuestion(question) || parseApiSpendCommand(question)) {
+      if (parseApiSpendCommand(question)) {
+        try {
+          if (!req.get('origin') || new URL(req.get('origin')).host !== req.get('host')) return res.status(403).json({ error: 'same_origin_required' });
+        } catch { return res.status(403).json({ error: 'same_origin_required' }); }
+      }
+      res.set('Cache-Control', 'no-store');
+      return res.json(await answerApiUsageQuestion(question));
+    }
 
     const clientId = getRequestClientId(req);
     observeLegacyChat(req, res, undefined, clientId);
@@ -349,3 +360,4 @@ ${question}`,
 });
 
 module.exports = router;
+

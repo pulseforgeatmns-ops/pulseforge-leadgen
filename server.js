@@ -77,6 +77,7 @@ ensureCallDispositionSchema().catch(err => console.error('[callDisposition] init
 ensureMiraSchema().catch(err => console.error('[mira] init error:', err.message));
 ensureLifecycleSchema(pool).catch(err => console.error('[lifecycle] init error:', err.message));
 ensurePlacesAttributionSchema().catch(err => console.error('[placesAttribution] init error:', err.message));
+require('./utils/apiSpendControl').ensureApiUsageSchema().catch(() => console.warn('[api-usage] Ledger initialization unavailable; paid calls require a working ledger.'));
 ensureAnchorPortalSchema().catch(err => console.error('[anchorPortal] init error:', err.message));
 ensureSignalSchema(pool).catch(err => console.error('[signal-v1] schema init error:', err.message));
 require('./services/signalV1ShadowScheduler').startSignalV1ShadowScheduler();
@@ -263,6 +264,7 @@ app.use('/', require('./routes/tenantWorkspace'));
 app.use('/', require('./routes/registration'));
 app.use('/', require('./routes/pilotOnboarding'));
 app.use('/', require('./routes/workspace'));
+app.use('/', require('./routes/apiUsage'));
 app.use('/', require('./routes/maxChat'));
 app.use('/', require('./routes/maxWorkspace'));
 app.use('/', require('./routes/maxStateIngestion'));
@@ -290,6 +292,17 @@ app.use('/', require('./routes/walkthrough'));
 app.use('/', require('./routes/anchorPortal'));
 app.use('/', require('./routes/leadQualificationReviews'));
 app.use('/', require('./routes/signalV1'));
+app.use('/', require('./routes/signalDistributionReference').createDistributionReferenceRouter({
+  Router:express.Router,requireAuth,requireRole,
+  getStore:()=>require('./services/signalDistribution').getStore(),
+  enabled:()=>process.env.SIGNAL_DISTRIBUTION_ENABLED==='1',
+}));
+app.use('/', require('./routes/signalDistribution').createDistributionRouter({
+  Router:express.Router,requireAuth,requireRole,
+  getStore:()=>require('./services/signalDistribution').getStore(),
+  getDeliveryStore:()=>require('./services/signalDistribution').getDeliveryStore(),
+  enabled:()=>process.env.SIGNAL_DISTRIBUTION_ENABLED==='1',
+}));
 
 // TEMP: one-shot GBP account/location lookup. CRON_SECRET-gated so it can be
 // curled without a session cookie. REMOVE AFTER MSHI IDs ARE CAPTURED.
@@ -926,3 +939,4 @@ try {
   console.error('LISTEN FAILED:', err);
   throw err;
 }
+
