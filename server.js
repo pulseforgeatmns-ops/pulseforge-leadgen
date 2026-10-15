@@ -66,13 +66,15 @@ const anchorPortalReadiness = createAnchorPortalReadiness({
 });
 // Mount before session, body parsing, static assets and all portal route handlers.
 app.use(anchorPortalReadiness.middleware);
-ensureClientArchitecture()
-  .then(() => ensureEmmettAutosendSchema())
-  .then(enforceMiraClientState)
-  .then(() => ensureAoFieldSchema())
-  .then(() => ensureAoProspectRoutingSchema())
-  .then(() => ensureAoCrmSchema())
-  .catch(err => console.error('[clients] init error:', err.message));
+const { runClientsStartup } = require('./utils/clientsStartup');
+runClientsStartup({
+  ensureClientArchitecture,
+  ensureEmmettAutosendSchema,
+  enforceMiraClientState,
+  ensureAoFieldSchema,
+  ensureAoProspectRoutingSchema,
+  ensureAoCrmSchema,
+});
 ensureCloserSchema().catch(err => console.error('[closer] init error:', err.message));
 ensureScoutExpansionTables().catch(err => console.error('[scoutExpansion] init error:', err.message));
 ensureIcpScoreHistoryTable().catch(err => console.error('[icpScoring] init error:', err.message));
