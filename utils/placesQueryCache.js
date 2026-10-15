@@ -71,6 +71,7 @@ function lookup(key, ttlMs = DEFAULT_TTL_MS) {
     age,
     strategy: DEFAULT_STRATEGY,
     payload: entry.payload,
+    failure: entry.failure || null,
     endpoint: entry.endpoint,
   };
 }
@@ -80,6 +81,18 @@ function storeResult(key, payload, endpoint) {
     storedAt: Date.now(),
     payload,
     endpoint: endpoint || 'unknown',
+  });
+}
+
+// Failure holds suppress the same requests for the existing TTL without making
+// a denied response available as business evidence. Upgrading an old entry must
+// not refresh its age, evict it, or create an automatic upstream retry.
+function holdFailure(key, failure, endpoint, { preserveAge = false } = {}) {
+  const existing = store.get(key);
+  store.set(key, {
+    storedAt: preserveAge && existing ? existing.storedAt : Date.now(),
+    failure: { httpStatus: failure.httpStatus, googleStatus: failure.googleStatus },
+    endpoint: endpoint || existing?.endpoint || 'unknown',
   });
 }
 
@@ -99,6 +112,7 @@ module.exports = {
   shareInFlight,
   lookup,
   storeResult,
+  holdFailure,
   clearPlacesQueryCache,
   cacheStats,
 };

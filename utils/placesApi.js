@@ -17,9 +17,10 @@ const {
 } = require('./placesCostAttribution');
 const {
   buildCacheKey,
+  shareInFlight,
   lookup,
   storeResult,
-  shareInFlight,
+  holdFailure,
   DEFAULT_STRATEGY,
 } = require('./placesQueryCache');
 
@@ -64,6 +65,43 @@ const LEGACY_FIND_PLACE = 'https://maps.googleapis.com/maps/api/place/findplacef
 const GEOCODE_URL = 'https://maps.googleapis.com/maps/api/geocode/json';
 const V1_SEARCH_TEXT = 'https://places.googleapis.com/v1/places:searchText';
 const V1_PLACE_DETAILS = 'https://places.googleapis.com/v1/places';
+
+const LEGACY_SUCCESS_STATUSES = new Set(['OK', 'ZERO_RESULTS']);
+const LEGACY_FAILURE_STATUSES = new Set([
+  'REQUEST_DENIED', 'OVER_QUERY_LIMIT', 'OVER_DAILY_LIMIT', 'INVALID_REQUEST',
+  'UNKNOWN_ERROR', 'NOT_FOUND', 'PERMISSION_DENIED', 'RESOURCE_EXHAUSTED', 'UNAVAILABLE',
+]);
+
+function legacyApplicationFailure(result) {
+  if (!result?.ok || LEGACY_SUCCESS_STATUSES.has(result.googleStatus)) return null;
+  return {
+    httpStatus: Number.isInteger(result.httpStatus) ? result.httpStatus : null,
+    googleStatus: LEGACY_FAILURE_STATUSES.has(result.googleStatus)
+      ? result.googleStatus : 'UNKNOWN_STATUS',
+  };
+}
+
+function failureResult(failure) {
+  return {
+    httpStatus: failure.httpStatus,
+    googleStatus: failure.googleStatus,
+    data: { status: failure.googleStatus },
+    ok: false,
+    applicationFailure: true,
+  };
+}
+
+function cachedLegacyResult(cacheKey, cached) {
+  const failure = cached.failure || legacyApplicationFailure(cached.payload);
+  if (!failure) return cached.payload;
+  if (!cached.failure) holdFailure(cacheKey, failure, cached.endpoint, { preserveAge: true });
+  return failureResult(failure);
+}
+
+function failedYieldParams(params) {
+  return { ...params, yield: { businessesReturned: 0, businessesAccepted: 0,
+    candidatesCreated: 0, qualifiedCandidates: 0 } };
+}
 
 function buildQueryRecord(endpoint, params = {}) {
   const originalQuery =
@@ -189,11 +227,12 @@ async function legacyTextSearch(params = {}, deps = {}) {
 
   if (useCache && recordBase.normalizedQuery) {
     const cached = lookup(cacheKey);
-    if (cached.hit && cached.payload) {
+    if (cached.hit && (cached.payload || cached.failure)) {
+      const result = cachedLegacyResult(cacheKey, cached);
       await recordCall(
         recordBase,
-        cached.payload,
-        params,
+        result,
+        result.ok ? params : failedYieldParams(params),
         deps,
         started,
         {
@@ -204,7 +243,7 @@ async function legacyTextSearch(params = {}, deps = {}) {
           cacheStrategy: cached.strategy,
         }
       );
-      return cached.payload;
+      return result;
     }
   }
 
@@ -240,15 +279,32 @@ async function legacyTextSearch(params = {}, deps = {}) {
     throw err;
   }
 
+  const failure = legacyApplicationFailure(result);
   if (reused) {
-    await recordCall(recordBase, result, params, deps, started, {
+    const sharedResult = failure ? failureResult(failure) : result;
+    await recordCall(recordBase, sharedResult, failure ? failedYieldParams(params) : params, deps, started, {
       cacheHit: true, cacheMiss: false, cacheAge: 0, cacheKey, cacheStrategy: 'memory_inflight',
     });
-    return result;
+    return sharedResult;
   }
-
-  if (useCache && recordBase.normalizedQuery && result.ok && ['OK', 'ZERO_RESULTS'].includes(result.googleStatus)) {
-    storeResult(cacheKey, result, PLACES_ENDPOINTS.TEXT_SEARCH);
+  if (useCache && recordBase.normalizedQuery && result.ok) {
+    if (failure) holdFailure(cacheKey, failure, PLACES_ENDPOINTS.TEXT_SEARCH);
+    else storeResult(cacheKey, result, PLACES_ENDPOINTS.TEXT_SEARCH);
+  }
+  if (failure) {
+    const uncachedResponse = !useCache ? result.data : null;
+    result = failureResult(failure);
+    // A failed provider page may exit before its deferred yield commit. Record
+    // it now and return no commit callback, so the failure is counted once.
+    await recordCall(recordBase, result, failedYieldParams(params), deps, started, {
+      cacheHit: false,
+      cacheMiss: Boolean(useCache && recordBase.normalizedQuery),
+      cacheKey: useCache ? cacheKey : null,
+      cacheStrategy: useCache ? DEFAULT_STRATEGY : null,
+    });
+    // Explicit uncached diagnostics already inspect the original provider
+    // response. Preserve that return contract, never its cache/telemetry data.
+    return !useCache ? { ...result, data: uncachedResponse } : result;
   }
 
   if (params.deferRecord) {
@@ -292,11 +348,12 @@ async function legacyPlaceDetails(params = {}, deps = {}) {
 
   if (useCache && params.placeId) {
     const cached = lookup(cacheKey);
-    if (cached.hit && cached.payload) {
+    if (cached.hit && (cached.payload || cached.failure)) {
+      const result = cachedLegacyResult(cacheKey, cached);
       await recordCall(
         recordBase,
-        cached.payload,
-        params,
+        result,
+        result.ok ? params : failedYieldParams(params),
         deps,
         started,
         {
@@ -307,7 +364,7 @@ async function legacyPlaceDetails(params = {}, deps = {}) {
           cacheStrategy: cached.strategy,
         }
       );
-      return cached.payload;
+      return result;
     }
   }
 
@@ -343,15 +400,28 @@ async function legacyPlaceDetails(params = {}, deps = {}) {
     throw err;
   }
 
+  const failure = legacyApplicationFailure(result);
   if (reused) {
-    await recordCall(recordBase, result, params, deps, started, {
+    const sharedResult = failure ? failureResult(failure) : result;
+    await recordCall(recordBase, sharedResult, failure ? failedYieldParams(params) : params, deps, started, {
       cacheHit: true, cacheMiss: false, cacheAge: 0, cacheKey, cacheStrategy: 'memory_inflight',
     });
-    return result;
+    return sharedResult;
   }
-
-  if (useCache && params.placeId && result.ok && result.googleStatus === 'OK') {
-    storeResult(cacheKey, result, PLACES_ENDPOINTS.PLACE_DETAILS);
+  if (useCache && params.placeId && result.ok) {
+    if (failure) holdFailure(cacheKey, failure, PLACES_ENDPOINTS.PLACE_DETAILS);
+    else storeResult(cacheKey, result, PLACES_ENDPOINTS.PLACE_DETAILS);
+  }
+  if (failure) {
+    const uncachedResponse = !useCache ? result.data : null;
+    result = failureResult(failure);
+    await recordCall(recordBase, result, failedYieldParams(params), deps, started, {
+      cacheHit: false,
+      cacheMiss: Boolean(useCache && params.placeId),
+      cacheKey: useCache ? cacheKey : null,
+      cacheStrategy: useCache ? DEFAULT_STRATEGY : null,
+    });
+    return !useCache ? { ...result, data: uncachedResponse } : result;
   }
 
   if (params.deferRecord) {
