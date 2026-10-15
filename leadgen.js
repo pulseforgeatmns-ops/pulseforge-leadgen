@@ -22,6 +22,7 @@ const { recordScoutBaseline } = require('./utils/icpScoring');
 const { verifyEmail } = require('./utils/emailVerifier');
 const { invalidOutreachEmailReason } = require('./utils/emailGuard');
 const { ensureEmailVerificationColumns } = require('./utils/emailVerificationSchema');
+const { applyScoutEnrichment, babrunScoutContactEvidence } = require('./utils/babrunScoutContactEvidence');
 const { ensureScoutUnenrichedTable } = require('./utils/scoutUnenrichedSchema');
 const { acquireScoutLockWithWait, releaseScoutLock, getActiveScoutLock } = require('./utils/scoutLock');
 const { awaitProspeoSlot } = require('./utils/prospeoThrottle');
@@ -1709,22 +1710,19 @@ async function main({ runId = null } = {}) {
     let enrichmentMethod = 'none';
     let enriched = await enrichWithProspeo(rootDomain);
     if (enriched) {
-      Object.assign(lead, enriched);
-      lead.source = [...(lead.source || []), 'prospeo'];
+      applyScoutEnrichment(lead, enriched, 'prospeo', CONFIG.clientId, domain);
       enrichmentMethod = 'prospeo';
       process.stdout.write(` ✓ ${enriched.email || 'no email'}\n`);
     } else {
       enriched = await enrichWithHunter(rootDomain);
       if (enriched) {
-        Object.assign(lead, enriched);
-        lead.source = [...(lead.source || []), 'hunter'];
+        applyScoutEnrichment(lead, enriched, 'hunter', CONFIG.clientId, domain);
         enrichmentMethod = 'hunter';
         process.stdout.write(` ✓ [Hunter] ${enriched.email || 'no email'}\n`);
       } else {
         const scraped = await scrapeWebsiteEmail(rootDomain);
         if (scraped) {
-          Object.assign(lead, scraped);
-          lead.source = [...(lead.source || []), 'scraped'];
+          applyScoutEnrichment(lead, scraped, 'scraped', CONFIG.clientId, domain);
           enrichmentMethod = 'scraped';
           process.stdout.write(` ✓ [Scraped] ${scraped.email}\n`);
         } else {
@@ -1793,6 +1791,7 @@ async function main({ runId = null } = {}) {
     websiteSignals:       l.websiteSignals || [],
     search_query:          l.search_query || null,
     cleaning_email_reject_reason: l.cleaning_email_reject_reason || null,
+    ...(Number(CONFIG.clientId) === 13 ? { scoutContactEvidence: l.scoutContactEvidence || null } : {}),
   }));
 
   const postEnrichmentAccepted = [];
@@ -2684,7 +2683,11 @@ async function saveToDatabase(leads, {
         contactCandidate.emailRejectReason ? `Ignored scraped email: ${contactCandidate.emailRejectReason}` : null,
       ].filter(Boolean).join(' ') || null;
 
-      const nameParts = (lead.contact && lead.contact !== '—' ? lead.contact : '').trim().split(/\s+/).filter(Boolean);
+      const babrunEvidence = Number(CONFIG.clientId) === 13
+        ? babrunScoutContactEvidence({ lead, email, verification, officialDomain: domain })
+        : null;
+      const contactName = babrunEvidence ? babrunEvidence.contactName : lead.contact;
+      const nameParts = (contactName && contactName !== '—' ? contactName : '').trim().split(/\s+/).filter(Boolean);
 
       // Use contact first name if available and looks like a real person name.
       // Keep generic inbox names null so downstream copy can use company/name fallbacks.
@@ -2708,10 +2711,11 @@ async function saveToDatabase(leads, {
         client_id, service_area_match, discovery_method, has_website, google_review_count, google_rating,
         has_facebook, has_instagram, facebook_url, instagram_url, website_url,
         email_verified, email_verification_method, verified_at, do_not_contact, preferred_channel,
-        email_status, verifier_response, verifier_checked_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28::jsonb, $29)
+        email_status, verifier_response, verifier_checked_at${babrunEvidence ? ', job_title, acquisition_metadata, enrichment_provenance' : ''}
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28::jsonb, $29${babrunEvidence ? ', $30, $31::jsonb, $32::jsonb' : ''})
       ON CONFLICT (email) DO NOTHING RETURNING id`,
-      [companyId, firstName, lastName, email, phone, 'cold', 'scout', lead.score, prospectNote, CONFIG.vertical, CONFIG.clientId, serviceArea, discoveryMethod, hasWebsite, googleReviewCount, googleRating, hasFacebook, hasInstagram, facebookUrl, instagramUrl, websiteUrl, emailVerified, emailVerificationMethod, verifiedAt, doNotContact, preferredChannel, emailStatus, JSON.stringify(verifierResponse || null), verifierCheckedAt]
+      [companyId, firstName, lastName, email, phone, 'cold', 'scout', lead.score, prospectNote, CONFIG.vertical, CONFIG.clientId, serviceArea, discoveryMethod, hasWebsite, googleReviewCount, googleRating, hasFacebook, hasInstagram, facebookUrl, instagramUrl, websiteUrl, emailVerified, emailVerificationMethod, verifiedAt, doNotContact, preferredChannel, emailStatus, JSON.stringify(verifierResponse || null), verifierCheckedAt,
+        ...(babrunEvidence ? [babrunEvidence.jobTitle, JSON.stringify(babrunEvidence.acquisitionMetadata), JSON.stringify(babrunEvidence.enrichmentProvenance)] : [])]
     );
       if (!insert.rows.length) {
         incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.INSERT_CONFLICT);

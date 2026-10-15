@@ -139,12 +139,22 @@ jobs:
       - uses: ./.github/actions/setup-postgres-environment
       - run: npm ci --ignore-scripts
       - run: npm run test:anchor-outbound
+      - name: Verification retry persistence and race regressions (no live verifier)
+        env:
+          DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
+          DATABASE_SSL: 'false'
+        run: node --test test/emailVerificationRecovery.test.js test/emailVerificationRecoveryPostgres.test.js
+      - name: Babrun standard Scout evidence and real PostgreSQL gate (no providers)
+        env:
+          DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
+          DATABASE_SSL: 'false'
+        run: npm run test:babrun-scout-intake
       - name: Mailbox and scheduling regressions
         env:
           DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
           DATABASE_SSL: 'false'
         run: >-
-          node --test test/pulseforgeCashflowOutbound.test.js test/governedMailboxBridge.test.js test/acquisitionMissionInventory.test.js test/tenantMailbox.test.js test/tenantMailboxImapRuntime.test.js
+          node --test test/pulseforgeCashflowOutbound.test.js test/pulseforgeReplenishmentTaxonomy.test.js test/governedMailboxBridge.test.js test/acquisitionMissionInventory.test.js test/tenantMailbox.test.js test/tenantMailboxImapRuntime.test.js
           test/tenantMailboxPollExecutor.test.js test/tenantOutreachScheduler.test.js
           test/emmettTenantMailboxCapacity.test.js test/mailHeaders.test.js
           test/maxScoutReplenishment.test.js
@@ -196,6 +206,8 @@ jobs:
           stage-file: ${{ env.CI_STAGE_FILE }}
       - run: npm ci
       - run: npm run test:postgres:harness
+      - name: Rollout preflight unit and non-skipping PostgreSQL gate
+        run: npm run test:rollout-preflight && npm run test:rollout-preflight:postgres
       - run: npm run test:revenue:postgres
       - run: npm run test:revenue:phase16b
       - run: npm run test:anchor-phone-setter:postgres
@@ -307,6 +319,10 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Verify bounded test-log summary
         run: node --test test/maxCiLogSummary.test.js
+      - name: Durable expectation PostgreSQL gate (no skips)
+        run: npm run test:max:expectations:postgres
+      - name: Verify attention lifecycle and crash recovery on real PostgreSQL
+        run: npm run test:max:attention:postgres
       - name: Run complete Max suite
         run: |
           set +e

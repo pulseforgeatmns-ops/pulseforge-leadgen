@@ -2,6 +2,8 @@
 
 const { EPISTEMIC } = require('./types');
 const { EXPECTATION_STATUS } = require('../stateIngestion/types');
+const { resolvesExpectation } = require('./activityEvidence');
+const { expectationScope } = require('./expectationScope');
 
 function findUser(users, aoId) {
   return users.find(u => u.id === aoId) || null;
@@ -16,11 +18,14 @@ function relationshipFlags(prospect) {
   };
 }
 
-function activitySince(prospect, sinceIso) {
-  const activities = prospect?.activities || [];
-  if (!sinceIso) return activities;
+function activitySince(activities, sinceIso, now) {
   const since = new Date(sinceIso).getTime();
-  return activities.filter(a => new Date(a.at || a.created_at || 0).getTime() >= since);
+  const until = new Date(now).getTime();
+  if (!sinceIso || !Number.isFinite(since) || !Number.isFinite(until)) return [];
+  return activities.filter(a => {
+    const at = new Date(a.at || a.created_at).getTime();
+    return Number.isFinite(at) && at >= since && at <= until;
+  });
 }
 
 /**
@@ -31,19 +36,36 @@ function activitySince(prospect, sinceIso) {
  * @param {object} [input.expectation]
  * @param {object} [input.prospect]
  */
-async function buildUnderstanding({ stateStore, trigger, expectation, prospect: prospectInput }) {
+async function buildUnderstanding({ stateStore, clientId = stateStore.clientId, trigger, expectation,
+  prospect: prospectInput, now = new Date() }) {
   const users = stateStore.users || [];
-  let prospect = prospectInput;
-  let expectationRow = expectation;
-
-  if (expectationRow && !prospect) {
-    prospect = await stateStore.readProspect(expectationRow.prospect_id);
+  let prospect = null;
+  const requestedExpectationId = expectation?.id || trigger?.payload?.expectation_id || null;
+  let expectationRow = null;
+  let contextStatus = 'complete';
+  try {
+    // Trigger payloads and ingestion snapshots identify a subject; they cannot
+    // supply canonical ownership, activity or durable expectation state.
+    if (requestedExpectationId) {
+      expectationRow = await stateStore.readExpectation(requestedExpectationId, { clientId });
+      if (!expectationRow) contextStatus = 'unavailable';
+    }
+    const prospectId = expectationRow?.prospect_id || prospectInput?.id || trigger?.payload?.prospect_id
+      || expectation?.prospect_id;
+    if (prospectId) prospect = await stateStore.readProspect(prospectId);
+    if ((expectation?.id && trigger?.payload?.expectation_id
+      && expectation.id !== trigger.payload.expectation_id)
+      || !prospect || String(prospect.client_id) !== String(clientId)
+      || (prospectInput?.id && prospectInput.id !== prospect.id)
+      || (trigger?.payload?.prospect_id && trigger.payload.prospect_id !== prospect.id)) {
+      contextStatus = 'unavailable';
+      prospect = null;
+    }
+  } catch {
+    contextStatus = 'unavailable';
   }
-  if (!prospect && trigger?.payload?.prospect_id) {
-    prospect = await stateStore.readProspect(trigger.payload.prospect_id);
-  }
 
-  const ownerId = prospect?.assigned_ao_id || expectationRow?.ao_id || null;
+  const ownerId = prospect?.assigned_ao_id || null;
   const owner = ownerId ? findUser(users, ownerId) : null;
   const rel = relationshipFlags(prospect);
 
@@ -51,17 +73,33 @@ async function buildUnderstanding({ stateStore, trigger, expectation, prospect: 
     || expectationRow?.expected_window?.end
     || null;
 
-  const subsequent = activitySince(prospect, windowEnd);
-  const hasResolvingActivity = subsequent.some(a =>
-    ['inbound_call', 'meeting_scheduled', 'call_completed', 'reply_received'].includes(a.kind)
-  );
+  const windowStart = expectationRow?.expected_window?.starts_at || expectationRow?.expected_window?.start;
+  const validWindow = Boolean(windowEnd && Number.isFinite(new Date(windowEnd).getTime())
+    && (!windowStart || (Number.isFinite(new Date(windowStart).getTime())
+      && new Date(windowStart) <= new Date(windowEnd))));
+  if (expectationRow && (!['OPEN', 'WAITING', 'OVERDUE', 'RESOLVED'].includes(expectationRow.status)
+    || !expectationScope(clientId, {
+    expectation: expectationRow,
+    account: { id: prospect?.id, client_id: prospect?.client_id, owner_id: ownerId },
+  }))) contextStatus = 'unavailable';
+
+  let activityRead = { status: 'unavailable', activities: [], source: null };
+  if (contextStatus === 'complete' && typeof stateStore.readProspectActivities === 'function') {
+    try {
+      activityRead = await stateStore.readProspectActivities(prospect.id, { clientId, aoId: ownerId });
+    } catch {
+      activityRead = { status: 'unavailable', activities: [], source: null };
+    }
+  }
+  const activityComplete = activityRead?.status === 'complete' && Array.isArray(activityRead.activities);
+  const subsequent = activityComplete ? activitySince(activityRead.activities, windowEnd, now) : [];
+  const resolving = subsequent.filter(a => resolvesExpectation(a, expectationRow));
+  const hasResolvingActivity = contextStatus === 'complete' && validWindow && activityComplete && resolving.length > 0;
 
   const epistemic = {
     account_owner: owner ? EPISTEMIC.KNOWN : ownerId ? EPISTEMIC.INFERRED : EPISTEMIC.UNKNOWN,
-    expectation_window: windowEnd ? EPISTEMIC.KNOWN : EPISTEMIC.UNKNOWN,
-    subsequent_activity: hasResolvingActivity
-      ? EPISTEMIC.KNOWN
-      : (subsequent.length === 0 && windowEnd ? EPISTEMIC.KNOWN : EPISTEMIC.UNKNOWN),
+    expectation_window: validWindow ? EPISTEMIC.KNOWN : EPISTEMIC.UNKNOWN,
+    subsequent_activity: activityComplete && validWindow ? EPISTEMIC.KNOWN : EPISTEMIC.UNKNOWN,
     relationship_state: rel.relationship_active ? EPISTEMIC.KNOWN : EPISTEMIC.INFERRED,
   };
 
@@ -71,8 +109,10 @@ async function buildUnderstanding({ stateStore, trigger, expectation, prospect: 
   }
 
   let assignedAo = null;
-  if (ownerId && stateStore.loadAssignedAoContext) {
-    assignedAo = await stateStore.loadAssignedAoContext(ownerId);
+  if (contextStatus === 'complete' && ownerId && stateStore.loadAssignedAoContext) {
+    try { assignedAo = await stateStore.loadAssignedAoContext(ownerId); } catch {
+      contextStatus = 'unavailable';
+    }
   } else if (owner) {
     assignedAo = {
       id: owner.id,
@@ -87,6 +127,7 @@ async function buildUnderstanding({ stateStore, trigger, expectation, prospect: 
   const snapshot = {
     account: {
       id: prospect?.id || null,
+      client_id: prospect?.client_id ?? null,
       company_name: prospect?.company_name || expectationRow?.source_evidence?.account_name || null,
       owner_id: ownerId,
       owner_name: owner?.name || expectationRow?.source_evidence?.ao_name || null,
@@ -96,6 +137,9 @@ async function buildUnderstanding({ stateStore, trigger, expectation, prospect: 
     expectation: expectationRow
       ? {
         id: expectationRow.id,
+        client_id: expectationRow.client_id,
+        prospect_id: expectationRow.prospect_id,
+        ao_id: expectationRow.ao_id,
         type: expectationRow.expectation_type,
         expectation_type: expectationRow.expectation_type,
         status: expectationRow.status,
@@ -104,7 +148,10 @@ async function buildUnderstanding({ stateStore, trigger, expectation, prospect: 
         source_evidence: expectationRow.source_evidence || {},
       }
       : null,
-    subsequent_activity_count: subsequent.length,
+    context_status: contextStatus,
+    activity_read_status: activityComplete ? 'complete' : 'unavailable',
+    subsequent_activity_count: activityComplete && validWindow ? subsequent.length : null,
+    resolving_activity: resolving,
     has_resolving_activity: hasResolvingActivity,
     epistemic,
     trigger,
@@ -137,11 +184,19 @@ async function buildUnderstanding({ stateStore, trigger, expectation, prospect: 
   supportingEvidence.push({
     kind: 'activity_query',
     since: windowEnd,
-    count: subsequent.length,
-    epistemic: EPISTEMIC.KNOWN,
+    count: activityComplete && validWindow ? subsequent.length : null,
+    status: activityComplete ? 'complete' : 'unavailable',
+    source: activityRead?.source || null,
+    client_id: clientId,
+    prospect_id: prospect?.id || null,
+    ao_id: ownerId,
+    until: now.toISOString(),
+    epistemic: activityComplete && validWindow ? EPISTEMIC.KNOWN : EPISTEMIC.UNKNOWN,
   });
 
-  return { snapshot, supportingEvidence, prospect, expectation: expectationRow, owner };
+  supportingEvidence.push(...resolving.map(activity => ({ ...activity, epistemic: EPISTEMIC.KNOWN })));
+
+  return { snapshot, supportingEvidence, prospect, expectation: expectationRow, owner, requestedExpectationId };
 }
 
 function expectationStillOpen(expectation, now = new Date()) {

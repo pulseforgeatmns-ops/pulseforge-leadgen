@@ -67,19 +67,23 @@ function buildDelegationFromMission(mission, scoutPayload = {}) {
     constraintVertical: constraints.vertical,
   });
   const segmentKey = canonical.segmentKey;
+  const segments = Array.isArray(marketPlan.eligibleSubsegments) && marketPlan.eligibleSubsegments.length
+    ? marketPlan.eligibleSubsegments.slice()
+    : segmentKey && segmentKey !== 'general' ? [segmentKey] : legacySegments;
 
   return {
     tenantId: String(mission.tenantId || mission.clientId || scoutPayload.tenantId || ''),
     targetContext: {
       geography,
-      segments: segmentKey && segmentKey !== 'general' ? [segmentKey] : legacySegments,
+      segments,
+      cities: ((structured && structured.geography && structured.geography.cities) || []).slice(),
       businessType: segmentKey && segmentKey !== 'general' ? segmentKey : constraints.industry || null,
       missionBound: Boolean(structured && mission.structuredMissionApproved),
       structuredMission: Boolean(structured),
     },
     businessContext: {
       serviceGeography: geography,
-      preferredSegments: segmentKey && segmentKey !== 'general' ? [segmentKey] : legacySegments,
+      preferredSegments: segments,
       operatorDirection: scoutPayload.operatorMessage || null,
       commercialCapability:
         constraints.discoveryProfile &&

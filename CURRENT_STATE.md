@@ -4,6 +4,13 @@
 
 ## Current Repository Architecture
 
+[SPEC-PF-ACCEL-001 rollout preflight](docs/specs/SPEC-PF-ACCEL-001_Rollout_Preflight.md)
+is an in-progress, approved local/test implementation slice for PR897/899.
+The standalone command checks migration prerequisites with bounded read-only
+catalog queries and sanitized evidence. Production actions and rollout readiness
+remain separately gated; local real-PostgreSQL validation is currently blocked
+by missing server binaries. See the [operator plan](docs/rollout-preflight-operator-plan.md).
+
 The October 13 merge-readiness repair restores existing Max routing and audit
 contracts, rejects ambiguous region/identity promotion and negated execution,
 and retains complete Max CI output with bounded summaries. This is repository

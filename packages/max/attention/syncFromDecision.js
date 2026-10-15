@@ -7,7 +7,7 @@ const {
   reasonKindFromDecision,
   newAttentionId,
 } = require('./fingerprints');
-const { ACTION_TYPE, EXECUTION_STATUS } = require('../decisionExecution/types');
+const { ACTION_TYPE, EXECUTION_STATUS, VERIFICATION_STATUS } = require('../decisionExecution/types');
 
 function buildReason(decision, snapshot) {
   const account = snapshot?.account?.name || snapshot?.account?.company_name || decision.subject_id;
@@ -27,7 +27,8 @@ function buildReason(decision, snapshot) {
 function attentionStatusFromDecision(decision, now = new Date()) {
   const action = decision?.selected_action?.action_type;
   if ([ACTION_TYPE.RESOLVE_EXPECTATION, ACTION_TYPE.SUPERSEDE_PRIOR].includes(action)
-    && decision.execution_status === EXECUTION_STATUS.EXECUTED) {
+    && decision.execution_status === EXECUTION_STATUS.EXECUTED
+    && decision.verification_status === VERIFICATION_STATUS.VERIFIED) {
     return ATTENTION_STATUS.RESOLVED;
   }
   if (decision.execution_status === EXECUTION_STATUS.SUPERSEDED) {
@@ -81,7 +82,7 @@ async function syncAttentionFromDecision({
     reasonKind,
   });
 
-  const existing = await attentionStore.findByFingerprint(decision.client_id, fingerprint);
+  const existing = await attentionStore.findByFingerprint(decision.client_id, fingerprint, { includeResolved: true });
   const status = attentionStatusFromDecision(decision, now);
   const resolved = [ATTENTION_STATUS.RESOLVED, ATTENTION_STATUS.SUPERSEDED].includes(status);
 

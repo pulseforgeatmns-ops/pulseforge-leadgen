@@ -6,7 +6,7 @@ function bounded(task,ms) {
   return Promise.race([Promise.resolve().then(task),new Promise(resolve=>{timer=setTimeout(()=>resolve(null),ms);})])
     .finally(()=>clearTimeout(timer));
 }
-function createOperatorWorker({store,feedUrl,token,channelId,marketProvider,relay,gate,sendEnabled=()=>true,fetchImpl=globalThis.fetch,now=()=>new Date(),marketTimeoutMs=2000}) {
+function createOperatorWorker({store,feedUrl,token,channelId,marketProvider,relay,gate,sendEnabled=()=>true,fetchImpl=globalThis.fetch,now=()=>new Date(),marketTimeoutMs=2000,onEvent=async()=>{}}) {
   const url=new URL(feedUrl);
   if(url.protocol!=='http:' || !url.hostname.endsWith('.railway.internal') || url.pathname!=='/operator-events'
     || url.username || url.password || url.search || url.hash || typeof token!=='string' || token.length<32) throw new Error('invalid_private_operator_feed');
@@ -21,13 +21,18 @@ function createOperatorWorker({store,feedUrl,token,channelId,marketProvider,rela
         const body=await response.json();
         if(!Array.isArray(body.events) || body.events.length>2000) throw new Error('invalid_operator_feed_response');
         const readiness=gate();if(!readiness.ok)return {skipped:true};
-        let enqueued=0;
+        let enqueued=0,distributionDeferred=0;
         for(const event of body.events) {
           if(Date.parse(event.occurredAt)<Date.parse(readiness.startAt))continue;
           if(!gate().ok)break;
-          await store.enqueue(event);enqueued++;
+          await store.enqueue(event);
+          try {
+            const monitored=await onEvent(event);
+            if(monitored?.skipped)distributionDeferred++;
+          } catch {distributionDeferred++;console.error('[signal-distribution] registration deferred; operator event retained');}
+          enqueued++;
         }
-        return {enqueued};
+        return {enqueued,...(distributionDeferred?{distributionDeferred}:{} )};
       }finally{ingesting=false;}
     },
     async sendOnce() {

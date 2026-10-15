@@ -20,6 +20,14 @@ class MemoryDecisionStore {
     ) || null;
   }
 
+  async listIngestionResolutionDecisions({ clientId, ingestionId }) {
+    if (String(clientId) !== String(this.clientId) || !ingestionId) return [];
+    return this.decisions.filter(d => String(d.client_id) === String(clientId)
+      && d.trigger?.type === 'NEW_EVIDENCE' && d.trigger?.payload?.ingestion_id === ingestionId
+      && d.subject_type === 'expectation' && d.selected_action?.action_type === 'RESOLVE_EXPECTATION'
+      && d.execution_status !== EXECUTION_STATUS.SUPERSEDED).map(d => structuredClone(d));
+  }
+
   async findActiveDecision({ clientId, subjectType, subjectId, actionType }) {
     return this.decisions.find(d =>
       d.client_id === clientId
@@ -46,6 +54,11 @@ class MemoryDecisionStore {
     if (idx >= 0) this.actionIntents[idx] = intent;
     else this.actionIntents.push(intent);
     return intent;
+  }
+
+  async findActionIntentByIdempotency(clientId, idempotencyKey) {
+    if (String(clientId) !== String(this.clientId)) return null;
+    return this.actionIntents.find(i => i.client_id === clientId && i.idempotency_key === idempotencyKey) || null;
   }
 
   async createAoTask(task) {

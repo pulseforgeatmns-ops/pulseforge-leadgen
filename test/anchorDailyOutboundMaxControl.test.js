@@ -339,6 +339,51 @@ test('Max keeps replenishing on later cycles until the target is met', async () 
   assert.equal(second.plan.shouldReplenish, false);
 });
 
+test('Max persists bounded retry failure counts in the existing control event, including admission fallback', async () => {
+  for (const sourceKey of ['verificationRetry', 'admission']) {
+    for (const categorized of [false, true]) {
+      const events = [];
+      const telemetry = { verificationRetryAttempted: 3, verificationRetryFailed: 3,
+        verificationRetryValid: 0, verificationRetryLoadFailed: 1,
+        ...(categorized ? { verificationRetryFailureReasons: {
+          verification_failed: 1, persistence_not_confirmed: 1, verification_exception: 1,
+          'fixture-secret@example.test': 100, adapter_unavailable: 'fixture-api-key',
+        } } : {}),
+      };
+      const inventory = { clean: [], excluded: [], scope: {}, exclusionCounts: {} };
+      await runMaxOutboundControlLoop({
+        pool: {},
+        tenantId: '13',
+        now: new Date('2026-09-29T15:00:00.000Z'),
+        program: { id: 'outbound_retry_fixture', tenant_id: '13', mode: 'active',
+          policy_hash: 'fixture_policy', source_mission_id: 'fixture_mission', policy: { dailyCap: 1 } },
+        source: { id: 'fixture_mission', payload: {} },
+        store: { tenantId: '13', event: async (type, key, payload) => events.push({ type, payload }) },
+        infrastructure: { cap: 1, snapshot: { sentToday: 0 },
+          assessed: { governor: { outcome: 'proceed' }, health: { score: 80 } },
+          operating: { planningDailyCapacity: 1, dispatchableDailyCapacity: 1, effectiveDailyCapacity: 1,
+            recommendedSafeDailyCapacity: 1, authorizationLimitedCapacity: 1, scheduleLimitedCapacity: 1,
+            dispatchCapacityNow: 1, governor: 'proceed' } },
+        inventory, inventoryAfter: inventory,
+        scoutRamp: async () => ({ [sourceKey]: telemetry }),
+      });
+      assert.equal(events.length, 1);
+      assert.equal(events[0].type, 'max_outbound_control');
+      const snapshot = JSON.parse(JSON.stringify(events[0].payload));
+      assert.equal(snapshot.verificationRetryAttempted, 3);
+      assert.equal(snapshot.verificationRetryFailed, 3);
+      assert.equal(snapshot.verificationRetryValid, 0);
+      assert.equal(snapshot.verificationRetryLoadFailed, 1);
+      assert.equal(snapshot.verificationRetryFailureReasons.verification_failed, categorized ? 1 : 0);
+      assert.equal(snapshot.verificationRetryFailureReasons.persistence_not_confirmed, categorized ? 1 : 0);
+      assert.equal(snapshot.verificationRetryFailureReasons.verification_exception, categorized ? 1 : 0);
+      assert.equal(Object.keys(snapshot.verificationRetryFailureReasons).length, 7);
+      assert.equal(Object.values(snapshot.verificationRetryFailureReasons).reduce((sum, n) => sum + n, 0), categorized ? 3 : 0);
+      assert.doesNotMatch(JSON.stringify(snapshot), /fixture-secret|fixture-api-key/);
+    }
+  }
+});
+
 test('Max observation can be disabled without invoking Scout', async () => {
   let called = false;
   const result = await runMaxOutboundControlLoop({

@@ -49,7 +49,7 @@ require.cache[dbPath] = {
   },
 };
 
-const anthropicPath = require.resolve('@anthropic-ai/sdk');
+const anthropicPath = require.resolve('../utils/meteredAnthropic');
 class FakeAnthropic {
   constructor() {
     this.messages = {
@@ -79,7 +79,7 @@ require.cache[anthropicPath] = {
   id: anthropicPath,
   filename: anthropicPath,
   loaded: true,
-  exports: FakeAnthropic,
+  exports: { forAgent: () => FakeAnthropic },
 };
 
 const { run, generateSocialContent } = require('../paigeAgent');
@@ -130,7 +130,7 @@ test('Mira-unavailable dry-run aborts without generating or writing', async () =
 
 test('Mira-unavailable dry-run returns structured skip reason without provider calls', async () => {
   let providerCalls = 0;
-  const anthropicPath = require.resolve('@anthropic-ai/sdk');
+  const anthropicPath = require.resolve('../utils/meteredAnthropic');
   class CountingAnthropic {
     constructor() {
       this.messages = {
@@ -145,7 +145,7 @@ test('Mira-unavailable dry-run returns structured skip reason without provider c
     id: anthropicPath,
     filename: anthropicPath,
     loaded: true,
-    exports: CountingAnthropic,
+    exports: { forAgent: () => CountingAnthropic },
   };
   delete require.cache[require.resolve('../paigeAgent')];
   delete require.cache[require.resolve('../services/paigeSocialContentExecution')];
@@ -162,3 +162,4 @@ test('Mira-unavailable dry-run returns structured skip reason without provider c
   assert.equal(result.outputs.length, 0);
   assert.equal(providerCalls, 0);
 });
+

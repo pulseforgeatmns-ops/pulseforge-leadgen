@@ -76,6 +76,16 @@ class MemoryStateStore {
     return this.prospects.find(p => p.id === id) || null;
   }
 
+  async readProspectActivities(prospectId, { clientId = this.clientId, aoId } = {}) {
+    const prospect = await this.readProspect(prospectId);
+    if (String(clientId) !== String(this.clientId) || !prospect
+      || String(prospect.client_id) !== String(clientId) || aoId == null
+      || String(prospect.assigned_ao_id) !== String(aoId) || !Array.isArray(prospect.activities)) {
+      return { status: 'unavailable', activities: [], source: 'memory' };
+    }
+    return { status: 'complete', activities: structuredClone(prospect.activities), source: 'memory' };
+  }
+
   async applyMutation(mutation) {
     if (mutation.commit_status === 'blocked' || mutation.commit_status === 'skipped_duplicate') {
       return { committed: false, mutation };
@@ -134,6 +144,7 @@ class MemoryStateStore {
         status: 'warm',
         acquisition_metadata: { maxStateIngestion: { relationship_active: true } },
         unknown_fields: mutation.intended_value.partial_unknowns || [],
+        activities: [],
       };
       this.prospects.push(prospect);
       mutation.entity_id = prospect.id;
@@ -272,15 +283,42 @@ class MemoryStateStore {
     return row;
   }
 
-  async listOpenExpectations({ clientId = this.clientId } = {}) {
-    return this.expectations.filter(e => e.client_id === clientId && ['OPEN', 'WAITING', 'OVERDUE'].includes(e.status));
+  async listOpenExpectations({ clientId = this.clientId, prospectId, includeResolved = false } = {}) {
+    if (String(clientId) !== String(this.clientId)) return [];
+    return this.expectations.filter(e => String(e.client_id) === String(clientId)
+      && (prospectId == null || e.prospect_id === prospectId)
+      && (['OPEN', 'WAITING', 'OVERDUE'].includes(e.status)
+        || (includeResolved && prospectId != null && e.status === 'RESOLVED')));
   }
 
-  async updateExpectation(id, patch = {}) {
-    const row = this.expectations.find(e => e.id === id);
+  async readExpectation(id, { clientId = this.clientId, prospectId, aoId } = {}) {
+    if (clientId == null || String(clientId) !== String(this.clientId)) return null;
+    const row = this.expectations.find(e => e.id === id
+      && String(e.client_id) === String(this.clientId)
+      && (prospectId === undefined || e.prospect_id === prospectId)
+      && (aoId === undefined || String(e.ao_id) === String(aoId)));
+    if (row && aoId !== undefined) {
+      const prospect = await this.readProspect(row.prospect_id);
+      if (!prospect || String(prospect.client_id) !== String(clientId)
+        || String(prospect.assigned_ao_id) !== String(aoId)) return null;
+    }
+    // Return a separate readback, not a mutable alias to the persisted record.
+    return row ? structuredClone(row) : null;
+  }
+
+  async updateExpectation(id, patch = {}, scope = {}) {
+    if (patch.status !== 'RESOLVED') throw new Error('Unsupported expectation update');
+    if (scope.prospectId == null || scope.aoId == null) return null;
+    const current = await this.readExpectation(id, scope);
+    if (!current || !['OPEN', 'WAITING', 'OVERDUE', 'RESOLVED'].includes(current.status)) return null;
+    const row = this.expectations.find(e => e.id === current.id && e.client_id === current.client_id);
     if (!row) return null;
-    Object.assign(row, patch);
-    return row;
+    if (row.status !== 'RESOLVED' || !row.resolved_at) {
+      row.status = 'RESOLVED';
+      row.resolved_at ||= new Date().toISOString();
+      row.updated_at = new Date().toISOString();
+    }
+    return structuredClone(row);
   }
 }
 

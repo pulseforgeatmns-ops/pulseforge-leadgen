@@ -22,6 +22,11 @@ function expandCitiesFromSearchDefinition(searchDefinition = {}) {
   const label = asText(geo.label);
   if (!label) return [];
 
+  if (geo.explicitCities === true && Array.isArray(geo.cities) && geo.cities.length) {
+    const state = geo.state || inferStateFromLabel(label);
+    return dedupeCities(geo.cities.map(city => formatCityState(city, state)));
+  }
+
   if (/greater\s+manchester/i.test(label)) {
     const state = geo.state || 'NH';
     return MANCHESTER_GEO.cities.map((city) => formatCityState(city, state));

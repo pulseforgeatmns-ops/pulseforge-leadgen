@@ -1,7 +1,7 @@
 require('dotenv').config();
 const { randomUUID } = require('crypto');
 const { google } = require('googleapis');
-const Anthropic = require('@anthropic-ai/sdk');
+const Anthropic = require('./utils/meteredAnthropic').forAgent('riley');
 const db = require('./dbClient');
 const fs = require('fs');
 const path = require('path');
@@ -1986,3 +1986,4 @@ if (require.main === module) {
     process.exit(1);
   });
 }
+

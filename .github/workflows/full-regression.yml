@@ -42,7 +42,7 @@ jobs:
               PAIGE_SOCIAL_PUBLISH_ENABLED=false
           - id: anchor-outbound
             label: Anchor governed outbound
-            run: npm run test:anchor-outbound
+            run: npm run test:anchor-outbound && node --test test/emailVerificationRecovery.test.js test/emailVerificationRecoveryPostgres.test.js
             postgres: true
           - id: decision-shadow
             label: Decision shadow
@@ -54,7 +54,7 @@ jobs:
             postgres: true
           - id: max
             label: Max orchestration
-            run: npm run test:max
+            run: npm run test:max && npm run test:max:expectations:postgres && npm run test:max:attention:postgres
             postgres: true
           - id: studio-substral
             label: Studio Substral

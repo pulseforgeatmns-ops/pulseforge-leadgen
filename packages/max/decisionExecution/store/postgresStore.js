@@ -21,6 +21,19 @@ class PostgresDecisionStore {
     return rows[0] ? this._hydrateDecision(rows[0]) : null;
   }
 
+  async listIngestionResolutionDecisions({ clientId, ingestionId }) {
+    if (String(clientId) !== String(this.clientId) || !ingestionId) return [];
+    const { rows } = await this.db.query(`
+      SELECT * FROM max_operational_decisions
+      WHERE client_id = $1 AND trigger_type = 'NEW_EVIDENCE'
+        AND trigger_payload->>'ingestion_id' = $2 AND subject_type = 'expectation'
+        AND selected_action->>'action_type' = 'RESOLVE_EXPECTATION'
+        AND execution_status <> 'SUPERSEDED'
+      ORDER BY created_at, id
+    `, [this.clientId, ingestionId]);
+    return rows.map(row => this._hydrateDecision(row));
+  }
+
   async findActiveDecision({ clientId, subjectType, subjectId, actionType }) {
     const { rows } = await this.db.query(`
       SELECT * FROM max_operational_decisions
@@ -97,6 +110,7 @@ class PostgresDecisionStore {
         execution_status = EXCLUDED.execution_status,
         verification_status = EXCLUDED.verification_status,
         output_payload = EXCLUDED.output_payload,
+        error_code = EXCLUDED.error_code,
         completed_at = EXCLUDED.completed_at
     `, [
       intent.id, intent.decision_id, intent.client_id, intent.action_type,
@@ -106,6 +120,15 @@ class PostgresDecisionStore {
       intent.execution_status === 'EXECUTED' ? new Date().toISOString() : null,
     ]);
     return intent;
+  }
+
+  async findActionIntentByIdempotency(clientId, idempotencyKey) {
+    if (String(clientId) !== String(this.clientId)) return null;
+    const { rows } = await this.db.query(
+      `SELECT * FROM max_operational_action_intents WHERE client_id = $1 AND idempotency_key = $2`,
+      [this.clientId, idempotencyKey]
+    );
+    return rows[0] || null;
   }
 
   async createAoTask(task) {

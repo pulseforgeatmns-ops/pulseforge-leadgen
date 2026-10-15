@@ -5,6 +5,7 @@ const { canonicalOutboundEmailIneligibilityReason, normalizeDomain } = require('
 const { normalizeVertical } = require('../utils/normalize');
 const {
   ENRICHABLE_SCOUT_VERTICALS,
+  CANONICAL_ENRICHABLE_SCOUT_VERTICALS,
   evaluateReplenishmentAdmission,
   formatProvenanceNotes,
   createReplenishmentAdmissionCounters,
@@ -44,6 +45,7 @@ const {
   retryUnverifiedEmails,
   emptyVerificationRetryTelemetry,
   mergeVerificationRetryTelemetry,
+  verificationRetryFailureReasons,
 } = require('./emailVerificationRecovery');
 const {
   evaluatePreparationRefill,
@@ -472,6 +474,8 @@ function scoutInput(program, source, plan, tenantContext = null, discoveryGenera
     targetContext: {
       geography: region,
       geographyScope: scope.scope || null,
+      cities: ((source?.mission || source?.payload || source || {}).structuredMission?.geography?.cities || scope.cities).slice(),
+      missionBound: true,
       segments,
       businessType,
       desiredSignals: pulseforgeCashflow
@@ -611,12 +615,20 @@ async function persistDiscoveredCompanies(pool, store, {
       const observed = await require('./scoutWebsiteBusinessEvidence').acquireBusinessEvidence(company, admissionContext);
       if (observed) { company = observed.candidate; businessEvidence = observed.evidence; }
     }
+    const admission = evaluateReplenishmentAdmission(company, admissionContext);
+    if (!admission.admitted) {
+      reject(admission.reason);
+      continue;
+    }
+    if (tenant.tenantId === '1') {
+      const offer = require('../utils/pulseforgeCashflowOffer');
+      const reason = scope.offerId !== offer.PULSEFORGE_CASHFLOW_OFFER_ID
+        ? offer.SOURCE_REVIEW_BLOCKER
+        : offer.pulseforgeTargetReason({ ...company, website, domain, industry: admission.vertical });
+      if (reason) { reject(reason); continue; }
+    }
+
     if (ownership.kind === OWNERSHIP_KINDS.SAME_COMPANY_DIFFERENT_CONTACT) {
-      const admission = evaluateReplenishmentAdmission(company, admissionContext);
-      if (!admission.admitted) {
-        reject(admission.reason);
-        continue;
-      }
       if (typeof store.one === 'function') {
         const recent = await store.one(`SELECT id FROM acquisition_outbound_events
           WHERE tenant_id=$1 AND event_type='scout_contact_recovery_attempt'
@@ -639,20 +651,6 @@ async function persistDiscoveredCompanies(pool, store, {
       }
       reject('same_company_different_contact');
       continue;
-    }
-
-    const admission = evaluateReplenishmentAdmission(company, admissionContext);
-    if (!admission.admitted) {
-      reject(admission.reason);
-      continue;
-    }
-
-    if (tenant.tenantId === '1') {
-      const offer = require('../utils/pulseforgeCashflowOffer');
-      const reason = scope.offerId !== offer.PULSEFORGE_CASHFLOW_OFFER_ID
-        ? offer.SOURCE_REVIEW_BLOCKER
-        : offer.pulseforgeTargetReason({ ...company, website, domain, industry: admission.vertical });
-      if (reason) { reject(reason); continue; }
     }
 
     counters.fit += 1;
@@ -685,7 +683,7 @@ async function persistDiscoveredCompanies(pool, store, {
       admission.vertical,
       company.location || admission.provenance?.discoveryCity || null,
       notes,
-      ENRICHABLE_SCOUT_VERTICALS.map(v => v.toLowerCase()),
+      CANONICAL_ENRICHABLE_SCOUT_VERTICALS.map(v => v.toLowerCase()),
       tenant.clientId,
     ]);
     inserted += result.rowCount;
@@ -734,6 +732,15 @@ async function runEnrichmentBatches(enrichment, pool, requested, tenantContext =
     tenantId: tenantContext?.tenantId,
     program: tenantContext?.program,
   });
+  let verticals = ENRICHABLE_SCOUT_VERTICALS;
+  if (tenant.tenantId === '1') {
+    const offer = require('../utils/pulseforgeCashflowOffer');
+    const source = tenantContext?.source;
+    const reason = offer.pulseforgeMissionReason(source?.mission || source?.payload || source);
+    if (reason) throw Object.assign(new Error(reason), { code: reason });
+    const scope = sourceScope(source);
+    verticals = missionCompatibleVerticals({ missionSegments: scope.eligibleSubsegments });
+  }
   const summaries = [];
   let promoted = 0;
   let recovered = 0;
@@ -751,7 +758,7 @@ async function runEnrichmentBatches(enrichment, pool, requested, tenantContext =
       tenantId: tenant.tenantId,
       limit: Math.min(DEFAULT_ENRICHMENT_BATCH, remaining),
       retryHours: 1,
-      verticals: ENRICHABLE_SCOUT_VERTICALS,
+      verticals,
       db: pool,
     });
     summaries.push(summary);
@@ -783,7 +790,7 @@ async function defaultScoutRamp({
 } = {}) {
   const governed = governedContext || createGovernedOutboundContext({ program });
   const tenant = resolveReplenishmentTenantContext({ governedContext: governed, program });
-  const tenantBinding = { ...tenant, program, governedContext: governed };
+  const tenantBinding = { ...tenant, program, governedContext: governed, source };
   const enricher = enrichment || require('../scoutUnenrichedEnrichmentAgent');
   const recoverExisting = recoverExistingInventory
     || require('./existingInventoryRecovery').recoverExistingGovernedInventory;
@@ -1296,6 +1303,8 @@ async function runMaxOutboundControlLoop(options = {}) {
     verificationRetryRisky: Number(verificationRetry.verificationRetryRisky || 0),
     verificationRetryInvalid: Number(verificationRetry.verificationRetryInvalid || 0),
     verificationRetryFailed: Number(verificationRetry.verificationRetryFailed || 0),
+    verificationRetryFailureReasons: verificationRetryFailureReasons(verificationRetry.verificationRetryFailureReasons),
+    verificationRetryLoadFailed: Number(verificationRetry.verificationRetryLoadFailed || 0),
     yield: scout?.yield || null,
     lossBuckets: scout?.lossBuckets || null,
     funnel,

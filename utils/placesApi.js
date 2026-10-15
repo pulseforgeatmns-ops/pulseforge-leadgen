@@ -5,8 +5,12 @@
  */
 
 const axios = require('axios');
+const { reserveApiCall, settleApiCall } = require('./apiSpendControl');
+const { PLACES_UPPER_BOUND } = require('./apiPricing');
 const {
   PLACES_ENDPOINTS,
+  getPlacesContext,
+  buildAttributionRow,
   recordPlacesRequest,
   normalizePlacesQuery,
   countFromResult,
@@ -15,8 +19,33 @@ const {
   buildCacheKey,
   lookup,
   storeResult,
+  shareInFlight,
   DEFAULT_STRATEGY,
 } = require('./placesQueryCache');
+
+async function guardedPlacesCall(recordBase, deps, execute) {
+  const row = buildAttributionRow(recordBase, getPlacesContext());
+  const reserve = deps.reserveApiCall || reserveApiCall;
+  const settle = deps.settleApiCall || settleApiCall;
+  const estimate = PLACES_UPPER_BOUND[row.endpoint] ?? null;
+  let id;
+  try { id = await reserve({ provider: 'google_places', agentName: row.caller,
+    tenantId: row.tenantId, missionId: row.missionId, operation: row.endpoint,
+    estimatedUsd: estimate, pricingBasis: 'places_gross_upper_field_tier_2026_10_14' }, { db: deps.db });
+  } catch (err) { err.apiUsageNoNetwork = true; throw err; }
+  let result;
+  try { result = await execute(); }
+  catch (err) {
+    await settle(id, { status: 'uncertain', httpStatus: err.response?.status }, { db: deps.db })
+      .catch(() => console.warn('[api-usage] Places attempt remains reserved.'));
+    throw err;
+  }
+  const status = result.httpStatus ?? result.status;
+  await settle(id, { status: status >= 200 && status < 300 ? 'ok' : 'error',
+    estimatedUsd: estimate, httpStatus: status }, { db: deps.db })
+    .catch(() => console.warn('[api-usage] Places result remains reserved.'));
+  return result;
+}
 
 async function readFetchJson(res) {
   if (res && typeof res.json === 'function') return res.json();
@@ -152,6 +181,9 @@ async function legacyTextSearch(params = {}, deps = {}) {
   const cacheKey = buildCacheKey({
     endpoint: PLACES_ENDPOINTS.TEXT_SEARCH,
     normalizedQuery: recordBase.normalizedQuery,
+    query: params.query,
+    pageToken: params.pageToken,
+    apiKey: params.apiKey,
   });
   const started = Date.now();
 
@@ -177,9 +209,16 @@ async function legacyTextSearch(params = {}, deps = {}) {
   }
 
   let result;
+  let reused = false;
   try {
-    result = await executeLegacyTextSearch(params);
+    const execute = () => guardedPlacesCall(recordBase, deps, () => executeLegacyTextSearch(params));
+    const pending = useCache && recordBase.normalizedQuery
+      ? shareInFlight(`${cacheKey}:timeout:${params.timeout ?? 30000}`, execute)
+      : { promise: execute(), reused: false };
+    reused = pending.reused;
+    result = await pending.promise;
   } catch (err) {
+    if (err.apiUsageNoNetwork) throw err;
     await recordCall(
       recordBase,
       {
@@ -192,16 +231,23 @@ async function legacyTextSearch(params = {}, deps = {}) {
       deps,
       started,
       {
-        cacheHit: false,
-        cacheMiss: Boolean(useCache && recordBase.normalizedQuery),
+        cacheHit: reused,
+        cacheMiss: !reused && Boolean(useCache && recordBase.normalizedQuery),
         cacheKey: useCache ? cacheKey : null,
-        cacheStrategy: useCache ? DEFAULT_STRATEGY : null,
+        cacheStrategy: reused ? 'memory_inflight' : useCache ? DEFAULT_STRATEGY : null,
       }
     );
     throw err;
   }
 
-  if (useCache && recordBase.normalizedQuery && result.ok) {
+  if (reused) {
+    await recordCall(recordBase, result, params, deps, started, {
+      cacheHit: true, cacheMiss: false, cacheAge: 0, cacheKey, cacheStrategy: 'memory_inflight',
+    });
+    return result;
+  }
+
+  if (useCache && recordBase.normalizedQuery && result.ok && ['OK', 'ZERO_RESULTS'].includes(result.googleStatus)) {
     storeResult(cacheKey, result, PLACES_ENDPOINTS.TEXT_SEARCH);
   }
 
@@ -240,6 +286,7 @@ async function legacyPlaceDetails(params = {}, deps = {}) {
     endpoint: PLACES_ENDPOINTS.PLACE_DETAILS,
     placeId: params.placeId,
     fieldMask: params.fields,
+    apiKey: params.apiKey,
   });
   const started = Date.now();
 
@@ -265,9 +312,16 @@ async function legacyPlaceDetails(params = {}, deps = {}) {
   }
 
   let result;
+  let reused = false;
   try {
-    result = await executeLegacyPlaceDetails(params);
+    const execute = () => guardedPlacesCall(recordBase, deps, () => executeLegacyPlaceDetails(params));
+    const pending = useCache && params.placeId
+      ? shareInFlight(`${cacheKey}:timeout:${params.timeout ?? 30000}`, execute)
+      : { promise: execute(), reused: false };
+    reused = pending.reused;
+    result = await pending.promise;
   } catch (err) {
+    if (err.apiUsageNoNetwork) throw err;
     await recordCall(
       recordBase,
       {
@@ -280,16 +334,23 @@ async function legacyPlaceDetails(params = {}, deps = {}) {
       deps,
       started,
       {
-        cacheHit: false,
-        cacheMiss: Boolean(useCache && params.placeId),
+        cacheHit: reused,
+        cacheMiss: !reused && Boolean(useCache && params.placeId),
         cacheKey: useCache ? cacheKey : null,
-        cacheStrategy: useCache ? DEFAULT_STRATEGY : null,
+        cacheStrategy: reused ? 'memory_inflight' : useCache ? DEFAULT_STRATEGY : null,
       }
     );
     throw err;
   }
 
-  if (useCache && params.placeId && result.ok) {
+  if (reused) {
+    await recordCall(recordBase, result, params, deps, started, {
+      cacheHit: true, cacheMiss: false, cacheAge: 0, cacheKey, cacheStrategy: 'memory_inflight',
+    });
+    return result;
+  }
+
+  if (useCache && params.placeId && result.ok && result.googleStatus === 'OK') {
     storeResult(cacheKey, result, PLACES_ENDPOINTS.PLACE_DETAILS);
   }
 
@@ -324,7 +385,7 @@ async function v1SearchText(params = {}, deps = {}) {
   let result;
 
   try {
-    const res = await axios.post(V1_SEARCH_TEXT, params.body, {
+    const res = await guardedPlacesCall(recordBase, deps, () => axios.post(V1_SEARCH_TEXT, params.body, {
       headers: {
         'Content-Type': 'application/json',
         'X-Goog-Api-Key': params.apiKey,
@@ -332,7 +393,7 @@ async function v1SearchText(params = {}, deps = {}) {
       },
       timeout: params.timeout || 30000,
       validateStatus: () => true,
-    });
+    }));
     result = {
       httpStatus: res.status,
       googleStatus: res.data?.error?.status || (res.status < 300 ? 'OK' : null),
@@ -340,6 +401,7 @@ async function v1SearchText(params = {}, deps = {}) {
       ok: res.status >= 200 && res.status < 300,
     };
   } catch (err) {
+    if (err.apiUsageNoNetwork) throw err;
     result = {
       httpStatus: err.response?.status ?? null,
       googleStatus: err.response?.data?.error?.status || null,
@@ -371,7 +433,7 @@ async function v1PlaceDetails(params = {}, deps = {}) {
   let result;
 
   try {
-    const res = await axios.get(`${V1_PLACE_DETAILS}/${encodeURIComponent(params.placeId)}`, {
+    const res = await guardedPlacesCall(recordBase, deps, () => axios.get(`${V1_PLACE_DETAILS}/${encodeURIComponent(params.placeId)}`, {
       headers: {
         'Content-Type': 'application/json',
         'X-Goog-Api-Key': params.apiKey,
@@ -379,7 +441,7 @@ async function v1PlaceDetails(params = {}, deps = {}) {
       },
       timeout: params.timeout || 30000,
       validateStatus: () => true,
-    });
+    }));
     result = {
       httpStatus: res.status,
       googleStatus: res.data?.error?.status || (res.status < 300 ? 'OK' : null),
@@ -387,6 +449,7 @@ async function v1PlaceDetails(params = {}, deps = {}) {
       ok: res.status >= 200 && res.status < 300,
     };
   } catch (err) {
+    if (err.apiUsageNoNetwork) throw err;
     result = {
       httpStatus: err.response?.status ?? null,
       googleStatus: err.response?.data?.error?.status || null,
@@ -415,11 +478,11 @@ async function geocodeAddress(params = {}, deps = {}) {
   let result;
 
   try {
-    const res = await axios.get(GEOCODE_URL, {
+    const res = await guardedPlacesCall(recordBase, deps, () => axios.get(GEOCODE_URL, {
       params: { address: params.address, key: params.apiKey },
       timeout: params.timeout || 8000,
       validateStatus: () => true,
-    });
+    }));
     result = {
       httpStatus: res.status,
       googleStatus: res.data?.status || null,
@@ -427,6 +490,7 @@ async function geocodeAddress(params = {}, deps = {}) {
       ok: res.status >= 200 && res.status < 300,
     };
   } catch (err) {
+    if (err.apiUsageNoNetwork) throw err;
     result = {
       httpStatus: err.response?.status ?? null,
       googleStatus: err.response?.data?.status || null,
@@ -456,3 +520,4 @@ module.exports = {
   v1PlaceDetails,
   geocodeAddress,
 };
+
