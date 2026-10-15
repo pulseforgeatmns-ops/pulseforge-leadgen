@@ -456,3 +456,54 @@ test('inventory buffer never exceeds the remaining reviewed total grant',()=>{
  const plan=buildControlPlan({dailyCap:1,emmettCapacity:4,cleanInventory:2,targetDays:3,totalAttempted:0,policy:{dailyCap:1,totalCap:2},operatingCapacity:{planningDailyCapacity:1,dispatchCapacityNow:0,effectiveDailyCapacity:1}});
  assert.equal(plan.targetInventory,2);assert.equal(plan.shouldReplenish,false);
 });
+
+test('explicit restaurant FOH mission accepts evidenced restaurants without widening STR scope', () => {
+  const scope = { segment: 'commercial_cleaning', eligibleSubsegments: ['property_manager', 'restaurant_foh'], cities: ['manchester'] };
+  const row = { client_id: 10, service_area_match: 'Manchester', company_location: 'Manchester, NH', company_name: 'Elm Bistro', vertical: 'restaurant' };
+  assert.equal(missionCandidateReason(row, scope, '10'), null);
+  assert.equal(missionCandidateReason(row, { ...scope, eligibleSubsegments: ['short_term_rental'] }, '10'), 'mission_segment_mismatch');
+  assert.equal(missionCandidateReason({ ...row, company_location: 'Boston, MA', service_area_match: 'Boston' }, scope, '10'), 'service_area_not_confirmed');
+  assert.equal(missionCandidateReason(row, scope, '1'), 'pulseforge_reviewed_offer_required');
+});
+
+test('restaurant inventory does not require FOH scope before a facilities assessment', () => {
+  const scope = { segment: 'restaurant_foh', cities: ['manchester'] };
+  const row = { client_id: 10, service_area_match: 'Manchester', company_location: 'Manchester, NH', company_name: 'Queen City Ghost Kitchen', vertical: 'restaurant' };
+  assert.equal(missionCandidateReason(row, scope, '10'), null);
+  assert.equal(missionCandidateReason({ ...row, company_name: 'Food Manufacturing Plant' }, scope, '10'), 'contradictory_business_type');
+});
+
+test('qualified knowledge cannot bypass restaurant business fit or geography but retains unrelated tenant behavior', async t => {
+  const { loadCleanInventory } = require('../services/maxOutboundControlLoop');
+  const inventory = require('../services/acquisitionMissionInventory');
+  const row = { id: 'restaurant-test', company_id: 'c', client_id: 10,
+    company_name: 'Elm Bistro', company_domain: 'elm.example', email: 'owner@elm.example',
+    email_verified: true, email_status: 'valid', enrichment_provenance: { email: { source: 'website_email' } },
+    vertical: 'restaurant', service_area_match: 'Manchester', company_location: 'Manchester, NH' };
+  t.mock.method(inventory, 'loadKnowledgeInventory', async () => [{ ...row, qualificationReason: null }]);
+  const pool = { query: async (sql, params) => {
+    assert.match(sql, /WHERE p.client_id=\$1/);
+    assert.match(sql, /c.client_id=p.client_id/);
+    assert.equal(params[0], row.client_id);
+    return { rows: [row] };
+  } };
+  const store = { candidateOwnership: async () => null, suppression: async () => null };
+  const source = { payload: { structuredMission: { market: { eligibleSubsegments: ['restaurant_foh'] }, geography: { cities: ['Manchester'] } } } };
+  const run = () => loadCleanInventory(pool, store, source, row.client_id, { tenantId: String(row.client_id) });
+  assert.equal((await run()).clean.length, 1);
+  source.payload.structuredMission.market.eligibleSubsegments = ['short_term_rental'];
+  assert.equal((await run()).exclusionCounts.business_fit, 1);
+  source.payload.structuredMission.market.eligibleSubsegments = ['restaurant'];
+  assert.equal((await run()).clean.length, 1);
+  row.company_name = 'Queen City Ghost Kitchen';
+  assert.equal((await run()).clean.length, 1);
+  row.company_name = 'Food Manufacturing Plant';
+  assert.equal((await run()).exclusionCounts.business_fit, 1);
+  row.company_name = 'Elm Bistro'; row.company_location = 'Boston, MA'; row.service_area_match = 'Boston';
+  assert.equal((await run()).clean.length, 0);
+  // Existing knowledge qualification remains authoritative for unrelated segments.
+  row.client_id = 13; row.vertical = 'property_manager';
+  const unrelated = await run();
+  assert.equal(unrelated.exclusionCounts.business_fit, undefined);
+  assert.equal(unrelated.exclusionCounts.out_of_scope, undefined);
+});

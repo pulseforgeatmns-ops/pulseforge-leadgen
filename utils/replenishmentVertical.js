@@ -90,26 +90,6 @@ const FOUNDER_LED_VERTICAL_EVIDENCE = Object.freeze({
   auto: [/\bauto(?:motive)? repair\b/i, /\bauto service\b/i, /\bmechanic shop\b/i],
 });
 
-const RESTAURANT_BOH_ONLY_EVIDENCE = [
-  /\bcommissary\b/i,
-  /\bghost kitchen\b/i,
-  /\bcommercial kitchen\b/i,
-  /\bfood (?:manufacturer|manufacturing|processor|processing|production)\b/i,
-  /\bmeal prep(?:aration)? (?:facility|company|service)\b/i,
-  /\bcatering (?:company|service|kitchen)\b/i,
-];
-
-const RESTAURANT_FOH_EVIDENCE = [
-  /\brestaurant\b/i,
-  /\bcafe\b/i,
-  /\bbistro\b/i,
-  /\btavern\b/i,
-  /\bgastropub\b/i,
-  /\bdiner\b/i,
-  /\bbar and grill\b/i,
-  /\beatery\b/i,
-];
-
 const STR_PLACE_TYPES = new Set(['lodging', 'extended stay', 'vacation rental']);
 const PM_PLACE_TYPES = new Set(['real estate agency']);
 
@@ -332,6 +312,17 @@ function formatProvenanceNotes(baseNote, provenance = {}) {
   return `${baseNote} | discovery: ${JSON.stringify(payload)}`;
 }
 
+// Restaurant missions identify businesses, not the cleaning scope to promise.
+// Kitchen/FOH requirements are assessed later. Industrial food production is
+// a distinct business type; a stale restaurant tag must not override it.
+function restaurantBusinessScopeReason(candidate = {}, context = {}) {
+  const segments = context.missionSegments?.length ? context.missionSegments : [context.missionSegment];
+  if (!segments.map(normalizeVertical).some(x => ['restaurant', 'restaurant_foh'].includes(x))) return null;
+  const text = classificationHaystack(candidate, context);
+  return /\bfood (?:manufacturer|manufacturing|processor|processing|production facility)\b/i.test(text)
+    ? 'contradictory_business_type' : null;
+}
+
 function evaluateReplenishmentAdmission(candidate = {}, context = {}) {
   const name = asText(candidate.name || candidate.company);
   const website = asText(candidate.website || candidate.website_url || candidate.url);
@@ -365,14 +356,8 @@ function evaluateReplenishmentAdmission(candidate = {}, context = {}) {
   const admissionContext = { ...context, ...provenance };
   const text = classificationHaystack(candidate, admissionContext);
 
-  const restaurantFohMission = (context.missionSegments || [context.missionSegment])
-    .map(normalizeVertical)
-    .includes('restaurant_foh');
-  if (restaurantFohMission
-    && hasEvidence(text, RESTAURANT_BOH_ONLY_EVIDENCE)
-    && !hasEvidence(text, RESTAURANT_FOH_EVIDENCE)) {
-    return { admitted: false, reason: 'restaurant_boh_only' };
-  }
+  const restaurantReason = restaurantBusinessScopeReason(candidate, admissionContext);
+  if (restaurantReason) return { admitted: false, reason: restaurantReason };
 
   const vertical = resolveReplenishmentVertical(candidate, admissionContext);
   // A verified heating/plumbing operator can perform both trades. Additional
@@ -493,6 +478,7 @@ module.exports = {
   CANONICAL_ENRICHABLE_SCOUT_VERTICALS,
   resolveReplenishmentVertical,
   evaluateReplenishmentAdmission,
+  restaurantBusinessScopeReason,
   missionCompatibleVerticals,
   isFounderLedSmallBusinessMission,
   buildDiscoveryProvenance,

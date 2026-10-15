@@ -9,6 +9,7 @@ const {
   ENRICHABLE_SCOUT_VERTICALS,
   CANONICAL_ENRICHABLE_SCOUT_VERTICALS,
   evaluateReplenishmentAdmission,
+  restaurantBusinessScopeReason,
   formatProvenanceNotes,
   createReplenishmentAdmissionCounters,
   recordReplenishmentRejection,
@@ -284,6 +285,7 @@ function segmentAliases(scope) {
   if (['property_manager', 'property_management'].includes(scope.segment)) {
     ['property_manager', 'property_management', 'str_manager'].forEach(x => aliases.add(x));
   }
+  if (scope.segment === 'restaurant_foh') aliases.add('restaurant');
   if (isSmallBusinessOwnerSegment(scope.segment)) {
     missionCompatibleVerticals({ missionSegment: scope.segment }).forEach(x => aliases.add(x));
   }
@@ -319,6 +321,11 @@ function missionCandidateReason(row, scope, tenantId = null) {
   const vertical = prospectMissionVertical(row, scope);
   const aliases = segmentAliases(scope);
   if (aliases.size && (!vertical || !aliases.has(vertical))) return 'mission_segment_mismatch';
+  if (vertical === 'restaurant') {
+    return restaurantBusinessScopeReason({ ...row, name: row.company_name || row.name }, {
+      missionSegments: scope.eligibleSubsegments?.length ? scope.eligibleSubsegments : [scope.segment],
+    });
+  }
   return null;
 }
 
@@ -382,7 +389,12 @@ async function loadCleanInventory(pool, store, source, clientId, policy = {}) {
     const scopedRow = knowledgeRow
       ? { ...row, knowledge_content: knowledgeRow.knowledge_content }
       : row;
-    const missionReason = qualifiedKnowledge.has(String(row.id)) ? null : missionCandidateReason(scopedRow, scope, cid);
+    // Reviewed knowledge must not bypass explicit restaurant source/geography boundaries.
+    const restaurantCandidate = prospectMissionVertical(scopedRow, scope) === 'restaurant'
+      && (cid === 10 || (scope.eligibleSubsegments?.length ? scope.eligibleSubsegments : [scope.segment])
+        .some(segment => ['restaurant', 'restaurant_foh'].includes(segment)));
+    const missionReason = qualifiedKnowledge.has(String(row.id)) && !restaurantCandidate
+      ? null : missionCandidateReason(scopedRow, scope, cid);
     const emailReason = missionReason ? null : governedContactReason(row, policy);
     const candidate = {
       candidateId: String(row.id),
