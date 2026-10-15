@@ -108,6 +108,7 @@
       "utils/babrunContactClassification.js",
       "utils/babrunScoutContactEvidence.js",
       "scripts/lib/babrunContactResolution.js",
+      "scripts/lib/anchorMissionBoundEnrichment.js",
       "scripts/promoteUnenriched.js",
       "test/helpers/babrunScoutIntake.js",
       "test/fixtures/babrunScoutIntakeSchema.sql",
