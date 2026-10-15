@@ -170,3 +170,12 @@ describe('outbound diagnostic accuracy CI coverage', () => {
     assert.ok(workflow.includes('test/outboundControlDiagnostics.test.js'));
   });
 });
+
+it('selects governed outbound for Babrun provider-chain persistence and both regression files', () => {
+  for (const file of ['scripts/lib/anchorMissionBoundEnrichment.js',
+    'test/babrunGovernedEnrichmentEvidence.test.js', 'test/babrunGovernedEnrichmentEvidencePostgres.test.js']) {
+    assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
+  }
+  const workflow = require('node:fs').readFileSync(require('node:path').join(__dirname, '../.github/workflows/pr-ci-lean.yml'), 'utf8');
+  assert.match(workflow, /node --test test\/babrunGovernedEnrichmentEvidence\.test\.js test\/babrunGovernedEnrichmentEvidencePostgres\.test\.js/);
+});

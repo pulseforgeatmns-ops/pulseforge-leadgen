@@ -150,7 +150,9 @@ jobs:
         env:
           DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
           DATABASE_SSL: 'false'
-        run: npm run test:babrun-scout-intake
+        run: |
+          npm run test:babrun-scout-intake
+          node --test test/babrunGovernedEnrichmentEvidence.test.js test/babrunGovernedEnrichmentEvidencePostgres.test.js
       - name: Mailbox and scheduling regressions
         env:
           DATABASE_URL: postgresql://localhost:1/pulseforge_test_only

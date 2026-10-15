@@ -138,7 +138,22 @@ async function loadMissionBoundProspects(db, missionId, opts = {}) {
   };
 }
 
+function providerContactEvidence(row, enriched, verification) {
+  if (Number(row.client_id) !== 13) return null;
+  const { applyScoutEnrichment, babrunScoutContactEvidence } = require('../../utils/babrunScoutContactEvidence');
+  const domain = resolveEnrichmentDomain(row);
+  // The provider chain returns one selected result. Mixed/unattributed sources
+  // remain review-only; never borrow a previous CRM name, title or source URL.
+  const sources = Array.isArray(enriched.source) ? enriched.source : [enriched.source];
+  const selectedSource = sources.filter(Boolean).join('+');
+  const lead = applyScoutEnrichment({}, enriched, selectedSource, row.client_id, domain);
+  return babrunScoutContactEvidence({ lead, email: enriched.email, verification, officialDomain: domain });
+}
+
 async function persistProviderChainEmail(db, row, enriched, verification, dryRun) {
+  if (Number(row.client_id) === 13 && (row.do_not_contact === true || verification.reject === true)) {
+    return { persisted: false, reason: 'failed_safety_gates' };
+  }
   const providerSource = persistableEmailSource((enriched.source || ['provider_chain']).join('+'))
     || 'provider_chain';
   const candidate = {
@@ -160,16 +175,28 @@ async function persistProviderChainEmail(db, row, enriched, verification, dryRun
   }
   const bindingReason = require('../../utils/governedContactEligibility').companyRecipientReason(candidate);
   if (bindingReason) return { persisted: false, reason: bindingReason, candidate };
+  const contactEvidence = providerContactEvidence(row, enriched, verification);
   if (dryRun) {
-    return { persisted: false, dryRun: true, wouldPersist: candidate.email };
+    return { persisted: false, dryRun: true, wouldPersist: candidate.email, contactEvidence };
   }
 
   const contactParts = String(enriched.contact || '').trim().split(/\s+/).filter(Boolean);
   const firstName = contactParts[0] || null;
   const lastName = contactParts.length > 1 ? contactParts.slice(1).join(' ') : null;
 
-  await db.query(
-    `UPDATE prospects
+  // Lock and compare the company inputs used for discovery before binding a new
+  // founder receipt. Concurrent identity changes must not inherit old evidence.
+  const persisted = await db.query(
+    `WITH bound_company AS MATERIALIZED (
+       SELECT c.id FROM companies c
+        WHERE $12::jsonb IS NOT NULL
+          AND c.id::text = $13::text AND c.client_id = $11
+          AND c.domain IS NOT DISTINCT FROM $14::text
+          AND c.website IS NOT DISTINCT FROM $15::text
+          AND c.name IS NOT DISTINCT FROM $17::text
+        FOR SHARE
+     )
+     UPDATE prospects
         SET email = $1,
             first_name = COALESCE(NULLIF(TRIM(first_name), ''), $2),
             last_name = COALESCE(NULLIF(TRIM(last_name), ''), $3),
@@ -181,9 +208,18 @@ async function persistProviderChainEmail(db, row, enriched, verification, dryRun
             verifier_response = $7::jsonb,
             do_not_contact = CASE WHEN $8 THEN true ELSE do_not_contact END,
             enrichment_provenance = COALESCE(enrichment_provenance, '{}'::jsonb) || $9::jsonb,
+            acquisition_metadata = CASE WHEN $12::jsonb IS NULL THEN acquisition_metadata
+              ELSE COALESCE(acquisition_metadata, '{}'::jsonb) || $12::jsonb END,
             updated_at = NOW()
       WHERE id = $10
-        AND client_id = $11`,
+        AND client_id = $11
+        AND ($12::jsonb IS NULL OR (
+          do_not_contact IS DISTINCT FROM TRUE
+          AND company_id::text = $13::text
+          AND website_url IS NOT DISTINCT FROM $16::text
+          AND email IS NOT DISTINCT FROM $18::text
+          AND EXISTS (SELECT 1 FROM bound_company c WHERE c.id = prospects.company_id)
+        ))`,
     [
       candidate.email,
       firstName,
@@ -196,8 +232,19 @@ async function persistProviderChainEmail(db, row, enriched, verification, dryRun
       JSON.stringify(candidate.enrichment_provenance),
       row.prospect_id,
       row.client_id,
+      contactEvidence ? JSON.stringify(contactEvidence.acquisitionMetadata) : null,
+      row.company_id || null,
+      row.domain ?? null,
+      row.website ?? null,
+      row.website_url ?? null,
+      row.company_name ?? null,
+      row.email ?? null,
     ]
   );
+
+  if (contactEvidence && persisted.rowCount === 0) {
+    return { persisted: false, reason: 'contact_update_not_applied' };
+  }
 
   await db.query(
     `INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at, client_id)
@@ -459,6 +506,7 @@ module.exports = {
   loadMissionBoundProspects,
   admitMissionBoundCandidates,
   persistProviderChainEmail,
+  providerContactEvidence,
   enrichProspectRow,
   reportProvenanceFields,
 };
