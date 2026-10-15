@@ -157,3 +157,16 @@ describe('PR CI gate selected-suite enforcement', () => {
     assert.equal(run(['not-wired'], {}), 1);
   });
 });
+
+describe('outbound diagnostic accuracy CI coverage', () => {
+  for (const file of ['services/outboundControlDiagnostics.js', 'test/outboundControlDiagnostics.test.js']) {
+    it(`selects governed outbound for ${file}`, () => {
+      const plan = buildPlan([file]);
+      assert.ok(plan.suites.includes('anchor-outbound'));
+    });
+  }
+  it('runs diagnostic regression in the governed outbound workflow', () => {
+    const workflow = require('node:fs').readFileSync(require('node:path').join(__dirname, '../.github/workflows/pr-ci-lean.yml'), 'utf8');
+    assert.ok(workflow.includes('test/outboundControlDiagnostics.test.js'));
+  });
+});
