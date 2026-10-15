@@ -90,6 +90,16 @@ jobs:
       - name: Test — AO prospect routing authorization and PostgreSQL invariants
         run: npm run test:ao-prospect-routing
 
+      - name: Install Chromium for isolated spreadsheet browser tests
+        # Dependency installation requires root; keep the executable in the
+        # runner user's cache so the subsequent non-root test can locate it.
+        run: sudo env "PATH=$PATH" "PUPPETEER_CACHE_DIR=$HOME/.cache/puppeteer" node node_modules/puppeteer/lib/cjs/puppeteer/node/cli.js browsers install chrome --install-deps
+
+      - name: Test — Max spreadsheet actual fixture, approval API and PostgreSQL reliability gate
+        env:
+          MAX_SPREADSHEET_BROWSER_TEST: '1'
+        run: npm run test:max:spreadsheet:reliability
+
       - name: Test — mission routing workspace regression suite
         run: npm run test:ci:application
 

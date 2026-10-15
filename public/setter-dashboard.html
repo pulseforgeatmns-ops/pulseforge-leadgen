@@ -1111,7 +1111,7 @@ function phoneCell(lead) {
   if (!lead.phone) return '<div class="mono">No phone</div>';
   const pf = window.PulseforgePhone;
   const display = pf ? (pf.formatPhoneDisplay(lead.phone) || lead.phone) : lead.phone;
-  const href = pf ? pf.telHref(lead.phone) : `tel:${lead.phone}`;
+  const href = lead.call_prohibited || lead.contact_prohibited ? null : (pf ? pf.telHref(lead.phone) : `tel:${lead.phone}`);
   return href
     ? `<div><a href="${href}" data-dial="${lead.id}" aria-label="Call ${display}">${display}</a></div>`
     : `<div>${display}</div>`;
@@ -1217,7 +1217,7 @@ function nextBestCall() {
   const overdue = dueLeads.filter(l => isOverdue(l.callback_at));
   if (overdue.length) return { lead: overdue[0], why: 'Overdue callback — they expected to hear from you' };
   if (dueLeads.length) return { lead: dueLeads[0], why: `Callback promised for ${fmtDateTime(dueLeads[0].callback_at)}` };
-  const callable = leads.filter(l => l.phone && !l.contact_prohibited && l.lifecycle_reason !== 'terminal_suppression');
+  const callable = leads.filter(l => l.phone && !l.call_prohibited && !l.contact_prohibited && l.lifecycle_reason !== 'terminal_suppression');
   if (callable.length) return { lead: callable[0], why: whyNow(callable[0]) };
   return null;
 }
@@ -1618,7 +1618,7 @@ function replaceLead(lead) {
 function renderPhoneTools(lead) {
   const pf = window.PulseforgePhone;
   const phoneDisplay = lead.phone ? (pf ? (pf.formatPhoneDisplay(lead.phone) || lead.phone) : lead.phone) : '-';
-  const telLink = lead.phone ? (pf ? pf.telHref(lead.phone) : `tel:${lead.phone}`) : null;
+  const telLink = lead.phone && !lead.call_prohibited && !lead.contact_prohibited ? (pf ? pf.telHref(lead.phone) : `tel:${lead.phone}`) : null;
   document.getElementById('detailPhone').textContent = phoneDisplay;
   document.getElementById('phoneStatus').textContent = '';
   document.getElementById('enrichPhoneBtn').style.display = lead.phone || lead.phone_setter_v1 || lead.is_synthetic ? 'none' : 'inline-block';
@@ -1628,7 +1628,7 @@ function renderPhoneTools(lead) {
   document.getElementById('contactLaunch').innerHTML = lead.is_synthetic
     ? '<span class="test-badge">Contact disabled for synthetic prospect</span>'
     : lead.phone ? `
-    <a class="btn primary launch-btn" href="${telLink}" data-dial="${lead.id}">Call</a>
+    ${telLink ? `<a class="btn primary launch-btn" href="${telLink}" data-dial="${lead.id}">Call</a>` : '<span>Calls suppressed</span>'}
     <button class="btn launch-btn" data-copy-phone="${lead.id}" type="button">Copy phone</button>
     ${lead.phone_setter_v1 ? '' : `<a class="btn launch-btn" href="sms:${lead.phone}">Text</a>`}
     <button class="btn launch-btn" data-workspace="${lead.id}" type="button">⧉ Workspace</button>
@@ -2271,7 +2271,7 @@ setInterval(refreshAll, 60000);
     return all.find(lead => String(lead.id) === String(id)) || null;
   }
 
-  document.addEventListener('click', event => {
+  document.addEventListener('click', async event => {
     const workspaceBtn = event.target.closest('[data-workspace]');
     if (workspaceBtn && window.PulseforgeWorkspace) {
       event.preventDefault();
@@ -2292,6 +2292,13 @@ setInterval(refreshAll, 60000);
       event.preventDefault();
       event.stopPropagation();
       const lead = findLead(dialLink.dataset.dial);
+      if (!lead || lead.call_prohibited || lead.contact_prohibited) return;
+      try {
+        await api(`/api/prospects/${encodeURIComponent(lead.id)}/call-preparation?client_id=${encodeURIComponent(lead.client_id)}`);
+      } catch (error) {
+        alert(error.message || 'Unable to verify call permission. Call held.');
+        return;
+      }
       window.PulseforgePhone.beginDialHandoff({
         prospectId: dialLink.dataset.dial,
         phone: lead?.phone || (dialLink.getAttribute('href') || '').replace('tel:', ''),

@@ -6,6 +6,10 @@ on:
       - 'utils/apiSpendControl.js'
       - 'utils/meteredAnthropic.js'
       - 'utils/placesApi.js'
+      - 'utils/placesQueryCache.js'
+      - 'packages/capabilities/discovery/providers/PlacesProvider.js'
+      - 'test/placesRequestSavings.test.js'
+      - 'test/placesCostAttribution.test.js'
       - 'services/apiUsageService.js'
       - 'routes/apiUsage.js'
       - 'routes/maxChat.js'
@@ -44,4 +48,5 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - name: Budget concurrency, reservations, history, privacy and existing agent behavior
-        run: node --test test/apiUsageControl.test.js test/apiUsageControlPostgres.test.js test/placesCostAttribution.test.js test/paigeModelSelection.test.js test/paigeDryRun.test.js test/paigeAnchorSocialDoctrine.test.js
+        run: node --test test/apiUsageControl.test.js test/apiUsageControlPostgres.test.js test/placesCostAttribution.test.js test/placesRequestSavings.test.js test/paigeModelSelection.test.js test/paigeDryRun.test.js test/paigeAnchorSocialDoctrine.test.js
+

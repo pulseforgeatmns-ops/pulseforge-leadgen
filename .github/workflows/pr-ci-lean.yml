@@ -33,6 +33,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Verify CI selection and fail-closed gate contracts
+        run: node --test test/ciPlanPr.test.js
       - name: Select CI suites
         id: plan
         run: node .github/scripts/ci-plan-pr.js changed-files.txt --github-output
@@ -210,6 +212,13 @@ jobs:
       - run: npm run test:revenue:phase16b
       - run: npm run test:anchor-phone-setter:postgres
       - run: npm run test:ao-prospect-routing
+      - name: Install Chromium for isolated spreadsheet browser tests
+        # Install dependencies as root, but retain the runner user's browser cache.
+        run: sudo env "PATH=$PATH" "PUPPETEER_CACHE_DIR=$HOME/.cache/puppeteer" node node_modules/puppeteer/lib/cjs/puppeteer/node/cli.js browsers install chrome --install-deps
+      - name: Max spreadsheet actual fixture, authenticated approval and PostgreSQL reliability
+        env:
+          MAX_SPREADSHEET_BROWSER_TEST: '1'
+        run: npm run test:max:spreadsheet:reliability
       - run: npm run test:ci:application
 
   walkthrough:
@@ -390,12 +399,12 @@ jobs:
           const failures = [];
           for (const suite of suites) {
             const outcome = results[suite];
-            if (outcome === 'skipped' || outcome === 'success') continue;
+            if (outcome === 'success') continue;
             failures.push(`${suite}: ${outcome || 'missing'}`);
           }
           if (failures.length) {
             console.error('Failed required suites:', failures.join(', '));
             process.exit(1);
           }
-          console.log('All selected suites passed or were skipped as unselected.');
+          console.log('All selected suites passed.');
           NODE
