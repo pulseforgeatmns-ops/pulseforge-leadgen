@@ -2,7 +2,7 @@
 
 const express = require('express');
 const path = require('path');
-const { requireAuth, requireRole } = require('../middleware/auth');
+function createPortalRouter({ requireAuth, requireRole, service, canonicalOrigin }) {
 const {
   AnchorPortalError,
   assertLocationAccess,
@@ -26,12 +26,13 @@ const {
   updateIssue,
   getClientHome,
   getOperatorSummary,
-} = require('../services/anchorPortal');
+} = service;
 
 const router = express.Router();
 
 const PORTAL_ROLES = ['admin', 'manager', 'cleaner', 'facility_client'];
 function expectedOrigin(req) {
+  if (canonicalOrigin) return canonicalOrigin;
   if (process.env.APP_URL) {
     try {
       const url = new URL(process.env.APP_URL);
@@ -259,5 +260,11 @@ router.patch('/api/anchor-portal/issues/:id', ...portalAuth, async (req, res) =>
   }
 });
 
-module.exports = router;
-module.exports.expectedOrigin = expectedOrigin;
+router.expectedOrigin = expectedOrigin;
+return router;
+}
+let defaultRouter;
+function defaults() { return defaultRouter ||= createPortalRouter({ ...require('../middleware/auth'), service: require('../services/anchorPortal') }); }
+module.exports = (req, res, next) => defaults()(req, res, next);
+module.exports.createPortalRouter = createPortalRouter;
+module.exports.expectedOrigin = req => defaults().expectedOrigin(req);

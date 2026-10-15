@@ -14,7 +14,7 @@ const empty = text => `<p class="muted empty">${esc(text)}</p>`;
 function flash(text, kind = 'ok') { $('flash').textContent = text; $('flash').className = `msg ${kind}`; }
 async function api(path, opts = {}) {
   let res;
-  try { res = await fetch('/api/anchor-portal' + path, {credentials:'same-origin', ...opts, headers:{Accept:'application/json', ...(opts.body ? {'Content-Type':'application/json'} : {})}, body:opts.body ? JSON.stringify(opts.body) : undefined}); }
+  try { res = await fetch('/api/anchor-portal' + path, {credentials:'same-origin', ...opts, headers:{Accept:'application/json', ...(window.PORTAL_CSRF ? {'X-CSRF-Token':window.PORTAL_CSRF} : {}), ...(opts.body ? {'Content-Type':'application/json'} : {})}, body:opts.body ? JSON.stringify(opts.body) : undefined}); }
   catch (_) { throw new Error('Connection interrupted. Your form is still here. Check your connection before trying again.'); }
   if (res.status === 401 || res.redirected) throw new Error('Your session has expired. Sign in again to continue.');
   const data = await res.json().catch(() => ({}));
