@@ -46,6 +46,8 @@ async function baseSchema(db) {
       company_id UUID REFERENCES companies(id), first_name TEXT, last_name TEXT,
       email TEXT, phone TEXT, vertical TEXT, icp_score INTEGER, status TEXT,
       service_area_match TEXT, do_not_contact BOOLEAN DEFAULT false, is_hot BOOLEAN DEFAULT false,
+      ao_call_suppressed BOOLEAN NOT NULL DEFAULT false,
+      ao_outreach_review_required BOOLEAN NOT NULL DEFAULT false,
       disposition_status TEXT NOT NULL DEFAULT 'active',
       next_action_due_at TIMESTAMPTZ, next_action_status TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -256,6 +258,17 @@ test('AO routing respects disposition_status independently of generic status', {
       true,
       'active disposition prospect should route into open AO tasks'
     );
+
+    await db.query('UPDATE prospects SET ao_call_suppressed=true WHERE id=$1', [ids.p2]);
+    const callHeld = (await taskService.listOpenTasks({ clientId: 10, db })).find(row => row.prospect_id === ids.p2);
+    assert.equal(callHeld.call_prohibited, true);
+    assert.match(callHeld.first_action, /permitted non-call follow-up/);
+    assert.equal(callHeld.ao_outreach_review_required, false, 'call-only suppression must not imply a general outreach hold');
+    await db.query('UPDATE prospects SET ao_call_suppressed=false,ao_outreach_review_required=true WHERE id=$1', [ids.p2]);
+    const admissionHeld = (await taskService.listOpenTasks({ clientId: 10, db })).find(row => row.prospect_id === ids.p2);
+    assert.equal(admissionHeld.outreach_review_required, true);
+    assert.match(admissionHeld.first_action, /Separate outreach review/);
+    await db.query('UPDATE prospects SET ao_outreach_review_required=false WHERE id=$1', [ids.p2]);
 
     await db.query(
       `UPDATE prospects SET disposition_status = 'dead', status = 'hot' WHERE id = $1`,

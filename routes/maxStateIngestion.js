@@ -7,7 +7,6 @@ const { requireAuth, requireRole } = require('../middleware/auth');
 const { normalizeClientId } = require('../utils/clientContext');
 const {
   ingestOperationalEvidence,
-  ingestSpreadsheetEvidence,
   listOverdueExpectationPrompts,
 } = require('../services/maxStateIngestionService');
 const { submitMaxComposerTurn } = require('../services/maxComposerService');
@@ -22,6 +21,8 @@ const { LIMITS } = require('../packages/max/composer/limits');
 const pool = require('../db');
 const { getEffectiveActor, impersonationProvenance } = require('../utils/requestIdentity');
 const { logImpersonationAction } = require('../services/aoImpersonationService');
+const { resolveSpreadsheetScope } = require('../utils/maxSpreadsheetAuthorization');
+const spreadsheetService = require('../services/maxSpreadsheetService');
 const {
   uploadAndTranscribeVoice,
   retryTranscription,
@@ -139,6 +140,7 @@ function parseComposerJsonBody(body = {}) {
     attachment_inputs: attachmentInputs,
     envelope_id: body.envelope_id || body.envelopeId,
     metadata: body.metadata,
+    ao_id: body.ao_id,
   };
 }
 
@@ -180,12 +182,25 @@ async function handleComposerSubmit(req, res) {
         envelope_id: req.body?.envelope_id || req.body?.envelopeId,
         metadata: req.body?.metadata ? JSON.parse(req.body.metadata) : undefined,
         actor: actorFromSession(req),
+        ao_id: req.body?.ao_id,
       };
     } else {
       payload = parseComposerJsonBody(req.body || {});
       payload.actor = actorFromSession(req);
     }
 
+    if (spreadsheetService.hasSpreadsheetInput(payload)) {
+      const scope = await resolveSpreadsheetScope(req, pool);
+      const result = await spreadsheetService.previewSpreadsheet(payload, scope, { db: pool });
+      return res.json(result);
+    }
+    // Old browser-owned plans are never authority to enter the generic ingestion
+    // path. Reload/re-upload to obtain an immutable, server-owned proposal.
+    if (payload.conversation_memory?.pendingSpreadsheetWorkbook || req.body?.spreadsheet_proposal
+        || req.body?.proposal_id) {
+      return res.status(409).json({ ok: false, error: 'server_proposal_required',
+        message: 'Open the spreadsheet proposal and approve its exact selected operations.' });
+    }
     const result = await submitMaxComposerTurn(clientId, payload);
     if (impersonationProvenance(req)) {
       await logImpersonationAction(req, { action: 'max_composer_submit', route: req.originalUrl });
@@ -221,7 +236,7 @@ async function handleComposerSubmit(req, res) {
     });
   } catch (error) {
     console.error('[max-composer]', error);
-    return res.status(500).json({ error: 'composer_failed', message: error.message });
+    return res.status(spreadsheetService.errorStatus(error)).json({ ok: false, error: error.code || 'composer_failed', message: error.message });
   }
 }
 
@@ -240,6 +255,60 @@ router.post(
   composerUpload.any(),
   handleComposerSubmit,
 );
+
+router.get('/api/v1/max/spreadsheet/scope', requireComposerWrite, async (req, res) => {
+  try {
+    const scope = await resolveSpreadsheetScope(req, pool, { allowMissingAo: true });
+    const { rows } = await pool.query("SELECT id, name FROM users WHERE client_id = $1 AND role = 'ao' AND active IS DISTINCT FROM FALSE AND ($2::int IS NULL OR id = $2) ORDER BY name, id", [scope.clientId, scope.aoId]);
+    return res.json({ tenant_id: scope.clientId, actor_id: scope.actorId, ao_id: scope.aoId,
+      can_approve: scope.canApprove, aos: rows });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({ ok: false, error: error.code || 'scope_unavailable' });
+  }
+});
+
+router.post('/api/v1/max/spreadsheet/proposals/:proposalId/commit', requireComposerWrite, async (req, res) => {
+  try {
+    const scope = await resolveSpreadsheetScope(req, pool);
+    const result = await spreadsheetService.commitSpreadsheet(req.params.proposalId, req.body || {}, scope, { db: pool });
+    return res.json(result);
+  } catch (error) {
+    return res.status(spreadsheetService.errorStatus(error)).json({ ok: false, error: error.code || 'spreadsheet_commit_failed', message: error.message,
+      ...(error.commitOutcomeUnknown ? { outcome: 'unknown', retry_same_request: true } : {}) });
+  }
+});
+
+router.get('/api/v1/max/spreadsheet/proposals/:proposalId', requireComposerWrite, async (req, res) => {
+  try {
+    const scope = await resolveSpreadsheetScope(req, pool);
+    const proposal = await spreadsheetService.getScopedProposal(spreadsheetService.proposalStore(pool, scope),
+      req.params.proposalId, req.query.conversation_id, scope);
+    return res.json({ ok: true, can_approve: scope.canApprove, spreadsheet_proposal: spreadsheetService.publicProposal(proposal, scope) });
+  } catch (error) {
+    return res.status(spreadsheetService.errorStatus(error)).json({ ok: false, error: error.code || 'proposal_unavailable' });
+  }
+});
+
+router.post('/api/v1/max/spreadsheet/proposals/:proposalId/resolve', requireComposerWrite, async (req, res) => {
+  try {
+    const scope = await resolveSpreadsheetScope(req, pool);
+    return res.json(await spreadsheetService.resolveSpreadsheet(req.params.proposalId, req.body || {}, scope, { db: pool }));
+  } catch (error) {
+    return res.status(spreadsheetService.errorStatus(error)).json({ ok: false, error: error.code || 'resolution_failed', message: error.message });
+  }
+});
+
+router.get('/api/v1/max/spreadsheet/proposals', requireComposerWrite, async (req, res) => {
+  try {
+    const scope = await resolveSpreadsheetScope(req, pool);
+    const proposals = await spreadsheetService.proposalStore(pool, scope).listProposals({
+      actorId: scope.actorId, approverRead: scope.canApprove, requestedBy: scope.authenticatedUserId,
+    });
+    return res.json({ ok: true, can_approve: scope.canApprove, proposals });
+  } catch (error) {
+    return res.status(spreadsheetService.errorStatus(error)).json({ ok: false, error: error.code || 'proposal_list_unavailable' });
+  }
+});
 
 async function handleVoiceUpload(req, res) {
   try {
@@ -369,32 +438,8 @@ router.post('/api/v1/max/ingest', requireIngestWrite, async (req, res) => {
 });
 
 router.post('/api/v1/max/ingest/spreadsheet', requireIngestWrite, async (req, res) => {
-  try {
-    const clientId = resolveClientId(req);
-    if (clientId == null) {
-      return res.status(400).json({ error: 'client_id_required' });
-    }
-    const batch = await ingestSpreadsheetEvidence(clientId, req.body || {});
-    const held = batch.recordResults.filter(r => r.skipped || (r.unresolved?.length || r.conflicts?.length)).length;
-    return res.json({
-      ok: true,
-      records_examined: batch.recordsExamined,
-      workbook_summary: batch.workbookSummary || null,
-      reconciliation_summary: batch.reconciliationPlan?.summary || null,
-      summary: batch.summary,
-      held_for_review: held,
-      telemetry: batch.telemetry || null,
-      records: batch.recordResults.map(r => ({
-        ingestion_id: r.ingestion_id,
-        receipt: r.receipt,
-        skipped: r.skipped || false,
-        telemetry: r.telemetry,
-      })),
-    });
-  } catch (error) {
-    console.error('[max-state-ingestion/spreadsheet]', error);
-    return res.status(500).json({ error: 'spreadsheet_ingestion_failed', message: error.message });
-  }
+  return res.status(410).json({ ok: false, error: 'reviewed_spreadsheet_proposal_required',
+    message: 'Upload the workbook through the composer. Persistence requires Jake’s approval of a server-owned proposal.' });
 });
 
 router.get('/api/v1/max/ingest/expectations/overdue', requireIngestWrite, async (req, res) => {

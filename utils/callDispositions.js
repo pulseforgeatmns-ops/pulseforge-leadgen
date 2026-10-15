@@ -201,6 +201,7 @@ async function reconcilePhase3dSetterSchema(db) {
     SELECT p.client_id, p.id, p.callback_at, COALESCE(p.is_synthetic, false)
     FROM prospects p
     WHERE p.callback_at IS NOT NULL
+      AND COALESCE((to_jsonb(p)->>'ao_call_suppressed')::boolean, false) = false
       AND NOT EXISTS (
         SELECT 1 FROM setter_callbacks sc
         WHERE sc.client_id = p.client_id AND sc.prospect_id = p.id AND sc.status = 'pending'

@@ -44,7 +44,7 @@ async function processClaimSet({
 }) {
   bump(telemetry, 'claims_extracted', claims.length);
 
-  const context = store.snapshotContext();
+  const context = await store.snapshotContext();
   const bindings = { ao: null, account: null, contact: null };
   const resolutions = {};
 

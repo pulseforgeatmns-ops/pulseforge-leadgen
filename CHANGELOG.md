@@ -16,6 +16,11 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Fixed
 
+- Restore AUDIT-063 Places in-flight request sharing and per-caller reuse
+  attribution after integrating failure-cache handling. Concurrent denials stay
+  sanitized, produce no business evidence, and reserve only one paid request;
+  tests cover cache expiry and synthetic spend-control dependencies.
+
 - Max merge-readiness regressions against existing contracts: restore the
   [SPEC-JEV-006](docs/specs/SPEC-JEV-006_Guarded_Active_Routing_Promotion.md) promotion
   assessment import; preserve durable-objective, operating-evidence, specialist,

@@ -271,6 +271,8 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
   let error = null;
   let nextPageToken = null;
   let attempt = 0;
+  let acceptedForQuery = 0;
+  const limit = Math.min(Number(querySpec.limit) || DEFAULT_LIMIT, DEFAULT_LIMIT);
 
   while (attempt <= MAX_RETRIES) {
     attempt += 1;
@@ -299,7 +301,8 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
     }
 
     for (const hit of page.results || []) {
-      if (seenPlaceIds.has(hit.place_id)) continue;
+      if (!hit.place_id || seenPlaceIds.has(hit.place_id)) continue;
+      seenPlaceIds.add(hit.place_id);
       const details = await fetchPlaceDetails(hit.place_id, apiKey, fetchImpl, {
         requireWebsite,
       });
@@ -307,7 +310,6 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
       const accepted = !(requireWebsite && !website);
       if (!accepted) continue;
 
-      seenPlaceIds.add(hit.place_id);
       out.push({
         companyName: details?.name || hit.name || 'Unknown',
         website: website ? normalizeDomain(website) : null,
@@ -321,6 +323,8 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
         snippet: '',
       });
       pageAccepted += 1;
+      acceptedForQuery += 1;
+      if (acceptedForQuery >= limit) break;
     }
 
     if (typeof page.commitRecord === 'function') {
@@ -331,14 +335,15 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
     }
 
     nextPageToken = page.nextPageToken || null;
-    if (!nextPageToken) break;
+    if (!nextPageToken || acceptedForQuery >= limit) break;
   }
 
   return { attempts, retries, latencyMs, quota, error };
 }
 
+// Search already returns rating. Re-requesting it adds the Atmosphere SKU.
 const PLACE_DETAILS_FIELDS =
-  'name,formatted_address,formatted_phone_number,website,place_id,types,rating,address_component,business_status';
+  'name,formatted_address,formatted_phone_number,website,place_id,types,address_component,business_status';
 
 async function fetchPlacesPage(querySpec, apiKey, fetchImpl, pageToken = null) {
   const q = `${querySpec.industry || ''} ${querySpec.location || ''}`.trim();
@@ -377,6 +382,7 @@ async function fetchPlacesPage(querySpec, apiKey, fetchImpl, pageToken = null) {
     const latencyMs = Date.now() - started;
     const httpStatus = traced.httpStatus;
     if (!traced.ok) {
+      const failureStatus = traced.applicationFailure === true ? traced.googleStatus : null;
       if (typeof traced.commitRecord === 'function') {
         await traced.commitRecord({
           businessesReturned: 0,
@@ -391,12 +397,12 @@ async function fetchPlacesPage(querySpec, apiKey, fetchImpl, pageToken = null) {
         attempt: {
           query: q,
           httpStatus,
-          googleStatus: null,
-          googleError: `http_${httpStatus}`,
+          googleStatus: failureStatus,
+          googleError: failureStatus || `http_${httpStatus}`,
           resultCount: 0,
           latencyMs,
           retries: 0,
-          quota: null,
+          quota: failureStatus === 'OVER_QUERY_LIMIT' ? { status: failureStatus } : null,
         },
       };
     }
@@ -496,3 +502,4 @@ module.exports = {
   buildQueriesForEvidence,
   createProviderExecution,
 };
+
