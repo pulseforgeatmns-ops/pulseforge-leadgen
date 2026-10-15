@@ -1,15 +1,15 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { Pool } = require('pg');
+const { createTrackedPostgresPool, closePostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
 const { refreshUsersRoleConstraint, withSchemaTransaction, refreshUsersRoleConstraintOnClient, USERS_ROLE_LOCK } = require('../utils/usersRoleConstraint');
 const { USER_ROLES } = require('../utils/userRoles');
 
 test('disposable PostgreSQL: concurrent role refresh, atomic failures, preserved checks/data and no held locks', { timeout: 60000 }, async t => {
   const instance = await startDisposablePostgres('portal-startup-');
-  const pool = new Pool({ connectionString: instance.connectionString, max: 8 });
-  t.after(async () => { await pool.end(); await instance.stop(); });
+  const pool = createTrackedPostgresPool({ connectionString: instance.connectionString, max: 8 });
+  t.after(async () => { await closePostgresFixture(pool, instance); });
   await pool.query(`CREATE TABLE users (id serial PRIMARY KEY, role text NOT NULL CHECK (role IN ('admin', 'manager')), name text, CONSTRAINT keep_role_name CHECK (role <> 'admin' OR name IS NOT NULL)); INSERT INTO users(role,name) VALUES ('admin','Synthetic admin'); CREATE SCHEMA unrelated; CREATE TABLE unrelated.users (role text CONSTRAINT users_role_check CHECK(role = 'custom'));`);
   const definitions = async () => (await pool.query(`SELECT conname, pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conrelid='users'::regclass ORDER BY conname`)).rows;
   const unrelated = (await pool.query(`SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conrelid='unrelated.users'::regclass`)).rows;
@@ -18,8 +18,8 @@ test('disposable PostgreSQL: concurrent role refresh, atomic failures, preserved
   await assert.rejects(pool.query("INSERT INTO users(role) VALUES ('unknown')"), { code: '23514' });
   await assert.rejects(pool.query("INSERT INTO users(role) VALUES ('admin')"), { code: '23514' });
   assert.deepEqual((await pool.query(`SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conrelid='unrelated.users'::regclass`)).rows, unrelated);
-  const shadowPool = new Pool({ connectionString: instance.connectionString, options: '-c search_path=unrelated,public' });
-  try { await assert.rejects(refreshUsersRoleConstraint(shadowPool), /must resolve to public.users/); } finally { await shadowPool.end(); }
+  const shadowPool = createTrackedPostgresPool({ connectionString: instance.connectionString, options: '-c search_path=unrelated,public' });
+  try { await assert.rejects(refreshUsersRoleConstraint(shadowPool), /must resolve to public.users/); } finally { await closePostgresPool(shadowPool); }
   const before = await definitions();
   // Failure after DROP/ADD and subsequent DDL must restore both constraint and schema.
   await assert.rejects(withSchemaTransaction(pool, async client => {
@@ -54,13 +54,13 @@ test('disposable PostgreSQL: concurrent role refresh, atomic failures, preserved
 
 test('actual portal initializer rolls back partial DDL and stays seed-free; repeated startup preserves history', { timeout: 60000 }, async t => {
   const instance = await startDisposablePostgres('portal-init-');
-  const pool = new Pool({ connectionString: instance.connectionString, max: 6 });
+  const pool = createTrackedPostgresPool({ connectionString: instance.connectionString, max: 6 });
   const dbPath = require.resolve('../db');
   const previous = require.cache[dbPath];
   require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: pool };
   const schemaPath = require.resolve('../utils/anchorPortalSchema'); delete require.cache[schemaPath];
   const schema = require(schemaPath);
-  t.after(async () => { delete require.cache[schemaPath]; if (previous) require.cache[dbPath] = previous; else delete require.cache[dbPath]; await pool.end(); await instance.stop(); });
+  t.after(async () => { delete require.cache[schemaPath]; if (previous) require.cache[dbPath] = previous; else delete require.cache[dbPath]; await closePostgresFixture(pool, instance); });
   await pool.query("CREATE TABLE users(id serial PRIMARY KEY, role text NOT NULL CHECK(role IN ('admin','manager')), name text)");
   // Force an error deep in the real helper after early CREATE TABLE statements.
   await pool.query('CREATE TABLE anchor_portal_issues(id serial PRIMARY KEY, location_id text)');

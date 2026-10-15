@@ -98,6 +98,12 @@
       "packages/max/workspace/tests/paige"
     ],
     "anchor-outbound": [
+      "utils/placesApi.js",
+      "utils/placesQueryCache.js",
+      "services/scoutPublicSourcing.js",
+      "packages/capabilities/discovery/providers/PlacesProvider.js",
+      "test/placesFailureCache.test.js",
+      "test/placesCostAttribution.test.js",
       "leadgen.js",
       "utils/babrunContactClassification.js",
       "utils/babrunScoutContactEvidence.js",
