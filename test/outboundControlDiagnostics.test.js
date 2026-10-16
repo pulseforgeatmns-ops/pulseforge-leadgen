@@ -291,11 +291,11 @@ test('persisted post-ramp exclusions reach the measured summary without prospect
 
 test('exact promotion cohort survives the real control loop into sanitized post-reload summary', async () => {
   const { retainPromotionIds } = require('../services/scoutPromotionCohort');
-  const batches = [retainPromotionIds({ promoted: 2, recovered: 0 }, ['765432109', '765432110'])];
+  const batches = [retainPromotionIds({ promoted: 2, recovered: 0 }, ['a1b2c3d4-1111-4222-8333-123456789abc', 'b2c3d4e5-2222-4333-8444-23456789abcd'])];
   const { logs, event } = await run('13', false, 0, false,
     { kind: 'investigated', result: { status: 'completed' } },
     { promoted: 2, enrichmentBatches: batches }, { business_fit: 40, contact_classification_not_authorized: 1 },
-    { excluded: [{ prospectId: '765432109', reason: 'contact_classification_not_authorized' },
+    { excluded: [{ prospectId: 'a1b2c3d4-1111-4222-8333-123456789abc', reason: 'contact_classification_not_authorized' },
       { prospectId: '999', reason: 'business_fit' }] });
   const receipt = logs.find(([label]) => label === '[max-outbound-control] measured summary')[1];
   const cohort = receipt.scoutPromotionCleanCohort;
@@ -306,6 +306,6 @@ test('exact promotion cohort survives the real control loop into sanitized post-
   assert.equal(cohort.exclusions.counts.contact_classification_not_authorized, 1);
   assert.equal(cohort.exclusions.counts.business_fit, 0);
   assert.equal(receipt.cleanInventoryExclusions.counts.business_fit, 40);
-  assert.ok(!JSON.stringify(receipt).includes('765432'));
-  assert.ok(!JSON.stringify(event.scoutPromotionCleanCohort).includes('765432'));
+  assert.ok(!JSON.stringify(receipt).includes('123456789abc'));
+  assert.ok(!JSON.stringify(event.scoutPromotionCleanCohort).includes('123456789abc'));
 });

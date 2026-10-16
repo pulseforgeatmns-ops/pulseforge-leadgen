@@ -31,18 +31,18 @@ test('actual enrichment worker and ramp retain identity without serializing it',
         market: { segment: 'small_business_owners' }, geography: { region: 'United States', scope: 'nationwide' },
       } } }, plan: { deficit: 1 }, skipVerificationRetry: true,
       enrichment: { run: params => run({ ...params, promote: async () => ({
-        promoted: true, recovered: false, prospectId: '765432109', emailResolved: true, emailVerified: true,
+        promoted: true, recovered: false, prospectId: 'a1b2c3d4-1111-4222-8333-123456789abc', emailResolved: true, emailVerified: true,
       }) }) },
       recoverExistingInventory: async () => ({ payload: { qualifiedCount: 0 } }),
       runDiscovery: async () => { throw new Error('unexpected provider request'); },
     });
     const cohort = promotionCohort(ramp.enrichmentBatches, {
-      clean: [], excluded: [{ prospectId: '765432109', reason: 'contact_classification_not_authorized' }],
+      clean: [], excluded: [{ prospectId: 'a1b2c3d4-1111-4222-8333-123456789abc', reason: 'contact_classification_not_authorized' }],
     });
     assert.equal(ramp.promoted, 1);
     assert.equal(cohort.identifiedProspects, 1);
     assert.equal(cohort.exclusionCounts.contact_classification_not_authorized, 1);
-    assert.ok(!JSON.stringify(ramp).includes('765432109'));
-    assert.ok(!JSON.stringify(logs).includes('765432109'));
+    assert.ok(!JSON.stringify(ramp).includes('a1b2c3d4-1111-4222-8333-123456789abc'));
+    assert.ok(!JSON.stringify(logs).includes('a1b2c3d4-1111-4222-8333-123456789abc'));
   } finally { console.log = originalLog; }
 });
