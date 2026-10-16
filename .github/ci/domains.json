@@ -129,6 +129,7 @@
       "test/emailVerificationRecovery",
       "test/helpers/loadEmailVerificationRecovery.js",
       "services/governedOutbound",
+      "services/substralPreparationGrant.js",
       "services/anchorGovernedScheduler.js",
       "services/governedOutboundExecutionClock.js",
       "services/governedOutboundTenant.js",

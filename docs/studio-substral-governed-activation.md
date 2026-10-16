@@ -9,7 +9,7 @@ This code change does not activate production, change a mission, or send mail.
 
 Use an existing tenant-17 mission that is approved/immutable and at Ready. Do
 not call the legacy tenant bootstrap to select or create a mission: its paid
-website-assessment objective is not the approved southern-New-Hampshire,
+website-assessment objective is not the approved nationwide, established-business,
 $2,000+ website-redesign acquisition scope. Correcting or approving a live
 mission is a separate operator decision through the canonical mission flow.
 
@@ -88,7 +88,7 @@ spacing, mailbox health and suppression gates remain mandatory.
 
 ## Regression coverage
 
-The three `test/anchorDailyOutboundSubstral*.test.js` files are included by the
+The `test/anchorDailyOutboundSubstral*.test.js` files are included by the
 existing `npm run test:anchor-outbound` wildcard and CI. They cover policy and
 identity isolation, read-only scope review, stale approvals, repeated commands,
 Ready/cancellation gates, capacity producer shape and governor states, and the
@@ -96,3 +96,94 @@ fail-closed copy boundary. Mailbox OAuth, tenant, Paige, execution-clock and
 governed-contract regressions remain applicable. PostgreSQL integration requires
 the existing disposable PostgreSQL harness in an environment permitting its
 local Unix socket.
+
+
+## Preparation-only release and approval packet (2026-10-16)
+
+This patch is local preparation, based on main `bb996bcd`. It does not prove
+current production state. No production queries, mailbox tests, paid provider
+requests, publication, deployment, or configuration writes were performed.
+Historical observations of missing program/flags and runtime tenants `10,13`
+are not a fresh status check. Do not bypass denied database access.
+
+### Smallest next approval
+
+Approve publication of the reconciled patch as a **draft PR only**, with CI.
+Merging, deploying and enabling preparation require a separate explicit decision.
+Do not describe the current artifact as production-ready or live.
+
+### Required before any preparation activation
+
+1. Obtain authorized fresh read-only evidence for the deployed revision, existing
+   tenant-17 program, runtime tenant list, all three switches below, mailbox and
+   identity state, suppression triggers, and the exact source mission. An existing
+   grant must be reviewed, never overwritten by the create command.
+2. Review a Ready, immutable tenant-17 mission for established businesses across
+   the United States and $2,000+ website-redesign projects. Preserve evidence URLs
+   and observations for website need, established operations and budget-fit
+   indicators. Indicators do not establish an actual budget, intent or demand.
+   Exclude unsubstantiated candidates; do not invent need or claim promised leads.
+   Paid assessment or regional-only missions require a separately approved mission
+   correction. This patch does not make that correction automatically.
+3. Existing reviewed Paige messages and Emmett artifacts must be bound to that
+   exact mission scope, candidate, company, email and canonical sender. No raw
+   inventory copy fallback, new discovery, enrichment or model generation is
+   authorized by this grant. If artifacts are missing, preparation remains blocked.
+4. Supply the real source mission ID, authorizing operator, exact start/expiry
+   timestamps (maximum 30 days), daily/lifetime item ceilings, contact classes,
+   spacing and business window. A conservative proposal is 2 prepared items/day,
+   10 total over seven days, verified founder email only, 240-minute spacing and
+   09:00–17:00 America/New_York. These are proposed ceilings, not approved values.
+5. Include `preparationOnly: true` in the policy file. The review hash binds this
+   restriction, all authority fields and the mission scope. Use the canonical
+   tenant `17`, sender `hello@studiosubstral.com`, integration
+   `tmi_17_substral_hello`, and identity `tsi_17_substral_hello`.
+
+### Exact scope of a later activation decision
+
+After the above evidence and exact review hash are supplied, approval must cover:
+
+- Deploying the reviewed release revision and creating only its reviewed shadow
+  program (including existing schema checks and Emmett capacity-envelope writes).
+- Adding `17` to the freshly observed runtime tenant list while preserving every
+  existing entry. If the fresh value is exactly `10,13`, the new value is `10,13,17`.
+- Setting `SUBSTRAL_GOVERNED_PREPARATION_ENABLED=true`,
+  `SUBSTRAL_GOVERNED_OUTBOUND_ENABLED=false`, and
+  `GOVERNED_OUTBOUND_TENANT_17_ENABLED=false`.
+- Running preparation only within the approved caps/dates, producing frozen,
+  unapproved envelopes from existing reviewed artifacts. Expired and unsent items
+  still consume the lifetime preparation cap; daily rollover cannot reset it.
+
+There is no live-send activation in this packet. A preparation-only program cannot
+be promoted to active, stripped of its restriction by capacity migration, or used
+by dispatch. Subsequent sending needs a separately reviewed authority workflow.
+Legacy autosend must remain false. Stop on stale scope/hash, missing artifacts,
+blocked mailbox/governor, invalid flags or exhausted budgets; do not loosen gates.
+A rollback proposal is to switch preparation off and pause the program, retaining
+its audit trail and prepared rows. Obtain approval for production changes.
+
+### Verification of this local reconciliation
+
+- Final non-PostgreSQL regression run: **188 passed, 2 skipped, 0 failed**.
+  Includes all daily-outbound tests, context/contract guards, CI selection,
+  provider diagnostics, Babrun enrichment evidence, and global startup checks.
+- The two skips are disposable PostgreSQL suites. An attempted PostgreSQL 17 run
+  failed at local Unix-socket startup; the escalation environment also failed
+  before execution. No fresh PostgreSQL pass is claimed for this revision.
+- `git diff --check` passed. Remote CI has not run because the patch is unpublished.
+- Require the PostgreSQL-enabled `npm run test:anchor-outbound` suite to pass on
+  this exact patch before merging. Earlier PostgreSQL evidence for the prior
+  preparation commit does not replace this release's check.
+
+- Review correction: the first preparation envelope now checks current planning
+  infrastructure and a proceed/slow governor before preparing or freezing rows,
+  and applies the current planning-capacity ceiling. Regression cases verify
+  thrown/explicit governor halt, missing authority, zero capacity, no committed
+  preparation budget on rejection, and a reduced live capacity of one item.
+  This closes the first-envelope path that previously froze reviewed artifacts
+  before the refill infrastructure check.
+
+- Partial-success reporting preserves the committed prepared-item delta and known
+  pending count when a later refill infrastructure check fails. A two-call test
+  verifies first-check success followed by governor halt: one frozen item, one
+  consumed budget unit, and matching response/audit counts. A retry adds zero.

@@ -116,10 +116,13 @@ class GovernedOutboundStore {
     const db = await this.pool.connect();
     try {
       await db.query('BEGIN');
-      if (options.requireShadow) {
+      if (options.requireShadow || program.policy.preparationOnly) {
         const current = (await db.query('SELECT mode,policy_hash,scope_hash FROM acquisition_outbound_programs WHERE id=$1 FOR UPDATE', [program.id])).rows[0];
         if (current?.mode !== 'shadow' || current.policy_hash !== program.policy_hash
           || current.scope_hash !== program.scope_hash) fail('replenishment_grant_changed');
+      }
+      if (program.policy.preparationOnly) {
+        await this.assertPreparationBudget(db, program, day, manifest.length);
       }
       await db.query(`INSERT INTO acquisition_outbound_envelopes
         (id,program_id,tenant_id,local_day,mission_id,revision,manifest,manifest_hash,status)
@@ -136,7 +139,23 @@ class GovernedOutboundStore {
     } catch (e) { await db.query('ROLLBACK'); throw e; } finally { db.release(); }
     return this.envelope(day);
   }
-  async appendToEnvelope(envelope, extraManifest = [], revision = null) {
+  // Caller holds the program row lock. Count all prepared items, including
+  // expired/unsent ones, so a new day cannot reset the lifetime preparation cap.
+  async assertPreparationBudget(db, program, day, added) {
+    const budget = (await db.query(`SELECT count(*)::int AS total,
+      count(*) FILTER (WHERE e.local_day=$3::date)::int AS today
+      FROM acquisition_outbound_items i JOIN acquisition_outbound_envelopes e ON e.id=i.envelope_id
+      WHERE e.tenant_id=$1 AND e.program_id=$2`, [this.tenantId, program.id, day])).rows[0];
+    if (!budget || !Number.isSafeInteger(budget.today) || !Number.isSafeInteger(budget.total)
+      || budget.today + added > program.policy.dailyCap || budget.total + added > program.policy.totalCap) fail('preparation_budget_exhausted');
+  }
+  async preparationCounts(program, day) {
+    return this.one(`SELECT count(*)::int AS total,
+      count(*) FILTER (WHERE e.local_day=$3::date)::int AS today
+      FROM acquisition_outbound_items i JOIN acquisition_outbound_envelopes e ON e.id=i.envelope_id
+      WHERE e.tenant_id=$1 AND e.program_id=$2`, [this.tenantId, program.id, day]);
+  }
+  async appendToEnvelope(envelope, extraManifest = [], revision = null, options = {}) {
     const current = Array.isArray(envelope.manifest) ? envelope.manifest : [];
     const extra = Array.isArray(extraManifest) ? extraManifest : [];
     if (!extra.length) return this.one('SELECT * FROM acquisition_outbound_envelopes WHERE id=$1', [envelope.id]);
@@ -144,6 +163,16 @@ class GovernedOutboundStore {
     const db = await this.pool.connect();
     try {
       await db.query('BEGIN');
+      if (options.shadowProgram) {
+        const program = options.shadowProgram;
+        const live = (await db.query('SELECT mode,policy_hash,scope_hash FROM acquisition_outbound_programs WHERE id=$1 AND tenant_id=$2 FOR UPDATE', [program.id, this.tenantId])).rows[0];
+        if (live?.mode !== 'shadow' || live.policy_hash !== program.policy_hash || live.scope_hash !== program.scope_hash
+          || envelope.program_id !== program.id || envelope.status !== 'frozen' || envelope.approval_id) fail('replenishment_grant_changed');
+        const bound = (await db.query('SELECT local_day::text AS local_day,status,approval_id,manifest_hash,revision FROM acquisition_outbound_envelopes WHERE id=$1 AND program_id=$2 AND tenant_id=$3 FOR UPDATE', [envelope.id, program.id, this.tenantId])).rows[0];
+        if (!bound || bound.status !== 'frozen' || bound.approval_id
+          || bound.manifest_hash !== hash(current) || bound.revision !== envelope.revision) fail('replenishment_grant_changed');
+        await this.assertPreparationBudget(db, program, bound.local_day, extra.length);
+      }
       const start = current.length;
       for (const [n, item] of extra.entries()) {
         await db.query(`INSERT INTO acquisition_outbound_items
@@ -152,11 +181,21 @@ class GovernedOutboundStore {
         [`${envelope.id}_${start + n}`, envelope.id, this.tenantId, item.candidateId, item.prospectId, item.companyId, item.email, item]);
       }
       const nextRevision = revision || envelope.revision;
+      if (options.shadowProgram) {
+        const updated = await db.query(`UPDATE acquisition_outbound_envelopes
+          SET manifest=$2::jsonb,manifest_hash=$3,revision=$4
+          WHERE id=$1 AND program_id=$5 AND tenant_id=$6 AND status='frozen'
+            AND approval_id IS NULL AND manifest_hash=$7 AND revision=$8 RETURNING id`,
+          [envelope.id, JSON.stringify(combined), hash(combined), nextRevision,
+            options.shadowProgram.id, this.tenantId, hash(current), envelope.revision]);
+        if (updated.rows.length !== 1) fail('replenishment_grant_changed');
+      } else {
       await db.query(`UPDATE acquisition_outbound_envelopes
         SET manifest=$2::jsonb, manifest_hash=$3, revision=$4,
             status=CASE WHEN status='complete' THEN 'authorized' ELSE status END
         WHERE id=$1`,
       [envelope.id, JSON.stringify(combined), hash(combined), nextRevision]);
+      }
       await this.event('envelope_refilled', [envelope.id, extra.length, Date.now()], {
         programId: envelope.program_id, envelopeId: envelope.id,
         added: extra.length, revision: nextRevision, manifestHash: hash(combined),

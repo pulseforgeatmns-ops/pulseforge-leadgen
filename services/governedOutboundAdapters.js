@@ -298,6 +298,9 @@ function adapters(pool, dependencies = {}) {
     return result;
   }
   async function prepare(program, source, day, store, recovery = null) {
+    // Preparation-only authority covers existing reviewed artifacts, not paid
+    // discovery, enrichment or generation via the mission runtime.
+    if (program.policy.preparationOnly && (source?.mission?.stage !== 'ready' || recovery)) fail('preparation_research_not_authorized');
     if (ctx.usesTenantMailboxTransport && source?.mission?.stage === 'ready' && !recovery) {
       await prepared(source, program);
       return source;

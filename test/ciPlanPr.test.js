@@ -179,3 +179,18 @@ it('selects governed outbound for Babrun provider-chain persistence and both reg
   const workflow = require('node:fs').readFileSync(require('node:path').join(__dirname, '../.github/workflows/pr-ci-lean.yml'), 'utf8');
   assert.match(workflow, /node --test test\/babrunGovernedEnrichmentEvidence\.test\.js test\/babrunGovernedEnrichmentEvidencePostgres\.test\.js/);
 });
+
+describe('Substral preparation-only CI coverage', () => {
+  for (const file of ['services/substralPreparationGrant.js',
+    'test/anchorDailyOutboundSubstralPreparationOnly.test.js',
+    'test/anchorDailyOutboundSubstralPreparationPostgres.test.js']) {
+    it(`selects governed outbound for ${file}`, () => {
+      assert.ok(buildPlan([file]).suites.includes('anchor-outbound'));
+    });
+  }
+  it('runs both new regressions through the PostgreSQL-enabled outbound glob', () => {
+    const command = require('../package.json').scripts['test:anchor-outbound'];
+    assert.ok(command.includes('test/anchorDailyOutbound*.test.js'));
+    assert.ok(command.includes('ANCHOR_OUTBOUND_TEST_POSTGRES=true'));
+  });
+});

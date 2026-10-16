@@ -1,6 +1,7 @@
 'use strict';
 
 const { hash, fail, policy, missionScope, clock, windowReason, candidateReason } = require('../packages/acquisition-mission/DailyOutboundPolicy');
+const { isSubstralPreparationGrant, substralPreparationGrantReason } = require('./substralPreparationGrant');
 const { GovernedOutboundStore } = require('./governedOutboundStore');
 const { governedOutboundEnabledForTenant, governedOutboundSendingDisabledForTenant, governedOutboundPreparationEnabledForTenant } = require('./governedOutboundTenant');
 const { createGovernedOutboundContext } = require('./governedOutboundContext');
@@ -64,6 +65,7 @@ function service({
   }
   async function validateProgram(program, sending = false) {
     if (!program || ['paused', 'revoked'].includes(program.mode)) fail('program_disabled');
+    if (sending && program.policy.preparationOnly) fail('preparation_only_grant');
     if (hash(program.policy) !== program.policy_hash) fail('policy_changed');
     const reason = windowReason(program.policy, now(), sending);
     if (reason) fail(reason);
@@ -72,6 +74,10 @@ function service({
       || hash(missionScope(source.mission)) !== program.scope_hash) fail('source_scope_changed');
     if (String(resolvedTenantId) === '1') {
       const reason = require('../utils/pulseforgeCashflowOffer').pulseforgeMissionReason(source.mission);
+      if (reason) fail(reason);
+    }
+    if (program.policy.preparationOnly) {
+      const reason = substralPreparationGrantReason(program, source.mission, now());
       if (reason) fail(reason);
     }
     await adapters.validateTenant(program);
@@ -98,6 +104,8 @@ function service({
     const migratedTotalCap = input.totalCap != null
       ? input.totalCap
       : resolveOperatorProgramTotalCapForDelegation(policyBasisForTotalCap, delegatedDaily);
+    if (current.preparationOnly && Object.prototype.hasOwnProperty.call(input, 'preparationOnly')
+      && input.preparationOnly !== true) fail('preparation_only_grant');
     const authorityBefore = describeOperatorAuthorityEnvelope(current);
     const p = policy({
       ...current,
@@ -168,6 +176,7 @@ function service({
     const program = await store.program();
     if (program?.id !== id) fail('program_not_found');
     if (mode === 'active') {
+      if (program.policy.preparationOnly) fail('preparation_only_grant');
       if (reviewHash !== program.policy_hash) fail('policy_review_required');
       if (resolvedTenantId === '1') {
         const source = await adapters.loadMission(program.source_mission_id);
@@ -180,9 +189,26 @@ function service({
     return store.status();
   }
   async function prepare(program, source, day, recovery = null) {
+    // The initial envelope must obey the same live planning authority as refills.
+    // Reviewed artifacts can outlive a mailbox/governor change; never commit them
+    // (or consume the preparation budget) before checking current infrastructure.
+    let planningCapacity = Infinity;
+    if (program.policy.preparationOnly) {
+      if (typeof adapters.infrastructure !== 'function') fail('emmett_capacity_unavailable');
+      const infra = await adapters.infrastructure(program, now(), null, { mode: 'planning' });
+      const governor = infra?.assessed?.governor?.outcome || infra?.operating?.governor;
+      if (infra?.assessed?.governor?.halt || !['proceed', 'slow'].includes(governor)) fail('emmett_governor_halted');
+      planningCapacity = infra?.operating?.planningDailyCapacity;
+      if (!Number.isFinite(planningCapacity) || planningCapacity < 0) fail('emmett_capacity_unavailable');
+      planningCapacity = Math.floor(planningCapacity);
+      if (planningCapacity === 0) fail('emmett_capacity_exhausted');
+    }
     const snapshot = await adapters.prepare(program, source, day, store, recovery);
     if (snapshot.mission.stage !== 'ready') fail('daily_mission_not_ready');
     const prepared = await adapters.prepared(snapshot, program);
+    const preparationBudget = program.policy.preparationOnly ? await store.preparationCounts(program, day) : null;
+    const preparationLimit = preparationBudget ? Math.min(program.policy.dailyCap - preparationBudget.today, program.policy.totalCap - preparationBudget.total) : Infinity;
+    if (preparationLimit <= 0) fail('preparation_budget_exhausted');
     const selected = [];
     const emails = new Set(); const companies = new Set();
     const excluded = [];
@@ -205,19 +231,19 @@ function service({
         continue;
       }
       const operatorDailyCeiling = resolveOperatorDelegatedMaximumDailyCapacity(program.policy) ?? program.policy.dailyCap;
-      if (selected.length >= Math.min(operatorDailyCeiling, prepared.capacity, PREPARATION_BATCH_LIMIT)) break;
+      if (selected.length >= Math.min(operatorDailyCeiling, prepared.capacity, PREPARATION_BATCH_LIMIT, preparationLimit, planningCapacity)) break;
       selected.push(entry); emails.add(entry.email); companies.add(entry.companyId);
     }
     await store.event('batch_eligibility', [program.id, day, prepared.revision, hash({ selected: selected.map(x => x.candidateId), excluded })], { programId: program.id, selected: selected.length,
       selectedCandidates: selected.map(row => ({ candidateId: row.candidateId, prospectId: row.prospectId, companyId: row.companyId })), excluded });
     if (!selected.length) fail('verified_inventory_shortfall');
-    if (recovery) {
+    if (recovery || program.policy.preparationOnly) {
       const current = await store.program();
       if (isEnabled() || current?.id !== program.id || current.mode !== 'shadow'
         || current.policy_hash !== program.policy_hash || clock(now()).day !== day) fail('replenishment_grant_changed');
       await validateProgram(current);
     }
-    return store.freeze(program, day, snapshot.mission.id, prepared.revision, selected, { requireShadow: Boolean(recovery) });
+    return store.freeze(program, day, snapshot.mission.id, prepared.revision, selected, { requireShadow: Boolean(recovery || program.policy.preparationOnly) });
   }
   async function initializePreparation(input, actor) {
     if (!actor?.id || !['admin', 'manager'].includes(actor.role)) fail('operator_required');
@@ -487,6 +513,7 @@ function service({
         governor = infra.assessed?.governor?.outcome || infra.operating?.governor || 'proceed';
       }
     } catch (error) {
+      if (program.policy.preparationOnly) throw error;
       const code = error.code || error.message;
       if (code === 'emmett_governor_halted') governor = 'halt';
     }
@@ -526,12 +553,18 @@ function service({
       remainingScheduleSlots: remainingSlots,
       cleanInventory,
       governor,
-      grantActive: program.mode === 'active' && isPreparationEnabled(),
+      grantActive: (program.mode === 'active' || isSubstralPreparationGrant(program)) && isPreparationEnabled(),
       dailyAuthorizationRemaining: Math.max(0, Number(operating?.authorizationLimitedCapacity ?? resolveOperatorDelegatedMaximumDailyCapacity(program.policy) ?? program.policy.dailyCap ?? 0) - sentToday),
       totalAuthorizationRemaining: Math.max(0, Number(program.policy.totalCap || 0) - Number(counts.total || 0)),
       planningDailyCapacity: operating?.planningDailyCapacity,
     });
     if (!plan.shouldPrepare) return observabilityFromRefill(plan, { sentToday, preparedAdded: 0, preparationDecisions });
+    if (program.policy.preparationOnly) {
+      const budget = await store.preparationCounts(program, day);
+      plan.prepareRequested = Math.min(plan.prepareRequested, program.policy.dailyCap - budget.today, program.policy.totalCap - budget.total);
+      if (plan.prepareRequested <= 0) return observabilityFromRefill({ ...plan, prepareRequested: 0, prepareSkippedReason: 'preparation_budget_exhausted' }, { sentToday });
+    }
+    if (program.policy.preparationOnly && (envelope.status !== 'frozen' || envelope.approval_id)) fail('preparation_envelope_invalid');
     if (!['authorized', 'complete', 'frozen'].includes(envelope.status)) {
       return observabilityFromRefill({ ...plan, shouldPrepare: false, prepareSkippedReason: 'envelope_not_refillable' }, { sentToday });
     }
@@ -570,7 +603,8 @@ function service({
       }, { sentToday, preparedAdded: 0, preparationDecisions });
     }
     if (!isPreparationEnabled()) fail('preparation_disabled');
-    const updated = await store.appendToEnvelope(envelope, selected, prepared.revision);
+    if (program.policy.preparationOnly) await validateProgram(await store.program());
+    const updated = await store.appendToEnvelope(envelope, selected, prepared.revision, program.policy.preparationOnly ? { shadowProgram: program } : {});
     return {
       envelope: updated,
       ...observabilityFromRefill({
@@ -584,8 +618,12 @@ function service({
     const lockResult = await store.lock(async () => {
       const program = await store.program();
       if (!program) return { halted: 'no_program' };
-      if (program.mode === 'shadow') return { halted: 'shadow_mode' };
+      if (program.mode === 'shadow' && !isSubstralPreparationGrant(program)) return { halted: 'shadow_mode' };
       const day = clock(now()).day;
+      // Preserve successful commits if a later refill/read fails. A governor
+      // change cannot undo the initial freeze or refund its preparation budget.
+      let committedPreparedAdded = 0;
+      let knownPending = null;
       try {
         const source = await validateProgram(program, false);
         await store.expire(day);
@@ -596,9 +634,16 @@ function service({
         if (!isPreparationEnabled()) fail('environment_kill_switch');
         let envelope = await store.envelope(day);
         const initialCount = envelope ? (await store.items(envelope.id)).filter(row => row.status === 'pending').length : 0;
-        if (!envelope) envelope = await prepare(program, source, day);
+        knownPending = initialCount;
+        if (!envelope) {
+          envelope = await prepare(program, source, day);
+          committedPreparedAdded = envelope.manifest.length;
+          knownPending += committedPreparedAdded;
+        }
         if (envelope.program_id !== program.id) fail('daily_envelope_already_used');
         const refill = await refillEnvelope(program, source, day, envelope, counts);
+        committedPreparedAdded += Number(refill.preparedAdded || 0);
+        knownPending = initialCount + committedPreparedAdded;
         const pending = (await store.items(envelope.id)).filter(row => row.status === 'pending').length;
         return { programId: program.id, ...refill, pendingPrepared: pending,
           preparedAdded: Math.max(0, pending - initialCount),
@@ -606,7 +651,8 @@ function service({
       } catch (error) {
         return {
           programId: program.id,
-          preparedAdded: 0,
+          preparedAdded: committedPreparedAdded,
+          ...(knownPending === null ? {} : { pendingPrepared: knownPending }),
           prepareSkippedReason: error.code || error.message,
         };
       }
@@ -648,6 +694,8 @@ function service({
     return store.lock(async () => {
       const program = await store.program();
       if (!program) return { halted: 'no_program' };
+      // Disabled legacy grants may omit policy; let validation record their halt.
+      if (program.policy?.preparationOnly) return { halted: 'preparation_only_grant', sent: 0 };
       const day = clock(now()).day;
       try {
         const source = await validateProgram(program);

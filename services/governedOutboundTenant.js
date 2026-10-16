@@ -66,11 +66,16 @@ function governedOutboundEnabledForTenant(tenantId) {
   return false;
 }
 
-// A preparation-only grant is explicit, Anchor-scoped, and requires the send
+// Preparation-only switches require sending explicitly off. Substral also
+// requires its legacy alias off; its shadow policy is checked by the caller.
+// A preparation-only grant requires the send
 // switch to be explicitly off. It never grants provider/send authority.
 function governedOutboundPreparationEnabledForTenant(tenantId, sendingEnabled = governedOutboundEnabledForTenant(tenantId)) {
   const tid = assertGovernedOutboundTenantId(tenantId);
-  return Boolean(sendingEnabled) || (tid === '10'
+  return Boolean(sendingEnabled) || (tid === '17'
+    && process.env.SUBSTRAL_GOVERNED_OUTBOUND_ENABLED === 'false'
+    && process.env.GOVERNED_OUTBOUND_TENANT_17_ENABLED === 'false'
+    && process.env.SUBSTRAL_GOVERNED_PREPARATION_ENABLED === 'true') || (tid === '10'
     && process.env.ANCHOR_GOVERNED_OUTBOUND_ENABLED === 'false'
     && process.env.ANCHOR_GOVERNED_PREPARATION_ENABLED === 'true');
 }
