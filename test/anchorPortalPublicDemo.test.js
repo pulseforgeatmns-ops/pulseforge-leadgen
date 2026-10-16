@@ -12,12 +12,12 @@ const {illustrativePhoto}=require('../standalone/anchor-portal/fixtures');
 const env={PORTAL_MODE:'hosted',PORT:'443',PORTAL_ORIGIN:ORIGIN,PORTAL_DATABASE_URL:'postgresql://demo:placeholder@database.example.invalid/anchor_portal_synthetic',PORTAL_SYNTHETIC_MARKER:MARKER,PORTAL_SESSION_SECRET:'a'.repeat(64),PORTAL_PUBLIC_DEMO:'enabled',...Object.fromEntries(Object.entries(PINS).map(([key,value])=>['PORTAL_PUBLIC_DEMO_'+key,value]))};
 let pg,pool,fixture,listener,runtime;
 before(async()=>{
- mock.timers.enable({apis:['Date'],now:new Date('2026-10-16T12:00:00.000Z')});
+ mock.timers.enable({apis:['Date'],now:new Date('2026-10-21T12:00:00.000Z')});
  pg=await startDisposablePostgres('portal-public-');const admin=new Pool({connectionString:pg.connectionString});
  await admin.query('CREATE DATABASE anchor_portal_synthetic');await admin.end();pool=new Pool({connectionString:pg.connectionString.replace(/\/postgres$/,'/anchor_portal_synthetic')});
  // Freeze SQL time as well as JS time so this fixed-expiry deployment test remains repeatable.
- const query=pool.query.bind(pool);pool.query=(sql,...args)=>query(typeof sql==='string'?sql.replace(/NOW\(\)/gi,"TIMESTAMPTZ '2026-10-16T12:00:00.000Z'"):sql,...args);
- await initializeSchema(pool,MARKER);const hash=await require('bcryptjs').hash(crypto.randomBytes(24).toString('hex'),12);
+ const query=pool.query.bind(pool);pool.query=(sql,...args)=>query(typeof sql==='string'?sql.replace(/NOW\(\)/gi,"TIMESTAMPTZ '2026-10-21T12:00:00.000Z'"):sql,...args);
+ await initializeSchema(pool,MARKER);await pool.query(require('node:fs').readFileSync('migrations/2026-10-16-anchor-portal-service-requests.sql','utf8'));const hash=await require('bcryptjs').hash(crypto.randomBytes(24).toString('hex'),12);
  fixture=await provisionDemo(pool,MARKER,{client:hash,operator:hash},new Date(EXPIRES_AT));
  runtime=await createApp(config(env),pool);listener=await new Promise(resolve=>{const s=runtime.app.listen(0,'127.0.0.1',()=>resolve(s));});
 });
@@ -58,7 +58,7 @@ test('real report/photo/issue creation and resolution persist across public sess
 });
 test('identity drift, marker drift, account expiry and stale sessions fail closed',async()=>{
  const actor=await entry();
- mock.timers.setTime(EXPIRES_AT);assert.equal((await call('/api/anchor-portal/me',actor)).status,410);mock.timers.setTime(Date.parse('2026-10-16T12:00:00.000Z'));
+ mock.timers.setTime(EXPIRES_AT);assert.equal((await call('/api/anchor-portal/me',actor)).status,410);mock.timers.setTime(Date.parse('2026-10-21T12:00:00.000Z'));
  for(const [field,bad] of [['email','other@exeter-fixture.invalid'],['role','manager'],['client_id',11],['active',false],['valid_until',new Date(EXPIRES_AT+1000)]]){
    const old=(await pool.query('SELECT '+field+' FROM users WHERE id=1')).rows[0][field];await pool.query('UPDATE users SET '+field+'=$1 WHERE id=1',[bad]);
    await assert.rejects(publicState(pool));assert.equal((await call('/api/anchor-portal/me',actor)).status,500);await pool.query('UPDATE users SET '+field+'=$1 WHERE id=1',[old]);
@@ -78,6 +78,14 @@ test('identity drift, marker drift, account expiry and stale sessions fail close
  await pool.query("UPDATE portal_sessions SET sess=jsonb_set(sess::jsonb,'{userId}','999') WHERE sess->>'publicDemo'='client'");assert.equal((await call('/api/anchor-portal/me',altered)).status,401);
  const fresh=await entry();await pool.query("UPDATE portal_sessions SET sess=jsonb_set(sess::jsonb,'{expiresAt}','0')");assert.equal((await call('/api/anchor-portal/me',fresh)).status,401);
 });
+test('public standalone routes persist requests and require CSRF before writes',async()=>{
+ const client=await entry();const location=fixture.location.id;
+ const body={location_id:location,request_key:'public-demo-request',preferred_date:'2026-10-22',preferred_window:'Morning',notes:'Synthetic review request'};
+ const denied=await call('/api/anchor-portal/service-requests',client,'POST',body,{'X-CSRF-Token':'bad'});assert.equal(denied.status,403);
+ const created=await call('/api/anchor-portal/service-requests',client,'POST',body);assert.equal(created.status,201,JSON.stringify(created.body));
+ const operator=await switchRole(client,'operator');const updated=await call('/api/anchor-portal/service-requests/'+created.body.request.id,operator,'PATCH',{status:'acknowledged'});assert.equal(updated.body.request.status,'acknowledged');
+});
+
 test('cookie-less session issuance is bounded and rejects without creating rows',async()=>{
  let limited=false;for(let i=0;i<30;i++){const result=await call('/');if(result.status===429){limited=true;break;}assert.equal(result.status,302);}assert.equal(limited,true);
  const before=Number((await pool.query('SELECT count(*) FROM portal_sessions')).rows[0].count);assert.equal((await call('/')).status,429);assert.equal((await call('/auth/csrf')).status,401);assert.equal(Number((await pool.query('SELECT count(*) FROM portal_sessions')).rows[0].count),before);

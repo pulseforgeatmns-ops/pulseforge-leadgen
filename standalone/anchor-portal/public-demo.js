@@ -6,7 +6,7 @@ const PINS = Object.freeze({
   SERVICE_ID:'80724c43-420c-4598-8c69-eecb9cc25745',
 });
 const ORIGIN='https://anchor-exeter-web-production.up.railway.app';
-const EXPIRES_AT=Date.parse('2026-10-16T17:36:00.000Z');
+const EXPIRES_AT=Date.parse('2026-10-22T17:36:00.000Z');
 const IDENTITIES=Object.freeze({client:{id:1,email:'client@exeter-fixture.invalid',role:'facility_client'},operator:{id:2,email:'operator@exeter-fixture.invalid',role:'manager'}});
 function publicConfig(env) {
   const enabled=env.PORTAL_PUBLIC_DEMO === 'enabled';

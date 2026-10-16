@@ -27,7 +27,7 @@ test('unknown data is not fabricated and optional scope failure preserves availa
 test('Account navigation is real, busy guard prevents navigation and client cannot author',()=>{
  const {elements,run}=setup();run('renderTabs();renderAccount(1)');
  assert.match(elements.tabs.innerHTML,/data-tab="account"/);assert.match(elements.view.innerHTML,/user@example.test/);assert.match(elements.view.innerHTML,/Test &lt;Facility&gt;/);
- assert.equal(elements.workspaceActions.innerHTML,'');run("state.busy=true;goto('issues');renderTabs()");assert.equal(run('state.tab'),'home');assert.match(elements.tabs.innerHTML,/disabled/);
+ assert.match(elements.workspaceActions.innerHTML,/Request a visit/);assert.doesNotMatch(elements.workspaceActions.innerHTML,/New Service Report/);run("state.busy=true;goto('issues');renderTabs()");assert.equal(run('state.tab'),'home');assert.match(elements.tabs.innerHTML,/disabled/);
 });
 test('late dashboard requests cannot replace a newer tab',async()=>{
  const {elements,run}=setup({'/home?location_id=1':{},'/issues?location_id=1':{issues:[]},'/locations/1/scope':{scope:[]}});
@@ -43,4 +43,41 @@ test('issue screen composes working form hooks beside history without fabricated
 test('CSRF request header and same-origin credentials remain intact',async()=>{
  const {ctx,run}=setup();let captured;ctx.window.PORTAL_CSRF='synthetic-token';ctx.fetch=async (url,options)=>{captured={url,options};return {status:200,ok:true,json:async()=>({ok:true})};};
  await run("api('/issues',{method:'POST',body:{description:'fixture'}})");assert.equal(captured.options.headers['X-CSRF-Token'],'synthetic-token');assert.equal(captured.options.credentials,'same-origin');assert.equal(captured.options.body,'{"description":"fixture"}');
+});
+test('public demo switch keeps contrasting colors while roles load and switch',async()=>{
+ const script=fs.readFileSync(require('node:path').join(__dirname,'../standalone/anchor-portal/demo-ui.js'),'utf8');
+ for(const role of ['facility_client','manager']){
+  const button={style:{},dataset:{},textContent:'',addEventListener(){}};
+  vm.runInNewContext(script,{document:{getElementById:id=>{assert.equal(id,'demoRole');return button;}},fetch:async()=>({ok:true,json:async()=>({user:{role}})})});
+  assert.equal(button.style.color,'#102e49');assert.equal(button.style.background,'#ffffff');assert.equal(button.disabled,true);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(button.textContent,role==='manager'?'Demo client':'Demo operator');assert.equal(button.disabled,false);
+  assert.equal(button.style.color,'#102e49');assert.equal(button.style.background,'#ffffff');
+ }
+});
+
+test('summary cards expose keyboard-native navigation to real visit IDs and issues',async()=>{
+ const {elements,run}=setup({'/home?location_id=1':{last_service:'2026-10-15T14:00:00Z',last_service_visit_id:41,next_service:'2026-10-17T14:00:00Z',next_service_visit_id:42,next_service_status:'scheduled',open_issues_count:1},'/issues?location_id=1':{issues:[]},'/locations/1/scope':{scope:[]}});
+ await run("renderHome(1,'1')");
+ const html=elements.view.innerHTML;
+ assert.equal((html.match(/class="panel summary-card summary-action"/g)||[]).length,4);
+ assert.equal((html.match(/data-visit="41"/g)||[]).length,2);
+ assert.match(html,/data-visit="42"/); assert.match(html,/aria-label="Open Issues: 1\. View open issues" data-go="issues"/);
+ assert.ok(!html.includes('role="button"'));
+});
+test('unscheduled next service is honest and cannot claim a saved booking',async()=>{
+ const {elements,run}=setup({'/home?location_id=1':{}});
+ await run("renderNextService(1,'1')");
+ assert.match(elements.view.innerHTML,/No upcoming service visit is scheduled/);
+ assert.match(elements.view.innerHTML,/does not schedule or confirm a visit/);
+ assert.match(elements.view.innerHTML,/data-go="history"/);assert.match(elements.view.innerHTML,/data-go="requests"/);
+});
+test('late next-service response cannot replace a newer view',async()=>{
+ const {elements,run}=setup({'/home?location_id=1':{next_service_visit_id:42}});
+ run('state.generation=2');elements.view.innerHTML='Current view';await run("renderNextService(1,'1')");assert.equal(elements.view.innerHTML,'Current view');
+});
+test('visit requests render escaped preferences, explicit non-booking notice and role-specific controls',async()=>{
+ const {elements,run}=setup({'/service-requests?location_id=1':{requests:[{id:5,requester_id:1,status:'requested',preferred_date:'2026-10-20',preferred_window:'<Morning>',notes:'<script>bad</script>',created_at:'2026-10-16T12:00:00Z'}]}});
+ run('state.me.user.id=1');await run("renderRequests(1,'1')");assert.match(elements.view.innerHTML,/does not book or confirm a visit or send notifications/);assert.match(elements.view.innerHTML,/Cancel request/);assert.doesNotMatch(elements.view.innerHTML,/Acknowledge request/);assert.match(elements.view.innerHTML,/&lt;script&gt;bad/);
+ run('state.me.capabilities.operator=true');await run("renderRequests(1,'1')");assert.match(elements.view.innerHTML,/Acknowledge request/);assert.match(elements.view.innerHTML,/Decline request/);
 });

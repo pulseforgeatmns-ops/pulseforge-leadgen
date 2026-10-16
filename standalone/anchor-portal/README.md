@@ -77,7 +77,7 @@ Exeter deployment. It requires hosted mode, the exact reviewed origin and the th
 must derive these values only after checking the actual Railway project,
 environment and service IDs. Do not forward caller-supplied assertions unchecked.
 The runtime additionally checks the dedicated database, synthetic marker, exact
-client/operator IDs, emails, roles, tenant and original 2026-10-16 17:36 UTC deadline.
+client/operator IDs, emails, roles, tenant and approved 2026-10-22 17:36 UTC deadline.
 No expiry extension, account creation, credential change or production auth change
 is performed. Public access must be explicitly approved before enabling it.
 
@@ -96,3 +96,11 @@ At the ceiling, reads remain available and writes return HTTP 429; do not restar
 automatically to evade the bound. Maps expire
 entries and are capped. Existing 30-minute session TTL remains bounded by the
 original demo deadline. This assumes the existing single trusted ingress proxy.
+
+### Persisted visit requests (explicit migration)
+
+Apply `migrations/2026-10-16-anchor-portal-service-requests.sql` only after deployment-specific approval and verification of the isolated database/marker. This file is never loaded by web startup. Existing private setups without the migration retain their table allowlist; the Requests API requires the explicit migration. The Docker image includes the request service module.
+
+The existing authenticated shared router exposes `GET/POST /api/anchor-portal/service-requests` and `PATCH /api/anchor-portal/service-requests/:id`. Client reads are scoped to their own requests at an assigned location; operators can review that location's requests. Tenant and requester are server-owned. Reusing a request key with identical details returns the same record; changed details return 409. Acknowledgement and decline are operator-only, and cancellation is requester-only. Requests never create visits, calendar entries, notifications, or booking confirmations. Acknowledged means reviewed, not scheduled.
+
+Minimum additional runtime permissions, after separate approval: SELECT and INSERT on the new table; UPDATE only on `status`, `updated_by`, and `updated_at`; USAGE on its ID sequence. The migration contains reviewed SQL templates using an explicit placeholder role, with no automatic grants. No DELETE, role changes, schema CREATE, ownership, credentials, or expiry updates are part of this migration.

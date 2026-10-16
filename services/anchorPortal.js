@@ -561,11 +561,18 @@ async function getClientHome(user, locationId) {
   const location = locRows[0];
 
   const { rows: lastCompleted } = await pool.query(
-    `SELECT completed_at, status
+    `SELECT id, completed_at, status
      FROM anchor_portal_visits
      WHERE location_id = $1 AND status = 'completed'
      ORDER BY completed_at DESC NULLS LAST
      LIMIT 1`,
+    [locId]
+  );
+
+  const { rows: nextVisits } = await pool.query(
+    `SELECT id, scheduled_at, status FROM anchor_portal_visits
+     WHERE location_id = $1 AND (status = 'in_progress' OR (status = 'scheduled' AND scheduled_at >= NOW()))
+     ORDER BY CASE WHEN status = 'in_progress' THEN 0 ELSE 1 END, scheduled_at ASC, id ASC LIMIT 1`,
     [locId]
   );
 
@@ -620,7 +627,10 @@ async function getClientHome(user, locationId) {
   return {
     location,
     last_service: lastCompleted[0]?.completed_at || null,
-    next_service: location.next_scheduled_at,
+    last_service_visit_id: lastCompleted[0]?.id || null,
+    next_service: nextVisits[0]?.scheduled_at || location.next_scheduled_at,
+    next_service_visit_id: nextVisits[0]?.id || null,
+    next_service_status: nextVisits[0]?.status || null,
     service_status: serviceStatus,
     open_issues_count: issueStats[0]?.active_count || 0,
     recent_quality: {
@@ -668,7 +678,10 @@ async function getOperatorSummary(user) {
   };
 }
 
+const serviceRequests = require('./anchorPortalServiceRequests')({pool, AnchorPortalError, assertPortalUser, assertLocationAccess, isOperator, isFacilityClient});
+
 return {
+  ...serviceRequests,
   AnchorPortalError,
   assertLocationAccess,
   isOperator,
@@ -723,3 +736,5 @@ Object.defineProperty(module.exports, 'updateIssue', { enumerable: true, get: ()
 Object.defineProperty(module.exports, 'getClientHome', { enumerable: true, get: () => defaults().getClientHome });
 Object.defineProperty(module.exports, 'getOperatorSummary', { enumerable: true, get: () => defaults().getOperatorSummary });
 Object.defineProperty(module.exports, 'ANCHOR_OPERATOR_CLIENT_ID', { enumerable: true, get: () => defaults().ANCHOR_OPERATOR_CLIENT_ID });
+
+for (const name of ['listServiceRequests','createServiceRequest','updateServiceRequest']) Object.defineProperty(module.exports, name, { enumerable:true, get:() => defaults()[name] });

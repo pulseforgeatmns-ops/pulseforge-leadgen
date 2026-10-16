@@ -1,5 +1,8 @@
 'use strict';
 const demoSwitch=document.getElementById('demoRole');
+// Keep the public switch readable despite the header's white ghost-button text.
+demoSwitch.style.color='#102e49';
+demoSwitch.style.background='#ffffff';
 async function refreshDemoRole(){
   const response=await fetch('/api/anchor-portal/me');if(!response.ok)throw new Error('session');
   const {user}=await response.json();

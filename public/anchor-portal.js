@@ -44,10 +44,12 @@ const timeOf = value => {const d = new Date(value); return value && !Number.isNa
 function bindNavigation() { $('view').querySelectorAll('[data-go]').forEach(b => b.onclick = () => goto(b.dataset.go)); }
 function renderTabs() {
   const items = [['home','Dashboard','home'],['history','Visits','calendar'],['issues','Issues','issues'],['scope','Scope','scope'],['account','Account','account']];
-  const active = ['resolved','report'].includes(state.tab) ? 'issues' : ['author','visit'].includes(state.tab) ? 'history' : state.tab;
+  if (cap().operator || cap().facility_client) items.splice(2,0,['requests','Requests','calendar']);
+  const active = ['resolved','report'].includes(state.tab) ? 'issues' : ['author','visit','next'].includes(state.tab) ? 'history' : state.tab;
   $('tabs').innerHTML = items.map(([id,label,name]) => `<button type="button" class="tab ${active === id ? 'active' : ''}" aria-current="${active === id ? 'page' : 'false'}" data-tab="${id}" ${state.busy ? 'disabled' : ''}>${icon(name)}${label}</button>`).join('');
   $('tabs').querySelectorAll('button').forEach(b => b.onclick = () => goto(b.dataset.tab));
   const extra = [];
+  if (cap().operator || cap().facility_client) extra.push(['requests','Request a visit']);
   if (cap().cleaner) extra.push(['visit',"Today's Visit"]);
   if (cap().operator || cap().cleaner) extra.push(['author','New Service Report']);
   if ($('workspaceActions')) {
@@ -58,7 +60,7 @@ function renderTabs() {
   const demo = !!selected()?.is_demo;
   $('demoBanner').classList.toggle('hidden', !demo);
   $('demoBanner').textContent = demo ? 'DEMO • Synthetic sample records and illustrative images only. These are not records of service performed for this facility.' : '';
-  const titles = {home:'Service Assurance Portal',history:'Service Visits',scope:'Service Scope',issues:'Issues & Resolution',resolved:'Issues & Resolution',report:'Report a New Issue',account:'Your Account',visit:"Today’s Visit",author:'New Service Report'};
+  const titles = {home:'Service Assurance Portal',history:'Service Visits',scope:'Service Scope',issues:'Issues & Resolution',resolved:'Issues & Resolution',report:'Report a New Issue',account:'Your Account',visit:"Today’s Visit",author:'New Service Report',next:'Next Service',requests:'Visit Requests'};
   $('pageTitle').textContent = titles[state.tab] || 'Service Assurance Portal';
   if ($('pageSubtitle')) $('pageSubtitle').textContent = ['issues','resolved','report'].includes(state.tab) ? 'Report an issue. We’ll make it right.' : state.tab === 'home' ? 'Consistent. Accountable. A Higher Standard.' : selected()?.name || 'Your Anchor service records.';
 }
@@ -79,7 +81,7 @@ async function detail(id, previousGeneration) {
   const g = ++state.generation; $('view').innerHTML = empty('Loading service report…');
   try {
     const {visit:v} = await api(`/visits/${encodeURIComponent(id)}`);
-    if (!paint(g, panel('Service Report', `<p>${esc(v.location_name)}</p><p class="muted">${esc(fmtDate(v.completed_at || v.scheduled_at))} · Completed by ${esc(v.completed_by_name || v.cleaner_name || 'Not recorded')}</p>${badge(v.status)}<h3 class="section-title">Areas serviced</h3>${(v.items || []).map(i => `<div class="check-item"><strong>${esc(i.section_title)} · ${esc(i.item_label)}</strong><p>${esc(statusLabel(i.outcome))}</p><p class="preserve muted">${esc(i.exception_reason || '')}</p></div>`).join('') || empty('No area details recorded.')}<h3 class="section-title">Service notes</h3><p class="preserve">${esc(v.visit_notes || 'No additional notes.')}</p><h3 class="section-title">Photo proof</h3>${v.evidence?.length ? gallery(v.evidence) : empty('No photos attached.')}<button type="button" class="btn ghost" id="backReports">Back</button>`))) return;
+    if (!paint(g, panel(v.status === 'completed' ? 'Service Report' : 'Service Visit', `<p>${esc(v.location_name)}</p><p class="muted">${esc(fmtDate(v.completed_at || v.scheduled_at))} · ${v.status === 'completed' ? 'Completed by' : 'Assigned to'} ${esc(v.completed_by_name || v.cleaner_name || 'Not recorded')}</p>${badge(v.status)}<h3 class="section-title">${v.status === 'completed' ? 'Areas serviced' : 'Scheduled areas'}</h3>${(v.items || []).map(i => `<div class="check-item"><strong>${esc(i.section_title)} · ${esc(i.item_label)}</strong><p>${esc(statusLabel(i.outcome))}</p><p class="preserve muted">${esc(i.exception_reason || '')}</p></div>`).join('') || empty('No area details recorded.')}<h3 class="section-title">Service notes</h3><p class="preserve">${esc(v.visit_notes || 'No additional notes.')}</p><h3 class="section-title">Photo proof</h3>${v.evidence?.length ? gallery(v.evidence) : empty('No photos attached.')}<button type="button" class="btn ghost" id="backReports">Back</button>`))) return;
     $('backReports').onclick = () => render();
   } catch(e) { loadError(g,e); }
 }
@@ -102,17 +104,32 @@ async function renderHome(g, id) {
   const [home,issueResult,scopeResult] = await Promise.all([api(`/home?location_id=${id}`), api(`/issues?location_id=${id}`).then(data => ({data}),error => ({error})), api(`/locations/${id}/scope`).then(data => ({data}),error => ({error}))]);
   const issues = issueResult.data?.issues || [], scope = scopeResult.data?.scope || [];
   const stats = [
-    ['Last Service',shortDate(home.last_service),timeOf(home.last_service),'calendar','',home.last_service ? badge('completed') : ''],
-    ['Next Service',home.next_service ? shortDate(home.next_service) : 'Not scheduled',timeOf(home.next_service),'calendar','blue',home.next_service ? badge('scheduled') : ''],
-    ['Service Status',home.service_status || 'Not available','Latest recorded service','check','green',''],
+    ['Last Service',shortDate(home.last_service),timeOf(home.last_service),'calendar','',home.last_service ? badge('completed') : '',home.last_service_visit_id],
+    ['Next Service',home.next_service ? shortDate(home.next_service) : 'Not scheduled',timeOf(home.next_service),'calendar','blue',home.next_service ? badge(home.next_service_status || 'scheduled') : '',home.next_service_visit_id],
+    ['Service Status',home.service_status || 'Not available','Latest recorded service','check','green','',home.last_service_visit_id],
     ['Open Issues',home.open_issues_count ?? 'Not available',home.open_issues_count === 0 ? 'No open issues' : 'For this facility','scope','',home.open_issues_count === 0 ? '<span class="badge resolved">All clear</span>' : '']
   ];
-  const cards = `<div class="summary-grid">${stats.map(([label,value,note,name,tone,pill]) => `<section class="panel summary-card"><span class="icon-disc ${tone}">${icon(name)}</span><div class="summary-content"><div class="stat-label">${label}</div><div class="stat-value ${label === 'Open Issues' ? 'number' : ''}">${esc(value)}</div><p class="stat-note">${esc(note)}</p>${pill}</div></section>`).join('')}</div>`;
+  const cards = `<div class="summary-grid">${stats.map(([label,value,note,name,tone,pill,visitId]) => `<button type="button" class="panel summary-card summary-action" aria-label="${esc(label)}: ${esc(value)}. ${visitId ? 'View service record' : label === 'Open Issues' ? 'View open issues' : label === 'Next Service' ? 'View scheduling details' : 'View service history'}" ${visitId ? `data-visit="${esc(visitId)}"` : `data-go="${label === 'Open Issues' ? 'issues' : label === 'Next Service' ? 'next' : 'history'}"`}><span class="icon-disc ${tone}">${icon(name)}</span><span class="summary-content"><span class="stat-label">${label}</span><span class="stat-value ${label === 'Open Issues' ? 'number' : ''}">${esc(value)}</span><span class="stat-note">${esc(note)}</span>${pill}</span></button>`).join('')}</div>`;
   const scopeContent = scopeResult.error ? `<p class="muted">Service scope is temporarily unavailable.</p>${viewLink('scope','Try loading scope')}` : scopePreview(scope);
   const qualityContent = issueResult.error ? `<p class="muted">Issue activity is temporarily unavailable.</p>${viewLink('issues','Try loading issues')}` : qualityRows(issues);
   const evidence = issues.flatMap(i => i.evidence || []);
   const html = `<div class="dashboard-layout"><div class="dashboard-main">${cards}<div class="dashboard-middle"><section class="panel">${heading('Recent Visits','calendar',viewLink('history','View All Visits'))}${visitsTable((home.recent_visits || []).slice(0,5))}</section><section class="panel">${heading('Service Scope','scope',viewLink('scope','View Full Scope'))}${scopeContent}</section></div><section class="panel">${heading('Recent Quality & Issue Resolution','shield',viewLink('issues','View All Issues'))}${qualityContent}</section></div><aside class="sidebar">${facilityCard(home.location || selected(),evidence)}<div class="brand-card">MORE THAN CLEAN.<br>A BRIGHTER WORKDAY.</div></aside></div>`;
   if (paint(g,html)) {bindReports(g);bindNavigation();}
+}
+async function renderNextService(g,id) {
+  const home = await api(`/home?location_id=${id}`);
+  if (g !== state.generation) return;
+  if (home.next_service_visit_id) return detail(home.next_service_visit_id,g);
+  const message = home.next_service ? `The facility lists ${fmtDate(home.next_service)} as its next service date, but no scheduled visit record is available.` : 'No upcoming service visit is scheduled for this facility.';
+  if (paint(g,panel('Next Service',`<p class="notice">${esc(message)}</p><p class="muted">Submit a preferred date and time for operator review. A request does not schedule or confirm a visit.</p><div class="actions">${cap().operator || cap().facility_client ? viewLink('requests','Request a visit') : ''}${viewLink('history','View service history')}${viewLink('home','Back to dashboard')}</div>`))) bindNavigation();
+}
+async function renderRequests(g,id) {
+  const {requests} = await api(`/service-requests?location_id=${id}`);
+  const rows = requests.map(r => `<article class="check-item"><strong>Preferred: ${esc(String(r.preferred_date).slice(0,10))} · ${esc(r.preferred_window)}</strong><p class="muted">Request #${esc(r.id)} · ${esc(r.status)} · ${esc(fmtDate(r.created_at))}</p><p class="preserve">${esc(r.notes)}</p><div class="actions">${cap().operator && r.status === 'requested' ? `<button class="btn ghost small" data-request="${esc(r.id)}" data-status="acknowledged">Acknowledge request</button><button class="btn ghost small" data-request="${esc(r.id)}" data-status="declined">Decline request</button>` : ''}${Number(r.requester_id) === Number(state.me.user.id) && ['requested','acknowledged'].includes(r.status) ? `<button class="btn ghost small" data-request="${esc(r.id)}" data-status="cancelled">Cancel request</button>` : ''}</div></article>`).join('');
+  if (!paint(g,formShell('Request a visit',`<p class="notice">Building: ${esc(selected().name)}. This saves a request for operator review only. It does not book or confirm a visit or send notifications. Acknowledged means reviewed, not scheduled.</p><label class="field">Preferred date<input type="date" id="requestDate" required></label><label class="field">Preferred time window<input id="requestWindow" required maxlength="200" placeholder="e.g. Morning, 9–11 a.m."></label><label class="field">Notes (optional)<textarea id="requestNotes" maxlength="5000"></textarea></label>`,'Submit request') + panel('Visit requests',rows || empty('No visit requests recorded.')))) return;
+  const requestKey = crypto.randomUUID();
+  formBind(async () => {await api('/service-requests',{method:'POST',body:{location_id:Number(id),request_key:requestKey,preferred_date:$('requestDate').value,preferred_window:$('requestWindow').value,notes:$('requestNotes').value}}); flash('Request saved for review. No visit has been scheduled.'); render();},'home');
+  $('view').querySelectorAll('[data-request]').forEach(b => b.onclick = () => mutate(b,async () => {await api(`/service-requests/${b.dataset.request}`,{method:'PATCH',body:{status:b.dataset.status}}); flash('Request status saved.'); render();}));
 }
 function renderAccount(g) {
   const user = state.me?.user || {};
@@ -227,6 +244,8 @@ async function render() {
   paint(g,empty('Loading…'));
   try {
     if (state.tab === 'home') await renderHome(g,id);
+    else if (state.tab === 'requests' && (cap().operator || cap().facility_client)) await renderRequests(g,id);
+    else if (state.tab === 'next') await renderNextService(g,id);
     else if (state.tab === 'account') renderAccount(g);
     else if (state.tab === 'history') {const {visits} = await api(`/visits?location_id=${id}&limit=50`); if (paint(g,panel('Service Reports',visitsTable(visits)))) bindReports(g);}
     else if (state.tab === 'scope') await renderScope(g,id);
