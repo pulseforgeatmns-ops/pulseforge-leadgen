@@ -127,10 +127,51 @@ function scoutRampDiagnostic({ tenantId, cycleId, requested, promoted, recovered
     discovery: discoveryDiagnostic(discovery),
   };
 }
+// First-failure counts across the loaded inventory, not the newly promoted cohort.
+// SQL-prefiltered rows (missing email, DNC, outreach review) are outside this scope.
+function cleanInventoryExclusionDiagnostic(value) {
+  const keys = ['business_fit', 'geography', 'contact_not_verified', 'dnc',
+    'duplicate_company_or_email', 'missing_row', 'do_not_contact', 'outreach_review_required',
+    'invalid_outreach_email', 'email_not_verified', 'email_status_not_verified',
+    'contaminated_email_domain', 'inferred_pattern_provenance', 'unobserved_provenance',
+    'contact_tenant_mismatch', 'synthetic_contact', 'missing_email_provenance',
+    'contact_classification_not_sendable', 'contact_classification_address_missing',
+    'contact_classification_email_changed', 'contact_classification_not_authorized',
+    'missing_company_domain', 'shared_profile_company_domain', 'recipient_company_domain_mismatch',
+    'prior_contact_or_human_owned', 'ao_owned_alias', 'ao_owned', 'already_attempted',
+    'prior_canonical_execution', 'prior_reply_or_booked', 'reply_received', 'engaged',
+    'quote_requested', 'incumbent_vendor', 'wrong_contact', 'closed', 'nurture', 'paused',
+    'service_area_not_confirmed',
+    'mission_segment_mismatch', 'public_website_required', 'pulseforge_reviewed_offer_required',
+    'pulseforge_prior_manual_first_touch'];
+  const available = value != null && typeof value === 'object' && !Array.isArray(value);
+  const entries = available ? Object.entries(value) : [];
+  const valid = available && entries.every(([, n]) => count(n) !== null);
+  return {
+    available, scope: 'loaded_inventory_first_failure',
+    counts: Object.fromEntries(keys.map(key => [key, available
+      ? (Object.hasOwn(value, key) ? count(value[key]) : 0) : null])),
+    recordedExcludedTotal: valid ? count(entries.reduce((sum, [, n]) => sum + n, 0)) : null,
+    unrecognizedReasonCount: valid
+      ? count(entries.reduce((sum, [key, n]) => sum + (keys.includes(key) ? 0 : n), 0)) : null,
+  };
+}
+function promotionCleanDiagnostic(value) {
+  return {
+    available: value != null && typeof value === 'object' && !Array.isArray(value),
+    scope: 'enrichment_promoted_or_recovered',
+    ...Object.fromEntries(['outcomes', 'identifiedProspects', 'unidentifiedOutcomes',
+      'duplicateOutcomeReferences', 'clean', 'unmatched'].map(key => [key, count(value?.[key])])),
+    exclusions: { ...cleanInventoryExclusionDiagnostic(value?.exclusionCounts),
+      scope: 'enrichment_cohort_first_failure' },
+  };
+}
 function controlCycleDiagnostic(tenantId, event) {
   return {
     ...correlation(tenantId, event.cycleId), phase: 'control_cycle', eventWriteCompleted: true,
     state: choice(event.state, ['healthy', 'critical', 'delivery_halted', 'replenish']),
+    scoutPromotionCleanCohort: promotionCleanDiagnostic(event.scoutPromotionCleanCohort),
+    cleanInventoryExclusions: cleanInventoryExclusionDiagnostic(event.cleanInventoryExclusions),
     cleanInventoryBefore: count(event.cleanInventoryBefore), cleanInventoryAfter: count(event.cleanInventoryAfter),
     pendingPrepared: event.pendingPreparedMeasured === true ? count(event.pendingPrepared) : null, preparedAdded: count(event.preparedAdded),
     prepareRequested: count(event.prepareRequested), sentToday: event.sentTodayMeasured === true ? count(event.sentToday) : null,

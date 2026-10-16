@@ -1300,6 +1300,7 @@ async function runMaxOutboundControlLoop(options = {}) {
     newPromotions,
     recoveredExisting,
     newCleanInventoryAdded: inventoryGrowth.newCleanInventoryAdded,
+    scoutPromotionCleanCohort: require('./scoutPromotionCohort').promotionCohort(scout?.enrichmentBatches, inventoryAfter),
     cleanInventoryExclusions: inventoryAfter.exclusionCounts || {},
     deficit: finalPlan.deficit,
     state: finalPlan.state,

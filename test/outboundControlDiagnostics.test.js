@@ -37,7 +37,7 @@ test('provider category and backoff are deterministic', () => {
   }
   assert.equal(discoveryDiagnostic({ kind: 'backoff' }).blocker, 'backoff');
 });
-async function run(tenantId, failEvent = false, rawSentToday = 0, failEnvelope = false, discovery, admissionFixture = {}) {
+async function run(tenantId, failEvent = false, rawSentToday = 0, failEnvelope = false, discovery, admissionFixture = {}, exclusionCounts = {}, postInventory = {}) {
   const logs = []; let persisted = false; let event;
   const result = await runMaxOutboundControlLoop({
     cycleId: `moc_${tenantId}_1234567890abcdef`, tenantId,
@@ -46,9 +46,9 @@ async function run(tenantId, failEvent = false, rawSentToday = 0, failEnvelope =
     program: { id: 'outbound_fixture', tenant_id: tenantId, mode: 'active', policy: { dailyCap: 2 } },
     source: { id: 'fixture', payload: { structuredMission: { market: { segment: 'small_business_owners' }, geography: { region: 'United States', scope: 'nationwide' } } } },
     infrastructure: { cap: 2, snapshot: { sentToday: rawSentToday }, assessed: { governor: { outcome: 'proceed' } }, operating: { planningDailyCapacity: 2, dispatchCapacityNow: 2, authorizationLimitedCapacity: 2 } },
-    inventory: { clean: [], excluded: [], exclusionCounts: {}, scope: {} },
+    inventory: { clean: [], excluded: [], exclusionCounts, scope: {} },
     timestamps: {}, funnel: {}, execute: discovery ? true : false,
-    ...(discovery ? { scoutRamp: async () => ({ discovery, ...admissionFixture }), inventoryAfter: { clean: [], excluded: [], exclusionCounts: {}, scope: {} } } : {}),
+    ...(discovery ? { scoutRamp: async () => ({ discovery, ...admissionFixture }), inventoryAfter: { clean: [], excluded: [], exclusionCounts, scope: {}, ...postInventory } } : {}),
     logger: { log: (label, value) => { assert.equal(persisted, true); logs.push([label, JSON.parse(value)]); } },
   });
   return { result, logs, event };
@@ -238,4 +238,74 @@ test('provider receipt reports bounded cache freshness and rejects malformed age
     assert.equal(invalid.cacheAgeMs, null); assert.equal(invalid.cacheExpiresInMs, null);
     assert.ok(!JSON.stringify(invalid).includes('secret'));
   }
+});
+
+
+test('clean exclusion projection is bounded, numeric and distinct from unavailable', () => {
+  const project = value => controlCycleDiagnostic('13', { cycleId, cleanInventoryExclusions: value }).cleanInventoryExclusions;
+  for (const value of [undefined, null, [], 'private@example.test']) {
+    const d = project(value);
+    assert.equal(d.available, false);
+    assert.equal(d.counts.business_fit, null);
+    assert.equal(d.recordedExcludedTotal, null);
+  }
+  const empty = project({});
+  assert.equal(empty.available, true);
+  assert.equal(empty.recordedExcludedTotal, 0);
+  assert.equal(empty.counts.business_fit, 0);
+  const secret = 'private@example.test https://private.test/token\nFORGED';
+  const value = { business_fit: 8, contact_classification_not_authorized: 2, [secret]: 3 };
+  const d = project(value);
+  assert.equal(d.scope, 'loaded_inventory_first_failure');
+  assert.equal(d.recordedExcludedTotal, 13);
+  assert.equal(d.unrecognizedReasonCount, 3);
+  assert.equal(d.counts.contact_classification_not_authorized, 2);
+  assert.ok(!JSON.stringify(d).includes('private'));
+  assert.ok(JSON.stringify(d).length < 2500);
+  for (const invalid of [NaN, Infinity, -1, 0.5, '2', { email: secret }]) {
+    const malformed = project({ business_fit: invalid });
+    assert.equal(malformed.counts.business_fit, null);
+    assert.equal(malformed.recordedExcludedTotal, null);
+    assert.equal(malformed.unrecognizedReasonCount, null);
+    assert.ok(!JSON.stringify(malformed).includes('private'));
+  }
+  assert.equal(project({ business_fit: Number.MAX_SAFE_INTEGER, email_not_verified: 1 }).recordedExcludedTotal, null);
+});
+
+test('persisted post-ramp exclusions reach the measured summary without prospect details', async () => {
+  const exclusions = { contact_classification_not_authorized: 2, business_fit: 7, 'private@example.test': 1 };
+  const discovery = { kind: 'investigated', result: { status: 'completed' } };
+  const { logs, event, result } = await run('13', false, 0, false, discovery, { promoted: 2 }, exclusions);
+  const d = logs.find(([label]) => label === '[max-outbound-control] measured summary')[1];
+  assert.equal(d.tenantId, '13');
+  assert.equal(d.cycleId, cycleId);
+  assert.equal(d.cleanInventoryAfter, 0);
+  assert.equal(d.cleanInventoryExclusions.counts.contact_classification_not_authorized, 2);
+  assert.equal(d.cleanInventoryExclusions.recordedExcludedTotal, 10);
+  assert.equal(d.cleanInventoryExclusions.unrecognizedReasonCount, 1);
+  assert.deepEqual(event.cleanInventoryExclusions, exclusions);
+  assert.deepEqual(result.cleanInventoryExclusions, exclusions);
+  assert.ok(!JSON.stringify(d).includes('private'));
+});
+
+
+test('exact promotion cohort survives the real control loop into sanitized post-reload summary', async () => {
+  const { retainPromotionIds } = require('../services/scoutPromotionCohort');
+  const batches = [retainPromotionIds({ promoted: 2, recovered: 0 }, ['765432109', '765432110'])];
+  const { logs, event } = await run('13', false, 0, false,
+    { kind: 'investigated', result: { status: 'completed' } },
+    { promoted: 2, enrichmentBatches: batches }, { business_fit: 40, contact_classification_not_authorized: 1 },
+    { excluded: [{ prospectId: '765432109', reason: 'contact_classification_not_authorized' },
+      { prospectId: '999', reason: 'business_fit' }] });
+  const receipt = logs.find(([label]) => label === '[max-outbound-control] measured summary')[1];
+  const cohort = receipt.scoutPromotionCleanCohort;
+  assert.equal(cohort.available, true);
+  assert.equal(cohort.outcomes, 2);
+  assert.equal(cohort.clean, 0);
+  assert.equal(cohort.unmatched, 1);
+  assert.equal(cohort.exclusions.counts.contact_classification_not_authorized, 1);
+  assert.equal(cohort.exclusions.counts.business_fit, 0);
+  assert.equal(receipt.cleanInventoryExclusions.counts.business_fit, 40);
+  assert.ok(!JSON.stringify(receipt).includes('765432'));
+  assert.ok(!JSON.stringify(event.scoutPromotionCleanCohort).includes('765432'));
 });
