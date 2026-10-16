@@ -23,6 +23,7 @@ function buildShadowReview(rows, options, evidenceCounts = {}) {
     if (row.route_comparable === true) return true;
     return row.comparison === 'match' || row.comparison === 'mismatch';
   });
+  const comparableSet = new Set(comparableRows);
   const comparable = comparableRows.length;
   const matches = comparableRows.filter(row => row.comparison === 'match').length;
   const mismatchCount = comparableRows.filter(row => row.comparison === 'mismatch').length;
@@ -46,14 +47,18 @@ function buildShadowReview(rows, options, evidenceCounts = {}) {
     acc[source].total += 1;
     if (row.status === 'evaluated') acc[source].evaluated += 1;
     if (row.status === 'error') acc[source].errors += 1;
-    if (row.comparison === 'match') { acc[source].comparable += 1; acc[source].match += 1; }
-    else if (row.comparison === 'mismatch') { acc[source].comparable += 1; acc[source].mismatch += 1; }
+    if (comparableSet.has(row)) acc[source].comparable += 1;
+    if (row.comparison === 'match') { acc[source].match += 1; }
+    else if (row.comparison === 'mismatch') { acc[source].mismatch += 1; }
     else if (row.comparison === 'unavailable') acc[source].unavailable += 1;
     return acc;
   }, Object.create(null));
 
-  const timeouts = rows.filter(row => row.error_reason === 'timeout'
-    || row.errors?.some(error => error.code === 'timeout')).length;
+  const timeoutRows = rows.filter(row => row.error_reason === 'timeout'
+    || row.errors?.some(error => error.code === 'timeout'));
+  const timeouts = timeoutRows.length;
+  const errorsOrTimeouts = rows.filter(row => row.status === 'error' || row.errors?.length > 0
+    || row.error_reason === 'timeout' || row.errors?.some(error => error.code === 'timeout')).length;
   const latencies = rows.map(row => row.latency_ms).filter(n => Number.isInteger(n) && n >= 0);
   const latency_ms = latencies.length
     ? { min: Math.min(...latencies), max: Math.max(...latencies), avg: Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) }
@@ -79,6 +84,7 @@ function buildShadowReview(rows, options, evidenceCounts = {}) {
     evaluated: rows.filter(row => row.status === 'evaluated').length,
     errors: errors.length,
     timeouts,
+    errors_or_timeouts: errorsOrTimeouts,
     comparable,
     unavailable: rows.filter(row => row.comparison === 'unavailable').length,
     matches,
@@ -90,6 +96,10 @@ function buildShadowReview(rows, options, evidenceCounts = {}) {
     inspection_recommended_while_prod_conversation: inspectionWhileConversation.length,
     dangerous_mismatch_rows: dangerousMismatchRows.length,
     dangerous_approval_clarification_7d: dangerousRecent.length,
+    // Sample counts cannot certify absence across a complete seven-day window.
+    dangerous_mismatches_7d: null,
+    pending_guard_verified_rows: null,
+    pending_guard_verification_complete: false,
     pending_guard_evidence_rows: evidenceCounts.pending_guard || 0,
     shadow_warning_evidence_rows: evidenceCounts.shadow_warning || 0,
     inspection_status_match_rate: inspectionStatusComparable
@@ -110,7 +120,7 @@ function buildShadowReview(rows, options, evidenceCounts = {}) {
   const report = {
     spec: 'SPEC-JEV-006', mode: 'shadow_review',
     scope: { latest: scope.limit, tenant_id: scope.tenantId, filter: scope.filter,
-      summary_basis: 'returned rows only' },
+      summary_basis: 'returned rows only', window_complete: false },
     thresholds: {
       confidence: 0.9,
       inspection_probability: INSPECTION_THRESHOLD,
