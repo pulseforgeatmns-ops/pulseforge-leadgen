@@ -51,3 +51,37 @@ test('unknown exclusion text is sanitized even for exact cohort matches', () => 
   assert.equal(diagnostic.exclusions.recordedExcludedTotal, 1);
   assert.ok(!JSON.stringify(diagnostic).includes('private'));
 });
+
+test('PostgreSQL UUID identities correlate case-insensitively with clean and excluded rows', () => {
+  const cleanId = 'a1b2c3d4-1111-4222-8333-123456789abc';
+  const excludedId = 'b2c3d4e5-2222-4333-8444-23456789abcd';
+  const cohort = promotionCohort([retainPromotionIds({ promoted: 2, recovered: 1 },
+    [cleanId.toUpperCase(), excludedId, excludedId.toUpperCase()])], {
+    clean: [{ prospectId: cleanId }],
+    excluded: [{ prospectId: excludedId.toUpperCase(), reason: 'contact_classification_not_authorized' }],
+  });
+  assert.equal(cohort.identifiedProspects, 2);
+  assert.equal(cohort.unidentifiedOutcomes, 0);
+  assert.equal(cohort.duplicateOutcomeReferences, 1);
+  assert.equal(cohort.clean, 1);
+  assert.equal(cohort.unmatched, 0);
+  assert.equal(cohort.exclusionCounts.contact_classification_not_authorized, 1);
+  assert.ok(!JSON.stringify(controlCycleDiagnostic('13', { scoutPromotionCleanCohort: cohort })).includes(cleanId));
+});
+
+test('malformed UUIDs and unsafe integer IDs remain unidentified even if inventory echoes them', () => {
+  const invalid = [' a1b2c3d4-1111-4222-8333-123456789abc', 'a1b2c3d4-1111-4222-8333-123456789abz',
+    'a1b2c3d4111142228333123456789abc', 'a1b2c3d4-1111-4222-8333-123456789abc@example.test',
+    '', '0', '01', -1, 1.5, Number.MAX_SAFE_INTEGER + 1, {}, null, undefined];
+  const cohort = promotionCohort([retainPromotionIds({ promoted: invalid.length, recovered: 0 }, invalid)], {
+    clean: invalid.map(prospectId => ({ prospectId })), excluded: [],
+  });
+  assert.equal(cohort.identifiedProspects, 0);
+  assert.equal(cohort.unidentifiedOutcomes, invalid.length);
+  assert.equal(cohort.clean, 0);
+  const legacy = promotionCohort([retainPromotionIds({ promoted: 2, recovered: 0 }, [42, '43'])], {
+    clean: [{ prospectId: '42' }, { prospectId: 43 }], excluded: [],
+  });
+  assert.equal(legacy.clean, 2);
+  assert.equal(legacy.unidentifiedOutcomes, 0);
+});
