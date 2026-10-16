@@ -33,6 +33,16 @@ function policy(input, now = new Date()) {
     weekdays: [1, 2, 3, 4, 5], startHour: 9, endHour: 17,
     // This phase authorizes first touches only. A reply can never restart a sequence.
     maxSequenceStep: 1, enrichmentLimit: 15, preparationAttemptsPerDay: 3 };
+  if (input.preparationOnly != null && input.preparationOnly !== false) {
+    if (p.tenantId !== '17' || input.preparationOnly !== true) fail('invalid_preparation_only_scope');
+    for (const field of ['startsAt', 'expiresAt', 'dailyCap', 'totalCap', 'spacingMinutes',
+      'startHour', 'endHour', 'allowedContactClassifications']) {
+      if (input[field] == null) fail('explicit_preparation_bounds_required');
+    }
+    if (!Number.isSafeInteger(p.dailyCap) || p.dailyCap < 1 || p.dailyCap > 50
+      || p.dailyCap > p.totalCap) fail('invalid_preparation_bounds');
+    p.preparationOnly = true;
+  }
   if (!['1', '10', '13', '17'].includes(p.tenantId) || !p.sourceMissionId || !p.senderEmail.includes('@') || !p.inboxIntegrationId) {
     fail('invalid_governed_outbound_scope');
   }

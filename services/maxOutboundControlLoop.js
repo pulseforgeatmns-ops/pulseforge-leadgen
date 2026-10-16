@@ -1,5 +1,6 @@
 'use strict';
 
+const { isSubstralPreparationGrant, substralPreparationGrantReason } = require('./substralPreparationGrant');
 const { admissionReceiptDiagnostic, providerReceiptDiagnostic, scoutRampDiagnostic, controlCycleDiagnostic, emitDiagnostic } = require('./outboundControlDiagnostics');
 const { governedContactReason, founderFirst, contactEvidence } = require('../utils/governedContactEligibility');
 
@@ -67,7 +68,7 @@ const { governedOutboundEnabledForTenant, governedOutboundPreparationEnabledForT
 const { isSmallBusinessOwnerSegment } = require('../utils/canonicalBusinessTaxonomy');
 
 function preparationGrantActive(store, program) {
-  if (program?.mode !== 'active') return false;
+  if (program?.mode !== 'active' && !isSubstralPreparationGrant(program)) return false;
   const tid = String(store?.tenantId ?? program?.tenant_id ?? '').trim();
   if (!tid || !['1', '10', '13', '17'].includes(tid)) return true;
   return governedOutboundPreparationEnabledForTenant(tid);
@@ -1074,7 +1075,7 @@ async function runMaxOutboundControlLoop(options = {}) {
     tenantId: governedContext.tenantId,
   });
 
-  const source = options.source || await loadSource(pool, program, governed.tenantId);
+  let source = options.source || await loadSource(pool, program, governed.tenantId);
   if (!source) return { halted: 'source_mission_missing', programId: program.id };
   if (governed.tenantId === '1') {
     const reason = require('../utils/pulseforgeCashflowOffer').pulseforgeMissionReason(source.mission || source.payload || source);
@@ -1083,6 +1084,16 @@ async function runMaxOutboundControlLoop(options = {}) {
 
   const governedAdapters = options.governedAdapters || createGovernedAdapters(pool, { governedContext: governed });
   const controlNow = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
+  if (governed.tenantId === '17' && (program.mode === 'shadow' || program.policy.preparationOnly)) {
+    const reviewedSource = await governedAdapters.loadMission(program.source_mission_id);
+    const reason = substralPreparationGrantReason(program, reviewedSource?.mission, controlNow);
+    if (reason) return { halted: reason, programId: program.id };
+    source = reviewedSource; // Discovery uses the same hash-checked source, never a stale caller snapshot.
+    const budget = await store.preparationCounts(program, clock(controlNow).day);
+    if (budget.total >= program.policy.totalCap || budget.today >= program.policy.dailyCap) {
+      return { halted: 'preparation_budget_exhausted', programId: program.id };
+    }
+  }
   const infrastructure = options.infrastructure
     || await governedAdapters.infrastructure(program, controlNow, null, { mode: 'planning' });
   const inventoryBefore = options.inventory
@@ -1114,8 +1125,10 @@ async function runMaxOutboundControlLoop(options = {}) {
   });
 
   let scout = null;
+  // Prepared-item caps are not authority to spend on discovery/enrichment.
+  const discoveryBlockedReason = program.policy.preparationOnly ? 'preparation_research_not_authorized' : null;
   const searchFingerprint = scoutSearchFingerprint(program, source);
-  if (plan.shouldReplenish && options.execute !== false) {
+  if (plan.shouldReplenish && options.execute !== false && !discoveryBlockedReason) {
     const ramp = options.scoutRamp || defaultScoutRamp;
     scout = await ramp({
       pool, store, program, source, plan, logger, governedContext: governed,
@@ -1294,6 +1307,7 @@ async function runMaxOutboundControlLoop(options = {}) {
     scoutPromoted: newPromotions,
     scoutQueued: Number(scout?.discoveredQueued || 0),
     scoutRecovered: recoveredExisting,
+    discoveryBlockedReason,
     scoutSearchFingerprint: searchFingerprint,
     scoutSearchGeneration: Number(scout?.searchGeneration || 0),
     scoutDiscoveryAttempted: Boolean(scout?.discoveryAttempted),
@@ -1373,6 +1387,7 @@ async function runMaxOutboundControlLoop(options = {}) {
       exclusionCounts: inventoryAfter.exclusionCounts || {},
     },
     scout,
+    discoveryBlockedReason,
     aoRefill,
     funnel,
     yield: scout?.yield || null,

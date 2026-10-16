@@ -17,11 +17,11 @@ function input(overrides = {}) {
 }
 function fixture(overrides = {}) {
   const row = { id: 'substral-reviewed-redesign', tenant_id: '17', stage: 'ready', status: 'ready',
-    objective: 'Acquire a $2,000+ website redesign client in southern New Hampshire.',
-    target_segment: 'Established local service businesses',
+    objective: 'Acquire a $2,000+ website redesign client among established businesses nationwide.',
+    target_segment: 'Established businesses with evidenced website need and budget fit',
     payload: { structuredMission: { immutable: true,
       market: { segment: 'home_services', capability: 'website_redesign' },
-      geography: { region: 'southern New Hampshire', cities: ['Manchester', 'Bedford'] } },
+      geography: { scope: 'nationwide', region: 'United States', cities: [] } },
     constraints: { minimumProjectValue: 2000 } }, ...overrides };
   const queries = [];
   const db = { async query(sql, args) {
@@ -234,4 +234,35 @@ test('readiness rejects unknown, paused, halted, conflicting and zero-capacity g
       assessment: { governor, maxSendsPerDay }, envelope: { governorState, maxSendsPerDay } }) });
     assert.equal(report.pass, false);
   }
+});
+
+
+test('preparation-only approval survives CLI review and authorization without becoming sending authority', async () => {
+  const { db } = fixture();
+  const proposal = input({ preparationOnly: true });
+  const review = await reviewStudioSubstralProgram(db, proposal, now);
+  assert.equal(review.policy.preparationOnly, true);
+  const sendReview = await reviewStudioSubstralProgram(db, input(), now);
+  assert.notEqual(sendReview.reviewHash, review.reviewHash);
+  let authorized = 0;
+  const result = await createGovernedProgram({ ...proposal, reviewHash: review.reviewHash }, 'operator', {
+    pool: db, now,
+    emmettReadiness: async () => ({ pass: true, recommendedSafeDailyCapacity: 1 }),
+    productionService: () => ({
+      authorize: async (value, actor) => {
+        authorized++;
+        assert.equal(value.preparationOnly, true);
+        assert.equal(value.reviewHash, review.reviewHash);
+        assert.equal(actor.id, 'operator');
+        return { id: 'preparation-shadow', mode: 'shadow', policy: value };
+      },
+      setMode: () => assert.fail('No mode activation'),
+      tick: () => assert.fail('No dispatch'),
+    }),
+  });
+  assert.equal(authorized, 1);
+  assert.equal(result.policy.preparationOnly, true);
+  await assert.rejects(createGovernedProgram(input({ reviewHash: review.reviewHash }), 'operator', {
+    pool: db, now, emmettReadiness: () => assert.fail('Changed approval must stop before writes'),
+  }), { code: 'program_review_required' });
 });
