@@ -162,7 +162,7 @@
     "test:anchor-portal": "node --test test/anchorPortal.test.js test/anchorPortalSecurity.test.js test/anchorPortalUiSafety.test.js test/anchorPortalReferenceUi.test.js test/anchorPortalAcceptancePostgres.test.js test/anchorPortalStartupSafety.test.js test/anchorPortalStartupPostgres.test.js",
     "test:anchor-portal:browser": "node --test test/browser/anchorPortalUi.test.js test/browser/anchorPortalBrowserAcceptance.test.js",
     "anchor:portal:demo": "node scripts/demoExeterPortalLocal.js --disposable-local",
-    "test:anchor-portal:standalone": "node --test test/anchorPortalStandalone.test.js test/anchorPortalProvisioning.test.js test/anchorPortalTls.test.js",
+    "test:anchor-portal:standalone": "node --test test/anchorPortalStandalone.test.js test/anchorPortalProvisioning.test.js test/anchorPortalTls.test.js test/anchorPortalPublicDemo.test.js",
     "test:anchor-portal:standalone:browser": "node --test test/browser/anchorPortalStandaloneBrowser.test.js"
   },
   "repository": {
