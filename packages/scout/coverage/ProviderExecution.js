@@ -27,6 +27,35 @@ function asText(value) {
 }
 
 /**
+ * Carry an adapter observation without inventing provider/network measurements.
+ * A skipped or thrown call has a known adapter outcome, but no execution receipt.
+ * Keep this projection separate from evidence/qualification contracts.
+ */
+function buildDiscoveryProviderReport(adapterReport, adapter = {}, opts = {}) {
+  const report = adapterReport || {};
+  const execution = report.execution || report.coverage?.execution || null;
+  const candidates = Array.isArray(report.candidates) ? report.candidates : null;
+  const errors = Array.isArray(report.errors) ? report.errors : [];
+  const source = adapter.id || report.source || null;
+  const providerId = report.providerId || execution?.providerId
+    || ({ public_business_places: 'google_maps', company_websites: 'website' })[source]
+    || source;
+  const failed = errors.length > 0 || (Array.isArray(execution?.errors) && execution.errors.length > 0);
+  return {
+    providerId,
+    evidenceType: opts.evidenceType || report.coverage?.evidenceType || null,
+    status: opts.status || (report.available === false ? 'skipped'
+      : failed ? 'failed' : candidates ? (candidates.length ? 'completed' : 'empty') : null),
+    rawResultCount: report.rawResultCount ?? execution?.totals?.results ?? null,
+    mappedCandidateCount: report.mappedCandidateCount ?? candidates?.length ?? null,
+    executedAt: report.executedAt || null,
+    error: errors[0]?.message || null,
+    errors,
+    execution,
+  };
+}
+
+/**
  * Normalize one provider report into canonical ProviderExecution observational shape.
  * @param {object} report
  * @returns {object|null}
@@ -254,6 +283,7 @@ function formatProviderExecutionProse(records = []) {
 }
 
 module.exports = {
+  buildDiscoveryProviderReport,
   PROVIDER_LABELS,
   providerLabel,
   normalizeProviderExecutionRecord,

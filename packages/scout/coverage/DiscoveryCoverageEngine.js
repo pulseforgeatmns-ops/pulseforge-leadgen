@@ -20,6 +20,7 @@ const {
   dedupeCities,
 } = require('./SearchGeography');
 const { enforceCandidateMinimumContract } = require('./CandidateMinimumContract');
+const { buildDiscoveryProviderReport } = require('./ProviderExecution');
 const { discoverCandidates } = require('../../max/scoutAcquisition/DiscoveryAdapters');
 const {
   computeCoverageFromEstimate,
@@ -179,10 +180,12 @@ async function executeCoveragePlan(plan, searchDefinition, adapters = [], opts =
   const marketAdapters = (adapters || []).filter((row) => row && row.id !== 'existing_pf');
 
   const reports = new Map();
+  const providerReceipts = [];
   for (const workload of plan.workloads || []) {
     const adapter = adapterForSource(marketAdapters, workload.source);
     if (!adapter || (typeof adapter.available === 'function' && !adapter.available())) {
       sourceTypesUnavailable.push(workload.source);
+      providerReceipts.push(buildDiscoveryProviderReport({ errors: [{ code: 'adapter_unavailable' }] }, adapter || {}, { status: 'skipped' }));
       executed.push({
         ...workload,
         status: 'skipped',
@@ -193,12 +196,25 @@ async function executeCoveragePlan(plan, searchDefinition, adapters = [], opts =
     }
 
     const scoped = scopedSearchDefinition(searchDefinition, workload, marketDefinition);
+    let providerAttempted = false;
+    let receiptRecorded = false;
     try {
       const { investigationTaskId, ...evidenceKey } = scoped.evidenceRequest || {};
       const requestKey = JSON.stringify([adapter.id, evidenceKey]);
       const reused = adapter.id === 'public_business_places' && reports.has(requestKey);
-      const report = reused ? reports.get(requestKey) : await adapter.discover(scoped);
+      let report;
+      if (reused) report = reports.get(requestKey);
+      else {
+        providerAttempted = true;
+        report = await adapter.discover(scoped);
+      }
       reports.set(requestKey, report);
+      if (!reused) {
+        providerReceipts.push(buildDiscoveryProviderReport(report, adapter, {
+          evidenceType: scoped.evidenceRequest?.evidenceType,
+        }));
+        receiptRecorded = true;
+      }
       const rows = report.candidates || [];
       executed.push({
         ...workload,
@@ -232,6 +248,13 @@ async function executeCoveragePlan(plan, searchDefinition, adapters = [], opts =
         errors.push(...report.errors.map((err) => ({ ...err, workload })));
       }
     } catch (err) {
+      // Candidate processing (including a reused report) is not another provider call.
+      if (providerAttempted && !receiptRecorded) {
+        providerReceipts.push(buildDiscoveryProviderReport({ errors: [{ code: 'provider_error', message: err.message || String(err) }] }, adapter, {
+          status: 'failed',
+          evidenceType: scoped.evidenceRequest?.evidenceType,
+        }));
+      }
       executed.push({
         ...workload,
         status: 'failed',
@@ -255,6 +278,7 @@ async function executeCoveragePlan(plan, searchDefinition, adapters = [], opts =
     sourceTypesChecked: [...new Set(sourceTypesChecked)],
     sourceTypesUnavailable: [...new Set(sourceTypesUnavailable)],
     discoveryPlan: plan,
+    providerReceipts,
   };
 }
 

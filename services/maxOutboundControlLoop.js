@@ -1351,6 +1351,7 @@ async function runMaxOutboundControlLoop(options = {}) {
   await store.event('max_outbound_control', [program.id, cycleId], controlEvent);
   if (scout) {
     emitDiagnostic(logger, '[max-outbound-control] Scout provider receipt', controlEvent.scoutProviderReceipt);
+    emitDiagnostic(logger, '[max-outbound-control] Scout admission receipt', controlEvent.scoutAdmissionReceipt);
   }
   emitDiagnostic(logger, '[max-outbound-control] measured summary',
     controlCycleDiagnostic(store.tenantId, controlEvent)
