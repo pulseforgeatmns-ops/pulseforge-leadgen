@@ -109,6 +109,27 @@ describe('scorecard capture payload', () => {
       pool.query = original;
     }
   });
+
+  it('keeps the internal capture successful when Brevo fails', async () => {
+    const originalQuery = pool.query;
+    const originalError = console.error;
+    pool.query = async () => ({ rows: [{ id: 902 }] });
+    console.error = () => {};
+    try {
+      const answers = basePayload({ marketing_consent: true });
+      delete answers.company_website;
+      const stored = await captureScorecardLead(answers, resolveResult(answers), {
+        syncContact: async () => { throw new Error('Brevo unavailable'); },
+      });
+
+      assert.equal(stored.id, 902);
+      assert.equal(stored.stored, true);
+      assert.deepEqual(stored.brevo, { synced: false, reason: 'brevo_sync_failed' });
+    } finally {
+      pool.query = originalQuery;
+      console.error = originalError;
+    }
+  });
 });
 
 describe('scorecard public routes', () => {
