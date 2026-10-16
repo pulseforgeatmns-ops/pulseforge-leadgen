@@ -82,6 +82,8 @@ async function run(params = {}) {
     retry_hours: retryHours,
     verticals,
   };
+  const promotionIds = [];
+  require('./services/scoutPromotionCohort').retainPromotionIds(summary, promotionIds);
   for (const record of rows.rows) {
     try {
       const result = await promote(record, { db });
@@ -92,6 +94,7 @@ async function run(params = {}) {
       const recovered = result?.recovered === true;
       if (result?.emailResolved) summary.emailResolved++;
       if (result?.emailVerified) summary.emailVerified++;
+      if (promoted || recovered) promotionIds.push(result?.prospectId ?? null);
       if (promoted) summary.promoted++;
       else if (recovered) summary.recovered++;
       else summary.unresolved++;
