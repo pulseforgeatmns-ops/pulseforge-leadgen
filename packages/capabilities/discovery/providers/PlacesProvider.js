@@ -406,6 +406,7 @@ async function fetchPlacesPage(querySpec, apiKey, fetchImpl, pageToken = null) {
         attempt: {
           query: q,
           httpStatus,
+          cacheHit: traced.cacheHit, cacheStrategy: traced.cacheStrategy,
           googleStatus: failureStatus,
           googleError: failureStatus || `http_${httpStatus}`,
           resultCount: 0,
@@ -431,6 +432,7 @@ async function fetchPlacesPage(querySpec, apiKey, fetchImpl, pageToken = null) {
       attempt: {
         query: q,
         httpStatus,
+        cacheHit: traced.cacheHit, cacheStrategy: traced.cacheStrategy,
         googleStatus,
         googleError,
         resultCount: Array.isArray(data.results) ? data.results.length : 0,

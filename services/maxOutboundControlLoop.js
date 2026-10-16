@@ -545,7 +545,7 @@ async function loadScoutDiscoveryBackoff(pool, tenantId, fingerprint, now = new 
   return {
     reason: latestGeneration < SCOUT_DISCOVERY_MAX_GENERATION
       ? 'repeated_zero_yield_rotate_search'
-      : 'repeated_zero_yield_search_space_exhausted',
+      : 'repeated_zero_yield_generation_limit_reached',
     fingerprint,
     consecutiveZeroYieldAttempts: rows.length,
     searchGeneration: Math.min(latestGeneration + 1, SCOUT_DISCOVERY_MAX_GENERATION),
@@ -1335,6 +1335,9 @@ async function runMaxOutboundControlLoop(options = {}) {
     lastSuccessfulPromotionAt,
   };
   await store.event('max_outbound_control', [program.id, cycleId], controlEvent);
+  if (scout) {
+    emitDiagnostic(logger, '[max-outbound-control] Scout provider receipt', controlEvent.scoutProviderReceipt);
+  }
   emitDiagnostic(logger, '[max-outbound-control] measured summary',
     controlCycleDiagnostic(store.tenantId, controlEvent)
   );

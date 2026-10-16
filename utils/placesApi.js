@@ -243,7 +243,7 @@ async function legacyTextSearch(params = {}, deps = {}) {
           cacheStrategy: cached.strategy,
         }
       );
-      return result;
+      return { ...result, cacheHit: true, cacheStrategy: cached.strategy };
     }
   }
 
@@ -285,7 +285,7 @@ async function legacyTextSearch(params = {}, deps = {}) {
     await recordCall(recordBase, sharedResult, failure ? failedYieldParams(params) : params, deps, started, {
       cacheHit: true, cacheMiss: false, cacheAge: 0, cacheKey, cacheStrategy: 'memory_inflight',
     });
-    return sharedResult;
+    return { ...sharedResult, cacheHit: true, cacheStrategy: 'memory_inflight' };
   }
   if (useCache && recordBase.normalizedQuery && result.ok) {
     if (failure) holdFailure(cacheKey, failure, PLACES_ENDPOINTS.TEXT_SEARCH);
@@ -304,12 +304,14 @@ async function legacyTextSearch(params = {}, deps = {}) {
     });
     // Explicit uncached diagnostics already inspect the original provider
     // response. Preserve that return contract, never its cache/telemetry data.
-    return !useCache ? { ...result, data: uncachedResponse } : result;
+    return { ...result, ...(!useCache ? { data: uncachedResponse } : {}),
+      cacheHit: false, cacheStrategy: useCache ? DEFAULT_STRATEGY : null };
   }
 
   if (params.deferRecord) {
     return {
       ...result,
+      cacheHit: false, cacheStrategy: useCache ? DEFAULT_STRATEGY : null,
       async commitRecord(yieldMetrics = {}) {
         params.yield = { ...(params.yield || {}), ...yieldMetrics };
         await recordCall(recordBase, result, params, deps, started, {
@@ -329,7 +331,7 @@ async function legacyTextSearch(params = {}, deps = {}) {
     cacheStrategy: useCache ? DEFAULT_STRATEGY : null,
   });
 
-  return result;
+  return { ...result, cacheHit: false, cacheStrategy: useCache ? DEFAULT_STRATEGY : null };
 }
 
 async function legacyPlaceDetails(params = {}, deps = {}) {

@@ -165,3 +165,23 @@ test('actual Scout ramp marks admission measured only when persistence callback 
     assert.equal(admissionReceiptDiagnostic('13', cycleId, result.admission, result.admissionMeasured).counts.evaluated, invoke ? 0 : null);
   }
 });
+
+test('natural control logs expose only the sanitized provider receipt after event write', async () => {
+  const privateText = 'secret@example.com https://private.test/?token=secret';
+  const discovery = { kind: 'investigated', result: { status: 'partial', payload: { providerExecution: [{
+    providerId: 'google_maps', status: 'failed', execution: { queries: [{
+      query: privateText, googleStatus: 'REQUEST_DENIED', googleError: privateText,
+      httpStatus: 200, resultCount: 0, cacheHit: true, cacheStrategy: 'memory_ttl',
+    }] },
+  }] } } };
+  const { logs, event } = await run('13', false, 0, false, discovery);
+  const receipts = logs.filter(([label]) => label === '[max-outbound-control] Scout provider receipt');
+  assert.equal(receipts.length, 1);
+  assert.deepEqual(receipts[0][1], event.scoutProviderReceipt);
+  assert.equal(receipts[0][1].providers[0].queries[0].origin, 'cache');
+  assert.ok(!JSON.stringify(logs).includes('secret'));
+  await assert.rejects(run('13', true, 0, false, discovery), /event_failure/);
+  const malformed = structuredClone(discovery);
+  malformed.result.payload.providerExecution[0].execution.queries[0].cacheStrategy = privateText;
+  assert.equal(providerReceiptDiagnostic('13', cycleId, malformed).providers[0].queries[0].cacheStrategy, 'unknown');
+});
