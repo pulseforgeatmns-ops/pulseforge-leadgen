@@ -421,3 +421,49 @@ for (const status of ['OK', 'ZERO_RESULTS']) test(`legacy Scout ${status} ignore
   assert.ok(!JSON.stringify([report, normalized]).includes('person@example.test'));
   assert.ok(!JSON.stringify([report, normalized]).includes('provider.test'));
 });
+
+for (const status of ['REQUEST_DENIED', 'ZERO_RESULTS']) test(`Scout receipt distinguishes live and cached ${status} without exposing query data`, async () => {
+  const { createPlacesDiscoveryAdapter } = require('../packages/max/scoutAcquisition/DiscoveryAdapters');
+  const { normalizeProviderReport } = require('../packages/scout/coverage/ProviderEvidenceContract');
+  const { normalizeProviderExecutionRecord } = require('../packages/scout/coverage/ProviderExecution');
+  const { providerReceiptDiagnostic } = require('../services/outboundControlDiagnostics');
+  let fetches = 0;
+  const provider = createPlacesProvider({ apiKey: SECRET, fetchImpl: async () => {
+    fetches++; return response(status, { error_message: `${SECRET} ${RAW}`, results: [] });
+  } });
+  const adapter = createPlacesDiscoveryAdapter({ placesProvider: provider });
+  for (const cacheHit of [false, true]) {
+    const report = await adapter.discover({ tenantId: '13', geography: { label: 'Private synthetic city' }, segments: ['private_segment'] });
+    const canonical = normalizeProviderExecutionRecord(normalizeProviderReport(report, { providerId: 'google_maps', evidenceType: 'contact_path' }));
+    const receipt = providerReceiptDiagnostic('13', 'moc_13_1234567890abcdef', { result: { payload: { providerExecution: [canonical] } } });
+    const query = receipt.providers[0].queries[0];
+    assert.equal(query.cacheHit, cacheHit);
+    assert.equal(query.origin, cacheHit ? 'cache' : 'uncached');
+    assert.equal(query.cacheStrategy, 'memory_ttl');
+    assert.equal(query.status, status);
+    assert.equal(query.resultCount, 0);
+    assert.equal(receipt.providers[0].status, status === 'REQUEST_DENIED' ? 'failed' : 'empty');
+    assertSafe(receipt);
+    assert.ok(!JSON.stringify(receipt).includes('Private synthetic city'));
+    assert.ok(!JSON.stringify(receipt).includes('private_segment'));
+  }
+  assert.equal(fetches, 1);
+});
+
+test('text-search shared responses report per-caller origin without mutating cached result', async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let fetches = 0;
+  const params = { query: 'Synthetic shared receipt', apiKey: SECRET, fetchImpl: async () => {
+    fetches++; await gate; return response('ZERO_RESULTS', { results: [] });
+  } };
+  const first = legacyTextSearch(params, { db: fakeDb });
+  const second = legacyTextSearch(params, { db: fakeDb });
+  release();
+  const [live, shared] = await Promise.all([first, second]);
+  assert.equal(live.cacheHit, false); assert.equal(live.cacheStrategy, 'memory_ttl');
+  assert.equal(shared.cacheHit, true); assert.equal(shared.cacheStrategy, 'memory_inflight');
+  const cached = await legacyTextSearch(params, { db: fakeDb });
+  assert.equal(cached.cacheHit, true); assert.equal(cached.cacheStrategy, 'memory_ttl');
+  assert.equal(live.cacheHit, false); assert.equal(fetches, 1);
+});

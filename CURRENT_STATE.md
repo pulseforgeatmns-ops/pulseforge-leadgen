@@ -4,6 +4,13 @@
 
 ## Current Repository Architecture
 
+[SPEC-184 Provider Execution Continuity](docs/specs/SPEC-184_Provider_Execution_Continuity.md)
+includes a local observational repair preserving Places search cache provenance in
+Scout receipts and exposing sanitized receipts in normal control logs. A search
+generation cap is labeled as a cap, not proof of an exhausted market. No sourcing,
+cache, backoff, admission or sending policy changes; live Babrun coverage cause
+remains unverified pending an authorized natural-run receipt.
+
 [SPEC-PF-ACCEL-001 rollout preflight](docs/specs/SPEC-PF-ACCEL-001_Rollout_Preflight.md)
 is an in-progress, approved local/test implementation slice for PR897/899.
 The standalone command checks migration prerequisites with bounded read-only

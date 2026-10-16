@@ -16,6 +16,13 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Fixed
 
+- [SPEC-184](docs/specs/SPEC-184_Provider_Execution_Continuity.md): preserve per-caller
+  Places search cache provenance through Scout provider receipts; emit only the
+  bounded sanitized receipt after the normal control event write. Distinguish
+  held denials, cached zero results and shared in-flight requests without exposing
+  query text, contact data or keys. Label the zero-yield generation cap truthfully
+  without changing retry, spend, admission or outbound behavior.
+
 - Restore AUDIT-063 Places in-flight request sharing and per-caller reuse
   attribution after integrating failure-cache handling. Concurrent denials stay
   sanitized, produce no business evidence, and reserve only one paid request;

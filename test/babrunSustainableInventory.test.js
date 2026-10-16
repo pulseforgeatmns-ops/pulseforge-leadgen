@@ -301,3 +301,17 @@ test('existing suppressed capacity rejection is canonically PROVEN_UNSENT only w
   });
   assert.equal(classification.outcome, 'PROVEN_UNSENT');
 });
+
+test('generation-limit backoff does not claim provider failures exhaust the market', async () => {
+  const now = new Date('2026-10-06T14:00:00.000Z');
+  const rows = Array.from({ length: 3 }, () => ({ created_at: '2026-10-06T13:45:00.000Z', payload: {
+    newCleanInventoryAdded: 0, newPromotions: 0, recoveredExisting: 0, scoutSearchGeneration: 100,
+    scoutProviderReceipt: { discovery: { blocker: 'provider_denied' } },
+  } }));
+  const pool = { query: async () => ({ rows }) };
+  const backoff = await loadScoutDiscoveryBackoff(pool, '13', 'same-search', now);
+  assert.equal(backoff.reason, 'repeated_zero_yield_generation_limit_reached');
+  assert.equal(backoff.diversify, false);
+  assert.equal(backoff.retryAt, '2026-10-06T14:45:00.000Z');
+  assert.equal(await loadScoutDiscoveryBackoff(pool, '13', 'same-search', new Date(backoff.retryAt)), null);
+});

@@ -90,8 +90,9 @@ function providerReceiptDiagnostic(tenantId, cycleId, discovery) {
           status: choice(query?.googleStatus, codes),
           httpStatus: Number.isInteger(query?.httpStatus) && query.httpStatus >= 100 && query.httpStatus <= 599 ? query.httpStatus : null,
           resultCount: count(query?.resultCount),
-          // Existing Places attempts omit cache metadata. Unknown stays unknown.
+          // Older attempts omit cache metadata. Unknown stays unknown.
           cacheHit: boolean(query?.cacheHit),
+          cacheStrategy: choice(query?.cacheStrategy, ['memory_ttl', 'memory_inflight']),
           origin: query?.cacheHit === true ? 'cache' : query?.cacheHit === false ? 'uncached' : 'unknown',
         })),
       };
