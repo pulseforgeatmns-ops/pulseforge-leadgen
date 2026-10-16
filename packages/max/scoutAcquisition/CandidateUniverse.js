@@ -208,6 +208,7 @@ async function constructCandidateUniverse(input = {}) {
   let investigationPlan = null;
   let revisedMarketDefinition = input.marketDefinition || null;
   let providerReports = [];
+  let providerReceipts = null;
 
   const useCoverageEngine = input.useCoverageEngine !== false;
   if (input.useCoverageEngine === false) {
@@ -323,6 +324,10 @@ async function constructCandidateUniverse(input = {}) {
     } else {
       result = await discoverCandidates(searchDefinition, marketAdapters);
     }
+    // Operational receipts are separate from evidence reports: existing artifact
+    // and qualification consumers must not gain new inputs from diagnostics.
+    providerReceipts = Array.isArray(result.providerReceipts) ? result.providerReceipts
+      : Array.isArray(result.providerReports) ? result.providerReports : null;
     discoveredRaw = (result.candidates || []).filter((row) => {
       if (row.tenantId && tenantId && String(row.tenantId) !== String(tenantId)) return false;
       return true;
@@ -456,6 +461,7 @@ async function constructCandidateUniverse(input = {}) {
     investigationPlan,
     revisedMarketDefinition,
     providerReports,
+    providerReceipts,
   };
 }
 

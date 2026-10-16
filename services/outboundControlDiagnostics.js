@@ -13,13 +13,23 @@ function correlation(tenantId, cycleId) {
   };
 }
 function choice(value, allowed) { return allowed.includes(value) ? value : 'unknown'; }
+// New observational receipts deliberately bypass legacy evidence/control fields.
+// Explicit null means unavailable; only older payloads fall back to execution.
+function discoveryProviderReceipts(payload = {}) {
+  if (!payload || typeof payload !== 'object') return undefined;
+  return Object.hasOwn(payload, 'providerReceipts') ? payload.providerReceipts : payload.providerExecution;
+}
 function discoveryDiagnostic(discovery) {
   const result = discovery?.result || discovery || {};
   const payload = result.payload || {};
-  const reports = Array.isArray(payload.providerExecution) ? payload.providerExecution.slice(0, 20) : [];
+  const receipts = discoveryProviderReceipts(payload);
+  const reports = Array.isArray(receipts) ? receipts.slice(0, 20) : [];
   // Exact code matching only. Error messages, URLs and arbitrary provider fields never leave here.
   const errors = [...(Array.isArray(result.errors) ? result.errors.slice(0, 100) : []),
-    ...reports.flatMap(row => Array.isArray(row?.execution?.errors) ? row.execution.errors.slice(0, 100) : [])].slice(0, 100);
+    ...reports.flatMap(row => [
+      ...(Array.isArray(row?.errors) ? row.errors.slice(0, 100) : []),
+      ...(Array.isArray(row?.execution?.errors) ? row.execution.errors.slice(0, 100) : []),
+    ])].slice(0, 100);
   const codes = [payload.blockerCode, ...errors.flatMap(row => [row?.code, row?.googleStatus])];
   let blocker = 'unknown';
   if (discovery?.kind === 'backoff') blocker = 'backoff';
@@ -62,7 +72,7 @@ function admissionReceiptDiagnostic(tenantId, cycleId, admission, measured = fal
 // Durable, bounded observations only; never infer network spend from executed/status.
 function providerReceiptDiagnostic(tenantId, cycleId, discovery) {
   const result = discovery?.result || discovery || {};
-  const reports = result.payload?.providerExecution;
+  const reports = discoveryProviderReceipts(result.payload);
   const statuses = ['completed', 'partial', 'blocked', 'failed', 'skipped', 'success', 'empty'];
   const providers = ['google_places', 'google_maps', 'county_records', 'linkedin', 'facebook', 'website', 'news', 'prospeo', 'existing_pf', 'apollo'];
   const codes = ['OK', 'ZERO_RESULTS', 'REQUEST_DENIED', 'OVER_QUERY_LIMIT', 'RESOURCE_EXHAUSTED', 'INVALID_REQUEST', 'UNKNOWN_ERROR', 'UNKNOWN_STATUS', 'insufficient_coverage', 'provider_error', 'provider_unavailable', 'external_discovery_capability_unavailable', 'adapter_unavailable', 'discovery_provider_failed', 'invalid_target', 'enrichment_unavailable', 'google_places_status_REQUEST_DENIED', 'google_places_status_OVER_QUERY_LIMIT'];
@@ -70,6 +80,11 @@ function providerReceiptDiagnostic(tenantId, cycleId, discovery) {
   const time = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(v) && Number.isFinite(Date.parse(v)) ? v : null;
   const array = (v, limit) => Array.isArray(v) ? v.slice(0, limit) : [];
   const errors = v => array(v, 20).map(e => ({ code: choice(e?.code, codes), status: choice(e?.googleStatus, codes) }));
+  const providerErrors = report => {
+    const normalized = errors([...array(report?.execution?.errors, 20), ...array(report?.errors, 20)]);
+    return normalized.filter((error, i) => normalized.findIndex(other =>
+      other.code === error.code && other.status === error.status) === i);
+  };
   return {
     ...correlation(tenantId, cycleId), schemaVersion: 1,
     discovery: discoveryDiagnostic(discovery),
@@ -84,7 +99,7 @@ function providerReceiptDiagnostic(tenantId, cycleId, discovery) {
         executed: boolean(execution.executed), executedAt: time(report?.executedAt),
         rawResultCount: count(report?.results ?? report?.rawResultCount), mappedCandidateCount: count(report?.qualified ?? report?.mappedCandidateCount),
         queryCount: count(execution.totals?.queries), resultCount: count(execution.totals?.results),
-        errors: errors(execution.errors),
+        errors: providerErrors(report),
         queriesTruncated: Array.isArray(execution.queries) && execution.queries.length > 20,
         queries: array(execution.queries, 20).map(query => ({
           status: choice(query?.googleStatus, codes),

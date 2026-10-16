@@ -185,3 +185,40 @@ test('natural control logs expose only the sanitized provider receipt after even
   malformed.result.payload.providerExecution[0].execution.queries[0].cacheStrategy = privateText;
   assert.equal(providerReceiptDiagnostic('13', cycleId, malformed).providers[0].queries[0].cacheStrategy, 'unknown');
 });
+
+test('natural control logs measured admission rejection buckets after the durable event write', async () => {
+  const privateText = 'secret@example.com https://private.test/?token=secret';
+  const admission = {
+    discovered: 92, evaluated: 92, fit: 0, admittedToEnrichment: 0,
+    rejected: { outside_geography: 70, segment_mismatch: 15, unclassifiable_vertical: 7, [privateText]: 0 },
+    decisions: [{ name: privateText, domain: privateText, reason: privateText }],
+  };
+  const discovery = { kind: 'investigated', result: { status: 'completed' } };
+  for (const tenant of ['10', '13']) {
+    const fixture = { admission, admissionMeasured: true };
+    const { logs, event } = await run(tenant, false, 0, false, discovery, fixture);
+    const receipts = logs.filter(([label]) => label === '[max-outbound-control] Scout admission receipt');
+    assert.equal(receipts.length, 1);
+    assert.deepEqual(receipts[0][1], event.scoutAdmissionReceipt);
+    assert.equal(receipts[0][1].tenantId, tenant);
+    assert.equal(receipts[0][1].cycleId, `moc_${tenant}_1234567890abcdef`);
+    assert.equal(receipts[0][1].measured, true);
+    assert.equal(receipts[0][1].recordedRejectedTotal, 92);
+    assert.equal(receipts[0][1].rejected.segment_mismatch, 15);
+    assert.equal(receipts[0][1].counts.fit, 0);
+    assert.ok(!JSON.stringify(logs).includes('secret'));
+    await assert.rejects(run(tenant, true, 0, false, discovery, fixture), /event_failure/);
+  }
+});
+
+test('natural admission receipt logs unavailable data as unknown, never measured zero', async () => {
+  const discovery = { kind: 'backoff' };
+  const { logs } = await run('10', false, 0, false, discovery, {
+    admission: { discovered: 0, evaluated: 0, fit: 0, rejected: {} }, admissionMeasured: false,
+  });
+  const receipt = logs.find(([label]) => label === '[max-outbound-control] Scout admission receipt')?.[1];
+  assert.ok(receipt);
+  assert.equal(receipt.measured, false);
+  assert.equal(receipt.counts.evaluated, null);
+  assert.equal(receipt.recordedRejectedTotal, null);
+});

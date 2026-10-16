@@ -546,6 +546,11 @@ function resolveProviderExecution(universe) {
   return universe.providerReports || [];
 }
 
+// Logging-only receipts must not enter providerExecution's evidence consumers.
+function resolveProviderReceipts(universe) {
+  return Array.isArray(universe?.providerReceipts) ? universe.providerReceipts : null;
+}
+
 function resolveAim(opts = {}, delegation = {}) {
   if (opts.aim) return isRuntimeAim(opts.aim) ? opts.aim : null;
   const ctx = (delegation && delegation.businessContext) || {};
@@ -606,6 +611,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
           invalidReason: 'Discovery provider failed before opportunities could be confirmed.',
         }),
         providerExecution: [],
+        providerReceipts: null,
       },
     };
   }
@@ -652,6 +658,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
         coverageConfidence: packed.investigation.coverageConfidence,
         consumedContext: buildConsumedContext(searchDefinition),
         providerExecution: [],
+        providerReceipts: null,
       },
     };
   }
@@ -700,6 +707,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
         coverageConfidence: packed.investigation.coverageConfidence,
         consumedContext: buildConsumedContext(searchDefinition),
         providerExecution: [],
+        providerReceipts: null,
       },
     };
   }
@@ -775,6 +783,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
         coverageConfidence: packed.investigation.coverageConfidence,
         consumedContext: buildConsumedContext(searchDefinition),
         providerExecution: [],
+        providerReceipts: null,
       },
     };
   }
@@ -833,6 +842,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
         capabilityBlocked: true,
         outcome: 'blocked',
         providerExecution: resolveProviderExecution(universe),
+        providerReceipts: resolveProviderReceipts(universe),
       },
     };
   }
@@ -888,6 +898,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
         coverageConfidence: packed.investigation.coverageConfidence,
         consumedContext: buildConsumedContext(searchDefinition),
         providerExecution: resolveProviderExecution(universe),
+        providerReceipts: resolveProviderReceipts(universe),
       },
     };
   }
@@ -1338,6 +1349,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       investigationPlan: universe.investigationPlan || null,
       candidateInvestigation: candidateInvestigation || null,
       providerExecution: resolveProviderExecution(universe),
+      providerReceipts: resolveProviderReceipts(universe),
       qualifiedCount: qualifiedProspectCount,
       qualifiedProspectCount,
       readinessReadyCount: supported.length,

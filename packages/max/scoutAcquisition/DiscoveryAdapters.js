@@ -7,6 +7,7 @@
  */
 
 const { asText, nowIso, SOURCE_TYPES } = require('./Types');
+const { buildDiscoveryProviderReport } = require('../../scout/coverage/ProviderExecution');
 const { createPlacesProvider, createProviderExecution } = require('../../capabilities/discovery/providers/PlacesProvider');
 const {
   PLACES_FEATURES,
@@ -430,6 +431,7 @@ async function discoverCandidates(searchDefinition, adapters = []) {
   const candidates = [];
   const errors = [];
   const sourceReports = [];
+  const providerReceipts = [];
   const sourceTypesChecked = [];
   const sourceTypesUnavailable = [];
 
@@ -443,6 +445,7 @@ async function discoverCandidates(searchDefinition, adapters = []) {
     ].includes(sourceType);
     if (typeof adapter.available === 'function' && !adapter.available()) {
       sourceTypesUnavailable.push(sourceType);
+      providerReceipts.push(buildDiscoveryProviderReport({ errors: [{ code: 'adapter_unavailable' }] }, adapter, { status: 'skipped' }));
       sourceReports.push(
         adapterResult({
           source: adapter.id || sourceType,
@@ -455,10 +458,16 @@ async function discoverCandidates(searchDefinition, adapters = []) {
       );
       continue;
     }
+    let receiptRecorded = false;
     try {
       const report = await adapter.discover(searchDefinition);
       sourceReports.push(report);
-      if (report.available === false) {
+      const unavailable = report.available === false;
+      providerReceipts.push(buildDiscoveryProviderReport(report, adapter, {
+        evidenceType: searchDefinition.evidenceRequest?.evidenceType,
+      }));
+      receiptRecorded = true;
+      if (unavailable) {
         sourceTypesUnavailable.push(sourceType);
         errors.push(...(report.errors || []));
         continue;
@@ -478,6 +487,9 @@ async function discoverCandidates(searchDefinition, adapters = []) {
         source: adapter.id || sourceType,
       };
       errors.push(failure);
+      if (!receiptRecorded) {
+        providerReceipts.push(buildDiscoveryProviderReport({ errors: [failure] }, adapter, { status: 'failed' }));
+      }
       sourceReports.push(
         adapterResult({
           source: adapter.id || sourceType,
@@ -499,6 +511,7 @@ async function discoverCandidates(searchDefinition, adapters = []) {
     },
     errors,
     sourceReports,
+    providerReceipts,
     sourceTypesChecked: [...new Set(sourceTypesChecked)],
     sourceTypesUnavailable: [...new Set(sourceTypesUnavailable)],
   };
