@@ -1,6 +1,7 @@
 'use strict';
 
 const { normalizeVertical } = require('./normalize');
+const OBSERVATION_CONTEXT = Symbol('observationContext');
 const { configuredServiceAreas } = require('./serviceArea');
 const {
   isLocationInMissionGeography,
@@ -167,7 +168,28 @@ function isSearchDerivedField(value, context = {}) {
   return geoHits.length >= 2 || (geoHits.length === 1 && tokens.length >= 4);
 }
 
+function classificationRecords(candidate = {}, context = {}) {
+  if (!Array.isArray(candidate.classificationObservations) || !candidate.classificationObservations.length) {
+    return [{ candidate, context }];
+  }
+  // The caller's search context is valid fallback provenance. Flattened
+  // candidate provenance from a different duplicate is not.
+  const baseContext = context[OBSERVATION_CONTEXT] || context;
+  return candidate.classificationObservations.filter(row => row && typeof row === 'object').map(row => ({
+    candidate: row,
+    context: { ...baseContext, ...buildDiscoveryProvenance(row, baseContext) },
+  }));
+}
+
 function declaredCanonicalVertical(candidate = {}, context = {}) {
+  for (const observation of classificationRecords(candidate, context)) {
+    const declared = declaredObservationVertical(observation.candidate, observation.context);
+    if (declared) return declared;
+  }
+  return null;
+}
+
+function declaredObservationVertical(candidate = {}, context = {}) {
   for (const field of ['vertical', 'industry', 'segment']) {
     const raw = candidate[field];
     if (!raw || isSearchDerivedField(raw, context)) continue;
@@ -183,6 +205,18 @@ function declaredCanonicalVertical(candidate = {}, context = {}) {
 }
 
 function classificationHaystack(candidate = {}, context = {}) {
+  const records = classificationRecords(candidate, context);
+  const text = records.map(row => observationHaystack(row.candidate, row.context));
+  if (records[0]?.candidate !== candidate) {
+    // Later first-party investigation may add descriptive facts. Keep those,
+    // but never trust flattened labels whose query association has been lost.
+    const { industry, vertical, segment, category, ...descriptive } = candidate;
+    text.push(observationHaystack(descriptive, context));
+  }
+  return text.filter(Boolean).join(' ');
+}
+
+function observationHaystack(candidate = {}, context = {}) {
   const parts = [
     asClassifyText(candidate.name),
     asClassifyText(candidate.company),
@@ -353,7 +387,7 @@ function evaluateReplenishmentAdmission(candidate = {}, context = {}) {
   }
 
   const provenance = buildDiscoveryProvenance(candidate, context);
-  const admissionContext = { ...context, ...provenance };
+  const admissionContext = { ...context, ...provenance, [OBSERVATION_CONTEXT]: context };
   const text = classificationHaystack(candidate, admissionContext);
 
   const restaurantReason = restaurantBusinessScopeReason(candidate, admissionContext);
