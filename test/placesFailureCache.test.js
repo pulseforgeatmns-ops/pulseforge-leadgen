@@ -124,7 +124,7 @@ test('old poisoned result is quarantined without refetch, TTL extension or raw p
     now += 250;
     await legacyTextSearch({ query, fetchImpl: async () => { throw new Error('must not refetch'); } }, { db: fakeDb });
     assert.equal(cache.lookup(key(query)).age, 750);
-    now = 100000 + cache.DEFAULT_TTL_MS;
+    now = 100000 + cache.DEFAULT_FAILURE_TTL_MS;
     assert.equal(cache.lookup(key(query)).hit, true);
     now++;
     assert.equal(cache.lookup(key(query)).expired, true);
@@ -440,6 +440,13 @@ for (const status of ['REQUEST_DENIED', 'ZERO_RESULTS']) test(`Scout receipt dis
     assert.equal(query.cacheHit, cacheHit);
     assert.equal(query.origin, cacheHit ? 'cache' : 'uncached');
     assert.equal(query.cacheStrategy, 'memory_ttl');
+    if (cacheHit) {
+      assert.ok(Number.isSafeInteger(query.cacheAgeMs));
+      assert.ok(Number.isSafeInteger(query.cacheExpiresInMs));
+      assert.ok(query.cacheExpiresInMs <= (status === 'REQUEST_DENIED' ? cache.DEFAULT_FAILURE_TTL_MS : cache.DEFAULT_TTL_MS));
+    } else {
+      assert.equal(query.cacheAgeMs, null); assert.equal(query.cacheExpiresInMs, null);
+    }
     assert.equal(query.status, status);
     assert.equal(query.resultCount, 0);
     assert.equal(receipt.providers[0].status, status === 'REQUEST_DENIED' ? 'failed' : 'empty');
@@ -466,4 +473,72 @@ test('text-search shared responses report per-caller origin without mutating cac
   const cached = await legacyTextSearch(params, { db: fakeDb });
   assert.equal(cached.cacheHit, true); assert.equal(cached.cacheStrategy, 'memory_ttl');
   assert.equal(live.cacheHit, false); assert.equal(fetches, 1);
+});
+
+for (const endpoint of ['search', 'details']) test(`${endpoint} denial expires after bounded negative TTL; recovery shares one ordinary request`, async () => {
+  const originalNow = Date.now; let now = 100000;
+  Date.now = () => now;
+  try {
+    let fetches = 0;
+    const params = { query: 'Synthetic negative TTL', placeId: 'synthetic-ttl-place', fields: 'name,website', apiKey: SECRET,
+      fetchImpl: async () => { fetches++; return fetches === 1 ? denied()
+        : response('OK', { results: [], result: { name: 'Synthetic recovered' } }); } };
+    const request = endpoint === 'search' ? legacyTextSearch : legacyPlaceDetails;
+    await request(params, { db: fakeDb });
+    now += cache.DEFAULT_FAILURE_TTL_MS - 1;
+    const held = await request(params, { db: fakeDb });
+    assert.equal(fetches, 1); assert.equal(reservations.length, 1);
+    assert.equal(held.cacheHit, true); assert.equal(held.googleStatus, 'REQUEST_DENIED');
+    assert.equal(held.cacheAgeMs, cache.DEFAULT_FAILURE_TTL_MS - 1);
+    assert.equal(held.cacheExpiresInMs, 1); assertSafe(held);
+    now += 2;
+    const recovered = await Promise.all([10, 13, 17].map(tenantId =>
+      withPlacesContext({ tenantId }, () => request(params, { db: fakeDb }))));
+    assert.ok(recovered.every(row => row.ok));
+    assert.equal(fetches, 2); assert.equal(reservations.length, 2);
+    assert.equal(settlements.length, 2);
+    now += cache.DEFAULT_FAILURE_TTL_MS + 1;
+    const stillSuccess = await request(params, { db: fakeDb });
+    assert.equal(stillSuccess.ok, true); assert.equal(fetches, 2, 'success retains ordinary 24-hour caching');
+  } finally { Date.now = originalNow; }
+});
+
+test('legacy poisoned failure older than negative TTL expires before return without reviving raw payload', async () => {
+  const originalNow = Date.now; let now = 100000;
+  Date.now = () => now;
+  try {
+    const query = 'Synthetic old denial';
+    cache.storeResult(key(query), { httpStatus: 200, googleStatus: 'REQUEST_DENIED', ok: true,
+      data: { status: 'REQUEST_DENIED', error_message: SECRET, results: [{ name: RAW }] } }, 'text_search');
+    now += cache.DEFAULT_FAILURE_TTL_MS + 1;
+    let fetches = 0;
+    const recovered = await legacyTextSearch({ query, fetchImpl: async () => {
+      fetches++; return response('ZERO_RESULTS', { results: [] });
+    } }, { db: fakeDb });
+    assert.equal(fetches, 1); assert.equal(recovered.cacheHit, false); assert.equal(recovered.ok, true);
+    assertSafe(recovered); assertSafe(rows);
+  } finally { Date.now = originalNow; }
+});
+
+test('a fresh denial renews only the bounded hold; cache reads never refresh it', async () => {
+  const originalNow = Date.now; let now = 100000;
+  Date.now = () => now;
+  try {
+    let fetches = 0;
+    const params = { query: 'Synthetic repeated denial', apiKey: SECRET,
+      fetchImpl: async () => { fetches++; return denied(); } };
+    await legacyTextSearch(params, { db: fakeDb });
+    now += cache.DEFAULT_FAILURE_TTL_MS + 1;
+    const fresh = await legacyTextSearch(params, { db: fakeDb });
+    assert.equal(fresh.cacheHit, false); assert.equal(fetches, 2);
+    now += 1000;
+    const held = await legacyTextSearch(params, { db: fakeDb });
+    assert.equal(held.cacheAgeMs, 1000); assert.equal(fetches, 2);
+    assert.equal(held.cacheExpiresInMs, cache.DEFAULT_FAILURE_TTL_MS - 1000);
+  } finally { Date.now = originalNow; }
+});
+
+test('negative holds respect an explicitly shorter lookup TTL', () => {
+  cache.holdFailure('synthetic', { httpStatus: 200, googleStatus: 'REQUEST_DENIED' }, 'text_search');
+  assert.ok(cache.lookup('synthetic', 100).expiresInMs <= 100);
 });

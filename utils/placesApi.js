@@ -22,6 +22,7 @@ const {
   storeResult,
   holdFailure,
   DEFAULT_STRATEGY,
+  legacyApplicationFailure,
 } = require('./placesQueryCache');
 
 async function guardedPlacesCall(recordBase, deps, execute) {
@@ -65,21 +66,6 @@ const LEGACY_FIND_PLACE = 'https://maps.googleapis.com/maps/api/place/findplacef
 const GEOCODE_URL = 'https://maps.googleapis.com/maps/api/geocode/json';
 const V1_SEARCH_TEXT = 'https://places.googleapis.com/v1/places:searchText';
 const V1_PLACE_DETAILS = 'https://places.googleapis.com/v1/places';
-
-const LEGACY_SUCCESS_STATUSES = new Set(['OK', 'ZERO_RESULTS']);
-const LEGACY_FAILURE_STATUSES = new Set([
-  'REQUEST_DENIED', 'OVER_QUERY_LIMIT', 'OVER_DAILY_LIMIT', 'INVALID_REQUEST',
-  'UNKNOWN_ERROR', 'NOT_FOUND', 'PERMISSION_DENIED', 'RESOURCE_EXHAUSTED', 'UNAVAILABLE',
-]);
-
-function legacyApplicationFailure(result) {
-  if (!result?.ok || LEGACY_SUCCESS_STATUSES.has(result.googleStatus)) return null;
-  return {
-    httpStatus: Number.isInteger(result.httpStatus) ? result.httpStatus : null,
-    googleStatus: LEGACY_FAILURE_STATUSES.has(result.googleStatus)
-      ? result.googleStatus : 'UNKNOWN_STATUS',
-  };
-}
 
 function failureResult(failure) {
   return {
@@ -243,7 +229,8 @@ async function legacyTextSearch(params = {}, deps = {}) {
           cacheStrategy: cached.strategy,
         }
       );
-      return { ...result, cacheHit: true, cacheStrategy: cached.strategy };
+      return { ...result, cacheHit: true, cacheStrategy: cached.strategy,
+        cacheAgeMs: cached.age, cacheExpiresInMs: cached.expiresInMs };
     }
   }
 
@@ -366,7 +353,8 @@ async function legacyPlaceDetails(params = {}, deps = {}) {
           cacheStrategy: cached.strategy,
         }
       );
-      return result;
+      return { ...result, cacheHit: true, cacheStrategy: cached.strategy,
+        cacheAgeMs: cached.age, cacheExpiresInMs: cached.expiresInMs };
     }
   }
 

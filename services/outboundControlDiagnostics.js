@@ -108,6 +108,7 @@ function providerReceiptDiagnostic(tenantId, cycleId, discovery) {
           // Older attempts omit cache metadata. Unknown stays unknown.
           cacheHit: boolean(query?.cacheHit),
           cacheStrategy: choice(query?.cacheStrategy, ['memory_ttl', 'memory_inflight']),
+          cacheAgeMs: count(query?.cacheAgeMs), cacheExpiresInMs: count(query?.cacheExpiresInMs),
           origin: query?.cacheHit === true ? 'cache' : query?.cacheHit === false ? 'uncached' : 'unknown',
         })),
       };

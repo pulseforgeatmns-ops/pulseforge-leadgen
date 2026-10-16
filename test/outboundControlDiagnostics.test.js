@@ -222,3 +222,20 @@ test('natural admission receipt logs unavailable data as unknown, never measured
   assert.equal(receipt.counts.evaluated, null);
   assert.equal(receipt.recordedRejectedTotal, null);
 });
+
+test('provider receipt reports bounded cache freshness and rejects malformed age metadata', () => {
+  const receipt = value => providerReceiptDiagnostic('10', 'moc_10_1234567890abcdef', {
+    result: { payload: { providerExecution: [{ providerId: 'google_maps', execution: { queries: [value] } }] } },
+  }).providers[0].queries[0];
+  const historical = receipt({ cacheHit: true, googleStatus: 'REQUEST_DENIED', cacheAgeMs: 60000, cacheExpiresInMs: 840000 });
+  assert.equal(historical.origin, 'cache');
+  assert.equal(historical.cacheAgeMs, 60000);
+  assert.equal(historical.cacheExpiresInMs, 840000);
+  const live = receipt({ cacheHit: false, googleStatus: 'OK' });
+  assert.equal(live.origin, 'uncached'); assert.equal(live.cacheAgeMs, null);
+  for (const value of ['secret@example.com', -1, Infinity, 1.5]) {
+    const invalid = receipt({ cacheAgeMs: value, cacheExpiresInMs: value });
+    assert.equal(invalid.cacheAgeMs, null); assert.equal(invalid.cacheExpiresInMs, null);
+    assert.ok(!JSON.stringify(invalid).includes('secret'));
+  }
+});
