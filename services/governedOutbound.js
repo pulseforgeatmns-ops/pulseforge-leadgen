@@ -694,7 +694,8 @@ function service({
     return store.lock(async () => {
       const program = await store.program();
       if (!program) return { halted: 'no_program' };
-      if (program.policy.preparationOnly) return { halted: 'preparation_only_grant', sent: 0 };
+      // Disabled legacy grants may omit policy; let validation record their halt.
+      if (program.policy?.preparationOnly) return { halted: 'preparation_only_grant', sent: 0 };
       const day = clock(now()).day;
       try {
         const source = await validateProgram(program);
