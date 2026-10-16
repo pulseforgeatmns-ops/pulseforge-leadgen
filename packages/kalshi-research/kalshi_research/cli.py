@@ -17,6 +17,11 @@ from kalshi_research.reporting.diagnostics import format_diagnostics, inspect_di
 from kalshi_research.features import format_feature_report, inspect_feature_report
 from kalshi_research.settlement import SettlementResolver
 from kalshi_research.outcomes import resolve_captured_outcomes
+from kalshi_research.hypotheses import (
+    evaluate_hypothesis,
+    format_hypothesis_evaluation,
+    list_hypotheses,
+)
 from kalshi_research.replay import (
     DEFAULT_FEE_RATE,
     format_replay,
@@ -31,12 +36,34 @@ from kalshi_research.strategies.threshold import BuyBelowThreshold
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Paper-trading research tools")
-    parser.add_argument("command", choices=["demo", "init-db", "collect-once", "collect-loop", "list-btc-series", "report", "resolve-settlements", "resolve-outcomes", "replay", "replay-sweep", "replay-split", "diagnose-data", "feature-report"])
+    parser.add_argument(
+        "command",
+        choices=[
+            "demo",
+            "init-db",
+            "collect-once",
+            "collect-loop",
+            "list-btc-series",
+            "report",
+            "resolve-settlements",
+            "resolve-outcomes",
+            "replay",
+            "replay-sweep",
+            "replay-split",
+            "diagnose-data",
+            "feature-report",
+            "list-hypotheses",
+            "evaluate-hypothesis",
+        ],
+    )
     parser.add_argument("--max-yes-ask", type=int, default=35)
     parser.add_argument("--min-threshold", type=int, default=1)
     parser.add_argument("--max-threshold", type=int, default=99)
     parser.add_argument("--top", type=int, default=10)
     parser.add_argument("--train-fraction", type=float, default=0.5)
+    parser.add_argument("--hypothesis-id", type=str, default="H-005")
+    parser.add_argument("--walk-forward-folds", type=int, default=4)
+    parser.add_argument("--sensitivity-radius", type=int, default=2)
     parser.add_argument(
         "--fee-rate", type=float, default=DEFAULT_FEE_RATE,
         help=(
@@ -73,6 +100,24 @@ def main() -> None:
         print(format_feature_report(inspect_feature_report(
             settings.database_url, train_fraction=args.train_fraction,
         )))
+        return
+    if args.command == "list-hypotheses":
+        for hyp in list_hypotheses():
+            print(
+                f"{hyp.hypothesis_id}\t{hyp.name}\t{hyp.status}\t"
+                f"{hyp.condition_feature} {hyp.condition_op}"
+            )
+        return
+    if args.command == "evaluate-hypothesis":
+        report = evaluate_hypothesis(
+            settings.database_url,
+            hypothesis_id=args.hypothesis_id,
+            train_fraction=args.train_fraction,
+            fee_rate=args.fee_rate,
+            walk_forward_folds=args.walk_forward_folds,
+            sensitivity_radius=args.sensitivity_radius,
+        )
+        print(format_hypothesis_evaluation(report))
         return
     if args.command == "resolve-settlements":
         market_data = KalshiRestMarketData(str(settings.kalshi_api_base_url), settings.kalshi_timeout_seconds)
