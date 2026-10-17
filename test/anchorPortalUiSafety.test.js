@@ -40,9 +40,9 @@ test('photo compression is bounded and revokes local image handles',async()=>{
  ctx.file={type:'image/jpeg',size:100};await assert.rejects(run('compressPhoto(file)'),/still too large/);assert.equal(draws,5);assert.equal(revoked,1);
 });
 test('demo marker follows only the selected building; cleaner can author reports',()=>{
- const elements={tabs:{innerHTML:'',querySelectorAll:()=>[]},building:{},demoBanner:{classList:{toggle(name,value){this[name]=value;}}},pageTitle:{}};
+ const elements={tabs:{innerHTML:'',querySelectorAll:()=>[]},workspaceActions:{innerHTML:'',querySelectorAll:()=>[]},building:{},demoBanner:{classList:{toggle(name,value){this[name]=value;}}},pageTitle:{}};
  const {run}=context({document:{getElementById:id=>elements[id]}});
  run("state.me={capabilities:{cleaner:true},locations:[{id:1,name:'Demo',is_demo:true},{id:2,name:'Live',is_demo:false}]};state.locationId=2;renderTabs()");
- assert.equal(elements.demoBanner.classList.hidden,true);assert.ok(elements.tabs.innerHTML.includes('New Service Report'));
+ assert.equal(elements.demoBanner.classList.hidden,true);assert.ok(elements.workspaceActions.innerHTML.includes('New Service Report'));
  run('state.locationId=1;renderTabs()');assert.equal(elements.demoBanner.classList.hidden,false);assert.match(elements.demoBanner.textContent,/Synthetic/);assert.ok(!elements.demoBanner.textContent.includes('PASSWORD'));
 });
