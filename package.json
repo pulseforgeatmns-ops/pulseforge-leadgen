@@ -5,6 +5,7 @@
   "main": "leadgen.js",
   "scripts": {
     "test": "node --test test/*.test.js",
+    "test:scout-owner-evidence": "node --require ./test/helpers/denyWebsiteEvidenceNetwork.cjs --test test/websiteOwnerEvidence.test.js test/websiteEnrichmentCrawl.test.js test/babrunScoutIntake.test.js test/babrunContactResolution.test.js test/canonicalEmailEligibility.test.js test/anchorPreparationBinding.test.js test/scoutInventoryCapacityRecovery.test.js test/babrunGovernedEnrichmentEvidence.test.js",
     "test:global-smoke": "node --test test/globalProductionStartupSmoke.test.js test/clientsStartupHardening.test.js",
     "test:ci-plan": "node --test test/ciPlanPr.test.js",
     "test:max:spreadsheet:reliability": "node --test test/maxSpreadsheetParserReliability.test.js test/maxSpreadsheetProposal.test.js test/maxSpreadsheetProposalPostgres.test.js test/maxSpreadsheetApprovalApi.test.js test/maxSpreadsheetReviewUi.test.js test/maxSpreadsheetReviewBrowser.test.js test/spreadsheetCallSuppression.test.js test/maxSpreadsheetCallConcurrency.test.js test/maxSpreadsheetFixtureScenarios.test.js test/maxSpreadsheetConsumers.test.js test/maxSpreadsheetConsumersPostgres.test.js test/maxSpreadsheetCallLockTimeout.test.js test/maxSpreadsheetTransactionFailure.test.js test/maxSpreadsheetAuthorization.test.js test/maxSpreadsheetCrossTenantContention.test.js",
@@ -188,6 +189,7 @@
     "express": "^5.2.1",
     "express-session": "^1.19.0",
     "googleapis": "^171.4.0",
+    "htmlparser2": "6.1.0",
     "imapflow": "^2.0.5",
     "multer": "^1.4.5-lts.1",
     "nodemailer": "^8.0.10",
