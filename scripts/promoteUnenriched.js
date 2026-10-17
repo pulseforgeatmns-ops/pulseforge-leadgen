@@ -139,66 +139,27 @@ function promotionServiceAreaMatch(record, clientConfig) {
 
 function babrunPromotionContactResolution({ enriched = {}, verification = {}, officialDomain = '' } = {}) {
   if (!enriched.email) return null;
-  const {
-    CONTACT_FINAL_STATE,
-    candidateRecord,
-    classifyCandidate,
-    mapVerificationResult,
-  } = require('../utils/babrunContactClassification');
-  const sourceUrl = String(enriched.sourceUrl || '').trim() || null;
-  const sourceDomain = sourceUrl
-    ? require('../utils/canonicalEmailEligibility').normalizeDomain(sourceUrl)
-    : null;
-  const firstParty = Boolean(sourceDomain && sourceDomain === officialDomain);
-  const sourceNames = (Array.isArray(enriched.source) ? enriched.source : [enriched.source])
-    .map(value => String(value || '').toLowerCase());
-  const explicitFounderRole = /\b(owner|founder|president|principal|proprietor)\b/i
-    .test(String(enriched.title || ''));
-  const providerFounderAttribution = explicitFounderRole
-    && Boolean(String(enriched.contact || '').trim())
-    && sourceNames.some(value => ['prospeo', 'hunter'].includes(value));
-  const discoveryMethod = firstParty ? 'first_party_website' : 'enrichment_provider';
-  const candidate = candidateRecord(
-    enriched.email,
-    discoveryMethod,
-    sourceUrl || (enriched.source || []).join('+') || null,
-    { firstParty, publicFounderSource: false, founderAttribution: providerFounderAttribution }
-  );
-  const mapped = {
-    ...mapVerificationResult({
-      status: verification.emailStatus,
-      reason: verification.rejectReason || verification.note || null,
-    }),
-    verified: verification.emailVerified === true,
-    method: verification.emailVerificationMethod || null,
-    verifiedAt: verification.verifiedAt || verification.verifierCheckedAt || new Date().toISOString(),
-  };
-  const founder = String(enriched.contact || '').trim();
-  const finalState = classifyCandidate(candidate, mapped, founder);
+  const { applyScoutEnrichment, babrunScoutContactEvidence } = require('../utils/babrunScoutContactEvidence');
+  const sources = (Array.isArray(enriched.source) ? enriched.source : [enriched.source])
+    .map(value => String(value || '').trim().toLowerCase());
+  // The current waterfall returns one selected source. Mixed legacy discovery
+  // provenance is not evidence that this address belongs to a named owner.
+  const selectedSource = sources.length === 1 ? sources[0] : 'unattributed';
+  // Retain the existing first-party website alias, still requiring exact site,
+  // named ownership, selected address binding and consistent verification.
+  const source = selectedSource === 'website_email' ? 'scraped' : selectedSource;
+  const lead = applyScoutEnrichment({ source: [] }, enriched, source, 13, officialDomain);
+  const evidence = babrunScoutContactEvidence({ lead, email: enriched.email, verification, officialDomain });
+  const contactResolution = evidence.acquisitionMetadata.contactResolution;
   return {
     contactResolution: {
-      resolvedAt: new Date().toISOString(),
-      finalState,
-      classification: finalState,
-      bestEmail: String(enriched.email).trim().toLowerCase(),
-      contactName: founder || null,
-      contactTitle: enriched.title || null,
-      discoverySource: candidate.discoverySource,
-      discoveryMethod,
-      verification: mapped,
-      candidates: [{
-        email: candidate.email,
-        discoverySource: candidate.discoverySource,
-        discoveryMethod,
-        classification: finalState,
-        verification: mapped,
-      }],
+      ...contactResolution,
       scoutLearning: {
         pipeline: 'company_identity → official_domain → attributable_contact → verification → classification',
-        outcome: finalState,
+        outcome: contactResolution.finalState,
       },
     },
-    sendableFounder: finalState === CONTACT_FINAL_STATE.VERIFIED_FOUNDER_EMAIL,
+    sendableFounder: contactResolution.finalState === 'VERIFIED_FOUNDER_EMAIL',
   };
 }
 
@@ -221,7 +182,7 @@ async function promoteRecord(record, {
   }
 
   console.log(`[promoteUnenriched] Re-enriching ${record.company || domain} (${domain})...`);
-  const enriched = await enrich(domain, 'owner');
+  const enriched = await enrich(domain, 'owner', { ownerEvidence: Number(record.client_id) === 13 });
   if (!enriched?.email) {
     await db.query(`
       UPDATE scout_unenriched
