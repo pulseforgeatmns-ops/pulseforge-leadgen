@@ -591,6 +591,7 @@ async function persistDiscoveredCompanies(pool, store, {
   };
 
   let websiteInvestigations = 0;
+  let checkpointDeferred = false;
   const decisions = [];
   for (let company of companies) {
     const reject = reason => {
@@ -633,6 +634,9 @@ async function persistDiscoveredCompanies(pool, store, {
     }
     const admission = evaluateReplenishmentAdmission(company, admissionContext);
     if (!admission.admitted) {
+      // Missing website evidence may reflect the per-run investigation cap or
+      // a temporary fetch failure. Retain replay until this is resolved.
+      if (admission.reason === 'unclassifiable_vertical') checkpointDeferred = true;
       reject(admission.reason);
       continue;
     }
@@ -650,7 +654,7 @@ async function persistDiscoveredCompanies(pool, store, {
           WHERE tenant_id=$1 AND event_type='scout_contact_recovery_attempt'
           AND payload->>'companyId'=$2 AND created_at>now()-interval '1 hour' LIMIT 1`,
         [tenant.tenantId, ownership.companyId]);
-        if (recent) { counters.recoveryBackoff = (counters.recoveryBackoff || 0) + 1; continue; }
+        if (recent) { checkpointDeferred = true; counters.recoveryBackoff = (counters.recoveryBackoff || 0) + 1; continue; }
       }
       const recovery = await attemptSameCompanyAlternateRecovery(store, pool, {
         company: { ...company, vertical: admission.vertical },
@@ -665,6 +669,7 @@ async function persistDiscoveredCompanies(pool, store, {
         counters.recovered += 1;
         continue;
       }
+      checkpointDeferred = true;
       reject('same_company_different_contact');
       continue;
     }
@@ -730,6 +735,7 @@ async function persistDiscoveredCompanies(pool, store, {
   return {
     inserted,
     admission: counters,
+    checkpointComplete: !checkpointDeferred,
     tenantId: tenant.tenantId,
     clientId: tenant.clientId,
   };
@@ -825,6 +831,7 @@ async function defaultScoutRamp({
   searchFingerprint = null,
   loadDiscoveryBackoff = loadScoutDiscoveryBackoff,
   recoverExistingInventory = null,
+  createQueryCheckpointSession = null,
   now = new Date(),
 } = {}) {
   const governed = governedContext || createGovernedOutboundContext({ program });
@@ -852,6 +859,7 @@ async function defaultScoutRamp({
   let searchGeneration = 0;
   let persisted = { inserted: 0, admission: createReplenishmentAdmissionCounters() };
   let admissionMeasured = false;
+  let queryProgression = null;
 
   const recoveredExistingCount = Number(existingRecovery?.payload?.qualifiedCount || 0);
   if (promoted < plan.deficit && recoveredExistingCount <= 0) {
@@ -860,9 +868,10 @@ async function defaultScoutRamp({
     if (discoveryBackoff?.diversify) {
       searchGeneration = Number(discoveryBackoff.searchGeneration || 1);
       if (typeof store.event === 'function') {
-        await store.event('scout_replenishment_diversified', [fingerprint, searchGeneration], {
+        await store.event('scout_replenishment_plan_reconsidered', [fingerprint, searchGeneration], {
           programId: program.id,
           ...discoveryBackoff,
+          reason: 'repeated_zero_yield_reconsider_plan',
         });
       }
     } else if (discoveryBackoff) {
@@ -879,6 +888,14 @@ async function defaultScoutRamp({
       const allowedCities = resolveScoutRampAllowedCities(scope);
       const discover = runDiscovery
         || ((input, opts) => require('./scoutAcquisitionIntelligence').runAcquisitionIntelligenceLoop(input, opts));
+      const checkpoints = require('./scoutQueryCheckpoints');
+      const checkpointSession = createQueryCheckpointSession
+        ? createQueryCheckpointSession({ pool, tenantId: tenant.tenantId, fingerprint })
+        : checkpoints.createCheckpointSession({ store: checkpoints.createCheckpointStore({
+          db: pool, tenantId: tenant.tenantId, fingerprint,
+        }) });
+      const placesProvider = require('../packages/capabilities/discovery/providers/PlacesProvider')
+        .createPlacesProvider({ queryCheckpointSession: checkpointSession });
       discoveryAttempted = true;
       discovery = await discover(
         scoutInput({ ...program, tenant_id: tenant.tenantId }, source, plan, tenant, searchGeneration),
@@ -904,8 +921,29 @@ async function defaultScoutRamp({
             return persisted;
           },
           enablePlaces: true,
+          placesProvider,
+          acknowledgeDiscovery: () => checkpointSession.acknowledge(),
         }
       );
+
+      const checkpointSnapshot = checkpointSession.snapshot();
+      queryProgression = {
+        status: ['observed_query_set_handled', 'pending_query_work', 'not_observed']
+          .includes(checkpointSnapshot.status) ? checkpointSnapshot.status : 'not_observed',
+        ...Object.fromEntries(['observedQueries', 'handledQueries', 'fetchedQueries',
+          'replayedQueries', 'pendingAcknowledgements', 'unresolvedQueries'].map(key => [key,
+          Number.isSafeInteger(checkpointSnapshot[key]) && checkpointSnapshot[key] >= 0
+            ? checkpointSnapshot[key] : null])),
+      };
+      emitDiagnostic(logger, '[max-outbound-control] Scout query progression', {
+        tenantId: tenant.tenantId, cycleId, ...queryProgression,
+      });
+      if (typeof store.event === 'function') {
+        await store.event('scout_query_progression', [cycleId || fingerprint, searchGeneration], {
+          programId: program.id,
+          ...queryProgression,
+        });
+      }
 
       if (persisted.inserted > 0 && promoted < plan.deficit) {
         const second = await runEnrichmentBatches(enricher, pool, plan.deficit - promoted, tenantBinding);
@@ -954,6 +992,7 @@ async function defaultScoutRamp({
     discovery,
     discoveryAttempted,
     discoveryBackoff,
+    queryProgression,
     searchFingerprint: searchFingerprint || scoutSearchFingerprint(program, source),
     searchGeneration,
     verificationRetry,

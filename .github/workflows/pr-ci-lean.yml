@@ -158,6 +158,12 @@ jobs:
           DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
           DATABASE_SSL: 'false'
         run: node --test test/scoutQueueAccounting.test.js test/scoutQueueAccountingPostgres.test.js
+      - name: Scout query checkpoints and required disposable PostgreSQL contract (no providers)
+        env:
+          DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
+          DATABASE_SSL: 'false'
+          SCOUT_CHECKPOINT_REQUIRE_POSTGRES: 'true'
+        run: node --test test/scoutQueryCheckpoints.test.js test/scoutQueryCheckpointRamp.test.js test/scoutQueryCheckpointsPostgres.test.js
       - name: Mailbox and scheduling regressions
         env:
           DATABASE_URL: postgresql://localhost:1/pulseforge_test_only

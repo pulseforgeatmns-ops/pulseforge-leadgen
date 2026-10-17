@@ -9,8 +9,8 @@ const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
 const express = require('express');
 const session = require('express-session');
-const { Pool } = require('pg');
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
+const { createTrackedPostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
 const { launchTestBrowser } = require('./helpers/puppeteerTestBrowser');
 
 const fixture = fs.readFileSync(path.join(__dirname, 'fixtures/anchor-cleaning-actual.xlsx'));
@@ -21,7 +21,7 @@ test('authenticated spreadsheet API safety gate with actual workbook and disposa
   assert.equal(createHash('sha256').update(fixture).digest('hex'), sourceHash);
   const instance = await startDisposablePostgres('spreadsheet-api-');
   assert.equal(new URL(instance.connectionString).hostname, '127.0.0.1');
-  const db = new Pool({ connectionString: instance.connectionString });
+  const db = createTrackedPostgresPool({ connectionString: instance.connectionString });
   let server;
   const originalApprover = process.env.MAX_SPREADSHEET_APPROVER_USER_ID;
   process.env.MAX_SPREADSHEET_APPROVER_USER_ID = '11';
@@ -32,17 +32,22 @@ test('authenticated spreadsheet API safety gate with actual workbook and disposa
     require.cache[filename] = { id: filename, filename, loaded: true, exports };
   }
   t.after(async () => {
-    if (server) {
-      if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
-      await new Promise(resolve => server.close(resolve));
+    try {
+      try {
+        if (server) {
+          if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+          await new Promise(resolve => server.close(resolve));
+        }
+      } finally {
+        await closePostgresFixture(db, instance);
+      }
+    } finally {
+      for (const [filename, original] of restoredModules.reverse()) {
+        if (original) require.cache[filename] = original; else delete require.cache[filename];
+      }
+      if (originalApprover === undefined) delete process.env.MAX_SPREADSHEET_APPROVER_USER_ID;
+      else process.env.MAX_SPREADSHEET_APPROVER_USER_ID = originalApprover;
     }
-    await db.end();
-    await instance.stop();
-    for (const [filename, original] of restoredModules.reverse()) {
-      if (original) require.cache[filename] = original; else delete require.cache[filename];
-    }
-    if (originalApprover === undefined) delete process.env.MAX_SPREADSHEET_APPROVER_USER_ID;
-    else process.env.MAX_SPREADSHEET_APPROVER_USER_ID = originalApprover;
   });
   await db.query(schema);
   await db.query(fs.readFileSync(path.join(__dirname, '../migrations/2026-10-07-max-spreadsheet-reliability.sql'), 'utf8'));

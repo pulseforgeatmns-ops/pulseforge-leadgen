@@ -5,8 +5,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { Pool } = require('pg');
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
+const { createTrackedPostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
 const { withCallAuthorization, withEmailAuthorization } = require('../utils/callEligibility');
 const { PostgresSpreadsheetProposalStore } = require('../packages/max/stateIngestion/spreadsheetProposalStore');
 function barrier() { let release; const promise = new Promise(resolve => { release = resolve; }); return { promise, release }; }
@@ -14,8 +14,8 @@ function barrier() { let release; const promise = new Promise(resolve => { relea
 test('real PostgreSQL serializes call provider handoff against approved suppression in both orders', { timeout: 60000 }, async t => {
   const instance = await startDisposablePostgres('spreadsheet-call-lock-');
   assert.equal(new URL(instance.connectionString).hostname, '127.0.0.1');
-  const db = new Pool({ connectionString: instance.connectionString, max: 6 });
-  t.after(async () => { await db.end(); await instance.stop(); });
+  const db = createTrackedPostgresPool({ connectionString: instance.connectionString, max: 6 });
+  t.after(() => closePostgresFixture(db, instance));
   await db.query(fs.readFileSync(path.join(__dirname, 'fixtures/maxSpreadsheetBaseSchema.sql'), 'utf8'));
   await db.query(fs.readFileSync(path.join(__dirname, '../migrations/2026-10-07-max-spreadsheet-reliability.sql'), 'utf8'));
   await db.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS do_not_contact boolean DEFAULT false;
