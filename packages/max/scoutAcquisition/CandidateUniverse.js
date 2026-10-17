@@ -404,9 +404,15 @@ async function constructCandidateUniverse(input = {}) {
   if (store && typeof store.upsert === 'function' && companies.length) {
     await store.upsert(tenantId, companies);
   }
-  if (typeof input.persistCompanies === 'function' && companies.length) {
+  if (typeof input.persistCompanies === 'function' && (companies.length || typeof input.acknowledgeDiscovery === 'function')) {
     try {
-      await input.persistCompanies({ tenantId, companies, searchDefinition });
+      const persistenceResult = await input.persistCompanies({ tenantId, companies, searchDefinition });
+      // Durable handling must explicitly confirm completion, including empty results.
+      // Any discovery error conservatively leaves every fetched unit replayable.
+      if (persistenceResult?.checkpointComplete === true && !discoveryErrors.length
+        && typeof input.acknowledgeDiscovery === 'function') {
+        await input.acknowledgeDiscovery();
+      }
     } catch {
       discoveryErrors.push({
         code: 'persist_failed',
