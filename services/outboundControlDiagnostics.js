@@ -46,6 +46,16 @@ function discoveryDiagnostic(discovery) {
   };
 }
 // Defaults allocated before admission runs are not a measured zero.
+function queueMatchesDiagnostic(value) {
+  const available = value != null && typeof value === 'object' && !Array.isArray(value);
+  return {
+    available, scope: 'distinct_matched_queue_rows', partition: 'vertical_then_attempts_then_cooldown',
+    ...Object.fromEntries(['duplicateCandidateMatches', 'unobservedCandidateMatches', 'distinctMatchedRows']
+      .map(key => [key, available ? count(value[key]) : null])),
+    firstFailureCounts: Object.fromEntries(require('./scoutQueueAccounting').BUCKETS
+      .map(key => [key, available ? count(value.firstFailureCounts?.[key]) : null])),
+  };
+}
 function admissionReceiptDiagnostic(tenantId, cycleId, admission, measured = false) {
   const keys = ['outside_geography', 'segment_mismatch', 'contradictory_business_type',
     'unclassifiable_vertical', 'suppressed', 'owned_elsewhere', 'valid_ownership_collision',
@@ -60,6 +70,10 @@ function admissionReceiptDiagnostic(tenantId, cycleId, admission, measured = fal
     ? count(values.reduce((sum, v) => sum + v, 0)) : null;
   return {
     ...correlation(tenantId, cycleId), measured: available,
+    // Fit is qualification, not new stock. Existing matches remain distinct.
+    netNewAdmitted: available ? count(admission.admittedToEnrichment) : null,
+    existingQueueCandidateMatches: available ? count(admission.alreadyQueued) : null,
+    queueMatches: queueMatchesDiagnostic(available ? admission.queueMatches : null),
     counts: Object.fromEntries(['discovered', 'evaluated', 'fit', 'admittedToEnrichment',
       'alreadyUsable', 'alreadyQueued', 'recoveryBackoff', 'recovered'].map(k => [k, available ? count(admission[k]) : null])),
     rejected: Object.fromEntries(keys.map(k => [k, count(rejected?.[k])])),

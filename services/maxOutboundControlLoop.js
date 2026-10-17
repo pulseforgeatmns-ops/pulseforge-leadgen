@@ -572,6 +572,7 @@ async function persistDiscoveredCompanies(pool, store, {
     counters.discovered = companies.length;
   counters.recovered = 0;
   counters.alreadyQueued = 0;
+  const queueAccounting = require('./scoutQueueAccounting').createQueueAccounting();
   mergeAlternateTelemetry(counters, emptyAlternateContactTelemetry());
 
   const scope = scoutContext.scope || {};
@@ -703,9 +704,26 @@ async function persistDiscoveredCompanies(pool, store, {
     ]);
     inserted += result.rowCount;
     if (result.rowCount) counters.admittedToEnrichment += 1;
-    else counters.alreadyQueued += 1;
+    else {
+      counters.alreadyQueued += 1;
+      // Read-only observation of the same tenant-scoped duplicate predicate.
+      // Failure cannot change admission or reset retry/attempt controls.
+      try {
+        const matched = await pool.query(`SELECT u.id, u.client_id,
+          ${require('./scoutQueueAccounting').ELIGIBILITY_SQL} AS eligibility_bucket
+          FROM scout_unenriched u
+          WHERE u.client_id=$1 AND (lower(u.domain)=lower($2) OR lower(trim(u.company))=lower(trim($3)))
+          AND NOT (u.source = 'max_buffer_replenishment'
+            AND COALESCE(u.enrichment_attempts, 0) = 0
+            AND NOT (lower(trim(u.vertical)) = ANY($4::text[])))`,
+        [tenant.clientId, domain, name, CANONICAL_ENRICHABLE_SCOUT_VERTICALS.map(v => v.toLowerCase()),
+          enrichmentVerticals(tenant, scoutContext)]);
+        queueAccounting.observe(matched.rows, { tenantId: tenant.tenantId });
+      } catch (_) { queueAccounting.observe(null); }
+    }
   }
 
+  counters.queueMatches = queueAccounting.snapshot();
   counters.decisions = decisions;
   counters.websiteInvestigations = websiteInvestigations;
   clampCohortCounters(counters);
@@ -741,12 +759,7 @@ async function loadReuseCompanies(pool, tenantId) {
   return mapReuseCompanyRows(rows, tenant.tenantId);
 }
 
-async function runEnrichmentBatches(enrichment, pool, requested, tenantContext = null) {
-  const tenant = resolveReplenishmentTenantContext({
-    governedContext: tenantContext?.governedContext,
-    tenantId: tenantContext?.tenantId,
-    program: tenantContext?.program,
-  });
+function enrichmentVerticals(tenant, tenantContext) {
   let verticals = ENRICHABLE_SCOUT_VERTICALS;
   if (tenant.tenantId === '1') {
     const offer = require('../utils/pulseforgeCashflowOffer');
@@ -756,6 +769,16 @@ async function runEnrichmentBatches(enrichment, pool, requested, tenantContext =
     const scope = sourceScope(source);
     verticals = missionCompatibleVerticals({ missionSegments: scope.eligibleSubsegments });
   }
+  return verticals;
+}
+
+async function runEnrichmentBatches(enrichment, pool, requested, tenantContext = null) {
+  const tenant = resolveReplenishmentTenantContext({
+    governedContext: tenantContext?.governedContext,
+    tenantId: tenantContext?.tenantId,
+    program: tenantContext?.program,
+  });
+  const verticals = enrichmentVerticals(tenant, tenantContext);
   const summaries = [];
   let promoted = 0;
   let recovered = 0;
@@ -867,6 +890,7 @@ async function defaultScoutRamp({
               tenantId: tenant.tenantId,
               scoutContext: {
                 scope,
+                source,
                 allowedCities,
                 serviceAreas: allowedCities,
                 clientId: tenant.clientId,
