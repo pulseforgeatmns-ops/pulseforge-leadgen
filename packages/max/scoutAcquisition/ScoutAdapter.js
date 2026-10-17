@@ -738,6 +738,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       },
       discoveryStore: opts.discoveryStore,
       persistCompanies: opts.persistCompanies,
+      acknowledgeDiscovery: opts.acknowledgeDiscovery,
       now: opts.now,
       freshnessMs: opts.freshnessMs,
       useCoverageEngine: opts.useCoverageEngine !== false,
