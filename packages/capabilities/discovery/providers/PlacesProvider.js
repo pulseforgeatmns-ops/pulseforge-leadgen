@@ -123,19 +123,46 @@ function createPlacesProvider(deps = {}) {
       const limit = DEFAULT_LIMIT;
       const out = [];
       const seenPlaceIds = new Set();
+      const knownHits = new Map();
       const queryRecords = [];
       const errors = [];
       let totalRetries = 0;
       let totalLatency = 0;
       let quota = null;
 
+      const checkpoint = !entity?.name && !businessName && evidenceRequest.scope !== 'entity'
+        ? deps.queryCheckpointSession : null;
+      if (checkpoint) checkpoint.assertTenant(evidenceRequest.tenantId);
+      let checkpointSkipped = 0;
+      let checkpointReplayed = 0;
       for (const query of queries) {
+        const prior = checkpoint ? await checkpoint.lookup(query, requireWebsite) : null;
+        if (prior?.handled) { checkpointSkipped += 1; continue; }
+        if (prior && Array.isArray(prior.candidates)) {
+          checkpointReplayed += 1;
+          for (const hit of prior.candidates) {
+            knownHits.set(hit.placeId, hit);
+            if (!seenPlaceIds.has(hit.placeId)) { seenPlaceIds.add(hit.placeId); out.push(hit); }
+          }
+          continue;
+        }
+        // Isolate query output until its durable replay payload is confirmed.
+        const queryOut = checkpoint ? [] : out;
+        const querySeen = checkpoint ? new Set(seenPlaceIds) : seenPlaceIds;
         const searchResult = await searchWithRetry(
           { industry: query, location: '', limit },
           apiKey,
           fetchImpl,
-          { requireWebsite, seenPlaceIds, out }
+          { requireWebsite, seenPlaceIds: querySeen, out: queryOut, knownHits: checkpoint ? knownHits : null }
         );
+        if (checkpoint) {
+          const rows = !searchResult.error
+            ? await checkpoint.stage(prior.key, queryOut) : queryOut;
+          for (const hit of rows) {
+            knownHits.set(hit.placeId, hit);
+            if (!seenPlaceIds.has(hit.placeId)) { seenPlaceIds.add(hit.placeId); out.push(hit); }
+          }
+        }
         queryRecords.push(...(searchResult.attempts || []));
         totalRetries += searchResult.retries || 0;
         totalLatency += searchResult.latencyMs || 0;
@@ -149,7 +176,8 @@ function createPlacesProvider(deps = {}) {
         executed: queryRecords.some(
           (row) => row.httpStatus != null || row.googleStatus != null || row.googleError
         ),
-        abortReason: queryRecords.length ? null : 'no_queries_generated',
+        abortReason: checkpointSkipped === queries.length && queries.length
+          ? 'approved_query_set_handled' : queryRecords.length || out.length || checkpointReplayed ? null : 'no_queries_generated',
         queries: queryRecords,
         totals: {
           queries: queryRecords.length,
@@ -265,7 +293,8 @@ function buildQueriesForEvidence({ segment, evidenceType, cities, state, entityN
 }
 
 async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
-  const { requireWebsite = true, seenPlaceIds, out } = opts;
+  const { requireWebsite = true, seenPlaceIds, out, knownHits = null } = opts;
+  const captured = new Set();
   const attempts = [];
   let retries = 0;
   let latencyMs = 0;
@@ -303,7 +332,15 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
     }
 
     for (const hit of page.results || []) {
-      if (!hit.place_id || seenPlaceIds.has(hit.place_id)) continue;
+      if (!hit.place_id) continue;
+      if (seenPlaceIds.has(hit.place_id)) {
+        // A staged query is a self-contained replay unit, not a delta dependent
+        // on earlier query order. Reuse the known hit without another detail call.
+        if (knownHits?.has(hit.place_id) && !captured.has(hit.place_id)) {
+          out.push({ ...knownHits.get(hit.place_id), industry: querySpec.industry || null }); captured.add(hit.place_id);
+        }
+        continue;
+      }
       seenPlaceIds.add(hit.place_id);
       const detailResult = await fetchPlaceDetails(hit.place_id, apiKey, fetchImpl, {
         requireWebsite,
@@ -318,7 +355,7 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
       const accepted = !(requireWebsite && !website);
       if (!accepted) continue;
 
-      out.push({
+      const acceptedHit = {
         companyName: details?.name || hit.name || 'Unknown',
         website: website ? normalizeDomain(website) : null,
         phone: details?.formatted_phone_number || null,
@@ -329,7 +366,10 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
         source: 'google_places',
         industry: querySpec.industry || null,
         snippet: '',
-      });
+      };
+      out.push(acceptedHit);
+      captured.add(hit.place_id);
+      if (knownHits) knownHits.set(hit.place_id, acceptedHit);
       pageAccepted += 1;
       acceptedForQuery += 1;
       if (acceptedForQuery >= limit) break;
