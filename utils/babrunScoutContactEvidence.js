@@ -9,10 +9,34 @@ const text = value => typeof value === 'string' ? value.trim() : '';
 const address = value => text(value).toLowerCase();
 const PROVIDERS = new Set(['hunter', 'prospeo']);
 
+function selectedWebsiteEvidence(enriched, source, officialDomain) {
+  const evidence = enriched.websiteOwnerEvidence;
+  if (source !== 'scraped' || !evidence || evidence.version !== 1
+    || !['html_person_record', 'json_ld_person'].includes(evidence.type)
+    || typeof evidence.record !== 'string' || !evidence.record.length || evidence.record.length > 8192
+    || !Number.isInteger(evidence.start) || evidence.start < 0
+    || !Number.isInteger(evidence.end) || evidence.end > 1_000_000 || evidence.end - evidence.start !== evidence.record.length
+    || typeof evidence.sourceUrl !== 'string' || evidence.sourceUrl.length > 2048 || !/^https?:\/\//i.test(evidence.sourceUrl)
+    || address(evidence.email) !== address(enriched.email)
+    || text(evidence.contactName) !== text(enriched.contact)
+    || text(evidence.contactTitle) !== text(enriched.title)
+    || evidence.sourceUrl !== enriched.sourceUrl
+    || normalizeDomain(evidence.sourceUrl) !== normalizeDomain(officialDomain)) return null;
+  // Copy only bounded source data, never caller-supplied verification/classification.
+  return {
+    version: 1, type: evidence.type, sourceUrl: evidence.sourceUrl,
+    email: address(enriched.email), contactName: text(enriched.contact), contactTitle: text(enriched.title),
+    start: evidence.start, end: evidence.end, record: evidence.record,
+    ...(evidence.type === 'json_ld_person' && typeof evidence.jsonPointer === 'string' && evidence.jsonPointer.length <= 500
+      ? { jsonPointer: evidence.jsonPointer } : {}),
+  };
+}
+
 function applyScoutEnrichment(lead, enriched, source, clientId, officialDomain) {
   Object.assign(lead, enriched);
   lead.source = [...(lead.source || []), source];
   if (Number(clientId) === 13) {
+    const websiteEvidence = selectedWebsiteEvidence(enriched, source, officialDomain);
     // Read only this selected result, never stale lead.contact/title/sourceUrl.
     lead.scoutContactEvidence = {
       email: address(enriched.email),
@@ -21,6 +45,7 @@ function applyScoutEnrichment(lead, enriched, source, clientId, officialDomain) 
       contactName: text(enriched.contact) || null,
       contactTitle: text(enriched.title) || null,
       companyDomain: normalizeDomain(officialDomain),
+      ...(websiteEvidence ? { websiteEvidence } : {}),
     };
   }
   return lead;
@@ -55,6 +80,10 @@ function babrunScoutContactEvidence({ lead = {}, email, verification = {}, offic
   const contactName = supportedSource ? supportedPersonName(observed.contactName) : null;
   const contactTitle = supportedSource ? text(observed.contactTitle) || null : null;
   const founder = contactName && explicitFounderTitle(contactTitle) ? contactName : '';
+  const websiteEvidence = firstParty ? selectedWebsiteEvidence({
+    email: selectedEmail, contact: contactName, title: contactTitle, sourceUrl,
+    websiteOwnerEvidence: observed.websiteEvidence,
+  }, source, domain) : null;
   const candidate = candidateRecord(selectedEmail, source || 'unattributed', sourceUrl || source, {
     firstParty: firstParty && Boolean(founder),
     founderAttribution: PROVIDERS.has(source) && Boolean(founder),
@@ -92,6 +121,7 @@ function babrunScoutContactEvidence({ lead = {}, email, verification = {}, offic
         discoverySource: candidate.discoverySource,
         discoveryMethod: candidate.discoveryMethod,
         evidenceReason: bindingReason,
+        ...(websiteEvidence ? { websiteEvidence } : {}),
         verification: receipt,
         candidates: [{ ...candidate, classification: finalState, verification: receipt }],
       },

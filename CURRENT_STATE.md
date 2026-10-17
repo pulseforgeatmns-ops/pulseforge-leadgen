@@ -4,6 +4,12 @@
 
 ## Current Repository Architecture
 
+[SPEC-SCOUT-OWNER-001](docs/specs/SPEC-SCOUT-OWNER-001_Observed_Website_Owner_Evidence.md)
+has an authorized local/test repair for explicit owner evidence on already-fetched
+website pages. Only Babrun/tenant 13 intake and promotion opt in; other callers
+retain their prior behavior. It preserves crawl/provider budgets, fallback
+results, and verification/contact gates. It is not deployed or live-validated.
+
 [SPEC-184 Provider Execution Continuity](docs/specs/SPEC-184_Provider_Execution_Continuity.md)
 includes a local observational repair preserving Places search cache provenance in
 Scout receipts and exposing sanitized receipts in normal control logs. A search

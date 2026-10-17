@@ -155,5 +155,6 @@ test('new intake module is side-effect-free and promotion uses the identical sha
   const legacy = require('../scripts/lib/babrunContactResolution');
   for (const key of ['classifyCandidate', 'mapVerificationResult', 'candidateRecord', 'CONTACT_FINAL_STATE']) assert.equal(legacy[key], shared[key]);
   const source = fs.readFileSync(path.join(__dirname, '../scripts/promoteUnenriched.js'), 'utf8');
-  assert.ok(source.includes("require('../utils/babrunContactClassification')"));
+  assert.ok(source.includes("require('../utils/babrunScoutContactEvidence')"));
+  assert.ok(source.includes("babrunScoutContactEvidence({ lead, email: enriched.email, verification, officialDomain })"));
 });

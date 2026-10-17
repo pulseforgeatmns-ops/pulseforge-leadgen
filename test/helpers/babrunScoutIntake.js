@@ -26,18 +26,18 @@ const ownerFixture = () => ({ email: 'ada@fixturepainting.example', contact: 'Ad
   title: 'Owner', sourceUrl: 'https://fixturepainting.example/about' });
 
 async function runScoutWaterfall(lead, { clientId = 13, prospeo = null, hunter = ownerFixture(), scraped = null } = {}) {
-  const calls = [];
+  const calls = [], scrapeOptions = [];
   const context = { ...evidence, leads: [lead], CONFIG: { clientId, vertical: 'painting' },
     console: { log() {} }, process: { stdout: { write() {} } }, setTimeout: fn => fn(),
     getClientConfig: async () => ({}), normalizeDomain: v => new URL(v).hostname,
     enrichWithProspeo: async () => { calls.push('prospeo'); return prospeo; },
     enrichWithHunter: async () => { calls.push('hunter'); return hunter; },
-    scrapeWebsiteEmail: async () => { calls.push('scraped'); return scraped; },
+    scrapeWebsiteEmail: async (domain, options) => { calls.push('scraped'); scrapeOptions.push(options); return scraped; },
     recordEmailEnrichmentMethod: noop, detectType: () => 'local_business', scoreLead: l => l.score,
   };
   vm.createContext(context);
   await vm.runInContext(`(async () => { ${waterfall}\n${projection}\nreturn leads; })()`, context);
-  return { lead: context.leads[0], calls };
+  return { lead: context.leads[0], calls, scrapeOptions };
 }
 
 function loadScoutSave({ db, clientId = 13, verify = async () => verificationReceipt,

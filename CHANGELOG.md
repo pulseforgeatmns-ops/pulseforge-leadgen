@@ -16,6 +16,15 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Fixed
 
+- [SPEC-SCOUT-OWNER-001](docs/specs/SPEC-SCOUT-OWNER-001_Observed_Website_Owner_Evidence.md):
+  Babrun/tenant 13 intake and promotion opt in to rank explicit, company-bound owner/founder contact records ahead of an earlier
+  website role inbox using only pages the existing crawl already fetched. Keep
+  exact bounded source evidence in the selected Babrun contact receipt; reject
+  ambiguous, hidden, third-party and contradictory records. Preserve the prior
+  fallback, default shared-caller behavior, provider budgets, verification and contact-policy gates.
+  Add a network-denying synthetic regression command and stub the legacy crawl
+  fixture's robots fetch. Local/test implementation only; no live validation.
+
 - [SPEC-184](docs/specs/SPEC-184_Provider_Execution_Continuity.md): preserve per-caller
   Places search cache provenance through Scout provider receipts; emit only the
   bounded sanitized receipt after the normal control event write. Distinguish

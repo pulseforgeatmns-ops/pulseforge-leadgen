@@ -772,7 +772,7 @@ function filterScrapedWebsiteEmails(html, companyDomain = null) {
   );
 }
 
-async function scrapeWebsiteEmail(domain) {
+async function scrapeWebsiteEmail(domain, options = {}) {
   const { crawlWebsite, normalizeDomain: crawlNormalizeDomain } = require('./utils/websiteEnrichmentCrawl');
   const normalizedDomain = crawlNormalizeDomain(domain);
   if (!normalizedDomain) return null;
@@ -794,6 +794,13 @@ async function scrapeWebsiteEmail(domain) {
       throw err;
     }
   }, { maxSuccessfulPages: 8 });
+
+  if (options.ownerEvidence === true) {
+    const { extractWebsiteOwnerCandidates } = require('./utils/websiteOwnerEvidence');
+    const owner = extractWebsiteOwnerCandidates(pages, normalizedDomain).find(candidate =>
+      filterScrapedWebsiteEmails(candidate.email, normalizedDomain).length > 0);
+    if (owner) return owner;
+  }
 
   for (const page of pages) {
     const filtered = filterScrapedWebsiteEmails(page.text, normalizedDomain);
@@ -1720,7 +1727,7 @@ async function main({ runId = null } = {}) {
         enrichmentMethod = 'hunter';
         process.stdout.write(` ✓ [Hunter] ${enriched.email || 'no email'}\n`);
       } else {
-        const scraped = await scrapeWebsiteEmail(rootDomain);
+        const scraped = await scrapeWebsiteEmail(rootDomain, { ownerEvidence: Number(CONFIG.clientId) === 13 });
         if (scraped) {
           applyScoutEnrichment(lead, scraped, 'scraped', CONFIG.clientId, domain);
           enrichmentMethod = 'scraped';
@@ -3523,7 +3530,7 @@ async function configureScoringContext(params = {}) {
   };
 }
 
-async function runEnrichmentChain(domain, jobTitle = 'owner') {
+async function runEnrichmentChain(domain, jobTitle = 'owner', options = {}) {
   const savedTitle = CONFIG.jobTitle;
   CONFIG.jobTitle = jobTitle;
   try {
@@ -3539,7 +3546,7 @@ async function runEnrichmentChain(domain, jobTitle = 'owner') {
       await recordEmailEnrichmentMethod(domain, 'hunter', { source: enriched.source, has_email: Boolean(enriched.email) });
       return enriched;
     }
-    enriched = await scrapeWebsiteEmail(domain);
+    enriched = await scrapeWebsiteEmail(domain, options);
     if (enriched) {
       enriched.source = ['scraped'];
       await recordEmailEnrichmentMethod(domain, 'scraped', { source: enriched.source, has_email: Boolean(enriched.email) });

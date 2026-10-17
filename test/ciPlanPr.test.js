@@ -194,3 +194,18 @@ describe('Substral preparation-only CI coverage', () => {
     assert.ok(command.includes('ANCHOR_OUTBOUND_TEST_POSTGRES=true'));
   });
 });
+
+
+describe('Babrun owner evidence and promotion safety CI coverage', () => {
+  for (const file of ['utils/websiteOwnerEvidence.js', 'test/websiteOwnerEvidence.test.js',
+    'test/scoutPromotionEvidence.test.js', 'test/scoutPromotionRetention.test.js',
+    'test/scoutPromotionCohort.test.js', 'test/helpers/denyWebsiteEvidenceNetwork.cjs']) {
+    it(`selects governed outbound for ${file}`, () => {
+      assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
+    });
+  }
+  it('executes both new suites through the network-denying preload', () => {
+    const workflow = require('node:fs').readFileSync(require('node:path').join(__dirname, '../.github/workflows/pr-ci-lean.yml'), 'utf8');
+    assert.ok(workflow.includes('node --require ./test/helpers/denyWebsiteEvidenceNetwork.cjs --test test/websiteOwnerEvidence.test.js test/scoutPromotionEvidence.test.js test/scoutPromotionRetention.test.js test/scoutPromotionCohort.test.js'));
+  });
+});
