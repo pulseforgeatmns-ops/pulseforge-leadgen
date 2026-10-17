@@ -34,7 +34,8 @@ PulseForge:
 - `SIGNAL_REQUIRED_CALLER_SOURCE_ID=telegram-front-runners`
 - `SIGNAL_REQUIRED_CALLER_CHANNEL_ID=<observed channel ID>`
 - `SIGNAL_SHADOW_MODE=1`, `SIGNAL_SHADOW_POLL_MS=60000`, `SIGNAL_CAPTURE_POLL_MS=1000`
-- `SIGNAL_OPERATOR_RELAY_ENABLED=0`, `SIGNAL_OPERATOR_RELAY_CONSENT=0` until separate relay approval.
+- `SIGNAL_OPERATOR_RELAY_ENABLED=1`, `SIGNAL_OPERATOR_RELAY_CONSENT=1` after Gmail delivery is verified (Brevo → pulseforgeatmns@gmail.com). ChatGPT relay remains unproven until a displayed receipt is observed.
+- Caller service requires `SIGNAL_OPERATOR_FEED_TOKEN` (shared reference); `/feed` rejects unauthenticated requests.
 
 Leave all `SIGNAL_PILOT_*` controls unset/disabled. Continuous mode does not load a readiness file, require management credentials or expire after 48 hours—even if old pilot settings exist. The start timestamp filters pre-activation events; it is not an expiry. If no model is selected, generated bundles say `unselected` and remain gated.
 
