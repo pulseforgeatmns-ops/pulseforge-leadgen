@@ -399,6 +399,7 @@ async function runAcquisitionIntelligenceLoop(input = {}, opts = {}) {
         discoveryAdapters: opts.discoveryAdapters,
         discoveryStore: opts.discoveryStore,
         persistCompanies: opts.persistCompanies,
+        acknowledgeDiscovery: opts.acknowledgeDiscovery,
         enrichPeople: opts.enrichPeople,
         enablePlaces: opts.enablePlaces,
         placesProvider: opts.placesProvider,
