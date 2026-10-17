@@ -127,7 +127,15 @@ describe('websiteEnrichmentCrawl', () => {
 });
 
 describe('tiered scrapeWebsite crawl integration', () => {
-  it('discovers legacy about.html email on Klug-like site layout', async () => {
+  it('discovers legacy about.html email on Klug-like site layout', async (t) => {
+    // scrapeWebsite reads robots before its injected page fetcher. Keep that
+    // preflight synthetic too; this regression must never call the real site.
+    let robotsCalls = 0;
+    t.mock.method(globalThis, 'fetch', async (url) => {
+      assert.equal(url, 'https://kluglawoffices.com/robots.txt');
+      robotsCalls++;
+      return { ok: true, text: async () => 'User-agent: *\nDisallow:' };
+    });
     const homepage = `
       <html><body>
         <a href="about.html">Meet Our Team</a>
@@ -155,6 +163,7 @@ describe('tiered scrapeWebsite crawl integration', () => {
 
     assert.ok(outcome.pages.some((page) => page.includes('about.html')));
     assert.ok(outcome.emails.some((row) => row.email === 'aklug@kluglawoffices.com'));
+    assert.equal(robotsCalls, 1);
   });
 
   it('still requires Bouncer verification before persistence', async () => {
