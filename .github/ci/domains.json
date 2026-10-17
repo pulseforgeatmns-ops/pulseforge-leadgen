@@ -117,6 +117,8 @@
       "utils/pulseforgeCashflowOffer.js",
       "services/maxOutboundControlLoop.js",
       "services/outboundControlDiagnostics.js",
+      "services/scoutQueueAccounting.js",
+      "test/scoutQueueAccounting",
       "test/outboundControlDiagnostics.test.js",
       "packages/max/scoutAcquisition/",
       "packages/scout/coverage/",
