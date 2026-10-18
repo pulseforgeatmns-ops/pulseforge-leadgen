@@ -209,3 +209,28 @@ describe('Babrun owner evidence and promotion safety CI coverage', () => {
     assert.ok(workflow.includes('node --require ./test/helpers/denyWebsiteEvidenceNetwork.cjs --test test/websiteOwnerEvidence.test.js test/scoutPromotionEvidence.test.js test/scoutPromotionRetention.test.js test/scoutPromotionCohort.test.js'));
   });
 });
+
+
+describe('Scout business evidence cursor CI coverage', () => {
+  for (const file of ['services/scoutBusinessEvidenceCursor.js', 'test/scoutBusinessEvidenceCursor.test.js',
+    'test/scoutBusinessEvidenceCursorRamp.test.js', 'test/scoutBusinessEvidenceCursorPostgres.test.js',
+    'test/scoutCheckpointStallDiagnosis.test.js', 'test/helpers/scoutEvidenceCursorFakePool.js']) {
+    it(`selects governed outbound for ${file}`, () => {
+      assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
+    });
+  }
+  it('runs pure and mocked cursor contracts with the network-denying preload', () => {
+    const workflow = require('node:fs').readFileSync(require('node:path').join(__dirname, '../.github/workflows/pr-ci-lean.yml'), 'utf8');
+    assert.ok(workflow.includes('node --require ./test/helpers/denyWebsiteEvidenceNetwork.cjs --test test/scoutBusinessEvidenceCursor.test.js test/scoutBusinessEvidenceCursorRamp.test.js test/scoutCheckpointStallDiagnosis.test.js'));
+  });
+  it('requires disposable PostgreSQL for the native cursor CAS contract', () => {
+    const workflow = require('node:fs').readFileSync(require('node:path').join(__dirname, '../.github/workflows/pr-ci-lean.yml'), 'utf8');
+    const gate = workflow.split('      - name: Scout evidence cursor required disposable PostgreSQL CAS contract (no providers)')[1]?.split('      - name:')[0];
+    assert.ok(gate?.includes("SCOUT_EVIDENCE_CURSOR_REQUIRE_POSTGRES: 'true'"));
+    assert.ok(gate?.includes('run: node --test test/scoutBusinessEvidenceCursorPostgres.test.js'));
+    const native = require('node:fs').readFileSync(require('node:path').join(__dirname, 'scoutBusinessEvidenceCursorPostgres.test.js'), 'utf8');
+    assert.ok(native.includes("process.env.SCOUT_EVIDENCE_CURSOR_REQUIRE_POSTGRES !== 'true'"));
+    assert.ok(native.includes("await startDisposablePostgres('scout-evidence-cursor-')"));
+    assert.equal(native.includes('t.skip('), false, 'native prerequisites must throw, not silently skip');
+  });
+});

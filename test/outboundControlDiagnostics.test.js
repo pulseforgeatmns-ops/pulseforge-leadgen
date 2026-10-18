@@ -5,6 +5,18 @@ const { admissionReceiptDiagnostic, providerReceiptDiagnostic, scoutRampDiagnost
 const { runMaxOutboundControlLoop } = require('../services/maxOutboundControlLoop');
 const cycleId = 'moc_13_1234567890abcdef';
 
+test('evidence cursor diagnostics expose bounded progress and fixed outcomes without keys or fingerprints', () => {
+  const { evidenceProgressionDiagnostic } = require('../services/outboundControlDiagnostics');
+  assert.deepEqual(evidenceProgressionDiagnostic({ selected: 20, investigated: 19, advanced: true, sequence: 4 }),
+    { status: 'advanced', selected: 20, investigated: 19, advanced: true, sequence: 4 });
+  for (const status of ['stale', 'busy', 'failed']) assert.equal(evidenceProgressionDiagnostic({ status }).status, status);
+  const secret = 'secret@example.com?token=secret';
+  const result = evidenceProgressionDiagnostic({ status: secret, selected: secret, investigated: -1,
+    sequence: Infinity, advanced: true, afterKey: secret, searchFingerprint: secret });
+  assert.deepEqual(result, { status: 'unknown', selected: null, investigated: null, advanced: false, sequence: null });
+  assert.ok(!JSON.stringify(result).includes('secret'));
+});
+
 test('ramp inventory is unknown even when legacy yield defaults are zero', () => {
   const result = scoutRampDiagnostic({ tenantId: '13', cycleId, admission: { discovered: 0 }, enrichment: { considered: 0 } });
   assert.equal(result.preCycleCleanInventory, null);
