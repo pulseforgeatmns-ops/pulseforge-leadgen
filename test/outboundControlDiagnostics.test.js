@@ -309,3 +309,48 @@ test('exact promotion cohort survives the real control loop into sanitized post-
   assert.ok(!JSON.stringify(receipt).includes('123456789abc'));
   assert.ok(!JSON.stringify(event.scoutPromotionCleanCohort).includes('123456789abc'));
 });
+
+const preparationProjection = reason => controlCycleDiagnostic('10', {
+  cycleId: 'moc_10_1ce0909dbe7afc13', cleanInventoryBefore: 7,
+  cleanInventoryAfter: 7, prepareRequested: 5, preparedAdded: 0,
+  prepareSkippedReason: reason,
+});
+const knownReasons = [
+  'no_program', 'shadow_mode', 'program_disabled', 'policy_changed',
+  'not_started', 'authorization_expired', 'source_scope_changed',
+  'tenant_inactive_or_legacy_autosend_enabled', 'sender_changed',
+  'anchor_reply_mailbox_not_ready', 'ao_owner_unavailable', 'suppression_triggers_missing',
+  'sender_not_ready', 'tenant_mailbox_not_ready', 'capacity_mailbox_changed',
+  'emmett_capacity_unavailable', 'emmett_capacity_exhausted', 'emmett_governor_halted',
+  'uncertain_send_requires_reconciliation', 'cap_reached', 'environment_kill_switch',
+  'daily_envelope_already_used', 'daily_mission_not_ready',
+  'preparation_budget_exhausted', 'preparation_envelope_invalid',
+  'inventory_evaluation_failed', 'envelope_not_refillable', 'no_eligible_prepared_candidates',
+  'preparation_research_not_authorized', 'replenishment_reservation_changed',
+  'replenishment_requires_operator_review', 'max_prioritization_missing',
+  'preparation_requires_operator_judgment', 'preparation_step_budget',
+  'mission_not_executable', 'daily_mission_scope_changed', 'missing_prepared_artifacts',
+  'message_binding_contamination', 'prepared_governor_halted', 'capacity_sender_changed',
+  'capacity_copy_binding_mismatch', 'approved_copy_binding_mismatch', 'replenishment_grant_changed',
+];
+for (const reason of knownReasons) test(`preserves bounded preparation gate: ${reason}`, () => {
+  const result = preparationProjection(reason);
+  assert.equal(result.prepareSkippedReason, reason);
+  assert.equal(result.cleanInventoryAfter, 7);
+  assert.equal(result.prepareRequested, 5);
+  assert.equal(result.preparedAdded, 0);
+});
+test('unknown errors and malicious values remain private and unknown', () => {
+  for (const reason of [null, undefined, '', 'connection failed secret@example.test',
+    'authorization_expired\nFORGED', { code: 'authorization_expired' }, ['authorization_expired'], 0]) {
+    assert.equal(preparationProjection(reason).prepareSkippedReason, 'unknown');
+    assert.ok(!JSON.stringify(preparationProjection(reason)).includes('secret'));
+    assert.ok(!JSON.stringify(preparationProjection(reason)).includes('FORGED'));
+  }
+});
+test('existing bounded preparation reasons remain unchanged', () => {
+  for (const reason of ['no_clean_inventory', 'preparation_backoff', 'verified_inventory_shortfall',
+    'control_execute_disabled', 'send_lock_overlap', 'grant_inactive', 'batch_limit_reached']) {
+    assert.equal(preparationProjection(reason).prepareSkippedReason, reason);
+  }
+});
