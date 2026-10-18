@@ -69,6 +69,188 @@ const verified = async () => ({
   reject: false,
 });
 
+const recoveryTenantBindings = [
+  ['tenantId'],
+  ['scoutContext', 'authorizedTenantId'],
+  ['scoutContext', 'tenantId'],
+  ['scoutContext', 'clientId'],
+  ['scoutContext', 'governedContext', 'tenantId'],
+  ['scoutContext', 'governedContext', 'clientId'],
+  ['scoutContext', 'governedContext', 'transport', 'tenantId'],
+  ['scoutContext', 'governedContext', 'transport', 'clientId'],
+  ['scoutContext', 'program', 'tenant_id'],
+  ['scoutContext', 'program', 'tenantId'],
+  ['scoutContext', 'program', 'policy', 'tenantId'],
+  ['store', 'tenantId'],
+  ['store', 'clientId'],
+  ['store', 'ctx', 'tenantId'],
+  ['store', 'ctx', 'clientId'],
+];
+
+function setTenantBinding(input, path, value) {
+  let target = input;
+  for (const key of path.slice(0, -1)) target = target[key] ||= {};
+  target[path.at(-1)] = value;
+  return input;
+}
+
+test('same-company recovery fails closed before queries, store checks, or providers for unsafe tenant bindings', async (t) => {
+  const cases = [
+    { name: 'missing identity', input: {}, reason: 'recovery_tenant_required' },
+    { name: 'null identities', input: { tenantId: null, scoutContext: { clientId: null } }, reason: 'recovery_tenant_required' },
+    ...[
+      ['empty string', ''],
+      ['blank string', ' '],
+      ['array', ['10']],
+      ['boolean', true],
+      ['coercible object', { toString() { return '10'; } }],
+      ['object', { toString() { throw new Error('Identity object must not be coerced'); } }],
+    ].map(([name, tenantId]) => ({
+      name: `malformed ${name} with tenant-10 store`,
+      input: { tenantId, store: { tenantId: '10', clientId: 10 } },
+      reason: 'recovery_tenant_unsupported',
+    })),
+    ...['1', '13', '17', 'invalid'].map(tenantId => ({
+      name: `non-Anchor tenant ${tenantId}`,
+      input: { tenantId, store: { tenantId }, scoutContext: { authorizedTenantId: tenantId } },
+      reason: 'recovery_tenant_unsupported',
+    })),
+    ...recoveryTenantBindings.map(path => ({
+      name: `conflicting ${path.join('.')}`,
+      input: setTenantBinding({ tenantId: '10', store: { tenantId: '10', clientId: 10 } }, path, '13'),
+      reason: 'recovery_tenant_mismatch',
+    })),
+  ];
+  for (const scenario of cases) {
+    for (const ownership of [null, { kind: 'same_company_different_contact', companyId: '3' }]) {
+      await t.test(`${scenario.name}; ownership ${ownership ? 'supplied' : 'unresolved'}`, async () => {
+        const calls = [];
+        const unexpected = name => async () => {
+          calls.push(name);
+          throw new Error(`Unexpected ${name} for a blocked tenant`);
+        };
+        const pool = { query: unexpected('query') };
+        const result = await attemptSameCompanyAlternateRecovery({
+          ...scenario.input.store,
+          pool,
+          candidateOwnership: unexpected('candidateOwnership'),
+          suppression: unexpected('suppression'),
+        }, pool, {
+          ...scenario.input,
+          ownership,
+          company: { name: 'Granite PM', domain: 'pm.example', email: 'owner@pm.example' },
+          verify: unexpected('verify'),
+          enrich: unexpected('enrich'),
+          sources: Object.fromEntries(['pfIntelligence', 'website', 'prospeo', 'hunter']
+            .map(name => [name, unexpected(name)])),
+        });
+        assert.equal(result.ok, false);
+        assert.equal(result.reason, scenario.reason);
+        assert.deepEqual(calls, []);
+        assert.equal(result.telemetry.sameCompanyCandidatesAttempted, 0);
+        assert.equal(result.telemetry.alternateContactsRejected, 1);
+        assert.equal(result.telemetry.alternateContactLossReasons[scenario.reason], 1);
+        assert.deepEqual(result.telemetry.terminalReasons, [scenario.reason]);
+        const merged = mergeAlternateTelemetry(emptyAlternateContactTelemetry(), result.telemetry);
+        assert.equal(merged.alternateContactLossReasons[scenario.reason], 1);
+      });
+    }
+  }
+});
+
+test('same-company recovery accepts tenant 10 with optional bindings absent', async (t) => {
+  for (const path of recoveryTenantBindings) {
+    await t.test(path.join('.'), async () => {
+      const input = setTenantBinding({}, path, path.at(-1) === 'clientId' ? 10 : '10');
+      const pool = companyPool();
+      const result = await attemptSameCompanyAlternateRecovery({
+        ...input.store,
+        pool,
+        candidateOwnership: async () => null,
+        suppression: async () => null,
+      }, pool, {
+        ...input,
+        company: { name: 'Granite PM', domain: 'pm.example', website: 'https://pm.example' },
+        enrich: async () => [{ email: 'owner@pm.example', source: ['prospeo'] }],
+        verify: verified,
+      });
+      assert.equal(result.ok, true);
+      assert.equal(result.reason, 'alternate_contact_resolved');
+      assert.equal(result.prospectId, '901');
+    });
+  }
+});
+
+test('same-company recovery preserves the complete production Anchor tenant context', async () => {
+  const { createGovernedOutboundContext } = require('../services/governedOutboundContext');
+  const { GovernedOutboundStore } = require('../services/governedOutboundStore');
+  const pool = companyPool();
+  const store = new GovernedOutboundStore(pool, '10');
+  store.candidateOwnership = async () => null;
+  store.suppression = async () => null;
+  const program = { id: 'anchor-program', tenant_id: '10', tenantId: null, policy: { tenantId: '10' } };
+  const result = await attemptSameCompanyAlternateRecovery(store, pool, {
+    tenantId: '10',
+    company: { name: 'Granite PM', domain: 'pm.example', website: 'https://pm.example' },
+    ownership: { kind: 'same_company_different_contact', companyId: '3' },
+    scoutContext: {
+      authorizedTenantId: '10', clientId: 10, tenantId: null,
+      governedContext: createGovernedOutboundContext({ program }),
+      program,
+    },
+    enrich: async () => [{ email: 'owner@pm.example', source: ['prospeo'] }],
+    verify: verified,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.prospectId, '901');
+  assert.equal(result.telemetry.alternateContactsAddedToCleanInventory, 1);
+});
+
+test('persistDiscoveredCompanies passes its resolved tenant to the Anchor-only recovery guard', async (t) => {
+  const { _test: { persistDiscoveredCompanies } } = require('../services/maxOutboundControlLoop');
+  for (const storeTenantId of ['13', '10']) {
+    await t.test(`tenant 13 with store tenant ${storeTenantId}`, async () => {
+      const queries = [];
+      const events = [];
+      const providerCalls = [];
+      const fixturePool = companyPool();
+      const pool = { query: async (sql, params) => {
+        queries.push(sql);
+        // Only the caller's tenant-scoped ownership classification may query.
+        assert.match(sql, /WHERE p\.client_id=\$4/);
+        assert.equal(params[3], 13);
+        return fixturePool.query(sql, params);
+      } };
+      const result = await persistDiscoveredCompanies(pool, {
+        ...clearStore, tenantId: storeTenantId, clientId: Number(storeTenantId), pool,
+        event: async (type, key, payload) => events.push({ type, payload }),
+      }, {
+        tenantId: '13',
+        companies: [{
+          name: 'Granite PM', domain: 'pm.example', website: 'https://pm.example',
+          industry: 'property_manager',
+        }],
+        scoutContext: {
+          scope: { segment: 'short_term_rental' },
+          recoverySources: Object.fromEntries(['pfIntelligence', 'website', 'prospeo', 'hunter']
+            .map(name => [name, async () => {
+              providerCalls.push(name);
+              throw new Error('Unexpected recovery provider call');
+            }])),
+        },
+      });
+      const reason = storeTenantId === '13' ? 'recovery_tenant_unsupported' : 'recovery_tenant_mismatch';
+      assert.equal(queries.length, 1);
+      assert.deepEqual(providerCalls, []);
+      assert.equal(result.inserted, 0);
+      assert.equal(result.admission.recovered, 0);
+      assert.equal(result.admission.sameCompanyCandidatesAttempted, 0);
+      assert.equal(result.admission.alternateContactLossReasons[reason], 1);
+      assert.deepEqual(events, []);
+    });
+  }
+});
+
 test('fresh provider evidence repairs the existing email without duplicating its company or contact', async () => {
   const pool = companyPool('owner@pm.example');
   const original = pool.query;

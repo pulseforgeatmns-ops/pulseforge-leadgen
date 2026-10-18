@@ -25,6 +25,9 @@ const {
 
 const RECOVERY_TERMINAL_REASONS = Object.freeze([
   'alternate_contact_resolved',
+  'recovery_tenant_required',
+  'recovery_tenant_mismatch',
+  'recovery_tenant_unsupported',
   'no_alternate_contact_found',
   'alternate_email_missing',
   'alternate_email_unverified',
@@ -474,8 +477,38 @@ function classifyProviderEmptyReason(resolved) {
   return resolved.emptyReason || 'no_alternate_contact_found';
 }
 
+function recoveryTenantBlockReason(store, scoutContext, tenantId) {
+  // This recovery implementation still uses Anchor-only SQL. Require a tenant
+  // binding and cross-check every supplied identity before any database/provider
+  // work; precedence must not hide a conflicting program, context, or store.
+  const bindings = [
+    tenantId,
+    scoutContext?.authorizedTenantId,
+    scoutContext?.tenantId,
+    scoutContext?.clientId,
+    scoutContext?.governedContext?.tenantId,
+    scoutContext?.governedContext?.clientId,
+    scoutContext?.governedContext?.transport?.tenantId,
+    scoutContext?.governedContext?.transport?.clientId,
+    scoutContext?.program?.tenant_id,
+    scoutContext?.program?.tenantId,
+    scoutContext?.program?.policy?.tenantId,
+    store?.tenantId,
+    store?.clientId,
+    store?.ctx?.tenantId,
+    store?.ctx?.clientId,
+  ].filter(value => value != null);
+  if (!bindings.length) return 'recovery_tenant_required';
+  if (bindings.some(value => !['string', 'number'].includes(typeof value)
+    || !String(value).trim())) return 'recovery_tenant_unsupported';
+  const normalized = bindings.map(value => String(value).trim());
+  if (new Set(normalized).size !== 1) return 'recovery_tenant_mismatch';
+  return normalized[0] === '10' ? null : 'recovery_tenant_unsupported';
+}
+
 async function attemptSameCompanyAlternateRecovery(store, pool, {
   company,
+  tenantId = null,
   ownership = null,
   scoutContext = {},
   telemetry = null,
@@ -485,6 +518,11 @@ async function attemptSameCompanyAlternateRecovery(store, pool, {
   sources = {},
 } = {}) {
   const stats = telemetry || emptyAlternateContactTelemetry();
+  const tenantBlock = recoveryTenantBlockReason(store, scoutContext, tenantId);
+  if (tenantBlock) {
+    recordAlternateLoss(stats, tenantBlock);
+    return { ok: false, reason: tenantBlock, telemetry: stats };
+  }
   stats.sameCompanyCandidatesAttempted += 1;
 
   const name = String(company.name || '').trim();
@@ -500,7 +538,7 @@ async function attemptSameCompanyAlternateRecovery(store, pool, {
     : await classifyInventoryOwnership(store, { company: name, domain, website }, {
       pool,
       now,
-      clientId: scoutContext.clientId ?? scoutContext.tenantId,
+      clientId: 10,
     });
   if (classified.kind !== OWNERSHIP_KINDS.SAME_COMPANY_DIFFERENT_CONTACT) {
     if (classified.kind === OWNERSHIP_KINDS.VALID_COLLISION) {
