@@ -1,7 +1,7 @@
 'use strict';
 
 const { isSubstralPreparationGrant, substralPreparationGrantReason } = require('./substralPreparationGrant');
-const { admissionReceiptDiagnostic, providerReceiptDiagnostic, scoutRampDiagnostic, controlCycleDiagnostic, emitDiagnostic } = require('./outboundControlDiagnostics');
+const { admissionReceiptDiagnostic, providerReceiptDiagnostic, scoutRampDiagnostic, controlCycleDiagnostic, evidenceProgressionDiagnostic, emitDiagnostic } = require('./outboundControlDiagnostics');
 const { governedContactReason, founderFirst, contactEvidence } = require('../utils/governedContactEligibility');
 
 const { canonicalOutboundEmailIneligibilityReason, normalizeDomain } = require('../utils/canonicalEmailEligibility');
@@ -592,6 +592,27 @@ async function persistDiscoveredCompanies(pool, store, {
 
   let websiteInvestigations = 0;
   let checkpointDeferred = false;
+  const evidenceCursor = scoutContext.evidenceCursor || null;
+  if (evidenceCursor) {
+    require('./scoutBusinessEvidenceCursor').assertCursorTenantBindings({ tenantId: tenant.tenantId, store, scoutContext });
+    evidenceCursor.assertTenant(tenant.tenantId);
+    const eligible = [];
+    for (const company of companies) {
+      if (company.tenantId != null && String(company.tenantId) !== tenant.tenantId) throw Error('Scout evidence cursor candidate tenant mismatch');
+      const name = String(company.name || '').trim();
+      const website = String(company.website || '').trim() || null;
+      const domain = normalizeDomain(company.domain || website);
+      if (!name || !domain || evaluateReplenishmentAdmission(company, admissionContext).reason !== 'unclassifiable_vertical') continue;
+      // Selection is read-only. The processing loop rechecks ownership before
+      // each actual request. Newly visited same-company work must not activate
+      // alternate-contact providers, even for correctly tenant-bound Anchor.
+      const ownership = await classifyInventoryOwnership(store, { company: name, domain, website }, {
+        pool, clientId: tenant.clientId,
+      });
+      if (ownership.kind === OWNERSHIP_KINDS.CLEAR) eligible.push(company);
+    }
+    evidenceCursor.select(eligible);
+  }
   const decisions = [];
   for (let company of companies) {
     const reject = reason => {
@@ -627,7 +648,8 @@ async function persistDiscoveredCompanies(pool, store, {
     }
     let businessEvidence = null;
     const initialAdmission = evaluateReplenishmentAdmission(company, admissionContext);
-    if (initialAdmission.reason === 'unclassifiable_vertical' && scoutContext.investigateBusinessEvidence && websiteInvestigations < 20) {
+    if (initialAdmission.reason === 'unclassifiable_vertical' && scoutContext.investigateBusinessEvidence && websiteInvestigations < 20
+      && (!evidenceCursor || (ownership.kind === OWNERSHIP_KINDS.CLEAR && evidenceCursor.take(company)))) {
       websiteInvestigations += 1;
       const observed = await require('./scoutWebsiteBusinessEvidence').acquireBusinessEvidence(company, admissionContext);
       if (observed) { company = observed.candidate; businessEvidence = observed.evidence; }
@@ -833,6 +855,7 @@ async function defaultScoutRamp({
   loadDiscoveryBackoff = loadScoutDiscoveryBackoff,
   recoverExistingInventory = null,
   createQueryCheckpointSession = null,
+  createBusinessEvidenceCursorStore = null,
   now = new Date(),
 } = {}) {
   const governed = governedContext || createGovernedOutboundContext({ program });
@@ -861,6 +884,7 @@ async function defaultScoutRamp({
   let persisted = { inserted: 0, admission: createReplenishmentAdmissionCounters() };
   let admissionMeasured = false;
   let queryProgression = null;
+  let evidenceProgression = evidenceProgressionDiagnostic(null);
 
   const recoveredExistingCount = Number(existingRecovery?.payload?.qualifiedCount || 0);
   if (promoted < plan.deficit && recoveredExistingCount <= 0) {
@@ -903,7 +927,7 @@ async function defaultScoutRamp({
         {
           loadCompanies: async () => loadReuseCompanies(pool, tenant.tenantId),
           persistCompanies: async input => {
-            persisted = await persistDiscoveredCompanies(pool, store, {
+            const persist = (persistencePool, persistenceStore, evidenceCursor = null) => persistDiscoveredCompanies(persistencePool, persistenceStore, {
               ...input,
               tenantId: tenant.tenantId,
               scoutContext: {
@@ -916,8 +940,22 @@ async function defaultScoutRamp({
                 governedContext: governed,
                 program,
                 investigateBusinessEvidence: true,
+                evidenceCursor,
               },
             });
+            if (input.companies?.length) {
+              const createCursor = createBusinessEvidenceCursorStore
+                || require('./scoutBusinessEvidenceCursor').createBusinessEvidenceCursorStore;
+              try {
+                const cursorStore = createCursor({ pool, tenantId: tenant.tenantId, fingerprint });
+                const cursorRun = await cursorStore.withPass(evidenceCursor => persist(pool, store, evidenceCursor));
+                evidenceProgression = evidenceProgressionDiagnostic(cursorRun.progression);
+                persisted = cursorRun.result;
+              } catch (error) {
+                evidenceProgression = evidenceProgressionDiagnostic(error.evidenceProgression || { status: 'failed' });
+                throw error;
+              }
+            } else persisted = await persist(pool, store);
             admissionMeasured = true;
             return persisted;
           },
@@ -937,12 +975,13 @@ async function defaultScoutRamp({
             ? checkpointSnapshot[key] : null])),
       };
       emitDiagnostic(logger, '[max-outbound-control] Scout query progression', {
-        tenantId: tenant.tenantId, cycleId, ...queryProgression,
+        tenantId: tenant.tenantId, cycleId, ...queryProgression, evidenceProgression,
       });
       if (typeof store.event === 'function') {
         await store.event('scout_query_progression', [cycleId || fingerprint, searchGeneration], {
           programId: program.id,
           ...queryProgression,
+          evidenceProgression,
         });
       }
 
@@ -994,6 +1033,7 @@ async function defaultScoutRamp({
     discoveryAttempted,
     discoveryBackoff,
     queryProgression,
+    evidenceProgression,
     searchFingerprint: searchFingerprint || scoutSearchFingerprint(program, source),
     searchGeneration,
     verificationRetry,
@@ -1378,6 +1418,7 @@ async function runMaxOutboundControlLoop(options = {}) {
     scoutDiscoveryAttempted: Boolean(scout?.discoveryAttempted),
     scoutProviderReceipt: providerReceiptDiagnostic(store.tenantId, cycleId, scout?.discovery),
     scoutAdmissionReceipt: admissionReceiptDiagnostic(store.tenantId, cycleId, scout?.admission, scout?.admissionMeasured),
+    scoutEvidenceProgression: evidenceProgressionDiagnostic(scout?.evidenceProgression),
     scoutBackoff: scout?.discoveryBackoff || null,
     aoRefill: aoRefill ? {
       assigned: Number(aoRefill.assigned?.length || 0),

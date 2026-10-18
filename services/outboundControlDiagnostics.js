@@ -13,6 +13,13 @@ function correlation(tenantId, cycleId) {
   };
 }
 function choice(value, allowed) { return allowed.includes(value) ? value : 'unknown'; }
+function evidenceProgressionDiagnostic(value) {
+  const status = value == null ? 'not_observed' : value.status
+    || (value.advanced === true ? 'advanced' : value.selected === 0 ? 'no_candidates' : 'failed');
+  return { status: choice(status, ['not_observed', 'advanced', 'no_candidates', 'stale', 'busy', 'failed']),
+    selected: count(value?.selected), investigated: count(value?.investigated),
+    advanced: value?.advanced === true && status === 'advanced', sequence: count(value?.sequence) };
+}
 // New observational receipts deliberately bypass legacy evidence/control fields.
 // Explicit null means unavailable; only older payloads fall back to execution.
 function discoveryProviderReceipts(payload = {}) {
@@ -210,6 +217,7 @@ function controlCycleDiagnostic(tenantId, event) {
     ...correlation(tenantId, event.cycleId), phase: 'control_cycle', eventWriteCompleted: true,
     state: choice(event.state, ['healthy', 'critical', 'delivery_halted', 'replenish']),
     scoutPromotionCleanCohort: promotionCleanDiagnostic(event.scoutPromotionCleanCohort),
+    scoutEvidenceProgression: evidenceProgressionDiagnostic(event.scoutEvidenceProgression),
     cleanInventoryExclusions: cleanInventoryExclusionDiagnostic(event.cleanInventoryExclusions),
     cleanInventoryBefore: count(event.cleanInventoryBefore), cleanInventoryAfter: count(event.cleanInventoryAfter),
     pendingPrepared: event.pendingPreparedMeasured === true ? count(event.pendingPrepared) : null, preparedAdded: count(event.preparedAdded),
@@ -221,4 +229,4 @@ function controlCycleDiagnostic(tenantId, event) {
 function emitDiagnostic(logger, label, value) {
   try { logger.log?.(label, JSON.stringify(value)); } catch (_) { /* Diagnostics must not change execution. */ }
 }
-module.exports = { admissionReceiptDiagnostic, providerReceiptDiagnostic, scoutRampDiagnostic, controlCycleDiagnostic, discoveryDiagnostic, emitDiagnostic };
+module.exports = { admissionReceiptDiagnostic, providerReceiptDiagnostic, scoutRampDiagnostic, controlCycleDiagnostic, discoveryDiagnostic, evidenceProgressionDiagnostic, emitDiagnostic };

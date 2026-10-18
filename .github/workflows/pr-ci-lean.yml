@@ -166,6 +166,17 @@ jobs:
           DATABASE_SSL: 'false'
           SCOUT_CHECKPOINT_REQUIRE_POSTGRES: 'true'
         run: node --test test/scoutQueryCheckpoints.test.js test/scoutQueryCheckpointRamp.test.js test/scoutQueryCheckpointsPostgres.test.js
+      - name: Scout evidence cursor progression and crash regressions (network denied)
+        env:
+          DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
+          DATABASE_SSL: 'false'
+        run: node --require ./test/helpers/denyWebsiteEvidenceNetwork.cjs --test test/scoutBusinessEvidenceCursor.test.js test/scoutBusinessEvidenceCursorRamp.test.js test/scoutCheckpointStallDiagnosis.test.js
+      - name: Scout evidence cursor required disposable PostgreSQL CAS contract (no providers)
+        env:
+          DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
+          DATABASE_SSL: 'false'
+          SCOUT_EVIDENCE_CURSOR_REQUIRE_POSTGRES: 'true'
+        run: node --test test/scoutBusinessEvidenceCursorPostgres.test.js
       - name: Mailbox and scheduling regressions
         env:
           DATABASE_URL: postgresql://localhost:1/pulseforge_test_only

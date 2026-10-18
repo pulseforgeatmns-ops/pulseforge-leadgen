@@ -148,8 +148,8 @@ function candidateFor(tenantId) {
 }
 
 function createTracePool(writes) {
-  return {
-    query: async (sql, params = []) => {
+  const pool = require('./helpers/scoutEvidenceCursorFakePool').createFakePool({
+    onQuery: async (sql, params = []) => {
       if (/INSERT INTO scout_unenriched/i.test(sql)) {
         const row = {
           id: `unenriched-${writes.unenriched.length + 1}`,
@@ -182,7 +182,9 @@ function createTracePool(writes) {
       if (/FROM companies/i.test(sql)) return { rows: [], rowCount: 0 };
       return { rows: [], rowCount: 0 };
     },
-  };
+  });
+  writes.cursorCalls = pool.calls;
+  return pool;
 }
 
 function createRampHooks(tenantId, writes, traces) {
@@ -344,6 +346,11 @@ test('forced replenishment keeps tenant 10 Greater Manchester and tenant 13 nati
   assert.equal(anchorWrites.unenriched.some(row => Number(row.client_id) === 13), false);
   assert.equal(babrunWrites.unenriched.some(row => Number(row.client_id) === 10), false);
   assert.equal(babrunWrites.ak.some(row => String(row.tenant_id) === '10'), false);
+  for (const [writes, tenant] of [[anchorWrites, '10'], [babrunWrites, '13']]) {
+    const cursorReads = writes.cursorCalls.filter(row => /SELECT id,payload FROM acquisition_outbound_events/.test(row.sql));
+    assert.ok(cursorReads.length > 0, 'forced replenishment exercises the real cursor storage boundary');
+    assert.ok(cursorReads.every(row => row.params[0] === tenant));
+  }
 
   assert.notEqual(babrunInput.businessContext.serviceGeography, 'Greater Manchester');
   assert.equal(
