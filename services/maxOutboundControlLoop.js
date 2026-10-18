@@ -657,13 +657,14 @@ async function persistDiscoveredCompanies(pool, store, {
         if (recent) { checkpointDeferred = true; counters.recoveryBackoff = (counters.recoveryBackoff || 0) + 1; continue; }
       }
       const recovery = await attemptSameCompanyAlternateRecovery(store, pool, {
+        tenantId: tenant.tenantId,
         company: { ...company, vertical: admission.vertical },
         ownership,
         scoutContext: { ...scoutContext, admittedVertical: admission.vertical, businessEvidence },
         sources: scoutContext.recoverySources,
       });
       mergeAlternateTelemetry(counters, recovery.telemetry || {});
-      if (typeof store.event === 'function') await store.event('scout_contact_recovery_attempt', require('node:crypto').randomUUID(),
+      if (recovery.telemetry?.sameCompanyCandidatesAttempted > 0 && typeof store.event === 'function') await store.event('scout_contact_recovery_attempt', require('node:crypto').randomUUID(),
         { companyId: ownership.companyId, domain, reason: recovery.reason, telemetry: recovery.telemetry });
       if (recovery.ok) {
         counters.recovered += 1;
