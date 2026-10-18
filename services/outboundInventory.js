@@ -7,8 +7,8 @@
  * Buyer-readiness UNKNOWN is not an admission requirement.
  */
 
-const { governedContactReason } = require('../utils/governedContactEligibility');
-const { normalizeDomain } = require('../utils/canonicalEmailEligibility');
+const { governedContactReason, companyRecipientReason } = require('../utils/governedContactEligibility');
+const { normalizeDomain, canonicalOutboundEmailIneligibilityReason } = require('../utils/canonicalEmailEligibility');
 
 const FUNNEL_STAGES = Object.freeze([
   'discovered',
@@ -26,6 +26,7 @@ const OWNERSHIP_KINDS = Object.freeze({
   STALE: 'stale_ownership',
   SAME_COMPANY_DIFFERENT_CONTACT: 'same_company_different_contact',
   ALREADY_USABLE_CANONICAL: 'already_usable_canonical',
+  CONTACT_POLICY_HOLD: 'canonical_contact_policy_hold',
   PRIOR_CONTACT: 'prior_contact_or_human_owned',
   AO_OWNED: 'ao_owned_alias',
 });
@@ -289,13 +290,27 @@ async function classifyInventoryOwnership(store, candidate = {}, opts = {}) {
   const email = String(candidate.email || '').trim().toLowerCase();
   const company = String(candidate.company || candidate.name || '').trim();
   const clientId = Number(opts.clientId ?? store?.clientId ?? store?.tenantId);
-  if (!Number.isFinite(clientId)) {
+  if (!Number.isSafeInteger(clientId) || clientId <= 0) {
     throw Object.assign(new Error('governed_outbound_tenant_required'), {
       code: 'governed_outbound_tenant_required',
     });
   }
+  const tenantId = String(clientId);
+  const bindings = [opts.clientId, store?.clientId, store?.tenantId,
+    store?.ctx?.clientId, store?.ctx?.tenantId, opts.policy?.tenantId];
+  if (bindings.filter(value => value != null).some(value => !['string', 'number'].includes(typeof value)
+    || String(value).trim() !== tenantId)) {
+    throw Object.assign(new Error('governed_outbound_tenant_mismatch'), {
+      code: 'governed_outbound_tenant_mismatch',
+    });
+  }
+  // Match the caller's contact policy without falling back to Anchor's rules
+  // when a partial prospect projection omits the tenant or contact evidence.
+  const contactPolicy = { ...opts.policy, tenantId };
   const { rows } = await pool.query(`
-    SELECT p.id, p.company_id, p.email, p.email_verified, p.email_status, p.do_not_contact, p.enrichment_provenance,
+    SELECT p.id, p.company_id, p.client_id, p.email, p.email_verified, p.email_status, p.do_not_contact, p.enrichment_provenance,
+      p.acquisition_metadata, to_jsonb(p)->>'contact_classification' AS contact_classification,
+      COALESCE((to_jsonb(p)->>'is_synthetic')::boolean,false) AS is_synthetic,
       COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) AS ao_outreach_review_required,
       p.assigned_ao_id, p.closer_id, p.last_contacted_at, p.last_reply_at,
       p.service_area_match, p.vertical, c.name, c.domain, c.website,
@@ -312,6 +327,12 @@ async function classifyInventoryOwnership(store, candidate = {}, opts = {}) {
       )
     ORDER BY p.email_verified DESC NULLS LAST, p.updated_at DESC NULLS LAST
   `, [email || null, domain || null, company, clientId]);
+
+  if (rows.some(row => row.client_id != null && String(row.client_id) !== tenantId)) {
+    throw Object.assign(new Error('governed_outbound_tenant_mismatch'), {
+      code: 'governed_outbound_tenant_mismatch',
+    });
+  }
 
   if (!rows.length) {
     const blocked = store?.candidateOwnership ? await store.candidateOwnership(candidate) : null;
@@ -337,12 +358,12 @@ async function classifyInventoryOwnership(store, candidate = {}, opts = {}) {
     if (blocked) return { kind: OWNERSHIP_KINDS.VALID_COLLISION, reason: blocked, recoverable: false };
   }
   const usable = rows.find(row => {
-    if (governedContactReason(row)) return false;
+    if (governedContactReason(row, contactPolicy)) return false;
     if (row.do_not_contact === true) return false;
     const classified = classifyOwnershipRow(row, opts.now);
     return classified.kind === OWNERSHIP_KINDS.CLEAR;
   });
-  if (usable || (exactEmail && !governedContactReason(exactEmail) && classifyOwnershipRow(exactEmail, opts.now).kind === OWNERSHIP_KINDS.CLEAR)) {
+  if (usable || (exactEmail && !governedContactReason(exactEmail, contactPolicy) && classifyOwnershipRow(exactEmail, opts.now).kind === OWNERSHIP_KINDS.CLEAR)) {
     const prospect = usable || exactEmail;
     return {
       kind: OWNERSHIP_KINDS.ALREADY_USABLE_CANONICAL,
@@ -350,6 +371,25 @@ async function classifyInventoryOwnership(store, candidate = {}, opts = {}) {
       recoverable: true,
       prospectId: String(prospect.id),
       companyId: String(prospect.company_id || ''),
+    };
+  }
+
+  // The old partial projection stopped at contacts satisfying these checks.
+  // Newly visible policy failures must not silently expand alternate recovery.
+  // Keep the actual evidence intact and require separate review of this work.
+  const policyHeld = rows.find(row => governedContactReason(row, contactPolicy)
+    && !canonicalOutboundEmailIneligibilityReason(row)
+    && String(row.enrichment_provenance?.email?.source || '').trim()
+    && !companyRecipientReason(row)
+    && classifyOwnershipRow(row, opts.now).kind === OWNERSHIP_KINDS.CLEAR);
+  if (policyHeld) {
+    return {
+      kind: OWNERSHIP_KINDS.CONTACT_POLICY_HOLD,
+      reason: 'existing_canonical_contact_policy_ineligible',
+      contactReason: governedContactReason(policyHeld, contactPolicy),
+      recoverable: false,
+      prospectId: String(policyHeld.id),
+      companyId: String(policyHeld.company_id || ''),
     };
   }
 
