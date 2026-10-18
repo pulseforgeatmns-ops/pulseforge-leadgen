@@ -607,7 +607,7 @@ async function persistDiscoveredCompanies(pool, store, {
       // each actual request. Newly visited same-company work must not activate
       // alternate-contact providers, even for correctly tenant-bound Anchor.
       const ownership = await classifyInventoryOwnership(store, { company: name, domain, website }, {
-        pool, clientId: tenant.clientId,
+        pool, clientId: tenant.clientId, policy: scoutContext.program?.policy,
       });
       if (ownership.kind === OWNERSHIP_KINDS.CLEAR) eligible.push(company);
     }
@@ -631,9 +631,16 @@ async function persistDiscoveredCompanies(pool, store, {
     const ownership = await classifyInventoryOwnership(store, { company: name, domain, website }, {
       pool,
       clientId: tenant.clientId,
+      policy: scoutContext.program?.policy,
     });
     if (ownership.kind === OWNERSHIP_KINDS.ALREADY_USABLE_CANONICAL) {
       counters.alreadyUsable = (counters.alreadyUsable || 0) + 1;
+      continue;
+    }
+    if (ownership.kind === OWNERSHIP_KINDS.CONTACT_POLICY_HOLD) {
+      checkpointDeferred = true;
+      counters.contactPolicyDeferred = (counters.contactPolicyDeferred || 0) + 1;
+      reject('same_company_different_contact');
       continue;
     }
     if (ownership.kind === OWNERSHIP_KINDS.VALID_COLLISION

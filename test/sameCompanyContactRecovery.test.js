@@ -221,7 +221,7 @@ test('persistDiscoveredCompanies passes its resolved tenant to the Anchor-only r
         assert.equal(params[3], 13);
         return fixturePool.query(sql, params);
       } };
-      const result = await persistDiscoveredCompanies(pool, {
+      const pending = persistDiscoveredCompanies(pool, {
         ...clearStore, tenantId: storeTenantId, clientId: Number(storeTenantId), pool,
         event: async (type, key, payload) => events.push({ type, payload }),
       }, {
@@ -239,13 +239,20 @@ test('persistDiscoveredCompanies passes its resolved tenant to the Anchor-only r
             }])),
         },
       });
-      const reason = storeTenantId === '13' ? 'recovery_tenant_unsupported' : 'recovery_tenant_mismatch';
+      if (storeTenantId !== '13') {
+        await assert.rejects(pending, { code: 'governed_outbound_tenant_mismatch' });
+        assert.deepEqual(queries, []);
+        assert.deepEqual(providerCalls, []);
+        assert.deepEqual(events, []);
+        return;
+      }
+      const result = await pending;
       assert.equal(queries.length, 1);
       assert.deepEqual(providerCalls, []);
       assert.equal(result.inserted, 0);
       assert.equal(result.admission.recovered, 0);
       assert.equal(result.admission.sameCompanyCandidatesAttempted, 0);
-      assert.equal(result.admission.alternateContactLossReasons[reason], 1);
+      assert.equal(result.admission.alternateContactLossReasons.recovery_tenant_unsupported, 1);
       assert.deepEqual(events, []);
     });
   }
