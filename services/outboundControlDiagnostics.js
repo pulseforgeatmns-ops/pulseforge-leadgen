@@ -180,6 +180,31 @@ function promotionCleanDiagnostic(value) {
       scope: 'enrichment_cohort_first_failure' },
   };
 }
+// Fixed internal gates only: raw exception messages must never reach runtime logs.
+// Keep projection-only; these categories cannot authorize preparation or sending.
+const PREPARATION_SKIP_REASONS = [
+  'no_clean_inventory', 'preparation_backoff', 'discovery_evidence', 'verified_inventory_shortfall',
+  'no_remaining_capacity', 'preparation_disabled', 'no_deficit', 'control_execute_disabled',
+  'send_lock_overlap', 'preparation_not_executed', 'governor_halt', 'grant_inactive',
+  'daily_authorization_exhausted', 'total_authorization_exhausted', 'no_remaining_slots',
+  'pending_covers_capacity', 'batch_limit_reached',
+  'no_program', 'shadow_mode', 'program_disabled', 'policy_changed',
+  'not_started', 'authorization_expired', 'source_scope_changed',
+  'tenant_inactive_or_legacy_autosend_enabled', 'sender_changed',
+  'anchor_reply_mailbox_not_ready', 'ao_owner_unavailable', 'suppression_triggers_missing',
+  'sender_not_ready', 'tenant_mailbox_not_ready', 'capacity_mailbox_changed',
+  'emmett_capacity_unavailable', 'emmett_capacity_exhausted', 'emmett_governor_halted',
+  'uncertain_send_requires_reconciliation', 'cap_reached', 'environment_kill_switch',
+  'daily_envelope_already_used', 'daily_mission_not_ready',
+  'preparation_budget_exhausted', 'preparation_envelope_invalid',
+  'inventory_evaluation_failed', 'envelope_not_refillable', 'no_eligible_prepared_candidates',
+  'preparation_research_not_authorized', 'replenishment_reservation_changed',
+  'replenishment_requires_operator_review', 'max_prioritization_missing',
+  'preparation_requires_operator_judgment', 'preparation_step_budget',
+  'mission_not_executable', 'daily_mission_scope_changed', 'missing_prepared_artifacts',
+  'message_binding_contamination', 'prepared_governor_halted', 'capacity_sender_changed',
+  'capacity_copy_binding_mismatch', 'approved_copy_binding_mismatch', 'replenishment_grant_changed',
+];
 function controlCycleDiagnostic(tenantId, event) {
   return {
     ...correlation(tenantId, event.cycleId), phase: 'control_cycle', eventWriteCompleted: true,
@@ -190,7 +215,7 @@ function controlCycleDiagnostic(tenantId, event) {
     pendingPrepared: event.pendingPreparedMeasured === true ? count(event.pendingPrepared) : null, preparedAdded: count(event.preparedAdded),
     prepareRequested: count(event.prepareRequested), sentToday: event.sentTodayMeasured === true ? count(event.sentToday) : null,
     dispatchCapacityNow: count(event.dispatchCapacityNow),
-    prepareSkippedReason: choice(event.prepareSkippedReason, ['no_clean_inventory', 'preparation_backoff', 'discovery_evidence', 'verified_inventory_shortfall', 'no_remaining_capacity', 'preparation_disabled', 'no_deficit', 'control_execute_disabled', 'send_lock_overlap', 'preparation_not_executed', 'governor_halt', 'grant_inactive', 'daily_authorization_exhausted', 'total_authorization_exhausted', 'no_remaining_slots', 'pending_covers_capacity', 'batch_limit_reached']),
+    prepareSkippedReason: choice(event.prepareSkippedReason, PREPARATION_SKIP_REASONS),
   };
 }
 function emitDiagnostic(logger, label, value) {
