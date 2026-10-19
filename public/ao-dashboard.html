@@ -963,6 +963,9 @@ body {
 <script src="/shared/maxVoiceRecorder.js"></script>
 <script src="/shared/spreadsheetReview.js"></script>
 <link rel="stylesheet" href="/shared/spreadsheetReview.css">
+<link rel="stylesheet" href="/shared/content-review.css">
+<link rel="stylesheet" href="/shared/account-review.css">
+<script src="/shared/account-review.js" defer></script>
 </head>
 <body>
 <header class="ao-header">
@@ -2051,6 +2054,12 @@ async function sendMessage(text) {
   const trimmed = text.trim();
   const hasAttachments = pendingComposerAttachments.length > 0;
   if (!trimmed && !hasAttachments) return;
+
+  if (!hasAttachments && spreadsheetReview.isAccountReviewRequest(trimmed)) {
+    messageInput.value = '';
+    await spreadsheetReview.handleAccountReview(trimmed);
+    return;
+  }
 
   if (!hasAttachments && spreadsheetReview.hasPending()) {
     if (trimmed) addMsg(trimmed, 'user');

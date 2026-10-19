@@ -11,3 +11,12 @@
 .pf-spreadsheet-review fieldset label { display: block; margin: .5rem 0; }
 .pf-spreadsheet-review textarea { display: block; width: 100%; min-height: 5rem; }
 .pf-spreadsheet-review select { max-width: 100%; }
+.pf-spreadsheet-scope { padding: 12px 0; font: 12px/1.6 var(--pf-font-body, sans-serif); }
+.pf-spreadsheet-scope label { display: grid; gap: 6px; color: var(--pf-text-dim); }
+.pf-spreadsheet-scope select { padding: 10px 12px; min-height: 42px; border-radius: 10px; border: 1px solid var(--pf-border-strong); background: var(--pf-bg); color: var(--pf-text); font: inherit; }
+.pf-spreadsheet-scope-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.pf-spreadsheet-scope button { padding: 9px 13px; min-height: 40px; border-radius: 9px; background: transparent; color: var(--pf-text); border: 1px solid var(--pf-border-strong); font: inherit; cursor: pointer; }
+.pf-spreadsheet-scope [data-account-review] { color: var(--pf-gold); border-color: var(--pf-gold); box-shadow: inset 0 0 16px var(--pf-gold-glow); }
+.pf-spreadsheet-scope button:disabled { opacity: .45; cursor: default; }
+.pf-spreadsheet-scope [data-spreadsheet-feedback] { color: var(--pf-amber); margin: 8px 0 0; }
+.pf-spreadsheet-scope [data-spreadsheet-feedback]:empty { display: none; }
