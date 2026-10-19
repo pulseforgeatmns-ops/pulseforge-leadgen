@@ -1010,8 +1010,8 @@ async function persistStageCommit(bundle = {}, pool = defaultPool(), opts = {}) 
 /**
  * SPEC-139 — load one mission + tenant-scoped side effects for durable verification.
  */
-async function loadMissionSnapshot(missionId, tenantId, pool = defaultPool()) {
-  const loaded = await loadTenantMissions(tenantId, pool);
+async function loadMissionSnapshot(missionId, tenantId, pool = defaultPool(), opts = {}) {
+  const loaded = await loadTenantMissions(tenantId, pool, opts);
   const mission = loaded.missions.find((row) => row && row.id === missionId) || null;
   if (!mission) return null;
   const contributions = loaded.contributions.filter((row) => row && row.missionId === missionId);
@@ -1046,9 +1046,9 @@ function comparableMissionState(snapshot) {
  * SPEC-139 / SPEC-169 — persisted canonical projection must match in-memory
  * engine state before commit succeeds.
  */
-async function assertPersistedMatchesEngine(engine, missionId, tenantId, pool = defaultPool()) {
+async function assertPersistedMatchesEngine(engine, missionId, tenantId, pool = defaultPool(), opts = {}) {
   const inMemory = snapshotFromEngine(engine, missionId, tenantId);
-  const persisted = await loadMissionSnapshot(missionId, tenantId, pool);
+  const persisted = await loadMissionSnapshot(missionId, tenantId, pool, opts);
   if (!persisted || !persisted.mission) {
     const err = new Error('Persisted mission snapshot is missing after stage commit.');
     err.code = 'tme_persistence_verify';
@@ -1097,13 +1097,13 @@ function bindStagePersistDurable(input = {}, engine, tenantId) {
         ? engine.store.listExecutionRecords(missionId)
         : [],
       audit: ctx.audit,
-    }, input.pool, { skipGlobalLock: true });
-    await assertPersistedMatchesEngine(engine, missionId, tenantId, input.pool);
+    }, input.pool, { skipGlobalLock: true, skipEnsure: input.preinitializedSchema === true });
+    await assertPersistedMatchesEngine(engine, missionId, tenantId, input.pool, { skipEnsure: input.preinitializedSchema === true });
   };
 }
 
-async function loadTenantMissions(tenantId, pool = defaultPool()) {
-  await ensureAcquisitionMissionSchema(pool);
+async function loadTenantMissions(tenantId, pool = defaultPool(), opts = {}) {
+  if (opts.skipEnsure !== true) await ensureAcquisitionMissionSchema(pool);
   const key = String(tenantId);
   const missions = (await pool.query(
     `SELECT * FROM acquisition_missions WHERE tenant_id = $1 ORDER BY updated_at DESC`,
@@ -1165,7 +1165,8 @@ async function loadTenantMissions(tenantId, pool = defaultPool()) {
       `SELECT * FROM acquisition_mission_candidate_observe_state WHERE tenant_id = $1`,
       [key]
     )).rows.map(candidateObserveStateFromRow);
-  } catch (_) {
+  } catch (error) {
+    if (opts.skipEnsure === true) throw error;
     /* tables may not exist on older deployments until migration runs */
   }
 

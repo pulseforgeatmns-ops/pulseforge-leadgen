@@ -53,20 +53,28 @@ function adapters(pool, dependencies = {}) {
   const ctx = governedContext.transport || createGovernedOutboundTenantContext(governedContext.tenantId);
   const tenantId = governedContext.tenantId;
   const clientId = governedContext.clientId;
-  const loadMission = dependencies.loadMission || (id => loadMissionSnapshot(id, tenantId, pool));
+  const loadMission = dependencies.loadMission || ((id, options = {}) => loadMissionSnapshot(id, tenantId, options.persistencePool || pool, { skipEnsure: options.preinitializedSchema === true }));
   const contact = dependencies.contact || (id => loadBestCrmProspectForMissionBoundKey({ pool, clientId, missionBoundKey: id }));
-  async function tenant(program) {
+  async function tenant(program, options = {}) {
     if (dependencies.tenant) return dependencies.tenant(program);
     const { rows } = await pool.query('SELECT * FROM clients WHERE id=$1', [clientId]);
     const client = rows[0];
     if (!client || client.active !== true || client.autosend_enabled !== false) fail('tenant_inactive_or_legacy_autosend_enabled');
     const sender = await resolveCanonicalSenderIdentity({ tenantId, clientId, client, pool });
     if (!sender.ok || sender.identity.senderEmail.toLowerCase() !== program.policy.senderEmail) fail('sender_changed');
-    const { PostgresTenantMailboxStore } = require('./tenantMailbox');
-    const integration = await new PostgresTenantMailboxStore(pool).getIntegration(tenantId, program.policy.inboxIntegrationId);
+    let integration;
+    if (options.preinitializedSchema === true) {
+      const row = (await pool.query('SELECT id,tenant_id,status,mailbox_address FROM tenant_mailbox_integrations WHERE tenant_id=$1 AND id=$2', [tenantId, program.policy.inboxIntegrationId])).rows[0];
+      integration = row ? { ...row, mailboxAddress: row.mailbox_address } : null;
+    } else {
+      const { PostgresTenantMailboxStore } = require('./tenantMailbox');
+      integration = await new PostgresTenantMailboxStore(pool).getIntegration(tenantId, program.policy.inboxIntegrationId);
+    }
     if (!integration || integration.status !== 'active' || integration.mailboxAddress.toLowerCase() !== program.policy.senderEmail) fail('anchor_reply_mailbox_not_ready');
     if (ctx.requiresAoOwners) {
-      const owners = await pool.query('SELECT id FROM users WHERE client_id=$1 AND active=true AND id=ANY($2::int[])', [clientId, program.policy.aoOwnerIds]);
+      const owners = options.preinitializedSchema === true
+        ? await pool.query('SELECT id FROM users WHERE client_id=$1 AND active=true AND id::text=ANY($2::text[])', [clientId, program.policy.aoOwnerIds.map(String)])
+        : await pool.query('SELECT id FROM users WHERE client_id=$1 AND active=true AND id=ANY($2::int[])', [clientId, program.policy.aoOwnerIds]);
       if (!owners.rows.length) fail('ao_owner_unavailable');
     }
     const triggers = await pool.query(`SELECT count(*)::int AS n FROM pg_trigger
@@ -227,10 +235,10 @@ function adapters(pool, dependencies = {}) {
       dispatchUnavailableNow: dispatchNow <= 0 || dispatchNow <= snapshot.sentToday,
     };
   }
-  async function runtimeFor() {
+  async function runtimeFor(options = {}) {
     if (dependencies.runtime) return dependencies.runtime;
     const runtime = getAcquisitionMissionRuntime({ pool, persist: true });
-    await runtime.hydrate(tenantId, { pool, persist: true });
+    await runtime.hydrate(tenantId, { pool: options.persistencePool || pool, persist: true, preinitializedSchema: options.preinitializedSchema === true });
     return runtime;
   }
   async function route(runtime, missionId, program, intent, extra = {}) {
@@ -242,12 +250,25 @@ function adapters(pool, dependencies = {}) {
       payload: { question: `Bounded delegation ${program.id}: ${intent}`, maxSends: 1,
         ...(extra.prospectId ? { prospectId: extra.prospectId } : {}) } });
     const result = await amo.routeExecutionRequest(request, { engine, tenantId,
-      pool: dependencies.persist === false ? undefined : pool, persist: dependencies.persist !== false,
+      pool: dependencies.persist === false ? undefined : (extra.persistencePool || pool), persist: dependencies.persist !== false,
       operatorId: program.authorized_by, allowFixtureFallback: false, ...extra });
     if (result.executionResult?.rolledBack) throw result.executionResult.error || new Error(result.executionResult.rollbackReason);
     return result;
   }
   async function scoutWithEligibility(mission, opts, program, store) {
+    if (program.tenant_id != null && String(program.tenant_id) !== tenantId) fail('governed_outbound_tenant_mismatch');
+    if (tenantId === '10') {
+      const state = await require('./anchorEmailRecovery').loadRecoveryState(pool);
+      if (state.mode !== 'legacy') {
+        if (state.mode !== 'scoped_resume') fail('anchor_recovery_separate_preparation_approval_required');
+        const authority = await require('./anchorScopedResume').assertScopedResumeCapability(pool,
+          { program, capability: 'research', operation: 'research_existing_source' });
+        await require('./anchorScopedResumeControl').consumeScopedOperation(pool, {
+          manifest: authority.manifest, capability: 'research', operation: 'research_existing_source',
+          operationId: require('node:crypto').randomUUID(), units: 1,
+        });
+      }
+    }
     const runScoutForAmoMission = dependencies.runScout || require('../packages/max/workspace/ScoutDiscoveryExecutor').runScoutForAmoMission;
     const result = await runScoutForAmoMission(mission, { ...opts, pool, governedProgram: program, runScout: undefined, allowFixtureFallback: false });
     const payload = result.payload;
@@ -301,8 +322,15 @@ function adapters(pool, dependencies = {}) {
     // Preparation-only authority covers existing reviewed artifacts, not paid
     // discovery, enrichment or generation via the mission runtime.
     if (program.policy.preparationOnly && (source?.mission?.stage !== 'ready' || recovery)) fail('preparation_research_not_authorized');
-    if (ctx.usesTenantMailboxTransport && source?.mission?.stage === 'ready' && !recovery) {
-      await prepared(source, program);
+    const reuseReady = source?.mission?.stage === 'ready' && !recovery;
+    const authority = await require('./anchorEmailRecoveryIntegration').assertLegacyPreparation(pool,
+      { tenantId, program, operation: reuseReady ? 'reuse_existing_artifacts' : 'generate_deterministic_existing_template' });
+    const scopedResume = authority?.manifest?.kind === 'scoped_resume';
+    // A preparation grant cannot authorize Scout, enrichment, or paid LLM copy.
+    // Existing ready artifacts can flow to the independently reserved freeze/refill.
+    if (scopedResume && !reuseReady) fail('anchor_scoped_resume_paid_preparation_unverified');
+    if ((ctx.usesTenantMailboxTransport || scopedResume) && reuseReady) {
+      await prepared(source, program, scopedResume ? { preinitializedSchema: true, persistencePool: pool } : {});
       return source;
     }
     const runtime = await runtimeFor();
@@ -364,7 +392,7 @@ function adapters(pool, dependencies = {}) {
       throw e;
     }
   }
-  async function prepared(snapshot, program) {
+  async function prepared(snapshot, program, options = {}) {
     if (!snapshot?.mission || String(snapshot.mission.tenantId) !== tenantId
       || snapshot.mission.planCancelled || !['ready', 'execute'].includes(snapshot.mission.stage)) fail('mission_not_executable');
     if (hash(missionScope(snapshot.mission)) !== program.scope_hash) fail('daily_mission_scope_changed');
@@ -380,7 +408,7 @@ function adapters(pool, dependencies = {}) {
     const variants = unwrapSpecialistPayload(paige);
     if (!amo.validateProspectMessageBindings(capacity).valid) fail('message_binding_contamination');
     if (capacity.governor?.halt || !['proceed', 'slow'].includes(capacity.governor?.outcome)) fail('prepared_governor_halted');
-    const { sender } = await tenant(program);
+    const { sender } = await tenant(program, options);
     const binding = require('../utils/canonicalSenderIdentity').assertCapacityMatchesCanonical(capacity, sender);
     if (!binding.ok) fail('capacity_sender_changed');
     if (ctx.usesTenantMailboxTransport) {
@@ -416,12 +444,24 @@ function adapters(pool, dependencies = {}) {
     }
     if (await require('../dbClient').checkDNC(item.prospect_id, { clientId, pool })) fail('dnc');
   }
+  function createBrevoSend(binding = {}, program = null) {
+    const providerSend = require('../packages/providers/brevo/sendEmail').sendEmail;
+    const brevoSend = command => providerSend({ ...command,
+      governedRecoveryContext: program && binding.envelope && binding.item
+        ? { provider: 'brevo', transport: 'governed_brevo', programId: program.id, envelopeId: binding.envelope.id, itemId: binding.item.id } : undefined,
+      outreachAuthorization: { prospectId: binding.item?.prospect_id || command.outreachAuthorization?.prospectId, clientId, pool } });
+    brevoSend.beforeAttempt = null;
+    // Scope this rollout to Anchor. The shared provider declares instrumentation,
+    // but only this opted-in, tenant-bound adapter can defer conservative marking.
+    if (clientId === 10 && process.env.ANCHOR_BREVO_BOUNDARY_DIAGNOSTICS_ENABLED === 'true'
+      && providerSend.providerBoundaryInstrumentation === 'brevo_http_v1') {
+      Object.defineProperty(brevoSend, 'isInstrumentedBrevoTransport', { value: true });
+    }
+    return brevoSend;
+  }
   function sendFor(program, binding = {}) {
     if (ctx.usesBrevoTransport) {
-      const brevoSend = command => require('../packages/providers/brevo/sendEmail').sendEmail({ ...command,
-        outreachAuthorization: { prospectId: binding.item?.prospect_id || command.outreachAuthorization?.prospectId, clientId, pool } });
-      brevoSend.beforeAttempt = null;
-      return brevoSend;
+      return createBrevoSend(binding, program);
     }
     return createGovernedTenantMailboxSend({ ...program, tenant_id: tenantId, pool }, binding);
   }
@@ -438,12 +478,49 @@ function adapters(pool, dependencies = {}) {
       engine.store.putMission(mission);
       await runtime.persistMissionState(mission.id, { pool, persist: true });
     },
-    send: command => require('../packages/providers/brevo/sendEmail').sendEmail({ ...command,
-      outreachAuthorization: { ...command.outreachAuthorization, clientId, pool } }),
-    approve: async (snapshot, program, binding) => {
-      const runtime = await runtimeFor();
-      const result = await route(runtime, snapshot.mission.id, program, amo.EXECUTION_INTENTS.APPROVE_EXECUTION, { governedApproval: binding });
-      return result.executionResult?.approval;
+    send: createBrevoSend(),
+    approve: async (snapshot, program, binding, options = {}) => {
+      if (program.tenant_id != null && String(program.tenant_id) !== tenantId) fail('governed_outbound_tenant_mismatch');
+      if (tenantId === '10') {
+        const state = await require('./anchorEmailRecovery').loadRecoveryState(options.persistencePool || pool);
+        if (!['legacy', 'scoped_resume'].includes(state.mode) && options.preinitializedSchema !== true) {
+          fail('anchor_recovery_separate_preparation_approval_required');
+        }
+        if (state.mode === 'scoped_resume') {
+          await require('./anchorScopedResume').assertScopedResumeCapability(options.persistencePool || pool,
+            { program, capability: 'preparation', operation: 'approve_canonical_envelope' });
+        }
+      }
+      // Recovery never initializes schema. Its dedicated client keeps canonical
+      // session advisory locks on one connection, separate from the outer latch.
+      if (options.preinitializedSchema === true && (!options.persistencePool || dependencies.persist === false)) fail('anchor_recovery_preinitialized_persistence_required');
+      let missionLock = null;
+      const schemaReady = options.preinitializedSchema === true;
+      // Hold the existing ADR-075 namespace on this dedicated connection before
+      // hydration. The canonical stage's nested lock is PostgreSQL-reentrant.
+      // No other mission writer can replace artifacts between review and commit.
+      if (schemaReady) {
+        const { MISSION_DURABLE_LOCK_NAMESPACE } = require('../packages/acquisition-mission/TransactionalPersistence');
+        missionLock = [MISSION_DURABLE_LOCK_NAMESPACE, require('node:crypto').createHash('sha256').update(snapshot.mission.id).digest().readInt32BE(0)];
+        const result = await options.persistencePool.query('SELECT pg_try_advisory_lock($1,$2) AS locked', missionLock);
+        if (result.rows[0]?.locked !== true) fail('anchor_recovery_mission_busy');
+      }
+      try {
+        const snapshotHash = value => hash(JSON.parse(JSON.stringify({ mission: value.mission,
+          contributions: [...value.contributions].sort((a,b) => String(a.id).localeCompare(String(b.id))) })));
+        if (schemaReady) {
+          const current = await loadMission(snapshot.mission.id, options);
+          if (!current || snapshotHash(current) !== snapshotHash(snapshot)) fail('anchor_recovery_artifacts_changed');
+        }
+        const runtime = await runtimeFor(options);
+        if (schemaReady && snapshotHash({ mission: runtime.engine().get(snapshot.mission.id, tenantId),
+          contributions: runtime.engine().store.listContributions(snapshot.mission.id) }) !== snapshotHash(snapshot)) fail('anchor_recovery_runtime_artifacts_changed');
+        const result = await route(runtime, snapshot.mission.id, program, amo.EXECUTION_INTENTS.APPROVE_EXECUTION, { governedApproval: binding,
+          ...(schemaReady ? { preinitializedSchema: true, persistencePool: options.persistencePool } : {}) });
+        return result.executionResult?.approval;
+      } finally {
+        if (missionLock) await options.persistencePool.query('SELECT pg_advisory_unlock($1,$2)', missionLock);
+      }
     },
     execute: async (envelope, item, program, sendEmail) => {
       const runtime = await runtimeFor();

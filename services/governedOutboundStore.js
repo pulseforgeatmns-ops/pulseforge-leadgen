@@ -3,6 +3,8 @@
 const { hash, fail } = require('../packages/acquisition-mission/DailyOutboundPolicy');
 const { resolveOperatorDelegatedMaximumDailyCapacity } = require('../packages/emmett-outbound/OperatorDelegatedCapacity');
 const { createGovernedOutboundTenantContext } = require('./governedOutboundTenant');
+const recovery = require('./anchorEmailRecoveryIntegration');
+const { assertRecoveryAdmission } = require('./anchorEmailRecovery');
 
 // Conservative ownership matching: a likely alias is held for review, never
 // used to merge CRM records or to transfer an AO's account.
@@ -101,7 +103,8 @@ class GovernedOutboundStore {
     return this.one('SELECT * FROM acquisition_outbound_envelopes WHERE tenant_id=$1 AND local_day=$2::date', [this.tenantId, day]);
   }
   async items(id) {
-    return (await this.pool.query('SELECT * FROM acquisition_outbound_items WHERE envelope_id=$1 ORDER BY id', [id])).rows;
+    if (this.tenantId !== '10') return (await this.pool.query('SELECT * FROM acquisition_outbound_items WHERE envelope_id=$1 ORDER BY id', [id])).rows;
+    return (await this.pool.query("SELECT *,((attempted_at AT TIME ZONE 'UTC')::text || '+00') AS attempt_token FROM acquisition_outbound_items WHERE envelope_id=$1 ORDER BY id", [id])).rows;
   }
   async ensurePreparation(program, day, db = this.pool) {
     const missionId = `mission_daily_${hash([program.id, day]).slice(0, 24)}`;
@@ -113,9 +116,11 @@ class GovernedOutboundStore {
   }
   async freeze(program, day, missionId, revision, manifest, options = {}) {
     const id = `daily_${hash([this.tenantId, day]).slice(0, 24)}`;
+    await recovery.reserveScopedPreparation(this.pool, { tenantId: this.tenantId, program, operation: 'freeze', entries: manifest, key: [id, revision, hash(manifest)] }, options);
     const db = await this.pool.connect();
     try {
       await db.query('BEGIN');
+      await recovery.checkScopedPreparation(db, program, 'freeze', manifest, options);
       if (options.requireShadow || program.policy.preparationOnly) {
         const current = (await db.query('SELECT mode,policy_hash,scope_hash FROM acquisition_outbound_programs WHERE id=$1 FOR UPDATE', [program.id])).rows[0];
         if (current?.mode !== 'shadow' || current.policy_hash !== program.policy_hash
@@ -160,9 +165,13 @@ class GovernedOutboundStore {
     const extra = Array.isArray(extraManifest) ? extraManifest : [];
     if (!extra.length) return this.one('SELECT * FROM acquisition_outbound_envelopes WHERE id=$1', [envelope.id]);
     const combined = [...current, ...extra];
+    const scopedProgram = this.tenantId === '10' ? await this.program() : null;
+    if (this.tenantId === '10' && scopedProgram?.id !== envelope.program_id) fail('anchor_scoped_resume_program_changed');
+    await recovery.reserveScopedPreparation(this.pool, { tenantId: this.tenantId, program: scopedProgram, operation: 'refill', entries: extra, key: [envelope.id, envelope.manifest_hash, hash(combined), revision] }, options);
     const db = await this.pool.connect();
     try {
       await db.query('BEGIN');
+      const scopedPreparation = this.tenantId === '10' ? await recovery.checkScopedPreparation(db, scopedProgram, 'refill', extra, options) : { mode: 'legacy' };
       if (options.shadowProgram) {
         const program = options.shadowProgram;
         const live = (await db.query('SELECT mode,policy_hash,scope_hash FROM acquisition_outbound_programs WHERE id=$1 AND tenant_id=$2 FOR UPDATE', [program.id, this.tenantId])).rows[0];
@@ -189,6 +198,13 @@ class GovernedOutboundStore {
           [envelope.id, JSON.stringify(combined), hash(combined), nextRevision,
             options.shadowProgram.id, this.tenantId, hash(current), envelope.revision]);
         if (updated.rows.length !== 1) fail('replenishment_grant_changed');
+      } else if (scopedPreparation.resumeGrant) {
+        const changed = await db.query(`UPDATE acquisition_outbound_envelopes
+          SET manifest=$2::jsonb,manifest_hash=$3,revision=$4,status='frozen',approval_id=NULL
+          WHERE id=$1 AND tenant_id='10' AND program_id=$5 AND manifest_hash=$6 AND revision=$7
+          AND status IN ('authorized','complete','frozen') RETURNING id`,
+          [envelope.id, JSON.stringify(combined), hash(combined), nextRevision, scopedProgram.id, envelope.manifest_hash, envelope.revision]);
+        if (changed.rows.length !== 1) fail('anchor_scoped_resume_envelope_changed');
       } else {
       await db.query(`UPDATE acquisition_outbound_envelopes
         SET manifest=$2::jsonb, manifest_hash=$3, revision=$4,
@@ -209,6 +225,7 @@ class GovernedOutboundStore {
     await this.event('envelope_authorized', envelope.id, { envelopeId: envelope.id, approvalId });
   }
   async expire(day) {
+    if (this.tenantId !== '10') {
     const db = await this.pool.connect();
     try {
       await db.query('BEGIN');
@@ -222,15 +239,37 @@ class GovernedOutboundStore {
       }
       await db.query('COMMIT');
     } catch (e) { await db.query('ROLLBACK'); throw e; } finally { db.release(); }
+    return;
+    }
+    const db = await this.pool.connect();
+    try {
+      await db.query('BEGIN');
+      if (this.tenantId === '10') await db.query("SELECT pg_advisory_xact_lock(hashtextextended('anchor-email-recovery:10',0))");
+      const state = await require('./anchorEmailRecovery').loadRecoveryState(db);
+      const notQuarantined = state.mode === 'legacy' ? '' : ` AND NOT EXISTS
+        (SELECT 1 FROM anchor_email_quarantines q WHERE q.tenant_id=i.tenant_id AND q.item_id=i.id)`;
+      const expired = await db.query(`UPDATE acquisition_outbound_items i SET status='expired',reason='day_expired'
+        FROM acquisition_outbound_envelopes e WHERE i.envelope_id=e.id AND e.local_day<$1::date AND i.tenant_id=$2 AND i.status='pending'${notQuarantined} RETURNING i.*`, [day, this.tenantId]);
+      await db.query("UPDATE acquisition_outbound_envelopes SET status='expired' WHERE local_day<$1::date AND tenant_id=$2 AND status IN ('frozen','authorized')", [day, this.tenantId]);
+      // An abandoned attempt is never returned to pending after a worker crash.
+      const abandoned = await db.query(`UPDATE acquisition_outbound_items i SET status='uncertain',reason='abandoned_attempt' WHERE i.tenant_id=$1 AND i.status='attempted' AND i.attempted_at<now()-interval '5 minutes'${notQuarantined} RETURNING i.*`, [this.tenantId]);
+      for (const item of [...expired.rows, ...abandoned.rows]) {
+        await this.event(`send_${item.status}`, item.id, { itemId: item.id, envelopeId: item.envelope_id, reason: item.reason }, db);
+      }
+      await db.query('COMMIT');
+    } catch (e) { await db.query('ROLLBACK'); throw e; } finally { db.release(); }
   }
-  async counts(program, day) {
-    return this.one(`SELECT
+  async counts(program, day, options = {}) {
+    const db = options.db || this.pool;
+    const isolated = await recovery.uncertaintyState(db, this.tenantId, { ...options, programId: program.id });
+    const counts = (await db.query(`SELECT
       count(*) FILTER(WHERE e.local_day=$2::date)::int AS today,
       count(*) FILTER(WHERE e.program_id=$1)::int AS total,
       count(*) FILTER(WHERE i.status IN ('attempted','uncertain'))::int AS uncertain,
       max(i.attempted_at) AS last_attempt
       FROM acquisition_outbound_items i JOIN acquisition_outbound_envelopes e ON e.id=i.envelope_id
-      WHERE i.tenant_id=$3 AND i.attempted_at IS NOT NULL`, [program.id, day, this.tenantId]);
+      WHERE i.tenant_id=$3 AND i.attempted_at IS NOT NULL`, [program.id, day, this.tenantId])).rows[0];
+    return isolated ? { ...counts, ...isolated } : counts;
   }
   async rampMetrics(program, day) {
     const row = await this.one(`SELECT
@@ -276,6 +315,10 @@ class GovernedOutboundStore {
       ? 'ao_owned_alias' : null;
   }
   async suppression(item, ignoreMissionId = '', ignoreItemId = '') {
+    try {
+      await recovery.assertNotQuarantinedWhenInstalled(this.pool, { tenantId: this.tenantId,
+        prospectId: item.prospectId || item.prospect_id, companyId: item.companyId || item.company_id, email: item.email });
+    } catch (error) { return error.code || 'anchor_recovery_quarantine_check_failed'; }
     const admission = await this.one(`SELECT id FROM prospects p WHERE client_id=$2 AND id::text=$1
       AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false)`, [String(item.prospectId || item.candidateId), this.clientId]);
     if (admission) return 'outreach_review_required';
@@ -309,6 +352,9 @@ class GovernedOutboundStore {
     const db = await this.pool.connect();
     try {
       await db.query('BEGIN');
+      if (this.tenantId === '10') await db.query("SELECT pg_advisory_xact_lock(hashtextextended('anchor-email-recovery:10',0))");
+      await recovery.assertNotQuarantinedWhenInstalled(db, { tenantId: this.tenantId,
+        prospectId: item.prospect_id, companyId: item.company_id, email: item.email, itemId: item.id }, { lockCompanyRows: true });
       await db.query(`UPDATE acquisition_outbound_items SET status=$2,reason=$3,
         provider_message_id=COALESCE($4,provider_message_id) WHERE id=$1`, [item.id, status, reason, providerMessageId]);
       await this.event(`send_${status}`, item.id, { itemId: item.id, envelopeId: item.envelope_id, reason, providerMessageId }, db);
@@ -316,9 +362,13 @@ class GovernedOutboundStore {
     } catch (e) { await db.query('ROLLBACK'); throw e; } finally { db.release(); }
   }
   async releaseUnsent(item, reason, extras = {}) {
+    if (extras.expectedAttempt && !extras.expectedAttempt.attemptedAt) fail('reconciliation_attempt_token_required');
     const db = await this.pool.connect();
     try {
       await db.query('BEGIN');
+      if (this.tenantId === '10') await db.query("SELECT pg_advisory_xact_lock(hashtextextended('anchor-email-recovery:10',0))");
+      await recovery.assertNotQuarantinedWhenInstalled(db, { tenantId: this.tenantId,
+        prospectId: item.prospect_id, companyId: item.company_id, email: item.email, itemId: item.id }, { lockCompanyRows: true });
       const allowTerminalPreProviderReconciliation = extras.reconciled === true
         && extras.providerOutcome === 'PROVIDER_CONFIRMED_NOT_SENT';
       if (extras.canonicalPreProviderRejection === true && extras.missionId) {
@@ -336,8 +386,13 @@ class GovernedOutboundStore {
       }
       const row = (await db.query(`UPDATE acquisition_outbound_items SET status='pending',reason=$2,
         attempted_at=NULL,provider_message_id=NULL WHERE id=$1
-        AND (status IN ('attempted','uncertain') OR ($3::boolean AND status='suppressed')) RETURNING *`,
-      [item.id, reason, allowTerminalPreProviderReconciliation])).rows[0];
+        AND tenant_id=$4 AND provider_message_id IS NULL
+        AND (status IN ('attempted','uncertain') OR ($3::boolean AND status='suppressed'))
+        AND (NOT $5::boolean OR (status=$6 AND reason IS NOT DISTINCT FROM $7
+          AND attempted_at IS NOT DISTINCT FROM $8::timestamptz)) RETURNING *`,
+      [item.id, reason, allowTerminalPreProviderReconciliation, this.tenantId,
+        Boolean(extras.expectedAttempt), extras.expectedAttempt?.status || null,
+        extras.expectedAttempt?.reason ?? null, extras.expectedAttempt?.attemptedAt || null])).rows[0];
       if (!row) fail('item_not_uncertain');
       const eventType = extras.reconciled ? 'send_reconciled' : 'send_released_unsent';
       await this.event(eventType, extras.reconciled ? [item.id, 'not_accepted'] : [item.id, reason, Date.now()], {
@@ -350,6 +405,7 @@ class GovernedOutboundStore {
     } catch (e) { await db.query('ROLLBACK'); throw e; } finally { db.release(); }
   }
   async claim(item, program, day, at = new Date()) {
+    if (this.tenantId !== '10') {
     // All counters and the final enabled/suppression checks share this short transaction.
     // The durable attempted marker commits BEFORE the irreversible provider call.
     const db = await this.pool.connect();
@@ -370,6 +426,30 @@ class GovernedOutboundStore {
         (SELECT 1 FROM acquisition_outbound_lifecycle s WHERE s.tenant_id=i.tenant_id AND s.suppressed
           AND (s.email=i.email OR s.company_id=i.company_id)) RETURNING *`, [item.id, at])).rows[0];
       if (!row) fail('suppressed_or_claimed');
+      await this.event('send_attempted', item.id, { itemId: item.id, envelopeId: item.envelope_id }, db);
+      await db.query('COMMIT');
+      return row;
+    } catch (e) { await db.query('ROLLBACK'); throw e; } finally { db.release(); }
+      }
+    // All counters and the final enabled/suppression checks share this short transaction.
+    // The durable attempted marker commits BEFORE the irreversible provider call.
+    const db = await this.pool.connect();
+    try {
+      await db.query('BEGIN');
+      if (this.tenantId === '10') await db.query("SELECT pg_advisory_xact_lock(hashtextextended('anchor-email-recovery:10',0))");
+      const p = (await db.query('SELECT * FROM acquisition_outbound_programs WHERE id=$1 AND tenant_id=$2 FOR UPDATE', [program.id, this.tenantId])).rows[0];
+      if (p?.mode !== 'active') fail('program_not_active');
+      const authorization = await assertRecoveryAdmission(db, { program: p, item, stage: 'claim' }, { now: at });
+      const counts = await this.counts(p, day, { db, now: at });
+      const operatorDailyCeiling = resolveOperatorDelegatedMaximumDailyCapacity(p.policy) ?? p.policy.dailyCap;
+      if (counts.today >= operatorDailyCeiling || counts.total >= p.policy.totalCap || recovery.blockingUncertainty(counts)) fail('budget_or_uncertain_block');
+      if (counts.last_attempt && +at - +new Date(counts.last_attempt) < p.policy.spacingMinutes * 60000) fail('spacing');
+      const row = (await db.query(`UPDATE acquisition_outbound_items i SET status='attempted',attempted_at=$2
+        WHERE i.id=$1 AND i.status='pending' AND NOT EXISTS
+        (SELECT 1 FROM acquisition_outbound_lifecycle s WHERE s.tenant_id=i.tenant_id AND s.suppressed
+          AND (s.email=i.email OR s.company_id=i.company_id)) RETURNING *,((attempted_at AT TIME ZONE 'UTC')::text || '+00') AS attempt_token`, [item.id, at])).rows[0];
+      if (!row) fail('suppressed_or_claimed');
+      await recovery.reserveAdmission(db, authorization, row);
       await this.event('send_attempted', item.id, { itemId: item.id, envelopeId: item.envelope_id }, db);
       await db.query('COMMIT');
       return row;

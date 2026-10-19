@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "kind": "scoped_resume",
+  "id": "",
+  "approvalReference": "",
+  "operatorId": "",
+  "operatorRole": "",
+  "tenantId": "10",
+  "programId": "",
+  "policyHash": "",
+  "sourceMissionId": "",
+  "scopeHash": "",
+  "validFrom": "",
+  "expiresAt": "",
+  "quarantineDecisionHash": "",
+  "senderEmail": "",
+  "senderName": "",
+  "sendingDomain": "",
+  "inboxIntegrationId": "",
+  "reviewSchemaPolicy": "nullable_no_default_preserve_existing",
+  "admissionPolicy": "explicit_reviewed_identity_batch",
+  "admissions": [],
+  "scopes": {
+    "research": { "enabled": false },
+    "preparation": { "enabled": false },
+    "email": { "enabled": false }
+  },
+  "sms": "closed",
+  "calls": "existing_policy",
+  "manualCrmEmail": "closed",
+  "nonCrmVerification": "closed",
+  "otherPrograms": "legacy_unchanged"
+}

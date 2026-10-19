@@ -1,3 +1,7 @@
+[ADR-105](docs/adr/ADR-105_Explicit_Scoped_Recovery_Resume.md): explicit scoped recovery resume under SPEC-262.
+
+[ADR-103](docs/adr/ADR-103_Anchor_Recovery_Quarantine.md): local-only permanent no-resend isolation and separately approved bounded email recovery under SPEC-261.
+
 # Decisions Index
 
 Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This file is the human-readable index.
@@ -76,3 +80,5 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 ## Related operational notes
 
 Pre-foundation decisions are scattered across `CLAUDE.md` (Known Architectural Notes), `AGENT_RULES.md`, and flat `docs/*` runbooks. New architectural choices must use ADRs; do not only append to chat or CLAUDE.md.
+
+- [ADR-104](docs/adr/ADR-104_Instrumented_Provider_Boundaries.md): proposed local-only scoped provider boundary instrumentation.

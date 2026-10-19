@@ -1,4 +1,5 @@
 'use strict';
+const { blockingUncertainty, assertLegacyPreparation } = require('./anchorEmailRecoveryIntegration');
 
 const { hash, fail, policy, missionScope, clock, windowReason, candidateReason } = require('../packages/acquisition-mission/DailyOutboundPolicy');
 const { isSubstralPreparationGrant, substralPreparationGrantReason } = require('./substralPreparationGrant');
@@ -189,6 +190,7 @@ function service({
     return store.status();
   }
   async function prepare(program, source, day, recovery = null) {
+    await assertLegacyPreparation(pool, { tenantId: resolvedTenantId, program, operation: 'reuse_existing_artifacts' }, { now: now() });
     // The initial envelope must obey the same live planning authority as refills.
     // Reviewed artifacts can outlive a mailbox/governor change; never commit them
     // (or consume the preparation budget) before checking current infrastructure.
@@ -225,7 +227,10 @@ function service({
         companyId: String(crm?.company_id || ''), email: String(row.item.email || '').toLowerCase(),
         message: row.message, sender: senderResolution.sender, revision: prepared.revision,
         senderResolution: { usedAoSender: senderResolution.usedAoSender, reason: senderResolution.reason } };
-      const suppressed = !reason && await store.suppression(entry);
+      let scopedReason = null;
+      try { await require('./anchorEmailRecoveryIntegration').assertScopedPreparedIdentity(pool, program, entry, { now: now() }); }
+      catch (error) { scopedReason = error.code || 'anchor_scoped_resume_identity_unavailable'; }
+      const suppressed = !reason && (scopedReason || await store.suppression(entry));
       if (reason || suppressed || !entry.companyId || emails.has(entry.email) || companies.has(entry.companyId)) {
         excluded.push({ candidateId: entry.candidateId, reason: reason || suppressed || 'duplicate_or_missing_company' });
         continue;
@@ -243,9 +248,10 @@ function service({
         || current.policy_hash !== program.policy_hash || clock(now()).day !== day) fail('replenishment_grant_changed');
       await validateProgram(current);
     }
-    return store.freeze(program, day, snapshot.mission.id, prepared.revision, selected, { requireShadow: Boolean(recovery || program.policy.preparationOnly) });
+    return store.freeze(program, day, snapshot.mission.id, prepared.revision, selected, { requireShadow: Boolean(recovery || program.policy.preparationOnly), now: now() });
   }
   async function initializePreparation(input, actor) {
+    await assertLegacyPreparation(pool, { tenantId: resolvedTenantId });
     if (!actor?.id || !['admin', 'manager'].includes(actor.role)) fail('operator_required');
     const disabled = () => {
       if (isEnabled() || !governedOutboundSendingDisabledForTenant(resolvedTenantId)) fail('preparation_requires_disabled_sending');
@@ -269,7 +275,7 @@ function service({
         const envelope = await store.one('SELECT id FROM acquisition_outbound_envelopes WHERE tenant_id=$1 AND (program_id=$2 OR local_day=$3::date) LIMIT 1', [resolvedTenantId, program.id, day]);
         if (envelope) fail('preparation_envelope_exists');
         const counts = await store.counts(program, day);
-        if (counts.today || counts.total || counts.uncertain) fail('preparation_attempt_exists');
+        if (counts.today || counts.total || blockingUncertainty(counts)) fail('preparation_attempt_exists');
         disabled();
         const currentTime = now();
         if (clock(currentTime).day !== day) fail('preparation_day_changed');
@@ -293,6 +299,7 @@ function service({
     });
   }
   async function resumeReservedPreparation(input, actor) {
+    await assertLegacyPreparation(pool, { tenantId: resolvedTenantId });
     return store.lock(async () => {
       if (isEnabled() || !actor?.id || !['admin','manager'].includes(actor.role)) fail('reserved_resume_requires_disabled_operator');
       const program = await store.program();
@@ -317,7 +324,7 @@ function service({
       if (await store.one('SELECT id FROM acquisition_missions WHERE tenant_id=$1 AND id=$2', [resolvedTenantId, reserved.missionId])) fail('reserved_mission_already_created');
       if (await store.envelope(day)) fail('replenishment_envelope_exists');
       const counts = await store.counts(program,day);
-      if (counts.today || counts.total || counts.uncertain) fail('replenishment_attempt_exists');
+      if (counts.today || counts.total || blockingUncertainty(counts)) fail('replenishment_attempt_exists');
       for (const candidate of review.research) if (await store.candidateOwnership({company:candidate.name,domain:candidate.domain})) fail('research_candidate_ao_owned');
       const plan = {program,source,progress,review,reviewHash:input.reviewHash,nextMissionId:reserved.missionId};
       await store.event('preparation_recovery_resumed',[program.id,input.reviewHash],{programId:program.id,missionId:reserved.missionId,reviewHash:input.reviewHash,actor:String(actor.id),reason:'Resume reserved preparation after interrupted connection before mission creation; no additional attempt.'});
@@ -329,6 +336,7 @@ function service({
     });
   }
   async function replenish(input, actor, commit = false) {
+    await assertLegacyPreparation(pool, { tenantId: resolvedTenantId });
     return store.lock(async () => {
       const recovery = require('./governedOutboundReplenishment');
       const plan = await recovery.reviewReplenishment(store, input, actor, now(), isEnabled());
@@ -353,13 +361,41 @@ function service({
     });
   }
   async function bindApproval(program, envelope) {
+    const approvalGate = await assertLegacyPreparation(pool, { tenantId: resolvedTenantId, program, operation: 'approve_canonical_envelope' }, { now: now() });
     if (hash(envelope.manifest) !== envelope.manifest_hash) fail('manifest_changed');
-    const snapshot = await adapters.loadMission(envelope.mission_id);
-    const prepared = await adapters.prepared(snapshot, program);
+    const safeApprovalOptions = approvalGate.resumeGrant ? { preinitializedSchema: true } : {};
+    const snapshot = await adapters.loadMission(envelope.mission_id, safeApprovalOptions);
+    const prepared = await adapters.prepared(snapshot, program, safeApprovalOptions);
     if (prepared.revision !== envelope.revision) fail('artifacts_changed');
     const binding = { id: envelope.id, programId: program.id, policyHash: program.policy_hash,
       manifestHash: envelope.manifest_hash, localDay: clock(now()).day,
       candidateIds: envelope.manifest.map(x => x.candidateId) };
+    const reserved = await require('./anchorEmailRecoveryIntegration').reserveScopedPreparation(pool, { tenantId: resolvedTenantId, program, operation: 'approve_canonical_envelope', entries: envelope.manifest, key: [envelope.id, envelope.manifest_hash, envelope.revision] }, { now: now() });
+    if (reserved.resumeGrant) {
+      const db = await pool.connect(); let begun = false;
+      try {
+        await db.query('BEGIN'); begun = true;
+        await db.query("SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='5s'");
+        await require('./anchorEmailRecoveryIntegration').checkScopedPreparation(db, program, 'approve_canonical_envelope', envelope.manifest, { now: now() });
+        // Reuse the preinitialized, locked canonical writer; no schema bootstrap.
+        const canonicalClient = await pool.connect(); let approval;
+        try {
+          const canonicalPool = { query: (text, values = []) => canonicalClient.query({ text, values, query_timeout: 6000 }) };
+          await canonicalPool.query("SET lock_timeout='5s'; SET statement_timeout='5s'");
+          approval = await adapters.approve(snapshot, program, binding, { preinitializedSchema: true, persistencePool: canonicalPool });
+        } finally { canonicalClient.release(true); }
+        if (!approval?.id || approval.payload?.approved !== true || String(approval.payload?.approvedBy) !== reserved.manifest.operatorId
+          || approval.payload?.preparedArtifactRevision !== envelope.revision || hash(approval.payload?.dailyEnvelope) !== hash(binding)) fail('approval_binding_mismatch');
+        const persisted = (await db.query('SELECT payload FROM acquisition_mission_contributions WHERE id=$1 AND tenant_id=$2 AND mission_id=$3', [approval.id, resolvedTenantId, envelope.mission_id])).rows[0]?.payload;
+        if (!persisted || hash(persisted) !== hash(approval)) fail('anchor_recovery_approval_not_durable');
+        await require('./anchorEmailRecoveryIntegration').checkScopedPreparation(db, program, 'approve_canonical_envelope', envelope.manifest, { now: now() });
+        const changed = await db.query("UPDATE acquisition_outbound_envelopes SET status='authorized',approval_id=$2 WHERE id=$1 AND tenant_id='10' AND program_id=$3 AND manifest_hash=$4 AND revision=$5 AND status='frozen' AND approval_id IS NULL RETURNING id", [envelope.id, approval.id, program.id, envelope.manifest_hash, envelope.revision]);
+        if (changed.rows.length !== 1) fail('anchor_scoped_resume_envelope_changed');
+        await store.event('envelope_authorized', envelope.id, { envelopeId: envelope.id, approvalId: approval.id }, db);
+        await db.query('COMMIT'); begun = false;
+        return store.envelope(clock(now()).day);
+      } finally { if (begun) await db.query('ROLLBACK'); db.release(); }
+    }
     const approval = await adapters.approve(snapshot, program, binding);
     if (hash(approval?.payload?.dailyEnvelope) !== hash(binding)) fail('approval_binding_mismatch');
     await store.approve(envelope, approval.id);
@@ -431,6 +467,16 @@ function service({
       try {
         markLeafProviderSend(sendFn, providerBoundary);
         const result = await sendFn({ ...command, providerBoundary });
+        if (sendFn.isInstrumentedBrevoTransport === true && finalItem.attempt_token) {
+          await store.event('provider_boundary_observed', [item.id, finalItem.attempt_token], {
+            programId: program.id, itemId: item.id, envelopeId: envelope.id,
+            attemptToken: finalItem.attempt_token, provider: 'brevo', instrumentation: 'brevo_http_v1',
+            providerBoundaryCrossed: providerBoundary.crossed,
+            failureStage: result?.failureStage || null,
+            reason: result?.providerErrorCode || null,
+            providerMessageId: result?.providerMessageId || result?.messageId || null,
+          });
+        }
         const messageId = result?.providerMessageId || result?.messageId;
         const rejected = !result?.success && /^brevo_http_4/.test(String(result?.providerErrorCode || ''));
         if (rejected) {
@@ -491,6 +537,7 @@ function service({
     }
   }
   async function refillEnvelope(program, source, day, envelope, counts) {
+    await assertLegacyPreparation(pool, { tenantId: resolvedTenantId, program, operation: 'refill' }, { now: now() });
     const items = await store.items(envelope.id);
     const pendingPreparedCount = items.filter(row => row.status === 'pending').length;
     const sentToday = Number(counts.today || 0);
@@ -593,6 +640,14 @@ function service({
       });
       selected = selected.concat(inventoryEntries);
     }
+    if (resolvedTenantId === '10') {
+      const scopedSelected = [];
+      for (const entry of selected) {
+        try { await require('./anchorEmailRecoveryIntegration').assertScopedPreparedIdentity(pool, program, entry, { now: now() }); scopedSelected.push(entry); }
+        catch (error) { preparationDecisions.push({ candidateId: entry.candidateId, prospectId: entry.prospectId, outcome: 'rejected', reason: error.code || 'anchor_scoped_resume_identity_unavailable' }); }
+      }
+      selected = scopedSelected;
+    }
     if (!selected.length) {
       return observabilityFromRefill({
         ...plan,
@@ -604,7 +659,7 @@ function service({
     }
     if (!isPreparationEnabled()) fail('preparation_disabled');
     if (program.policy.preparationOnly) await validateProgram(await store.program());
-    const updated = await store.appendToEnvelope(envelope, selected, prepared.revision, program.policy.preparationOnly ? { shadowProgram: program } : {});
+    const updated = await store.appendToEnvelope(envelope, selected, prepared.revision, program.policy.preparationOnly ? { shadowProgram: program, now: now() } : { now: now() });
     return {
       envelope: updated,
       ...observabilityFromRefill({
@@ -625,10 +680,11 @@ function service({
       let committedPreparedAdded = 0;
       let knownPending = null;
       try {
+        await assertLegacyPreparation(pool, { tenantId: resolvedTenantId, program, operation: 'reuse_existing_artifacts' }, { now: now() });
         const source = await validateProgram(program, false);
         await store.expire(day);
         const counts = await store.counts(program, day);
-        if (counts.uncertain) fail('uncertain_send_requires_reconciliation');
+        if (blockingUncertainty(counts)) fail('uncertain_send_requires_reconciliation');
         const operatorDailyCeiling = resolveOperatorDelegatedMaximumDailyCapacity(program.policy) ?? program.policy.dailyCap;
         if (counts.total >= program.policy.totalCap || counts.today >= operatorDailyCeiling) fail('cap_reached');
         if (!isPreparationEnabled()) fail('environment_kill_switch');
@@ -701,7 +757,7 @@ function service({
         const source = await validateProgram(program);
         await store.expire(day);
         const counts = await store.counts(program, day);
-        if (counts.uncertain) fail('uncertain_send_requires_reconciliation');
+        if (blockingUncertainty(counts)) fail('uncertain_send_requires_reconciliation');
         const operatorDailyCeiling = resolveOperatorDelegatedMaximumDailyCapacity(program.policy) ?? program.policy.dailyCap;
         if (counts.total >= program.policy.totalCap || counts.today >= operatorDailyCeiling) fail('cap_reached');
         let envelope = await store.envelope(day);
@@ -798,6 +854,7 @@ function service({
   }
   return {
     authorize,
+    bindRecoveryApproval: (input, actor) => require('./anchorEmailRecoveryApproval').bindRecoveryApproval(pool, input, actor, adapters, { now }),
     migrateOperatorDelegatedCapacity,
     setMode,
     tick,

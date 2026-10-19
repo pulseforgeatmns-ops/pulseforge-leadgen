@@ -4,6 +4,41 @@
 **Depends on:** SPEC-118 (Acquisition Mission Orchestration), SPEC-128 (Operator Approval), SPEC-130 (Mission Planning Engine)  
 **ADR:** [ADR-057](../adr/ADR-057_Transactional_Mission_Execution.md)
 
+## October 2026 reconciliation safety repair (local review)
+
+Inspection must perform no durable mutation, including audit evidence writes.
+Unknown acceptance, empty receipts, bare SQLSTATEs, and unversioned/historical
+pre-provider failures cannot prove non-acceptance.
+
+Automatic release requires a proof event whose `itemId`, `envelopeId`, and
+`attemptToken` match the current row, whose `providerBoundaryCrossed` is explicitly
+false, and whose reason is an explicit pre-provider code. `attemptToken` is the
+exact database `attempted_at::text` value, preserving microseconds. A bare current
+reason is insufficient. Legacy events lacking this binding remain unknown; this
+repair does not backfill or manufacture proof. Item-bound receipts/crossed-boundary
+events override contradictory reasons. Mailbox provider/RFC IDs or sent timestamps,
+and canonical provider IDs/sent timestamps/sent status, prevent release regardless
+of failure status. Receipt-bearing rows take priority over diagnostic query limits.
+
+Apply acquires the tenant send lock and the durable scheduler's shared global
+executor lock before reading evidence and keeps both through release. Either overlap
+returns `applied: false` and `retryAllowed: false`. Release is a tenant-scoped
+compare-and-set on the expected status, reason and exact attempt timestamp, and
+refuses a provider ID. A failed compare-and-set rolls back canonical updates too.
+Inspection takes no mutation lock.
+
+The generic CLI defaults to inspection; mutating use requires `--apply`. The
+historical September 29 script is not a tool for later incidents, and empty results
+no longer authorize apply. No schema migration, provider call, sending policy,
+production evidence write or release authority is added.
+
+Acceptance coverage includes read-only database transactions, exact microsecond
+attempt proof, old-attempt adversaries, mailbox/canonical receipts under failed
+statuses, receipt priority past query limits, both lock overlaps, competing durable
+dispatch, and concurrent receipt/attempt/status/reason compare-and-set failures.
+The native PostgreSQL suite is required, not silently skipped, in selected CI.
+Production receipt reconciliation and any resume decision remain separate.
+
 ## Purpose
 
 Guarantee that every mission stage executes atomically.

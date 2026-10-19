@@ -16,6 +16,7 @@ const { promotionCohort } = require('../services/scoutPromotionCohort');
 test('actual enrichment worker and ramp retain identity without serializing it', async () => {
   const logs = [];
   const db = { query: async (sql, params) => {
+    if (/to_regclass/.test(sql)) return { rows: [{ control_table: null }] };
     if (/SELECT \*/.test(sql)) return { rows: [{ id: 1, client_id: 13 }] };
     if (/INSERT INTO agent_log/.test(sql)) logs.push(params[1]);
     else assert.match(sql, /UPDATE scout_unenriched/);

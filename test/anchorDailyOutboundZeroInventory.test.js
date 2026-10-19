@@ -27,7 +27,7 @@ test('zero verified inventory rolls Scout back before Max, Paige and Emmett; no 
   let enriched = 0;
   const events = [];
   const queries = [];
-  const adapter = adapters({ query: async sql => { queries.push(sql); return { rows: [] }; } }, {
+  const adapter = adapters({ query: async sql => { if (/to_regclass/.test(sql)) return { rows: [{ control_table: null }] }; queries.push(sql); return { rows: [] }; } }, {
     governedContext,
     program,
     persist: false,

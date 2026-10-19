@@ -1,5 +1,8 @@
 'use strict';
 
+const { loadRecoveryState } = require('./anchorEmailRecovery');
+const { assertLegacyPreparation } = require('./anchorEmailRecoveryIntegration');
+
 const { isSubstralPreparationGrant, substralPreparationGrantReason } = require('./substralPreparationGrant');
 const { admissionReceiptDiagnostic, providerReceiptDiagnostic, scoutRampDiagnostic, controlCycleDiagnostic, evidenceProgressionDiagnostic, emitDiagnostic } = require('./outboundControlDiagnostics');
 const { governedContactReason, founderFirst, contactEvidence } = require('../utils/governedContactEligibility');
@@ -58,7 +61,7 @@ const {
   observabilityFromRefill,
   finalizePreparationObservability,
 } = require('./governedOutboundRefill');
-const { clock, hash } = require('../packages/acquisition-mission/DailyOutboundPolicy');
+const { clock, hash, fail } = require('../packages/acquisition-mission/DailyOutboundPolicy');
 const {
   createGovernedOutboundContext,
   resolveGovernedAuthorizationTenantId,
@@ -846,6 +849,26 @@ async function runEnrichmentBatches(enrichment, pool, requested, tenantContext =
   return { promoted, recovered, emailResolved, emailVerified, considered, summaries };
 }
 
+// The recovery overlay belongs only to Anchor. Other tenants never acquire its
+// locks or read its catalog/control/ledger, including when the schema is absent.
+async function researchAuthority(pool, program, tenantId, now = new Date()) {
+  if (program?.tenant_id != null && String(program.tenant_id) !== String(tenantId)) fail('governed_outbound_tenant_mismatch');
+  if (String(tenantId) !== '10') return null;
+  const state = await loadRecoveryState(pool, { now });
+  if (state.mode === 'legacy') return null;
+  if (state.mode !== 'scoped_resume') fail('anchor_recovery_separate_preparation_approval_required');
+  return require('./anchorScopedResume').assertScopedResumeCapability(pool,
+    { program, capability: 'research', operation: 'research_existing_source' }, { now });
+}
+
+async function consumeResearch(pool, authority, now) {
+  if (!authority) return;
+  await require('./anchorScopedResumeControl').consumeScopedOperation(pool, {
+    manifest: authority.manifest, capability: 'research', operation: 'research_existing_source',
+    operationId: require('node:crypto').randomUUID(), units: 1,
+  }, { now });
+}
+
 async function defaultScoutRamp({
   cycleId = null,
   pool,
@@ -867,6 +890,9 @@ async function defaultScoutRamp({
 } = {}) {
   const governed = governedContext || createGovernedOutboundContext({ program });
   const tenant = resolveReplenishmentTenantContext({ governedContext: governed, program });
+  const authority = await researchAuthority(pool, program, tenant.tenantId, now);
+  // Commit consumption before recovery, enrichment, discovery or injected work.
+  await consumeResearch(pool, authority, now);
   const tenantBinding = { ...tenant, program, governedContext: governed, source };
   const enricher = enrichment || require('../scoutUnenrichedEnrichmentAgent');
   const recoverExisting = recoverExistingInventory
@@ -1130,6 +1156,7 @@ async function applyPreparationRefill({
   runPreparationRefill = null,
   controlNow = new Date(),
   governedContext = null,
+  program = null,
 } = {}) {
   if (!preparation.prepareRequested) {
     return finalizePreparationObservability(preparation);
@@ -1139,6 +1166,14 @@ async function applyPreparationRefill({
       ...preparation,
       prepareSkippedReason: 'control_execute_disabled',
     });
+  }
+  const authority = await assertLegacyPreparation(pool, { tenantId: tenantId ?? governedContext?.tenantId,
+    program, operation: 'refill' }, { now: controlNow });
+  if (authority?.manifest?.kind === 'scoped_resume' && runPreparationRefill) {
+    await require('./anchorScopedResumeControl').consumeScopedOperation(pool, {
+      manifest: authority.manifest, capability: 'preparation', operation: 'refill',
+      operationId: require('node:crypto').randomUUID(), units: 1,
+    }, { now: controlNow });
   }
   const refill = runPreparationRefill
     ? await runPreparationRefill()
@@ -1186,6 +1221,16 @@ async function runMaxOutboundControlLoop(options = {}) {
     tenantId: governedContext.tenantId,
   });
 
+  if (program.tenant_id != null && String(program.tenant_id) !== governed.tenantId) fail('governed_outbound_tenant_mismatch');
+  // Non-Anchor callers retain the legacy branch without a recovery dependency.
+  // A one-item recovery manifest still grants no preparation or research.
+  const controlNow = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
+  const recoveryState = governed.tenantId === '10'
+    ? await loadRecoveryState(pool, { now: controlNow }) : { mode: 'legacy' };
+  if (!['legacy', 'scoped_resume'].includes(recoveryState.mode) && options.execute !== false) {
+    return { halted: 'anchor_recovery_separate_preparation_approval_required', programId: program.id, recoveryMode: recoveryState.mode };
+  }
+
   let source = options.source || await loadSource(pool, program, governed.tenantId);
   if (!source) return { halted: 'source_mission_missing', programId: program.id };
   if (governed.tenantId === '1') {
@@ -1194,7 +1239,6 @@ async function runMaxOutboundControlLoop(options = {}) {
   }
 
   const governedAdapters = options.governedAdapters || createGovernedAdapters(pool, { governedContext: governed });
-  const controlNow = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
   if (governed.tenantId === '17' && (program.mode === 'shadow' || program.policy.preparationOnly)) {
     const reviewedSource = await governedAdapters.loadMission(program.source_mission_id);
     const reason = substralPreparationGrantReason(program, reviewedSource?.mission, controlNow);
@@ -1237,10 +1281,17 @@ async function runMaxOutboundControlLoop(options = {}) {
 
   let scout = null;
   // Prepared-item caps are not authority to spend on discovery/enrichment.
-  const discoveryBlockedReason = program.policy.preparationOnly ? 'preparation_research_not_authorized' : null;
+  let discoveryBlockedReason = program.policy.preparationOnly ? 'preparation_research_not_authorized' : null;
+  let scopedResearch = null;
+  if (recoveryState.mode === 'scoped_resume' && options.execute !== false && plan.shouldReplenish && !discoveryBlockedReason) {
+    try { scopedResearch = await researchAuthority(pool, program, governed.tenantId, controlNow); }
+    catch (error) { discoveryBlockedReason = error.code || 'anchor_scoped_resume_research_unavailable'; }
+  }
   const searchFingerprint = scoutSearchFingerprint(program, source);
   if (plan.shouldReplenish && options.execute !== false && !discoveryBlockedReason) {
     const ramp = options.scoutRamp || defaultScoutRamp;
+    // Native Scout reserves at its own boundary; injected callbacks cannot skip it.
+    if (options.scoutRamp) await consumeResearch(pool, scopedResearch, controlNow);
     scout = await ramp({
       pool, store, program, source, plan, logger, governedContext: governed,
       searchFingerprint, now: controlNow, cycleId,
@@ -1254,7 +1305,7 @@ async function runMaxOutboundControlLoop(options = {}) {
 
   const inventoryGrowth = computeCleanInventoryGrowth(inventoryBefore.clean, inventoryAfter.clean);
   let aoRefill = null;
-  if (governed.tenantId === '10' && options.execute !== false) {
+  if (governed.tenantId === '10' && recoveryState.mode === 'legacy' && options.execute !== false) {
     try {
       const refillAoBooks = options.refillAoBooks
         || require('../utils/aoAccountFill').fillActiveAoAccounts;
@@ -1341,22 +1392,23 @@ async function runMaxOutboundControlLoop(options = {}) {
     permanentlyRejected: Number(funnelStock.permanentlyRejected || 0) + cycleFunnel.permanentlyRejected,
   };
 
+  const preparationBefore = await capturePreparationObservability({
+    store, program, operating, sentToday, cleanInventory: inventoryAfter.clean.length,
+    inventoryExclusions: inventoryAfter.excluded || [], now: controlNow,
+  });
   const preparation = await applyPreparationRefill({
     pool,
-    tenantId: store.tenantId,
+    tenantId: governed.tenantId,
+    program,
     execute: options.execute !== false,
     runPreparationRefill: options.runPreparationRefill,
     controlNow,
     governedContext: governed,
-    preparation: await capturePreparationObservability({
-      store,
-      program,
-      operating,
-      sentToday,
-      cleanInventory: inventoryAfter.clean.length,
-      inventoryExclusions: inventoryAfter.excluded || [],
-      now: controlNow,
-    }),
+    preparation: preparationBefore,
+  }).catch(error => {
+    if (recoveryState.mode !== 'scoped_resume') throw error;
+    return finalizePreparationObservability({ ...preparationBefore, preparedAdded: 0,
+      prepareSkippedReason: error.code || 'anchor_scoped_resume_preparation_unavailable' });
   });
   const sameCompanyDifferentContact = Number(
     scout?.admission?.rejected?.same_company_different_contact || 0
@@ -1461,13 +1513,14 @@ async function runMaxOutboundControlLoop(options = {}) {
     lastSuccessfulReplenishmentAt,
     lastSuccessfulPromotionAt,
   };
-  await store.event('max_outbound_control', [program.id, cycleId], controlEvent);
+  if (recoveryState.mode === 'legacy') await store.event('max_outbound_control', [program.id, cycleId], controlEvent);
   if (scout) {
     emitDiagnostic(logger, '[max-outbound-control] Scout provider receipt', controlEvent.scoutProviderReceipt);
     emitDiagnostic(logger, '[max-outbound-control] Scout admission receipt', controlEvent.scoutAdmissionReceipt);
   }
   emitDiagnostic(logger, '[max-outbound-control] measured summary',
-    controlCycleDiagnostic(store.tenantId, controlEvent)
+    { ...controlCycleDiagnostic(store.tenantId, controlEvent),
+      eventWriteCompleted: recoveryState.mode === 'legacy' }
   );
 
   return {

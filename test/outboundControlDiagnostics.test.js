@@ -53,7 +53,7 @@ async function run(tenantId, failEvent = false, rawSentToday = 0, failEnvelope =
   const logs = []; let persisted = false; let event;
   const result = await runMaxOutboundControlLoop({
     cycleId: `moc_${tenantId}_1234567890abcdef`, tenantId,
-    pool: { query: async () => { throw new Error('Unexpected database call'); } },
+    pool: { query: async sql => { if (/to_regclass/.test(sql)) return { rows: [{ control_table: null }] }; throw new Error('Unexpected database call'); } },
     store: { tenantId, clientId: Number(tenantId), envelope: async () => { if (failEnvelope) throw new Error('fixture read unavailable'); return null; }, event: async (_type, _key, payload) => { event = payload; if (failEvent) throw new Error('event_failure'); persisted = true; } },
     program: { id: 'outbound_fixture', tenant_id: tenantId, mode: 'active', policy: { dailyCap: 2 } },
     source: { id: 'fixture', payload: { structuredMission: { market: { segment: 'small_business_owners' }, geography: { region: 'United States', scope: 'nationwide' } } } },
@@ -172,7 +172,7 @@ test('actual Scout ramp marks admission measured only when persistence callback 
   const program = { id: 'fixture', tenant_id: '13', policy: {} };
   const source = { payload: { structuredMission: { market: { segment: 'small_business_owner' }, geography: { region: 'United States', scope: 'nationwide', cities: [] } } } };
   for (const invoke of [false, true]) {
-    const result = await defaultScoutRamp({ cycleId, pool: { query: async () => { throw Error('unexpected DB'); } }, store: { tenantId: '13', clientId: 13 }, program, source, plan: { deficit: 1 }, skipVerificationRetry: true, enrichment: { run: async () => ({ considered: 0 }) }, recoverExistingInventory: async () => ({}), loadDiscoveryBackoff: async () => null, runDiscovery: async (_input, options) => { if (invoke) await options.persistCompanies({ companies: [] }); return { kind: 'investigated', result: { status: 'partial' } }; }, logger: { log() {} } });
+    const result = await defaultScoutRamp({ cycleId, pool: { query: async sql => { if (/to_regclass/.test(sql)) return { rows: [{ control_table: null }] }; throw Error('unexpected DB'); } }, store: { tenantId: '13', clientId: 13 }, program, source, plan: { deficit: 1 }, skipVerificationRetry: true, enrichment: { run: async () => ({ considered: 0 }) }, recoverExistingInventory: async () => ({}), loadDiscoveryBackoff: async () => null, runDiscovery: async (_input, options) => { if (invoke) await options.persistCompanies({ companies: [] }); return { kind: 'investigated', result: { status: 'partial' } }; }, logger: { log() {} } });
     assert.equal(result.admissionMeasured, invoke);
     assert.equal(admissionReceiptDiagnostic('13', cycleId, result.admission, result.admissionMeasured).counts.evaluated, invoke ? 0 : null);
   }

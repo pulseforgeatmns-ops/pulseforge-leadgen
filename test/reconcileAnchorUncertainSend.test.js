@@ -20,9 +20,9 @@ test('inspect is the default; apply requires an explicit operator', () => {
   assert.equal(parseArgs(['--confirm-production', '--apply', '--operator', 'jake']).operator, 'jake');
 });
 
-test('provider outcome stays fail-closed unless Brevo and execution evidence are empty', () => {
+test('empty provider and execution evidence never proves non-acceptance', () => {
   const item = { provider_message_id: null };
-  assert.equal(outcomeFromEvidence({ item, executions: [], brevo: { skipped: false, events: [] } }), 'PROVIDER_CONFIRMED_NOT_SENT');
+  assert.equal(outcomeFromEvidence({ item, executions: [], brevo: { skipped: false, events: [] } }), 'PROVIDER_STATE_UNKNOWN');
   assert.equal(outcomeFromEvidence({ item, executions: [], brevo: { skipped: true, events: [] } }), 'PROVIDER_STATE_UNKNOWN');
   assert.equal(outcomeFromEvidence({
     item: { provider_message_id: '<id>' }, executions: [], brevo: { skipped: false, events: [] },

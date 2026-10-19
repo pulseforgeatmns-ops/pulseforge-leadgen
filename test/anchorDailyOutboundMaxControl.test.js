@@ -202,7 +202,7 @@ test('Max invokes Scout for a deficit and records the post-replenishment state w
     },
   };
   const result = await runMaxOutboundControlLoop({
-    pool: {},
+    pool: { query: async sql => { assert.match(sql, /to_regclass/); return { rows: [{ control_table: null }] }; } },
     cycleId: 'moc_10_test',
     program,
     source,
@@ -287,7 +287,7 @@ test('Max keeps replenishing on later cycles until the target is met', async () 
   };
 
   const first = await runMaxOutboundControlLoop({
-    pool: {},
+    pool: { query: async sql => { assert.match(sql, /to_regclass/); return { rows: [{ control_table: null }] }; } },
     program,
     source,
     store: { event: async () => {} },
@@ -313,7 +313,7 @@ test('Max keeps replenishing on later cycles until the target is met', async () 
   assert.equal(calls[0], 26);
 
   const second = await runMaxOutboundControlLoop({
-    pool: {},
+    pool: { query: async sql => { assert.match(sql, /to_regclass/); return { rows: [{ control_table: null }] }; } },
     program,
     source,
     store: { event: async () => {} },
@@ -352,7 +352,7 @@ test('Max persists bounded retry failure counts in the existing control event, i
       };
       const inventory = { clean: [], excluded: [], scope: {}, exclusionCounts: {} };
       await runMaxOutboundControlLoop({
-        pool: {},
+        pool: { query: async sql => { assert.match(sql, /to_regclass/); return { rows: [{ control_table: null }] }; } },
         tenantId: '13',
         now: new Date('2026-09-29T15:00:00.000Z'),
         program: { id: 'outbound_retry_fixture', tenant_id: '13', mode: 'active',
@@ -387,7 +387,7 @@ test('Max persists bounded retry failure counts in the existing control event, i
 test('Max observation can be disabled without invoking Scout', async () => {
   let called = false;
   const result = await runMaxOutboundControlLoop({
-    pool: {},
+    pool: { query: async sql => { assert.match(sql, /to_regclass/); return { rows: [{ control_table: null }] }; } },
     execute: false,
     program: {
       id: 'outbound_test',

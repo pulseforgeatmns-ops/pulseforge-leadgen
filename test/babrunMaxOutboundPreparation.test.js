@@ -55,7 +55,7 @@ test('tenant-13-like control cycle executes preparation refill when prepareReque
   };
 
   const result = await runMaxOutboundControlLoop({
-    pool: {},
+    pool: { query: async sql => { assert.match(sql, /to_regclass/); return { rows: [{ control_table: null }] }; } },
     tenantId: '13',
     now: businessWindow,
     program,
@@ -137,7 +137,7 @@ test('execute=false exposes control_execute_disabled instead of silent zero prep
   assert.equal(observed.prepareRequested, 1);
 
   const finalized = await applyPreparationRefill({
-    pool: {},
+    pool: { query: async sql => { assert.match(sql, /to_regclass/); return { rows: [{ control_table: null }] }; } },
     tenantId: '13',
     preparation: observed,
     execute: false,

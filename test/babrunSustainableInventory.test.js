@@ -154,7 +154,7 @@ test('three identical zero-yield discoveries rotate into fresh search space with
   let recoveryChecks = 0;
   let discoveryCalls = 0;
   await defaultScoutRamp({
-    pool: { query: async () => ({ rows: [] }) },
+    pool: { query: async sql => ({ rows: /to_regclass/.test(sql) ? [{ control_table: null }] : [] }) },
     store: { tenantId: '13', clientId: 13, event: async () => {} },
     program: { id: 'program', tenant_id: '13', source_mission_id: BABRUN_SOURCE.id },
     source: BABRUN_SOURCE,
@@ -175,7 +175,7 @@ test('three identical zero-yield discoveries rotate into fresh search space with
 
   const events = [];
   const ramp = await defaultScoutRamp({
-    pool: { query: async () => ({ rows: [] }) },
+    pool: { query: async sql => ({ rows: /to_regclass/.test(sql) ? [{ control_table: null }] : [] }) },
     store: {
       tenantId: '13', clientId: 13,
       event: async (type, _key, payload) => events.push({ type, payload }),
@@ -197,7 +197,7 @@ test('three identical zero-yield discoveries rotate into fresh search space with
   assert.equal(ramp.discovery.kind, 'fresh-search');
   assert.equal(ramp.searchGeneration, 1);
   assert.equal(ramp.discoveryBackoff.reason, 'repeated_zero_yield_rotate_search');
-  assert.equal(events[0].type, 'scout_replenishment_diversified');
+  assert.equal(events[0].type, 'scout_replenishment_plan_reconsidered');
 });
 
 async function governedScheduleFixture() {
@@ -290,7 +290,7 @@ test('genuine provider attempt remains terminally protected against duplicate se
   assert.equal(fixture.item.status, 'uncertain');
 });
 
-test('existing suppressed capacity rejection is canonically PROVEN_UNSENT only with matching evidence', () => {
+test('suppressed capacity rejection without exact attempt proof remains UNKNOWN', () => {
   const classification = classifyProvenUnsent({
     id: 'item', status: 'suppressed', reason: 'emmett_capacity_exhausted',
     provider_message_id: null,
@@ -299,7 +299,7 @@ test('existing suppressed capacity rejection is canonically PROVEN_UNSENT only w
     mailboxMessages: [], executions: [{ status: 'attempted', provider_message_id: null }],
     events: [], emmettReservation: [], tickBlocks: [],
   });
-  assert.equal(classification.outcome, 'PROVEN_UNSENT');
+  assert.equal(classification.outcome, 'UNKNOWN');
 });
 
 test('generation-limit backoff does not claim provider failures exhaust the market', async () => {

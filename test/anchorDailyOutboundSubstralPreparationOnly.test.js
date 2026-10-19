@@ -24,6 +24,7 @@ function fixture(extra = {}, options = {}) {
     domain: 'harbor.example', client_id: 17, email: 'office@harbor.example', email_verified: true, email_status: 'valid',
     service_area_match: true, vertical: 'small_business_owner', acquisition_metadata: { contactResolution: { finalState: 'VERIFIED_FOUNDER_EMAIL', bestEmail: 'office@harbor.example' } }, enrichment_provenance: { email: { source: 'website_email', source_url: 'https://harbor.example/contact' } }, ...extra };
   const pool = { query: async sql => {
+    if (/to_regclass/.test(sql)) return { rows: [{ control_table: null }] };
     if (/acquisition_knowledge_objects/.test(sql)) return { rows: [] };
     if (/SELECT p\.\*, c\.name/.test(sql)) return { rows: [crm] };
     throw new Error(`Unexpected database operation: ${sql}`);
@@ -151,7 +152,7 @@ test('Max blocks discovery before research when the shadow grant is missing or c
   switches(t);
   for (const change of [f => { delete f.program.policy.preparationOnly; }, f => { f.source.objective = 'Changed'; }, f => { f.program.policy.dailyCap++; }]) {
     const f = fixture(); change(f); let research = 0;
-    const result = await runMaxOutboundControlLoop({ tenantId: '17', pool: {}, store: f.svc.store,
+    const result = await runMaxOutboundControlLoop({ tenantId: '17', pool: { query: async sql => { assert.match(sql, /to_regclass/); return { rows: [{ control_table: null }] }; } }, store: f.svc.store,
       now, program: f.program, source: f.source,
       governedAdapters: { loadMission: async () => ({ mission: f.source }) },
       scoutRamp: async () => { research++; },
@@ -167,7 +168,7 @@ test('Max prepares existing reviewed stock while research stays explicitly unaut
   let research = 0; let preparation = 0;
   f.svc.store.rampMetrics = async () => null;
   const clean = { clean: [{ prospectId: 'p1', candidateId: 'p1', companyId: 'co1', email: f.crm.email }], excluded: [], scope: {}, exclusionCounts: {} };
-  const result = await runMaxOutboundControlLoop({ tenantId: '17', pool: {}, store: f.svc.store,
+  const result = await runMaxOutboundControlLoop({ tenantId: '17', pool: { query: async sql => { assert.match(sql, /to_regclass/); return { rows: [{ control_table: null }] }; } }, store: f.svc.store,
     now, program: f.program, source: { ...f.source, objective: 'Stale caller data must not be used' },
     governedAdapters: { loadMission: async () => ({ mission: f.source }) },
     infrastructure: { cap: 2, snapshot: { sentToday: 0 }, assessed: { governor: { outcome: 'proceed' } },

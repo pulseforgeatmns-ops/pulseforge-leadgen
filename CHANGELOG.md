@@ -1,3 +1,15 @@
+## Local SPEC-262 proposal
+
+Tenant-10-only approved identity-batch email and existing-artifact/deterministic preparation resume while quarantine persists. Non-Anchor query/lock/preparation behavior remains unchanged. Paid research is rejected; source currently lacks ready artifacts. See ADR-105 and the scoped operator proposal. No production action approved.
+
+# Local SPEC-261 milestone
+
+Default-disabled Anchor email recovery, dedicated no-resend quarantine and strict manifest preparation. See SPEC-261 and ADR-103; no production action approved.
+
+## Local proposal 2026-10-19: SPEC-260
+
+Default-disabled Anchor-only Brevo boundary diagnostics; exact 42703 and post-HTTP COMMIT regressions. No migration, admission widening, hold release, publication or deployment. See ADR-104 (combined-artifact metadata-only renumber; frozen boundary patch unchanged).
+
 # Changelog
 
 All notable changes to this project are documented here. Format inspired by [Keep a Changelog](https://keepachangelog.com/). Versions follow the release plans in `docs/releases/`.
