@@ -38,9 +38,9 @@ function preparation(f, operations = ['reuse_existing_artifacts', 'refill']) {
 }
 
 test('preparation gate uses the same supplied clock and activation environment at both checks', async () => {
-  const f = scopedResumeFixture(); preparation(f, ['approve_canonical_envelope']);
+  const f = scopedResumeFixture(); preparation(f, ['reuse_existing_artifacts']);
   const { assertLegacyPreparation } = require('../services/anchorEmailRecoveryIntegration');
-  const input = { tenantId: '10', program: f.program, operation: 'approve_canonical_envelope' };
+  const input = { tenantId: '10', program: f.program, operation: 'reuse_existing_artifacts' };
   const grant = await assertLegacyPreparation(f.db, input, { now: f.now, env: f.env });
   assert.equal(grant.resumeGrant.id, f.manifest.id);
   await assert.rejects(assertLegacyPreparation(f.db, input, { now: new Date(Date.parse(f.manifest.expiresAt) + 1), env: f.env }),
