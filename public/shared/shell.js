@@ -289,7 +289,7 @@
     if (['admin', 'manager'].includes(role)) {
       const needs = document.createElement('a');
       needs.className = 'pf-nav-needs';
-      needs.href = '/dashboard#pf-tab=approvals';
+      needs.href = '/command-deck#content-review';
       needs.title = 'Content awaiting your approval';
       needs.textContent = 'Needs you';
       const count = document.createElement('span');

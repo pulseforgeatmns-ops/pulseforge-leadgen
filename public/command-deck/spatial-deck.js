@@ -92,6 +92,7 @@
     els.drawerEyebrow = document.getElementById('cdDomainDrawerEyebrow');
     els.drawerBody = document.getElementById('cdDomainDrawerBody');
     els.drawerDiscuss = document.getElementById('cdDomainDiscussMax');
+    els.drawerReview = document.getElementById('cdDomainReviewContent');
     els.explain = document.getElementById('cdPriorityExplain');
     els.explainBody = document.getElementById('cdPriorityExplainBody');
     els.recentSelect = document.getElementById('cdRecentConversations');
@@ -754,6 +755,13 @@
       els.drawerEyebrow.textContent = PRIORITY_LABELS[domain.priority] || domain.priority;
     }
     if (els.drawerBody) els.drawerBody.innerHTML = renderDrawerBody(domain);
+    if (els.drawerReview) {
+      els.drawerReview.hidden = domainId !== 'content';
+      els.drawerReview.onclick = () => {
+        closeDomainDrawer();
+        document.dispatchEvent(new CustomEvent('pulseforge:content-review'));
+      };
+    }
 
     els.drawer.hidden = false;
     document.body.classList.add('cd-domain-open');
