@@ -62,6 +62,7 @@
     host: () => document.getElementById('mxSpreadsheetProposal'),
     scopeHost: () => document.getElementById('mxSpreadsheetScope'),
     onMessage: text => appendSystemMessage(text),
+    onReviewAccounts: owner => { closeWorkspace(); window.PulseforgeAccountReview?.open(owner); },
     getTenantId: () => window.PulseforgeTenantCoordinator?.getActiveClientId(),
   });
 
@@ -4758,6 +4759,11 @@
     const hasAttachments = mxPendingComposerFiles.length > 0;
     if (!q && !hasAttachments) return;
     if (workspaceAskInFlight) return;
+    if (!hasAttachments && spreadsheetReview.isAccountReviewRequest(q)) {
+      resetAskInput();
+      await spreadsheetReview.handleAccountReview(q);
+      return;
+    }
     workspaceAskInFlight = true;
     document.body.classList.add('lc-thinking');
     console.info('[mission-objective-len]', {

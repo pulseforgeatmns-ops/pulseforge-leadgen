@@ -38,7 +38,7 @@ function reviewModel() {
   ] };
 }
 
-async function setup(t, { role = 'admin', width = 1440, motion = 'no-preference', askReview = false, previewError = 0, decisionError = 0, reviewDelay = 0 } = {}) {
+async function setup(t, { role = 'admin', width = 1440, motion = 'no-preference', askReview = false, previewError = 0, decisionError = 0, reviewDelay = 0, accountDelay = 0, accountError = 0 } = {}) {
   const browser = await puppeteer.launch({ executablePath: process.env.CHROMIUM_PATH || undefined, headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
   t.after(() => browser.close());
   const page = await browser.newPage();
@@ -57,6 +57,16 @@ async function setup(t, { role = 'admin', width = 1440, motion = 'no-preference'
       if (url.pathname === '/api/me') data = { user: { name: 'Jacob', role }, active_client_id: 10, client: { display_name: 'Test workspace' } };
       else if (url.pathname === '/api/clients') data = { active_client_id: 10, clients: [{ id: 10, name: 'Test workspace' }, { id: 11, name: 'Other workspace' }] };
       else if (url.pathname === '/api/v1/command-deck') data = model();
+      else if (url.pathname === '/api/v1/max/spreadsheet/scope') data = { tenant_id: 10, actor_id: 1, ao_id: null, can_approve: false, aos: [{ id: 24, name: 'Tony' }, { id: 20, name: 'Mike' }] };
+      else if (url.pathname === '/api/v1/max/spreadsheet/proposals') { status = 503; data = { error: '42P01' }; }
+      else if (url.pathname === '/api/v1/max/account-review') {
+        if (accountDelay) await new Promise(resolve => setTimeout(resolve, accountDelay));
+        status = accountError || 200;
+        data = accountError ? { error: 'account_review_unavailable' } : { tenant_id: 10, ao_id: 24, ao_name: 'Tony', summary: { total: 2, overdue: 1, help_requested: 1 }, accounts: [
+          { prospect_id: 'account-a', company_name: 'North River Properties', assigned_ao_id: '24', current_status: 'decision_maker_reached', next_action: 'follow_up', next_action_date: '2026-10-20', last_touch_at: '2026-10-19T15:00:00Z', priority: 'high', help_requested: true, help_reason: 'Review the facilities proposal.', latest_note_preview: 'Operations contact requested a follow-up.' },
+          { prospect_id: 'account-b', company_name: 'Elm Street Offices', assigned_ao_id: '24', current_status: 'call_attempted', next_action: 'call', overdue: true, last_touch_at: '2026-10-16T15:00:00Z' },
+        ] };
+      } else if (url.pathname.startsWith('/api/v1/max/account-review/')) data = { tenant_id: 10, ao_id: 24, account: { summary: { assigned_ao_id: 24, why_account_matters: 'Recurring facility cleaning opportunity.' }, contact: { name: 'Alex Morgan', role: 'Operations manager', email: 'operations@example.test', phone: '603-555-0100' }, history: [{ created_at: '2026-10-19T15:00:00Z', activity_type: 'call', outcome: 'decision_maker_reached', notes: '<img src=x onerror="window.injected=true"> is a literal source note.' }] } };
       else if (url.pathname === '/api/v1/max/workspace/open') data = { sessionId: 'fixture-session', opening: { fullText: 'Test opening' }, suggestions: [] };
       else if (url.pathname === '/api/v1/max/workspace/ask') data = { sessionId: 'fixture-session', prose: 'Test answer', suggestions: [], ...(askReview ? { uiAction: { type: 'open_content_review' } } : {}) };
       else if (url.pathname === '/api/content-review') { if (reviewDelay) await new Promise(resolve => setTimeout(resolve, reviewDelay)); data = { ...review, pendingCount: review.items.length }; }
@@ -224,5 +234,67 @@ test('mobile review fits the viewport and tenant changes discard late draft resp
   await response;
   assert.equal(await delayed.page.$eval('#contentReview', el => el.hidden), true);
   assert.equal(await delayed.page.$eval('#crDetail', el => el.textContent), '');
+  assert.deepEqual([...errors, ...delayed.errors], []);
+});
+
+test('Tony account picker opens real account review independently of unavailable spreadsheet previews', async t => {
+  const { page, errors, writes, reads } = await setup(t);
+  await page.click('#cdSpatialMax');
+  await page.waitForSelector('[data-spreadsheet-ao]');
+  await page.select('[data-spreadsheet-ao]', '24');
+  await page.click('[data-spreadsheet-refresh]');
+  await page.waitForFunction(() => document.querySelector('[data-spreadsheet-feedback]')?.textContent.includes('still review assigned accounts'));
+  assert.doesNotMatch(await page.$eval('#mxThread', el => el.textContent), /42P01/);
+  await page.click('[data-account-review]');
+  await page.waitForSelector('#arDetail .ar-event');
+  assert.equal(await page.$eval('#maxWorkspace', el => el.hidden), true);
+  assert.equal(await page.$eval('#arTitle', el => el.textContent), 'Tony’s accounts');
+  assert.match(await page.$eval('#arSubtitle', el => el.textContent), /2 assigned/);
+  assert.match(await page.$eval('#arDetail', el => el.textContent), /North River Properties|Alex Morgan|Operations manager|Review the facilities proposal/);
+  assert.equal(await page.$('#arDetail img'), null);
+  assert.equal(await page.evaluate(() => window.injected), undefined);
+  assert.equal(writes.filter(write => !write.path.endsWith('/workspace/open')).length, 0);
+  assert.ok(reads.includes('/api/v1/max/account-review/account-a'));
+  if (process.env.LIVING_COMMAND_QA_DIR) await page.screenshot({ path: path.join(process.env.LIVING_COMMAND_QA_DIR, 'living-command-account-review.png'), fullPage: true });
+  await page.select('#arFilter', 'overdue');
+  assert.equal(await page.$eval('#arDetail h3', el => el.textContent), 'Elm Street Offices');
+  await page.focus('#arSearch'); await page.keyboard.press('Escape');
+  assert.equal(await page.$eval('#accountReview', el => el.hidden), true);
+  assert.deepEqual(errors, []);
+});
+
+test('typing review Tony’s accounts routes to verified account data before generic Max chat', async t => {
+  const { page, errors, writes, reads } = await setup(t);
+  await page.click('#cdSpatialMax');
+  await page.waitForSelector('[data-spreadsheet-ao]');
+  await page.type('#mxAskInput', 'Review Tony’s accounts');
+  await page.click('#mxAskSend');
+  await page.waitForSelector('#arDetail .ar-event');
+  assert.equal(await page.$eval('#arTitle', el => el.textContent), 'Tony’s accounts');
+  assert.equal(writes.filter(write => write.path.endsWith('/ask')).length, 0);
+  assert.equal(reads.filter(path => path.includes('/spreadsheet/proposals')).length, 0);
+  assert.deepEqual(errors, []);
+});
+
+test('mobile account review fits the viewport and workspace changes clear late responses', async t => {
+  const { page, errors, writes } = await setup(t, { width: 390, motion: 'reduce' });
+  await page.click('#cdSpatialMax'); await page.waitForSelector('[data-spreadsheet-ao]');
+  await page.select('[data-spreadsheet-ao]', '24'); await page.click('[data-account-review]');
+  await page.waitForSelector('#arDetail .ar-event');
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  assert.equal(await page.$eval('#accountReview', el => el.contains(document.activeElement)), true);
+  if (process.env.LIVING_COMMAND_QA_DIR) await page.screenshot({ path: path.join(process.env.LIVING_COMMAND_QA_DIR, 'living-command-account-review-mobile.png'), fullPage: true });
+  await page.evaluate(() => document.dispatchEvent(new CustomEvent('pulseforge:tenant-changed')));
+  assert.equal(await page.$eval('#accountReview', el => el.hidden), true);
+  assert.equal(await page.$eval('#arDetail', el => el.textContent), '');
+  assert.equal(writes.filter(write => !write.path.endsWith('/workspace/open')).length, 0);
+  const delayed = await setup(t, { accountDelay: 300 });
+  await delayed.page.click('#cdSpatialMax'); await delayed.page.waitForSelector('[data-spreadsheet-ao]');
+  await delayed.page.select('[data-spreadsheet-ao]', '24'); await delayed.page.click('[data-account-review]');
+  await delayed.page.waitForFunction(() => !document.getElementById('accountReview').hidden);
+  const response = delayed.page.waitForResponse(res => new URL(res.url()).pathname === '/api/v1/max/account-review');
+  await delayed.page.evaluate(() => document.dispatchEvent(new CustomEvent('pulseforge:tenant-changed'))); await response;
+  assert.equal(await delayed.page.$eval('#accountReview', el => el.hidden), true);
+  assert.equal(await delayed.page.$eval('#arDetail', el => el.textContent), '');
   assert.deepEqual([...errors, ...delayed.errors], []);
 });

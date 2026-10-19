@@ -23,6 +23,7 @@ const { getEffectiveActor, impersonationProvenance } = require('../utils/request
 const { logImpersonationAction } = require('../services/aoImpersonationService');
 const { resolveSpreadsheetScope } = require('../utils/maxSpreadsheetAuthorization');
 const spreadsheetService = require('../services/maxSpreadsheetService');
+router.use(require('./accountReview').createAccountReviewRouter({ db: pool }));
 const {
   uploadAndTranscribeVoice,
   retryTranscription,
@@ -236,7 +237,7 @@ async function handleComposerSubmit(req, res) {
     });
   } catch (error) {
     console.error('[max-composer]', error);
-    return res.status(spreadsheetService.errorStatus(error)).json({ ok: false, error: error.code || 'composer_failed', message: error.message });
+    return res.status(spreadsheetService.errorStatus(error)).json(spreadsheetService.publicError(error, 'composer_failed'));
   }
 }
 
@@ -263,7 +264,7 @@ router.get('/api/v1/max/spreadsheet/scope', requireComposerWrite, async (req, re
     return res.json({ tenant_id: scope.clientId, actor_id: scope.actorId, ao_id: scope.aoId,
       can_approve: scope.canApprove, aos: rows });
   } catch (error) {
-    return res.status(error.statusCode || 500).json({ ok: false, error: error.code || 'scope_unavailable' });
+    return res.status(error.statusCode || 500).json(spreadsheetService.publicError(error, 'scope_unavailable'));
   }
 });
 
@@ -273,8 +274,7 @@ router.post('/api/v1/max/spreadsheet/proposals/:proposalId/commit', requireCompo
     const result = await spreadsheetService.commitSpreadsheet(req.params.proposalId, req.body || {}, scope, { db: pool });
     return res.json(result);
   } catch (error) {
-    return res.status(spreadsheetService.errorStatus(error)).json({ ok: false, error: error.code || 'spreadsheet_commit_failed', message: error.message,
-      ...(error.commitOutcomeUnknown ? { outcome: 'unknown', retry_same_request: true } : {}) });
+    return res.status(spreadsheetService.errorStatus(error)).json(spreadsheetService.publicError(error, 'spreadsheet_commit_failed'));
   }
 });
 
@@ -285,7 +285,7 @@ router.get('/api/v1/max/spreadsheet/proposals/:proposalId', requireComposerWrite
       req.params.proposalId, req.query.conversation_id, scope);
     return res.json({ ok: true, can_approve: scope.canApprove, spreadsheet_proposal: spreadsheetService.publicProposal(proposal, scope) });
   } catch (error) {
-    return res.status(spreadsheetService.errorStatus(error)).json({ ok: false, error: error.code || 'proposal_unavailable' });
+    return res.status(spreadsheetService.errorStatus(error)).json(spreadsheetService.publicError(error, 'proposal_unavailable'));
   }
 });
 
@@ -294,7 +294,7 @@ router.post('/api/v1/max/spreadsheet/proposals/:proposalId/resolve', requireComp
     const scope = await resolveSpreadsheetScope(req, pool);
     return res.json(await spreadsheetService.resolveSpreadsheet(req.params.proposalId, req.body || {}, scope, { db: pool }));
   } catch (error) {
-    return res.status(spreadsheetService.errorStatus(error)).json({ ok: false, error: error.code || 'resolution_failed', message: error.message });
+    return res.status(spreadsheetService.errorStatus(error)).json(spreadsheetService.publicError(error, 'resolution_failed'));
   }
 });
 
@@ -306,7 +306,7 @@ router.get('/api/v1/max/spreadsheet/proposals', requireComposerWrite, async (req
     });
     return res.json({ ok: true, can_approve: scope.canApprove, proposals });
   } catch (error) {
-    return res.status(spreadsheetService.errorStatus(error)).json({ ok: false, error: error.code || 'proposal_list_unavailable' });
+    return res.status(spreadsheetService.errorStatus(error)).json(spreadsheetService.publicError(error, 'proposal_list_unavailable'));
   }
 });
 

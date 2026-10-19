@@ -374,7 +374,7 @@ jobs:
           exit "$test_status"
       - name: Living Command brief and browser acceptance
         run: |
-          node --test test/livingCommandBrief.test.js test/contentReview.test.js
+          node --test test/livingCommandBrief.test.js test/contentReview.test.js test/maxAccountReview.test.js test/maxSpreadsheetReviewUi.test.js
           CHROMIUM_PATH="$(command -v google-chrome)" LIVING_COMMAND_QA_DIR="$RUNNER_TEMP" node --test test/browser/livingCommandUi.test.js
       - name: Retain Living Command previews
         if: always()

@@ -8,6 +8,13 @@
   'use strict';
   const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const display = value => escape(value === undefined ? 'Unspecified' : JSON.stringify(value, null, 2));
+  function accountReviewName(text) {
+    const value = String(text || '').trim();
+    const prefix = '(?:(?:please|can you|could you)\\s+)?(?:show(?:\\s+me)?|review|open|check)\\s+';
+    const match = value.match(new RegExp(`^${prefix}(?:the\\s+)?accounts\\s+(?:assigned\\s+to|for)\\s+(.+?)[.!?]?$`, 'i'))
+      || value.match(new RegExp(`^${prefix}(.+?)\\s+accounts[.!?]?$`, 'i'));
+    return match ? match[1].replace(/['’]s$/i, '').trim() : null;
+  }
   function intent(text) {
     const value = String(text || '').trim();
     if (/\b(do\s+not|don't|dont|never|not\s+yet|wait|cancel|hold|stop|without|preview|compare|review\s+only)\b/i.test(value)) return 'hold';
@@ -62,7 +69,7 @@
       ${proposal.can_approve ? `<button type="button" data-spreadsheet-save ${busy || !selected.size ? 'disabled' : ''}>${busy ? 'Saving selected changes…' : locked ? 'Retry the same approval' : 'Approve and save selected changes'}</button>` : (proposal.review_closed ? '<p>This review is closed. Upload again for a fresh comparison before further changes.</p>' : '<p>Jake approval required. This preview cannot be saved by your account.</p>')}
     </section>`;
   }
-  function create({ fetch: request, host, scopeHost, onMessage = () => {}, getTenantId = () => null, makeId = async binding => [...new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(binding)))].map(byte => byte.toString(16).padStart(2, '0')).join('') }) {
+  function create({ fetch: request, host, scopeHost, onMessage = () => {}, onReviewAccounts = owner => globalThis.PulseforgeAccountReview?.open(owner), getTenantId = () => null, makeId = async binding => [...new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(binding)))].map(byte => byte.toString(16).padStart(2, '0')).join('') }) {
     let scope = null, selectedAo = null, resumable = [];
     let proposal = null, selected = new Set(), saved = new Set(), pendingRequest = null, busy = false, epoch = 0, status = '';
     const getHost = () => typeof host === 'function' ? host() : host;
@@ -82,9 +89,12 @@
       if (!next.aos.some(ao => String(ao.id) === String(selectedAo))) selectedAo = next.ao_id || null;
       const el = typeof scopeHost === 'function' ? scopeHost() : scopeHost;
       if (el) {
-        el.innerHTML = `<label>Review accounts assigned to <select data-spreadsheet-ao><option value="">Choose an acquisition operator</option>${next.aos.map(ao => `<option value="${escape(ao.id)}" ${String(ao.id) === String(selectedAo) ? 'selected' : ''}>${escape(ao.name)}</option>`).join('')}</select></label><button type="button" data-spreadsheet-refresh>Find saved previews</button><div data-spreadsheet-resume></div>`;
-        el.querySelector('[data-spreadsheet-refresh]')?.addEventListener('click', () => listProposals().catch(err => onMessage(err.message)));
-        el.querySelector('[data-spreadsheet-ao]')?.addEventListener('change', event => { selectedAo = event.target.value || null; clear(); resumable = []; const resumeHost = el.querySelector('[data-spreadsheet-resume]'); if (resumeHost) resumeHost.innerHTML = ''; });
+        el.classList.add('pf-spreadsheet-scope');
+        el.innerHTML = `<label>Review accounts assigned to <select data-spreadsheet-ao><option value="">Choose an acquisition operator</option>${next.aos.map(ao => `<option value="${escape(ao.id)}" ${String(ao.id) === String(selectedAo) ? 'selected' : ''}>${escape(ao.name)}</option>`).join('')}</select></label><div class="pf-spreadsheet-scope-actions"><button type="button" data-account-review ${selectedAo ? '' : 'disabled'}>Review accounts</button><button type="button" data-spreadsheet-refresh>Saved spreadsheet previews</button></div><p data-spreadsheet-feedback role="status"></p><div data-spreadsheet-resume></div>`;
+        const feedback = error => { el.querySelector('[data-spreadsheet-feedback]').textContent = error.message; };
+        el.querySelector('[data-account-review]')?.addEventListener('click', () => reviewAccounts().catch(feedback));
+        el.querySelector('[data-spreadsheet-refresh]')?.addEventListener('click', () => listProposals().catch(feedback));
+        el.querySelector('[data-spreadsheet-ao]')?.addEventListener('change', event => { selectedAo = event.target.value || null; clear(); resumable = []; el.querySelector('[data-account-review]').disabled = !selectedAo; el.querySelector('[data-spreadsheet-feedback]').textContent = ''; const resumeHost = el.querySelector('[data-spreadsheet-resume]'); if (resumeHost) resumeHost.innerHTML = ''; });
       }
       return next;
     }
@@ -94,7 +104,7 @@
       const res = await request(`/api/v1/max/spreadsheet/proposals?ao_id=${encodeURIComponent(selectedAo)}`, { credentials: 'same-origin' });
       const data = await res.json();
       if (requestEpoch !== epoch) return;
-      if (!res.ok) throw new Error(data.message || data.error || 'Could not load saved previews.');
+      if (!res.ok) throw new Error(/^[0-9A-Z]{5}$/.test(data.error || '') ? 'Saved spreadsheet previews are unavailable right now. You can still review assigned accounts.' : data.message || 'Could not load saved previews. Please try again.');
       resumable = data.proposals || [];
       const parent = typeof scopeHost === 'function' ? scopeHost() : scopeHost;
       const el = parent?.querySelector('[data-spreadsheet-resume]');
@@ -105,6 +115,20 @@
         if (value === '') return;
         resume(resumable[Number(value)]).catch(err => onMessage(err.message));
       });
+    }
+    async function reviewAccounts(aoName = null) {
+      if (busy || pendingRequest) throw new Error('Recover the pending save result before opening another review.');
+      await loadScope();
+      const normalize = value => String(value || '').trim().toLowerCase();
+      const matches = scope.aos.filter(ao => aoName ? normalize(ao.name) === normalize(aoName) || normalize(ao.name).split(/\s+/)[0] === normalize(aoName) : String(ao.id) === String(selectedAo));
+      if (matches.length !== 1) throw new Error('Choose the acquisition operator in the account picker so I can open the correct accounts.');
+      const ao = matches[0];
+      onReviewAccounts({ aoId: ao.id, aoName: ao.name });
+    }
+    async function handleAccountReview(text) {
+      const name = accountReviewName(text); if (name == null) return false;
+      try { await reviewAccounts(name); } catch (error) { onMessage(error.message); }
+      return true;
     }
     async function resume(item) {
       if (busy || pendingRequest) throw new Error('Recover the pending save result before opening another proposal.');
@@ -245,7 +269,7 @@
       else onMessage('Nothing saved. The proposal remains available for review. To revise it, resolve a row or upload the workbook for a fresh comparison. Close the review to return to chat.');
       return true;
     }
-    return { accept, commit, resolve, handleText, clear, render, loadScope, listProposals, resume, appendScope, hasPending: checkScope, token: () => epoch };
+    return { accept, commit, resolve, handleText, handleAccountReview, isAccountReviewRequest: text => accountReviewName(text) != null, clear, render, loadScope, listProposals, reviewAccounts, resume, appendScope, hasPending: checkScope, token: () => epoch };
   }
-  return { create, intent, proposalHtml };
+  return { create, intent, proposalHtml, accountReviewName };
 }));
