@@ -1,5 +1,7 @@
 'use strict';
 
+const { withResearchProviderScope } = require('../../utils/anchorResearchProviderPause');
+
 /**
  * SPEC-WEB-001A — WEB-COHORT-003 live read-only revalidation.
  * Stratified Scout discovery + admission filters + live deterministic audit.
@@ -137,7 +139,11 @@ async function discoverStratumCandidates(stratum, clientId) {
   return batch.slice(0, CANDIDATES_PER_STRATUM);
 }
 
-async function discoverStratifiedCandidates(clientId, { targetSize = COHORT_SIZE } = {}) {
+async function discoverStratifiedCandidates(clientId, options = {}) {
+  return withResearchProviderScope(clientId, () => discoverStratifiedCandidatesScoped(clientId, options));
+}
+
+async function discoverStratifiedCandidatesScoped(clientId, { targetSize = COHORT_SIZE } = {}) {
   assertDiscoveryEnv();
   const stratumPools = [];
 

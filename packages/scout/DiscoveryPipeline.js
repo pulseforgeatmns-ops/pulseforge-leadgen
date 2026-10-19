@@ -1,5 +1,7 @@
 'use strict';
 
+const { rethrowResearchProviderControl } = require('../../utils/anchorResearchProviderPause');
+
 /**
  * SPEC-154 — Unified Discovery Pipeline.
  *
@@ -390,6 +392,7 @@ async function runDiscoveryPipeline(input = {}) {
       preservedCandidates: opts.preservedCandidates || [],
     });
   } catch (err) {
+    rethrowResearchProviderControl(err);
     stages.push(
       buildStage(DISCOVERY_PIPELINE_STAGES.EXECUTE_COVERAGE_PLAN, {
         startedAt: executeStarted,

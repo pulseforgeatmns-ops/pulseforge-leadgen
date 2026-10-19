@@ -1,4 +1,5 @@
 'use strict';
+const { withResearchProviderScope, assertResearchProviderAllowed, isResearchProviderControlError, rethrowResearchProviderControl } = require('../../../utils/anchorResearchProviderPause');
 
 /**
  * Canonical Scout discovery execution via SEC (SPEC-077).
@@ -213,6 +214,13 @@ async function runScoutDiscovery(executionInput = {}, opts = {}) {
 }
 
 async function runScoutForAmoMission(mission, opts = {}) {
+  return withResearchProviderScope(mission.tenantId ?? mission.clientId, () => {
+    if (mission.clientId != null) assertResearchProviderAllowed('research', mission.clientId);
+    return runScoutForAmoMissionResearchScoped(mission, opts);
+  });
+}
+
+async function runScoutForAmoMissionResearchScoped(mission, opts = {}) {
   if (typeof opts.runScout === 'function') {
     return opts.runScout(mission, opts);
   }
@@ -246,15 +254,28 @@ async function runScoutForAmoMission(mission, opts = {}) {
   });
 
   try {
+    let providerControlError = null;
     const executionResult = await executeSpecialist({
       mission,
       specialist: SPECIALISTS.SCOUT,
       contributions,
       transactionId: opts.transactionId,
       store: opts.engine?.store,
-      run: (secInput) => runScoutDiscovery({ ...secInput, mission }, opts),
+      run: async (secInput) => {
+        try { return await runScoutDiscovery({ ...secInput, mission }, opts); }
+        catch (error) {
+          if (isResearchProviderControlError(error)) providerControlError = error;
+          throw error;
+        }
+      },
       treatErrorsAsBlocked: opts.treatErrorsAsBlocked !== false,
     });
+
+    // SEC intentionally converts ordinary exceptions to blocked/failed results.
+    // A provider control must survive either mode before any fixture fallback.
+    if (providerControlError) throw providerControlError;
+    const controlCode = executionResult.blocked?.requiredPrecondition;
+    if (controlCode) rethrowResearchProviderControl(Object.assign(new Error(String(controlCode)), { code: controlCode }));
 
     const discoveryPayload =
       executionResult.contributions && Object.keys(executionResult.contributions).length
@@ -302,6 +323,7 @@ async function runScoutForAmoMission(mission, opts = {}) {
 
     return scoutResult;
   } catch (err) {
+    rethrowResearchProviderControl(err);
     if (opts.allowFixtureFallback === true && typeof opts.fixtureScoutDiscoveryResult === 'function') {
       return opts.fixtureScoutDiscoveryResult();
     }

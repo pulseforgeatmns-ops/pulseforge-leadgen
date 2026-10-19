@@ -1,4 +1,12 @@
+## Unreleased — SPEC-265 local research-provider pause
+
+- Add a default-off tenant-10 research/discovery/contact-enrichment/email-verification pause at reviewed provider handoffs and trusted caller boundaries. Preserve field-route geocoding, call/SMS and unrelated presentation paths.
+- Require explicit tenant context for previously unscoped research diagnostics while armed; keep known non-Anchor utilities bound to their existing scope. Typed interruption preserves candidate state and completed accounting.
+- No new DDL, budget, research-resume permission or activation. See [SPEC-265](docs/specs/SPEC-265_Anchor_Research_Provider_Pause.md), [ADR-107](docs/adr/ADR-107_Explicit_Research_Provider_Pause.md), and [operator proposal](docs/anchor-research-provider-pause.md).
+
+
 ## Local SPEC-264 operator invocation proposal
+
 
 Default-read-only fixed tenant-10 CRM preparation command; explicit exact revision/manifest/source hashes and --apply required for later separately approved writes. No new route, activation or provider authority.
 

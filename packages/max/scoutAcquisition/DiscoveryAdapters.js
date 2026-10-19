@@ -1,5 +1,7 @@
 'use strict';
 
+const { rethrowResearchProviderControl } = require('../../../utils/anchorResearchProviderPause');
+
 /**
  * SPEC-100A — candidate discovery adapters.
  * Business reasoning is not hard-coded to one vendor. Social specialists
@@ -205,6 +207,7 @@ function createPlacesDiscoveryAdapter(opts = {}) {
                 available: !(execution && execution.abortReason === 'provider_unavailable'),
               });
             } catch (err) {
+              rethrowResearchProviderControl(err);
               errors.push({
                 code: 'provider_error',
                 message: err.message || String(err),
@@ -278,6 +281,7 @@ async function discoverPlacesLegacySegment({
         if (providerErrors.some(error => error.googleStatus === 'REQUEST_DENIED')) break;
       }
     } catch (err) {
+      rethrowResearchProviderControl(err);
       errors.push({
         code: 'provider_error',
         message: err.message || String(err),
@@ -480,6 +484,7 @@ async function discoverCandidates(searchDefinition, adapters = []) {
         errors.push(...report.errors);
       }
     } catch (err) {
+      rethrowResearchProviderControl(err);
       sourceTypesUnavailable.push(sourceType);
       const failure = {
         code: 'provider_error',

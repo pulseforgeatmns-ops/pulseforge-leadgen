@@ -37,7 +37,7 @@ function scrapeFixture({ pagesByPath = {}, redirects = {}, sourceFile } = {}) {
     const data = pagesByPath[new URL(url).pathname] ?? '<html>No contact listed</html>';
     return { status: 200, data, request: { res: { responseURL: redirects[new URL(url).pathname] || url } } };
   } };
-  const context = { require: createRequire(filename), axios, module: { exports: {} } };
+  const context = { ...require('../utils/anchorResearchProviderPause'), require: createRequire(filename), axios, module: { exports: {} } };
   vm.runInNewContext(source.slice(start, end) + '\nmodule.exports = { scrapeWebsiteEmail, filterScrapedWebsiteEmails };', context);
   return { scrape: (options = { ownerEvidence: true }) => context.module.exports.scrapeWebsiteEmail(domain, options),
     scrapeDefault: () => context.module.exports.scrapeWebsiteEmail(domain), calls };
@@ -82,7 +82,7 @@ test('standard intake opts in only for tenant 13 and chain callers must opt in i
   const source = fs.readFileSync(path.join(__dirname, '../leadgen.js'), 'utf8');
   const body = source.slice(source.indexOf('async function runEnrichmentChain('), source.indexOf('\nmodule.exports = {'));
   const calls = [];
-  const context = { module: { exports: {} }, CONFIG: { clientId: 13, jobTitle: 'original' },
+  const context = { ...require('../utils/anchorResearchProviderPause'), module: { exports: {} }, CONFIG: { clientId: 13, jobTitle: 'original' },
     enrichWithProspeo: async () => { calls.push('prospeo'); return null; },
     enrichWithHunter: async () => { calls.push('hunter'); return null; },
     scrapeWebsiteEmail: async (d, options) => { calls.push({ domain: d, options }); return null; },
@@ -103,7 +103,7 @@ test('actual promotion opts in only for Babrun, independently of shared Scout CO
   const filename = path.join(__dirname, '../scripts/promoteUnenriched.js');
   const source = fs.readFileSync(filename, 'utf8');
   const body = source.slice(source.indexOf('async function promoteRecord('), source.indexOf('\nasync function run()'));
-  const context = { module: { exports: {} }, console: { log() {} }, require: createRequire(filename),
+  const context = { ...require('../utils/anchorResearchProviderPause'), module: { exports: {} }, console: { log() {} }, require: createRequire(filename),
     configuredServiceAreas: () => [], promotionServiceAreaMatch: () => null };
   vm.runInNewContext(body + '\nmodule.exports = promoteRecord;', context);
   for (const clientId of [10, 13, 17]) await t.test(`tenant ${clientId}`, async () => {

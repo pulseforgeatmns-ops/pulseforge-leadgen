@@ -43,6 +43,7 @@ const path = require('path');
 const express = require('express');
 const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { armed, withResearchProviderScope, isResearchProviderControlError } = require('../utils/anchorResearchProviderPause');
 const {
   isClientRole,
   isInternalOperator,
@@ -612,9 +613,18 @@ router.get(
         req.query.compare_places_new ?? req.query.comparePlacesNew,
         true
       );
-      const report = await diagnoseScoutPlaces({
-        comparePlacesNew,
-        query: req.query.query ? String(req.query.query) : undefined,
+      const actor = req.user || req.session?.user;
+      const selectedTenant = actor?.client_id != null && String(actor.client_id).trim() !== ''
+        ? actor.client_id : req.session?.active_client_id;
+      const report = await withResearchProviderScope(selectedTenant, () => {
+        if (armed()) resolveCieClientId(req, req.query.client_id ?? req.query.clientId);
+        return diagnoseScoutPlaces({
+          client_id: selectedTenant,
+          clientId: req.query.clientId,
+          tenantId: req.query.client_id,
+          comparePlacesNew,
+          query: req.query.query ? String(req.query.query) : undefined,
+        });
       });
       noStore(res);
       return res.status(report.ok ? 200 : 422).json({
@@ -627,6 +637,10 @@ router.get(
         fullKeyLogged: false,
       });
     } catch (err) {
+      if (isResearchProviderControlError(err)) {
+        noStore(res);
+        return res.status(err.code === 'anchor_research_provider_paused' ? 423 : 400).json({ ok: false, error: err.code });
+      }
       return sendError(res, err);
     }
   }

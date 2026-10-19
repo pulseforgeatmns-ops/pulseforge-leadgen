@@ -1,3 +1,7 @@
+## Local proposal — explicit research-provider pause (SPEC-265 / ADR-107)
+
+Use immutable trusted tenant context and typed pre-handoff rejection for the reviewed research paths. Keep the default inactive, preserve other product operations, and disclose unknown-context diagnostic compatibility plus replica/in-flight limits. Publication/deployment/activation require separate approval. See [ADR-107](docs/adr/ADR-107_Explicit_Research_Provider_Pause.md).
+
 [ADR-106](docs/adr/ADR-106_Crm_Only_Canonical_Preparation.md): fixed no-fallback CRM-only canonical preparation under SPEC263.
 
 [ADR-105](docs/adr/ADR-105_Explicit_Scoped_Recovery_Resume.md): explicit scoped recovery resume under SPEC-262.

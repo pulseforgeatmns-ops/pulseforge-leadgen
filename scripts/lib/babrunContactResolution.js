@@ -1,5 +1,7 @@
 'use strict';
 
+const { withResearchProviderScope } = require('../../utils/anchorResearchProviderPause');
+
 /**
  * Babrun tenant 13 — first-ten contact resolution (CONTACT DISCOVERY + VERIFICATION ONLY).
  * Never sends mail. Never schedules outreach. Never modifies Emmett capacity.
@@ -569,6 +571,12 @@ function extractAlternateChannels(pageText, domainEvidence) {
 }
 
 async function resolveTarget(target, options = {}) {
+  return withResearchProviderScope(CLIENT_ID, () => options.prospect?.client_id != null
+    ? withResearchProviderScope(options.prospect.client_id, () => resolveTargetScoped(target, options))
+    : resolveTargetScoped(target, options));
+}
+
+async function resolveTargetScoped(target, options = {}) {
   const domainEvidence = await revalidateDomain(target);
   const domains = relatedBrandDomains(domainEvidence.domain);
   const websiteDiscovery = await discoverWebsiteEmails(target, domainEvidence);

@@ -1,4 +1,5 @@
 'use strict';
+const { rethrowResearchProviderControl } = require('../utils/anchorResearchProviderPause');
 
 const amo = require('../packages/acquisition-mission');
 const { hash, fail, missionScope } = require('../packages/acquisition-mission/DailyOutboundPolicy');
@@ -307,6 +308,7 @@ function adapters(pool, dependencies = {}) {
             companyId: crm.company_id, email: crm.email });
         eligible[id] = { eligible: !reason, reason, prospectId: crm?.prospect_id || null };
       } catch (e) {
+        rethrowResearchProviderControl(e);
         // A conflicting company/contact (including Stewart duplicates) quarantines
         // that candidate without dropping the remainder of the replenishment run.
         eligible[id] = { eligible: false, reason: e.code || 'enrichment_failed' };
@@ -388,6 +390,7 @@ function adapters(pool, dependencies = {}) {
       }
       fail('preparation_step_budget');
     } catch (e) {
+      rethrowResearchProviderControl(e);
       await pool.query('UPDATE acquisition_outbound_preparation SET last_error=$3 WHERE program_id=$1 AND local_day=$2', [program.id, day, e.code || e.message]);
       throw e;
     }
