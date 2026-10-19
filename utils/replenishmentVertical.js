@@ -19,6 +19,11 @@ const ENRICHABLE_SCOUT_VERTICALS = Object.freeze([
   'property_manager',
   'str_manager',
   'commercial_office',
+  'dealership',
+  'school',
+  'campus',
+  'manufacturer',
+  'warehouse',
   'realtor',
   ...FOUNDER_LED_SMALL_BUSINESS_VERTICALS,
 ]);
@@ -74,6 +79,14 @@ const COMMERCIAL_OFFICE_EVIDENCE = [
   /\boffice building management\b/i,
 ];
 
+const MANAGED_FACILITIES_EVIDENCE = Object.freeze({
+  dealership: [/\b(?:auto|car|vehicle) dealership\b/i, /\bdealer group\b/i, /\bautomotive dealership\b/i],
+  school: [/\bprivate school\b/i, /\bacademy\b/i, /\bpreparatory school\b/i, /\bindependent school\b/i],
+  campus: [/\bcollege\b/i, /\buniversity\b/i, /\bcampus\b/i, /\btraining center\b/i],
+  manufacturer: [/\bmanufacturer\b/i, /\bmanufacturing (?:company|facility|plant)\b/i, /\bproduction facility\b/i],
+  warehouse: [/\bwarehouse\b/i, /\bdistribution (?:center|facility)\b/i, /\blogistics facility\b/i],
+});
+
 const FOUNDER_LED_VERTICAL_EVIDENCE = Object.freeze({
   cleaning: [/\bcleaning (?:company|service|business)\b/i, /\bjanitorial (?:company|service)\b/i],
   landscaping: [/\blandscap(?:e|ing|er)\b/i, /\blawn care\b/i, /\bgrounds maintenance\b/i],
@@ -116,6 +129,12 @@ const MISSION_VERTICALS = Object.freeze({
   property_management: ['property_manager', 'str_manager'],
   property_manager: ['property_manager', 'str_manager'],
   commercial_office: ['commercial_office'],
+  managed_facilities: ['property_manager', 'commercial_office', 'dealership', 'school', 'campus', 'manufacturer', 'warehouse'],
+  dealership: ['dealership'],
+  school: ['school'],
+  campus: ['campus'],
+  manufacturer: ['manufacturer'],
+  warehouse: ['warehouse'],
   realtor: ['realtor'],
   real_estate: ['realtor'],
   restaurant_foh: ['restaurant'],
@@ -268,6 +287,9 @@ function resolveReplenishmentVertical(candidate = {}, context = {}) {
     return 'property_manager';
   }
   if (hasEvidence(text, COMMERCIAL_OFFICE_EVIDENCE)) return 'commercial_office';
+  for (const [vertical, patterns] of Object.entries(MANAGED_FACILITIES_EVIDENCE)) {
+    if (hasEvidence(text, patterns)) return vertical;
+  }
   if (realtySignal || /\b(?:real estate (?:agency|brokerage)|realtor)\b/i.test(text)) return 'realtor';
   for (const [vertical, patterns] of Object.entries(FOUNDER_LED_VERTICAL_EVIDENCE)) {
     if (hasEvidence(text, patterns)) return vertical;
