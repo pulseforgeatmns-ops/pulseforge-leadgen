@@ -6,10 +6,16 @@ const BUCKETS = Object.freeze(['eligible_now', 'unsupported_vertical', 'attempt_
 // First failure is vertical, attempts, then retry; predicates are not additive.
 const ELIGIBILITY_SQL = `CASE
   WHEN (u.vertical = ANY($5::text[])) IS NOT TRUE THEN 'unsupported_vertical'
-  WHEN (COALESCE(u.enrichment_attempts, 0) < 3
-    OR u.last_attempt_at <= NOW() - INTERVAL '7 days') IS NOT TRUE THEN 'attempt_limit_hold'
-  WHEN (COALESCE(u.last_attempt_at, NOW() - INTERVAL '100 years')
-    <= NOW() - INTERVAL '1 hour') IS NOT TRUE THEN 'retry_cooldown'
+  WHEN COALESCE(u.enrichment_attempts, 0) >= 6
+    AND (COALESCE(u.last_attempt_at, NOW() - INTERVAL '100 years')
+      <= NOW() - INTERVAL '7 days') IS NOT TRUE THEN 'attempt_limit_hold'
+  WHEN COALESCE(u.enrichment_attempts, 0) >= 3
+    AND COALESCE(u.enrichment_attempts, 0) < 6
+    AND (COALESCE(u.last_attempt_at, NOW() - INTERVAL '100 years')
+      <= NOW() - INTERVAL '24 hours') IS NOT TRUE THEN 'retry_cooldown'
+  WHEN COALESCE(u.enrichment_attempts, 0) < 3
+    AND (COALESCE(u.last_attempt_at, NOW() - INTERVAL '100 years')
+      <= NOW() - INTERVAL '1 hour') IS NOT TRUE THEN 'retry_cooldown'
   ELSE 'eligible_now' END`;
 function createQueueAccounting() {
   const matched = new Map();
