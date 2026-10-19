@@ -65,6 +65,10 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-090](docs/adr/ADR-090_Canonical_Execution_Routing.md) | Canonical Execution Routing | Accepted | Every executable intent is a Canonical Execution Request dispatched by one router |
 | [ADR-092](docs/adr/ADR-092_Identity_Before_Enrichment.md) | Identity Before Enrichment | Accepted | Business identity precedes enrichment; vertical keys are market hypotheses that expand into multi-source search strategies |
 
+## Local proposals pending release approval
+
+- [ADR-102](docs/adr/ADR-102_Explicit_Immutable_Legacy_Coverage_Epoch.md): exact same-fingerprint legacy coverage epoch with one immutable allocation/window receipt, preserved historical work and default-off activation.
+
 ## How to add a decision
 
 1. Copy [`docs/adr/TEMPLATE.md`](docs/adr/TEMPLATE.md).

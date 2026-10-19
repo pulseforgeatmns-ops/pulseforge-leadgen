@@ -14,6 +14,12 @@ describe('CI plan PR selector (SPEC-CI-LEAN-001)', () => {
 
   const cases = [
     {
+      name: 'Small-business website evidence safety',
+      files: ['utils/websiteSmallBusinessEvidence.js', 'services/scoutWebsiteBusinessEvidence.js', 'test/scoutSmallBusinessWebsiteEvidence.test.js'],
+      expect: ['global', 'anchor-outbound'],
+      forbid: ['signal-v1', 'paige-social'],
+    },
+    {
       name: 'Signal-only (PR #899 shape)',
       files: [
         'packages/signal-v1/operator/alertText.js',
@@ -198,6 +204,7 @@ describe('Substral preparation-only CI coverage', () => {
 
 describe('Babrun owner evidence and promotion safety CI coverage', () => {
   for (const file of ['utils/websiteOwnerEvidence.js', 'test/websiteOwnerEvidence.test.js',
+    'utils/websiteSmallBusinessEvidence.js', 'services/scoutWebsiteBusinessEvidence.js', 'test/scoutSmallBusinessWebsiteEvidence.test.js',
     'test/scoutPromotionEvidence.test.js', 'test/scoutPromotionRetention.test.js',
     'test/scoutPromotionCohort.test.js', 'test/helpers/denyWebsiteEvidenceNetwork.cjs']) {
     it(`selects governed outbound for ${file}`, () => {
@@ -206,7 +213,7 @@ describe('Babrun owner evidence and promotion safety CI coverage', () => {
   }
   it('executes both new suites through the network-denying preload', () => {
     const workflow = require('node:fs').readFileSync(require('node:path').join(__dirname, '../.github/workflows/pr-ci-lean.yml'), 'utf8');
-    assert.ok(workflow.includes('node --require ./test/helpers/denyWebsiteEvidenceNetwork.cjs --test test/websiteOwnerEvidence.test.js test/scoutPromotionEvidence.test.js test/scoutPromotionRetention.test.js test/scoutPromotionCohort.test.js'));
+    assert.ok(workflow.includes('node --require ./test/helpers/denyWebsiteEvidenceNetwork.cjs --test test/websiteOwnerEvidence.test.js test/scoutSmallBusinessWebsiteEvidence.test.js test/scoutPromotionEvidence.test.js test/scoutPromotionRetention.test.js test/scoutPromotionCohort.test.js'));
   });
 });
 

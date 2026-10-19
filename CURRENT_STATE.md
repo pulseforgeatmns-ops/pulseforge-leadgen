@@ -4,6 +4,27 @@
 
 ## Current Repository Architecture
 
+[SPEC-SCOUT-CONT-002](docs/specs/SPEC-SCOUT-CONT-002_Explicit_Legacy_Coverage_Epoch.md)
+is an authorized local, production-wired, default-off epoch-1 implementation for legacy roots
+without continuation tokens. Required local PostgreSQL tests start with 21 legacy roots and prove
+old-ticket preservation, fresh admissions across cycles and no unchanged candidate reprocessing. Exact root scope, expiry and cumulative spending
+require later approval; old checkpoints and tickets are preserved.
+
+[Scout durable candidate integration](docs/engineering/scout-durable-candidate-integration.md)
+is locally production-wired behind the default-off tenant 10/13 flag. Immutable
+per-query membership, independent durable tickets, bounded page continuation and
+structured website outcomes prevent held identities from replaying every query.
+Disposable-PostgreSQL multi-cycle tests cover queue flow and simulated verified
+founder clean inventory. This is not deployed or live-yield validated; additive
+migrations and activation still need separate approval.
+
+[SPEC-SCOUT-CONT-001](docs/specs/SPEC-SCOUT-CONT-001_Bounded_Query_Page_Continuation.md)
+is an authorized local/test, default-off query-page continuation proposal. It
+preserves finite provider and per-cycle budgets and requires durable candidate
+responsibility transfer before progression. Legacy checkpoints without tokens
+cannot be resumed or reset implicitly. Publication, migration, activation and
+live inventory validation remain separately gated.
+
 [SPEC-SCOUT-OWNER-001](docs/specs/SPEC-SCOUT-OWNER-001_Observed_Website_Owner_Evidence.md)
 has an authorized local/test repair for explicit owner evidence on already-fetched
 website pages. Only Babrun/tenant 13 intake and promotion opt in; other callers

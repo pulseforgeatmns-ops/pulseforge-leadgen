@@ -153,7 +153,10 @@ function mergeIdentities(candidates = []) {
 
     const existing = byKey.get(key);
     if (existing) {
-      byKey.set(key, fuseCandidateRecords(existing, row, identity));
+      const fused = fuseCandidateRecords(existing, row, identity);
+      byKey.set(key, fused);
+      const index = merged.indexOf(existing);
+      if (index >= 0) merged[index] = fused;
     } else {
       // Secondary match: try name+address against existing entries
       const nameAddrKey = `nameaddr:${lowerText(row.name || row.company)}|${lowerText(candidateAddressText(row))}`;
@@ -196,6 +199,7 @@ function fuseCandidateRecords(existing, incoming, identity) {
   return {
     ...existing,
     ...incoming,
+    ...require('../../../utils/scoutTicketMembership').ticketFields(existing, incoming),
     name: existing.name || incoming.name || incoming.company,
     phone: existing.phone || incoming.phone,
     address: existing.address || incoming.address,
