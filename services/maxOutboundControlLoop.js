@@ -1,4 +1,5 @@
 'use strict';
+const { withResearchProviderScope, assertResearchProviderAllowed, rethrowResearchProviderControl } = require('../utils/anchorResearchProviderPause');
 
 const { loadRecoveryState } = require('./anchorEmailRecovery');
 const { assertLegacyPreparation } = require('./anchorEmailRecoveryIntegration');
@@ -869,7 +870,14 @@ async function consumeResearch(pool, authority, now) {
   }, { now });
 }
 
-async function defaultScoutRamp({
+async function defaultScoutRamp(input = {}) {
+  const governed = input.governedContext || createGovernedOutboundContext({ program: input.program });
+  const tenant = resolveReplenishmentTenantContext({ governedContext: governed, program: input.program });
+  return withResearchProviderScope(tenant.tenantId,
+    () => defaultScoutRampResearchScoped({ ...input, governedContext: governed }));
+}
+
+async function defaultScoutRampResearchScoped({
   cycleId = null,
   pool,
   store,
@@ -906,6 +914,7 @@ async function defaultScoutRamp({
       tenantId: tenant.tenantId,
     });
   } catch (err) {
+    rethrowResearchProviderControl(err);
     logger.warn?.('[max-outbound-control] existing inventory recovery failed', err.message || err);
   }
   const first = await runEnrichmentBatches(enricher, pool, plan.deficit, tenantBinding);
@@ -1318,6 +1327,7 @@ async function runMaxOutboundControlLoop(options = {}) {
         preserveGovernedEmailInventory: true,
       });
     } catch (err) {
+      rethrowResearchProviderControl(err);
       logger.warn?.('[max-outbound-control] AO refill failed', err.message || err);
       aoRefill = { error: err.message || String(err), assigned: [] };
     }

@@ -1,4 +1,5 @@
 'use strict';
+const { withResearchProviderScope, assertResearchProviderAllowed, rethrowResearchProviderControl } = require('../../../../utils/anchorResearchProviderPause');
 
 /**
  * Google Places discovery provider (SPEC-024).
@@ -243,6 +244,19 @@ function createPlacesProvider(deps = {}) {
       return out;
     },
   };
+  // Capture request authority before any checkpoint, retry, or provider await.
+  // Attribution/global configuration cannot substitute for this bound scope.
+  for (const method of ['collectEvidence', 'search']) {
+    const execute = provider[method];
+    provider[method] = async function (request = {}) {
+      const tenants = [request.tenantId, request.clientId, request.client_id,
+        deps.tenantId, deps.clientId, deps.client_id].filter(value => value != null);
+      return withResearchProviderScope(tenants[0], () => {
+        for (const tenant of tenants) assertResearchProviderAllowed('google_places', tenant);
+        return execute.call(this, request);
+      });
+    };
+  }
   return provider;
 }
 
@@ -484,6 +498,7 @@ async function fetchPlacesPage(querySpec, apiKey, fetchImpl, pageToken = null) {
       },
     };
   } catch (err) {
+    rethrowResearchProviderControl(err);
     return {
       results: [],
       nextPageToken: null,

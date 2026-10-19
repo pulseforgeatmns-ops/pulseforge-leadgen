@@ -255,3 +255,52 @@ describe('SPEC262 scoped recovery CI coverage', () => {
     assert.match(require('../package.json').scripts['test:anchor-outbound'], /test\/anchorScopedResume\*\.test\.js/);
   });
 });
+
+// SPEC-265: the reviewed provider pause cannot change without its regressions.
+it('research provider pause leaves and callers select the Anchor suite', () => {
+  for (const file of [
+    "leadgen.js",
+    "lib/serpapi.js",
+    "packages/capabilities/acquisition/ProspectAcquisition.js",
+    "packages/capabilities/acquisition/providerContract.js",
+    "packages/capabilities/discovery/ProspectDiscovery.js",
+    "packages/capabilities/discovery/providers/PlacesProvider.js",
+    "packages/max/scoutAcquisition/DiscoveryAdapters.js",
+    "packages/max/scoutAcquisition/ScoutAdapter.js",
+    "packages/max/workspace/MissionBoundWebsiteDiscovery.js",
+    "packages/max/workspace/ScoutDiscoveryExecutor.js",
+    "packages/scout/DiscoveryPipeline.js",
+    "packages/scout/coverage/DiscoveryCoverageEngine.js",
+    "packages/scout/coverage/HypothesisDrivenDiscoveryEngine.js",
+    "packages/scout/investigation/CandidateInvestigation.js",
+    "phoneEnrich.js",
+    "routes/clientIntelligence.js",
+    "routes/cron.js",
+    "scoutUnenrichedEnrichmentAgent.js",
+    "scripts/backfill_email_verification.js",
+    "scripts/diagnoseScoutPlaces.js",
+    "scripts/importAnchorCallList.js",
+    "scripts/lib/anchorMissionBoundEnrichment.js",
+    "scripts/lib/babrunCohort002.js",
+    "scripts/lib/babrunContactResolution.js",
+    "scripts/lib/webCohort002.js",
+    "scripts/lib/webCohort003.js",
+    "scripts/promoteUnenriched.js",
+    "scripts/resolveBabrunFirstTenContacts.js",
+    "server.js",
+    "services/emailVerificationRecovery.js",
+    "services/governedOutboundAdapters.js",
+    "services/maxOutboundControlLoop.js",
+    "services/sameCompanyContactRecovery.js",
+    "services/scoutPlacesDiagnostic.js",
+    "services/scoutPublicSourcing.js",
+    "tieredEnrichmentAgent.js",
+    "utils/anchorResearchProviderPause.js",
+    "utils/emailVerifier.js",
+    "utils/placesApi.js",
+    "test/anchorResearchProviderPauseCore.test.js"
+]) {
+    assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
+  }
+  assert.match(require('../package.json').scripts['test:anchor-outbound'], /test\/anchorResearchProviderPause\*\.test\.js/);
+});

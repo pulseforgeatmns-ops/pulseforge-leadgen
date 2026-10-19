@@ -6,6 +6,7 @@
  */
 require('dotenv').config();
 const pool = require('../db');
+const { withResearchProviderScope } = require('../utils/anchorResearchProviderPause');
 const { companyIdentityNameKey, COMPANY_IDENTITY_NAME_SQL } = require('../utils/companyIdentityName');
 const { normalizeDomain, runEnrichmentChain, resolveEmailVerification } = require('../leadgen');
 const { ensureEmailVerificationColumns } = require('../utils/emailVerificationSchema');
@@ -163,7 +164,11 @@ function babrunPromotionContactResolution({ enriched = {}, verification = {}, of
   };
 }
 
-async function promoteRecord(record, {
+async function promoteRecord(record, options = {}) {
+  return withResearchProviderScope(record.client_id, () => promoteRecordScoped(record, options));
+}
+
+async function promoteRecordScoped(record, {
   db = pool,
   enrich = runEnrichmentChain,
   verify = resolveEmailVerification,

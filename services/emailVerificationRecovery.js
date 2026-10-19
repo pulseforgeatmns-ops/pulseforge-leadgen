@@ -5,6 +5,7 @@
  * addresses merely to fill inventory.
  */
 
+const { withResearchProviderScope, rethrowResearchProviderControl } = require('../utils/anchorResearchProviderPause');
 const { invalidOutreachEmailReason } = require('../utils/emailGuard');
 const { resolveEmailVerification } = require('../leadgen');
 
@@ -215,7 +216,12 @@ async function persistVerifiedRetry(pool, clientId, row, email, verification) {
   return result.rowCount === 1;
 }
 
-async function retryUnverifiedEmails(pool, {
+async function retryUnverifiedEmails(pool, options = {}) {
+  const tenantId = options.clientId === undefined ? 10 : options.clientId;
+  return withResearchProviderScope(tenantId, () => retryUnverifiedEmailsScoped(pool, options));
+}
+
+async function retryUnverifiedEmailsScoped(pool, {
   clientId = 10,
   limit = 15,
   verify = resolveEmailVerification,
@@ -223,7 +229,8 @@ async function retryUnverifiedEmails(pool, {
 } = {}) {
   const tenantId = validatedClientId(clientId);
   const telemetry = emptyVerificationRetryTelemetry();
-  const rows = await loadUnverifiedProspects(pool, { clientId: tenantId, limit }).catch(() => {
+  const rows = await loadUnverifiedProspects(pool, { clientId: tenantId, limit }).catch(error => {
+    rethrowResearchProviderControl(error);
     telemetry.verificationRetryLoadFailed += 1;
     return [];
   });
@@ -249,11 +256,11 @@ async function retryUnverifiedEmails(pool, {
         continue;
       }
       failureReason = 'verification_exception';
-      const verification = await verify(email, {
+      const verification = await withResearchProviderScope(row.client_id, () => verify(email, {
         email,
         source: ['verification_retry'],
         now,
-      });
+      }));
       failureReason = 'unexpected_exception';
       const outcome = classifyRetryOutcome(verification);
       if (outcome === 'failed') {
@@ -274,6 +281,7 @@ async function retryUnverifiedEmails(pool, {
         telemetry.verificationRetryInvalid += 1;
       }
     } catch (_err) {
+      rethrowResearchProviderControl(_err);
       recordRetryFailure(telemetry, failureReason);
     }
   }

@@ -1,3 +1,5 @@
+[SPEC-265](docs/specs/SPEC-265_Anchor_Research_Provider_Pause.md) is in-progress local-only preparation of a default-off tenant-10 research-provider pause. No publication, deployment or arming authority. See [ADR-107](docs/adr/ADR-107_Explicit_Research_Provider_Pause.md).
+
 [SPEC-264](docs/specs/SPEC-264_Anchor_Crm_One_Shot_Invocation.md) is a separate local-only one-shot operator invocation proposal; not approved for publication or production execution. Frozen SPEC262/263 artifacts remain unchanged.
 
 [SPEC-263](docs/specs/SPEC-263_Anchor_Existing_Crm_Canonical_Preparation.md) is a separate local-only CRM preparation bridge on frozen SPEC262. No current fresh production candidates or activation authority exist.

@@ -1,6 +1,7 @@
 'use strict';
 
 const { serviceTradeVerticals } = require('../../../utils/canonicalBusinessTaxonomy');
+const { rethrowResearchProviderControl } = require('../../../utils/anchorResearchProviderPause');
 
 /**
  * SPEC-153 — Discovery Coverage Engine (ADR-076: Coverage Before Conclusion).
@@ -248,6 +249,7 @@ async function executeCoveragePlan(plan, searchDefinition, adapters = [], opts =
         errors.push(...report.errors.map((err) => ({ ...err, workload })));
       }
     } catch (err) {
+      rethrowResearchProviderControl(err);
       // Candidate processing (including a reused report) is not another provider call.
       if (providerAttempted && !receiptRecorded) {
         providerReceipts.push(buildDiscoveryProviderReport({ errors: [{ code: 'provider_error', message: err.message || String(err) }] }, adapter, {
