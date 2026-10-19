@@ -32,6 +32,11 @@ const MAX_RETRIES = 2;
 const RETRYABLE_GOOGLE_STATUS = new Set(['OVER_QUERY_LIMIT', 'UNKNOWN_ERROR']);
 const SUCCESS_GOOGLE_STATUS = new Set(['OK', 'ZERO_RESULTS']);
 
+function mergeTicketRefs(existing, incoming) {
+  const refs = [...(existing?._scoutTicketRefs || []), ...(incoming?._scoutTicketRefs || [])];
+  if (refs.length) existing._scoutTicketRefs = [...new Map(refs.map(ref => [JSON.stringify(ref), ref])).values()];
+}
+
 function createProviderExecution(partial = {}) {
   return {
     providerId: 'google_places',
@@ -136,14 +141,17 @@ function createPlacesProvider(deps = {}) {
       if (checkpoint) checkpoint.assertTenant(evidenceRequest.tenantId);
       let checkpointSkipped = 0;
       let checkpointReplayed = 0;
+      let continuationStatus = null;
       for (const query of queries) {
         const prior = checkpoint ? await checkpoint.lookup(query, requireWebsite) : null;
-        if (prior?.handled) { checkpointSkipped += 1; continue; }
+        if (prior?.handled) { checkpointSkipped += 1; continuationStatus ||= prior.continuationStatus; continue; }
         if (prior && Array.isArray(prior.candidates)) {
           checkpointReplayed += 1;
           for (const hit of prior.candidates) {
-            knownHits.set(hit.placeId, hit);
-            if (!seenPlaceIds.has(hit.placeId)) { seenPlaceIds.add(hit.placeId); out.push(hit); }
+            const existing = out.find(row => row.placeId === hit.placeId);
+            if (existing) mergeTicketRefs(existing, hit);
+            else { seenPlaceIds.add(hit.placeId); out.push(hit); }
+            knownHits.set(hit.placeId, existing || hit);
           }
           continue;
         }
@@ -154,14 +162,20 @@ function createPlacesProvider(deps = {}) {
           { industry: query, location: '', limit },
           apiKey,
           fetchImpl,
-          { requireWebsite, seenPlaceIds: querySeen, out: queryOut, knownHits: checkpoint ? knownHits : null }
+          { requireWebsite, seenPlaceIds: querySeen, out: queryOut, knownHits: checkpoint ? knownHits : null,
+            singlePage: prior?.singlePage === true, pageToken: prior?.pageToken || null }
         );
         if (checkpoint) {
           const rows = !searchResult.error
-            ? await checkpoint.stage(prior.key, queryOut) : queryOut;
+            ? await checkpoint.stage(prior.key, queryOut, prior.singlePage ? {
+              nextPageToken: searchResult.nextPageToken, rawResults: searchResult.rawResults,
+            } : null) : prior.singlePage ? [] : queryOut;
+          if (searchResult.error && typeof checkpoint.fail === 'function') await checkpoint.fail(prior.key, { ...searchResult.error, rawResults: searchResult.rawResults });
           for (const hit of rows) {
-            knownHits.set(hit.placeId, hit);
-            if (!seenPlaceIds.has(hit.placeId)) { seenPlaceIds.add(hit.placeId); out.push(hit); }
+            const existing = out.find(row => row.placeId === hit.placeId);
+            if (existing) mergeTicketRefs(existing, hit);
+            else { seenPlaceIds.add(hit.placeId); out.push(hit); }
+            knownHits.set(hit.placeId, existing || hit);
           }
         }
         queryRecords.push(...(searchResult.attempts || []));
@@ -178,7 +192,7 @@ function createPlacesProvider(deps = {}) {
           (row) => row.httpStatus != null || row.googleStatus != null || row.googleError
         ),
         abortReason: checkpointSkipped === queries.length && queries.length
-          ? 'approved_query_set_handled' : queryRecords.length || out.length || checkpointReplayed ? null : 'no_queries_generated',
+          ? (continuationStatus || 'approved_query_set_handled') : queryRecords.length || out.length || checkpointReplayed ? null : 'no_queries_generated',
         queries: queryRecords,
         totals: {
           queries: queryRecords.length,
@@ -314,7 +328,8 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
   let latencyMs = 0;
   let quota = null;
   let error = null;
-  let nextPageToken = null;
+  let nextPageToken = opts.pageToken || null;
+  let rawPageResults = [];
   let attempt = 0;
   let acceptedForQuery = 0;
   const limit = Math.min(Number(querySpec.limit) || DEFAULT_LIMIT, DEFAULT_LIMIT);
@@ -336,6 +351,7 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
         query: page.attempt.query,
         httpStatus: page.attempt.httpStatus,
         googleStatus: page.attempt.googleStatus,
+        noNetwork: page.attempt.noNetwork === true && attempts.every(row => row.noNetwork === true),
       };
       const retryable = RETRYABLE_GOOGLE_STATUS.has(page.attempt.googleStatus);
       if (retryable && attempt <= MAX_RETRIES) {
@@ -345,20 +361,35 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
       break;
     }
 
+    // Single-page mode has not processed any earlier successful page. A prior
+    // error here can only be a failed search retry; do not poison its recovery.
+    if (opts.singlePage) error = null;
+    if (opts.singlePage && page.attempt.resultCount > DEFAULT_LIMIT) {
+      error = { code: 'unexpected_page_size', message: 'Provider page exceeds approved result bound' };
+      break;
+    }
+    rawPageResults = page.results || [];
     for (const hit of page.results || []) {
       if (!hit.place_id) continue;
       if (seenPlaceIds.has(hit.place_id)) {
         // A staged query is a self-contained replay unit, not a delta dependent
         // on earlier query order. Reuse the known hit without another detail call.
         if (knownHits?.has(hit.place_id) && !captured.has(hit.place_id)) {
-          out.push({ ...knownHits.get(hit.place_id), industry: querySpec.industry || null }); captured.add(hit.place_id);
+          const { _scoutTicketRefs, ...rawHit } = knownHits.get(hit.place_id);
+          out.push({ ...rawHit, industry: querySpec.industry || null, discoveryQuery: querySpec.industry || null }); captured.add(hit.place_id);
         }
         continue;
       }
       seenPlaceIds.add(hit.place_id);
-      const detailResult = await fetchPlaceDetails(hit.place_id, apiKey, fetchImpl, {
-        requireWebsite,
-      });
+      let detailResult;
+      try {
+        detailResult = await fetchPlaceDetails(hit.place_id, apiKey, fetchImpl, { requireWebsite });
+      } catch (failure) {
+        rethrowResearchProviderControl(failure);
+        if (!opts.singlePage) throw failure;
+        error = { code: 'google_places_details_failed', message: 'Place details request failed', noNetwork: false };
+        break;
+      }
       if (detailResult.error && !error) error = detailResult.error;
       if (detailResult.error?.googleStatus === 'REQUEST_DENIED') {
         error = detailResult.error;
@@ -379,6 +410,7 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
         googleRating: details?.rating ?? hit.rating ?? null,
         source: 'google_places',
         industry: querySpec.industry || null,
+        discoveryQuery: querySpec.industry || null,
         snippet: '',
       };
       out.push(acceptedHit);
@@ -392,16 +424,16 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
     if (typeof page.commitRecord === 'function') {
       await page.commitRecord({
         businessesAccepted: pageAccepted,
-        candidatesCreated: pageAccepted,
+        candidatesCreated: opts.singlePage && error ? 0 : pageAccepted,
       });
     }
 
     if (error?.googleStatus === 'REQUEST_DENIED') break;
     nextPageToken = page.nextPageToken || null;
-    if (!nextPageToken || acceptedForQuery >= limit) break;
+    if (opts.singlePage || !nextPageToken || acceptedForQuery >= limit) break;
   }
 
-  return { attempts, retries, latencyMs, quota, error };
+  return { attempts, retries, latencyMs, quota, error, nextPageToken, rawResults: rawPageResults };
 }
 
 // Search already returns rating. Re-requesting it adds the Atmosphere SKU.
@@ -507,7 +539,8 @@ async function fetchPlacesPage(querySpec, apiKey, fetchImpl, pageToken = null) {
         query: q,
         httpStatus: null,
         googleStatus: null,
-        googleError: 'google_places_transport_failed',
+        googleError: err.apiUsageNoNetwork ? 'provider_budget_denied' : 'google_places_transport_failed',
+        noNetwork: err.apiUsageNoNetwork === true,
         resultCount: 0,
         latencyMs: Date.now() - started,
         retries: 0,

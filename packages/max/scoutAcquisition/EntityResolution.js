@@ -63,6 +63,7 @@ function mergeResolved(existing, incoming) {
   for (const key of Object.keys(incoming || {})) {
     if (out[key] == null && incoming[key] != null) out[key] = incoming[key];
   }
+  Object.assign(out, require('../../../utils/scoutTicketMembership').ticketFields(existing, incoming));
   const observations = [...classificationObservations(existing), ...classificationObservations(incoming)];
   out.classificationObservations = [...new Map(observations.map(row => [JSON.stringify(row), row])).values()];
   if (!out.aliases) out.aliases = [];
@@ -108,6 +109,7 @@ function resolveCandidate(candidate, existingCompanies = []) {
     `disc-${normalizeName(name).replace(/\s+/g, '-') || 'company'}`;
   return {
     company: {
+      ...require('../../../utils/scoutTicketMembership').ticketFields(candidate),
       id,
       tenantId: candidate.tenantId || null,
       name,

@@ -42,6 +42,7 @@ function toDiscoveredCompany(raw, searchDefinition, source) {
   const name = asText(raw.name || raw.companyName || raw.company);
   if (!name) return null;
   return {
+    ...require('../../../utils/scoutTicketMembership').ticketFields(raw),
     id: asText(raw.id || raw.companyId || raw.placeId) || null,
     tenantId: asText(raw.tenantId || raw.client_id || raw.clientId) || searchDefinition.tenantId,
     name,

@@ -73,6 +73,10 @@ ADRs capture **why** we locked an architectural choice. They are permanent. Stat
 
 Also listed in root [`DECISIONS.md`](../../DECISIONS.md).
 
+## Local proposals
+
+- [ADR-102: Explicit immutable legacy coverage epoch](ADR-102_Explicit_Immutable_Legacy_Coverage_Epoch.md) — Proposed; locally implemented, production approval pending.
+
 ## When to write an ADR
 
 - New data store or memory model

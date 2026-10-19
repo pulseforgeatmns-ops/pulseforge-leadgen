@@ -7,6 +7,19 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
+// Provider acceptance fixtures must not construct a shared DB or reserve live spend.
+const dbPath = require.resolve('../db');
+require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: {
+  query: async sql => {
+    assert.match(sql, /places_api_requests|CREATE TABLE|CREATE INDEX|ALTER TABLE/);
+    return { rows: [] };
+  },
+} };
+const spendPath = require.resolve('../utils/apiSpendControl');
+require.cache[spendPath] = { id: spendPath, filename: spendPath, loaded: true, exports: {
+  reserveApiCall: async () => 'fixture-reservation', settleApiCall: async () => {},
+} };
+
 const {
   buildEvidenceRequest,
   scopeSearchDefinitionForTask,
@@ -114,7 +127,7 @@ describe('SPEC-181 — Evidence-Native Execution', () => {
       const u = String(url);
       if (u.includes('textsearch')) {
         return {
-          ok: true,
+          ok: true, status: 200,
           async json() {
             return {
               status: 'OK',
@@ -125,9 +138,10 @@ describe('SPEC-181 — Evidence-Native Execution', () => {
       }
       if (u.includes('details')) {
         return {
-          ok: true,
+          ok: true, status: 200,
           async json() {
             return {
+              status: 'OK',
               result: {
                 place_id: 'place-1',
                 name: 'River City PM',

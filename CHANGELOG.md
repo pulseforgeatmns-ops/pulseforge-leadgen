@@ -39,6 +39,28 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- [SPEC-SCOUT-CONT-002](docs/specs/SPEC-SCOUT-CONT-002_Explicit_Legacy_Coverage_Epoch.md)
+  and [ADR-102](docs/adr/ADR-102_Explicit_Immutable_Legacy_Coverage_Epoch.md):
+  default-off explicit same-fingerprint epoch1 for exact legacy query roots,
+  immutable scope-wide allocation/window receipt, durable staged-page recovery
+  after expiry/removal, and bounded sanitized approval diagnostics. Local tests
+  preserve old candidate/attempt history and enforce cumulative page ceilings.
+  Production release, exact manifest and additional spend remain approval-gated.
+
+- Default-off tenant 10/13 durable Scout candidate tickets and exact immutable
+  query membership, independent backlog draining, fenced queue completion,
+  bounded continuation and explicit dependency holds. Successful no-evidence
+  crawls do not automatically repeat; only explicit transient failures retry.
+  Real PostgreSQL tests exercise sustained simulated queue/clean-inventory flow,
+  crashes, concurrency and preserved cost/attempt limits. Migration, activation,
+  publication and live yield remain separately gated.
+
+- [SPEC-SCOUT-CONT-001](docs/specs/SPEC-SCOUT-CONT-001_Bounded_Query_Page_Continuation.md):
+  authorized local/test, opt-in finite Places pagination with immutable scoped
+  page checkpoints, exact durable candidate handoff, one-page cycle allocation,
+  existing spend reservations and explicit exhaustion/legacy-token blockers.
+  No publication, production migration, activation or live replenishment proof.
+
 - [SPEC-PF-ACCEL-001](docs/specs/SPEC-PF-ACCEL-001_Rollout_Preflight.md):
   default-dry-run rollout preflight for PR897 schema/index/constraint/trigger
   prerequisites and optional local PR899 token-length diagnostics. Uses an
