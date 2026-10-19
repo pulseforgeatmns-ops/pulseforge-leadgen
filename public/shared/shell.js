@@ -111,6 +111,7 @@
 
   function currentSurface() {
     const path = window.location.pathname;
+    if (path.startsWith('/admin/clients')) return 'clients';
     if (path.startsWith('/command-deck')) {
       if ((window.location.hash || '') === '#operations') return 'operations';
       return 'command-deck';
@@ -142,8 +143,7 @@
   // Legacy stored values migrate: 'light' → warm, 'dark' → dark.
   function readTheme() {
     const stored = localStorage.getItem(THEME_KEY);
-    if (stored === 'dark') return 'dark';
-    return 'warm';
+    return stored === 'warm' || stored === 'light' ? 'warm' : 'dark';
   }
 
   function applyTheme(theme) {
@@ -251,31 +251,53 @@
     const tenantName = tenantState?.tenantName || null;
     const surface = currentSurface();
     const nav = document.createElement('nav');
-    nav.className = 'pf-shell-nav';
+    nav.className = 'pf-shell-nav pf-living-shell';
     nav.setAttribute('aria-label', 'Pulseforge primary navigation');
 
     const brand = document.createElement('a');
     brand.className = 'pf-nav-brand';
-    brand.href = ['setter', 'sales'].includes(role) ? '/setter' : (role === 'closer' ? '/closer' : '/dashboard');
-    brand.textContent = 'PULSEFORGE';
+    brand.href = ['setter', 'sales'].includes(role) ? '/setter' : (role === 'closer' ? '/closer' : '/command-deck');
+    brand.textContent = 'pulseforge';
     nav.appendChild(brand);
 
     const links = document.createElement('div');
     links.className = 'pf-nav-links';
-    for (const item of NAV_ITEMS) {
-      if (role && !item.roles.includes(role)) continue;
+    const operatorView = ['admin', 'manager', 'viewer', 'client'].includes(role);
+    const primaryIds = operatorView ? ['command-deck', 'pipeline'] : ['home', 'pipeline', 'customers'];
+    const visibleItems = NAV_ITEMS.filter(item => role && item.roles.includes(role));
+    const primaryItems = visibleItems.filter(item => primaryIds.includes(item.id)).map(item =>
+      item.id === 'command-deck' ? { ...item, label: 'Command', clientLabel: 'Command' } : item);
+    if (['admin', 'manager'].includes(role)) primaryItems.push({
+      id: 'clients', label: 'Clients', href: { default: '/admin/clients' },
+    });
+    if (role === 'client') primaryItems.push(visibleItems.find(item => item.id === 'client-intel'));
+    function appendLink(parent, item) {
       const link = document.createElement('a');
       link.className = 'pf-nav-link';
       link.href = hrefFor(item, role);
       link.textContent = labelFor(item, role);
       link.dataset.pfNav = item.id;
       if (surface === item.id) link.setAttribute('aria-current', 'page');
-      links.appendChild(link);
+      parent.appendChild(link);
     }
+    primaryItems.filter(Boolean).forEach(item => appendLink(links, item));
     nav.appendChild(links);
 
     const group = document.createElement('div');
     group.className = 'pf-nav-group';
+
+    if (['admin', 'manager'].includes(role)) {
+      const needs = document.createElement('a');
+      needs.className = 'pf-nav-needs';
+      needs.href = '/dashboard#pf-tab=approvals';
+      needs.title = 'Content awaiting your approval';
+      needs.textContent = 'Needs you';
+      const count = document.createElement('span');
+      count.id = 'pfNeedsCount';
+      count.hidden = true;
+      needs.appendChild(count);
+      group.appendChild(needs);
+    }
 
     // SPEC-099 — client users: upper-right identity is the business workspace.
     // Admin/manager: keep gold tenant pill + personal who.
@@ -313,13 +335,6 @@
         tenantCoordinator()?.bindTenantSelect?.(select);
         tenantWrap.appendChild(select);
 
-        const createLink = document.createElement('a');
-        createLink.className = 'pf-nav-link pf-nav-create-client';
-        createLink.href = '/admin/clients';
-        createLink.textContent = 'New client';
-        createLink.title = 'Create and provision a tenant workspace';
-        tenantWrap.appendChild(createLink);
-
         group.appendChild(tenantWrap);
       } else if (tenantName) {
         const tenant = document.createElement('span');
@@ -337,18 +352,40 @@
       }
     }
 
+    const tools = document.createElement('details');
+    tools.className = 'pf-nav-tools';
+    const summary = document.createElement('summary');
+    summary.textContent = 'Workspace tools';
+    tools.appendChild(summary);
+    const toolLinks = document.createElement('div');
+    toolLinks.className = 'pf-nav-tools-panel';
+    visibleItems.filter(item => !primaryIds.includes(item.id) && item.id !== 'home' && !(role === 'client' && item.id === 'client-intel'))
+      .forEach(item => appendLink(toolLinks, item));
+    if (['admin', 'manager'].includes(role)) {
+      for (const [id, label] of [['agents', 'Agents'], ['actions', 'Actions'], ['prospects', 'Prospects'], ['activity', 'Activity']]) {
+        appendLink(toolLinks, { id: `tool-${id}`, label, href: { default: `/dashboard#pf-tab=${id}` } });
+      }
+      appendLink(toolLinks, { id: 'service-portal', label: 'Service portal', href: { default: '/portal/anchor' } });
+    }
     const themeBtn = document.createElement('button');
     themeBtn.type = 'button';
     themeBtn.id = 'pfThemeToggle';
     themeBtn.className = 'pf-nav-theme';
     themeBtn.addEventListener('click', toggleTheme);
-    group.appendChild(themeBtn);
+    toolLinks.appendChild(themeBtn);
 
     const logout = document.createElement('a');
     logout.className = 'pf-nav-logout';
     logout.href = '/logout';
     logout.textContent = 'Log out';
-    group.appendChild(logout);
+    toolLinks.appendChild(logout);
+    tools.appendChild(toolLinks);
+    group.appendChild(tools);
+    tools.addEventListener('keydown', event => {
+      if (event.key === 'Escape') { tools.open = false; summary.focus(); }
+    });
+    toolLinks.addEventListener('click', event => { if (event.target.closest('a')) tools.open = false; });
+    document.addEventListener('click', event => { if (!tools.contains(event.target)) tools.open = false; });
 
     nav.appendChild(group);
     return nav;
@@ -371,7 +408,7 @@
     let attempts = 0;
     const timer = window.setInterval(() => {
       attempts += 1;
-      const target = document.querySelector(`.sidebar [data-tab="${tab}"], .nav-tabs [data-tab="${tab}"]`);
+      const target = document.querySelector(`.sidebar [data-tab="${tab}"], .nav-tabs [data-tab="${tab}"]`) || (tab === 'users' ? document.getElementById('usersTab') : null);
       if (target) {
         target.click();
         window.clearInterval(timer);
@@ -384,6 +421,11 @@
   async function init() {
     applyTheme(readTheme());
     const context = await fetchContext();
+    if (window.location.pathname === '/dashboard' && !window.location.hash && !window.location.search && ['admin', 'manager', 'viewer', 'client'].includes(context?.user?.role)) {
+      window.location.replace('/command-deck');
+      return;
+    }
+    document.body.classList.toggle('pf-focused-workspace', window.location.pathname.startsWith('/dashboard'));
     const tenantState = await fetchTenantContext(context);
     const coord = tenantCoordinator();
     if (coord && tenantState.clients?.length) {

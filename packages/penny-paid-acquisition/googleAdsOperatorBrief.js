@@ -72,6 +72,24 @@ function buildGoogleAdsOperatorBrief({ readiness, evidence } = {}) {
     activeCampaignCount: campaignCount,
     warnings,
     blockers,
+    // Preserve per-campaign scope and evidence gaps for the opening brief.
+    // Legacy aggregate fields above include paused history and remain compatible.
+    live: evidence && !blockers.length ? {
+      available: true,
+      currency: evidence.account?.currency || 'USD',
+      window: evidence.observationWindow || null,
+      observedAt: evidence.provenance?.observedAt || evidence.readiness?.lastSuccessfulReadAt || null,
+      campaigns: (evidence.campaigns || []).map(row => ({
+        name: row.name,
+        status: row.status,
+        channel: row.advertisingChannelType,
+        spend: row.spend,
+        impressions: row.impressions,
+        clicks: row.clicks,
+        conversions: row.platformConversions ?? null,
+        dailyBudget: row.budget?.period === 'DAILY' ? row.budget.amount : null,
+      })),
+    } : { available: false },
     recommendedNextAction: recommendGoogleAdsNextAction({
       blockers,
       campaignCount,

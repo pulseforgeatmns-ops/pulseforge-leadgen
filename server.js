@@ -475,14 +475,14 @@ app.post('/login', async (req, res) => {
     if (user.role === 'sales') return res.redirect('/sales');
     if (user.role === 'ao') return res.redirect('/ao');
     if (user.role === 'cleaner' || user.role === 'facility_client') return res.redirect('/portal/anchor');
-    return res.redirect('/dashboard');
+    return res.redirect('/command-deck');
   }
 
   if (password === process.env.DASHBOARD_PASSWORD) {
     req.session.user = { id: null, name: 'Legacy Admin', email: email || 'legacy@pulseforge.local', role: 'admin' };
     req.session.authenticated = true;
     req.session.active_client_id = 1;
-    return res.redirect('/dashboard');
+    return res.redirect('/command-deck');
   }
 
   res.redirect('/login?error=1');
