@@ -290,6 +290,9 @@ function segmentAliases(scope) {
     ['property_manager', 'property_management', 'str_manager'].forEach(x => aliases.add(x));
   }
   if (scope.segment === 'restaurant_foh') aliases.add('restaurant');
+  if (scope.segment === 'managed_facilities') {
+    missionCompatibleVerticals({ missionSegment: scope.segment }).forEach(x => aliases.add(x));
+  }
   if (isSmallBusinessOwnerSegment(scope.segment)) {
     missionCompatibleVerticals({ missionSegment: scope.segment }).forEach(x => aliases.add(x));
   }
