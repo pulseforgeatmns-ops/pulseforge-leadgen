@@ -16,6 +16,16 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Fixed
 
+- [SPEC-131](docs/specs/SPEC-131_Transactional_Mission_Execution.md): proposed
+  local reconciliation safety correction. Inspection writes nothing; CLI mutation
+  requires `--apply`. Release needs exact current-attempt, item/envelope-bound,
+  explicitly pre-provider evidence; legacy unversioned evidence stays held. Durable
+  mailbox/canonical receipts block release regardless of status and are prioritized
+  over diagnostic limits. Apply excludes tenant and scheduler dispatch, then uses
+  tenant/status/reason/exact-attempt CAS; overlap never claims application. Adds
+  adversarial unit and required native PostgreSQL race coverage. No live write,
+  reconciliation, resend, publication or production change has been performed.
+
 - [SPEC-SCOUT-OWNER-001](docs/specs/SPEC-SCOUT-OWNER-001_Observed_Website_Owner_Evidence.md):
   Babrun/tenant 13 intake and promotion opt in to rank explicit, company-bound owner/founder contact records ahead of an earlier
   website role inbox using only pages the existing crawl already fetched. Keep

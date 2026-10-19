@@ -316,6 +316,7 @@ class GovernedOutboundStore {
     } catch (e) { await db.query('ROLLBACK'); throw e; } finally { db.release(); }
   }
   async releaseUnsent(item, reason, extras = {}) {
+    if (extras.expectedAttempt && !extras.expectedAttempt.attemptedAt) fail('reconciliation_attempt_token_required');
     const db = await this.pool.connect();
     try {
       await db.query('BEGIN');
@@ -336,8 +337,13 @@ class GovernedOutboundStore {
       }
       const row = (await db.query(`UPDATE acquisition_outbound_items SET status='pending',reason=$2,
         attempted_at=NULL,provider_message_id=NULL WHERE id=$1
-        AND (status IN ('attempted','uncertain') OR ($3::boolean AND status='suppressed')) RETURNING *`,
-      [item.id, reason, allowTerminalPreProviderReconciliation])).rows[0];
+        AND tenant_id=$4 AND provider_message_id IS NULL
+        AND (status IN ('attempted','uncertain') OR ($3::boolean AND status='suppressed'))
+        AND (NOT $5::boolean OR (status=$6 AND reason IS NOT DISTINCT FROM $7
+          AND attempted_at IS NOT DISTINCT FROM $8::timestamptz)) RETURNING *`,
+      [item.id, reason, allowTerminalPreProviderReconciliation, this.tenantId,
+        Boolean(extras.expectedAttempt), extras.expectedAttempt?.status || null,
+        extras.expectedAttempt?.reason ?? null, extras.expectedAttempt?.attemptedAt || null])).rows[0];
       if (!row) fail('item_not_uncertain');
       const eventType = extras.reconciled ? 'send_reconciled' : 'send_released_unsent';
       await this.event(eventType, extras.reconciled ? [item.id, 'not_accepted'] : [item.id, reason, Date.now()], {

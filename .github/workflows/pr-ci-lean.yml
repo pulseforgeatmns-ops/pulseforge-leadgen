@@ -309,7 +309,18 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - run: node --test test/anchorCanonicalOutboundRecovery.test.js
+      - uses: ./.github/actions/setup-postgres-environment
+      - name: Canonical recovery and fail-closed reconciliation regressions
+        run: >-
+          node --require ./test/helpers/denyWebsiteEvidenceNetwork.cjs --test
+          test/anchorCanonicalOutboundRecovery.test.js
+          test/governedReconciliationReadOnly.test.js
+          test/reconcileAnchorUncertainSend.test.js
+          test/governedProvenanceProviderBoundary.test.js
+          test/governedUncertainSendReconciliation.test.js
+          test/tenantOutreachScheduler.test.js
+      - name: Reconciliation native PostgreSQL attempt and race boundaries (required)
+        run: node --test test/anchorReconciliationPostgres.test.js
 
   studio-substral:
     name: Studio Substral doctrine

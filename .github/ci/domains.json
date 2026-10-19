@@ -242,6 +242,17 @@
       "scripts/inspectAnchorCanonicalOutbound.js",
       "scripts/recoverAnchorCanonicalOutbound.js",
       "test/anchorCanonicalOutboundRecovery.test.js",
+      "scripts/reconcileAnchorUncertainSend.js",
+      "scripts/reconcileGovernedUncertainFromEvidence.js",
+      "services/governedUncertainSendReconciliation.js",
+      "services/governedOutboundStore.js",
+      "services/tenantOutreachExecutorLock.js",
+      "services/tenantOutreachScheduler.js",
+      "test/anchorReconciliationPostgres.test.js",
+      "test/reconcileAnchorUncertainSend.test.js",
+      "test/governedReconciliationReadOnly.test.js",
+      "test/governedProvenanceProviderBoundary.test.js",
+      "test/governedUncertainSendReconciliation.test.js",
       "routes/cron.js"
     ],
     "studio-substral": [

@@ -4,6 +4,16 @@
 
 ## Current Repository Architecture
 
+[SPEC-131](docs/specs/SPEC-131_Transactional_Mission_Execution.md) has a local-only
+reconciliation safety repair under review: inspection does not persist evidence;
+unknown acceptance and unversioned/historical failure evidence remain held.
+Automatic release requires exact item/envelope/current-attempt proof, explicit
+pre-provider evidence, and no durable send receipt. Apply takes both tenant-send
+and scheduler-executor locks, then uses a tenant/attempt/status/reason compare-and-set.
+The generic CLI requires explicit `--apply`. Legacy events without an exact attempt
+token no longer auto-release. This does not resolve the October 16 Anchor receipt,
+clear its hold, authorize a resend, or establish production status.
+
 [SPEC-SCOUT-OWNER-001](docs/specs/SPEC-SCOUT-OWNER-001_Observed_Website_Owner_Evidence.md)
 has an authorized local/test repair for explicit owner evidence on already-fetched
 website pages. Only Babrun/tenant 13 intake and promotion opt in; other callers

@@ -116,19 +116,23 @@ test('G: proven pre-provider uncertain attempt reconciles to releasable pending 
     envelope_id: 'env_1',
     program_id: 'prog_1',
     status: 'uncertain',
-    reason: 'provider_or_persistence_error',
+    reason: 'ak_observed_provenance_required',
     provider_message_id: null,
     candidate_id: 'prospect-1',
     prospect_id: 'prospect-1',
     email: 'ops@example.com',
     mission_id: 'mission_daily_x',
     attempted_at: '2026-10-01T12:00:00.000Z',
+    attempt_token: '2026-10-01 12:00:00+00',
   };
   const evidence = {
     schedules: [],
     mailboxMessages: [],
     executions: [],
-    events: [{ event_type: 'send_uncertain', payload: { reason: 'provider_or_persistence_error' } }],
+    events: [{ event_type: 'send_uncertain', payload: {
+      itemId: item.id, envelopeId: item.envelope_id, attemptToken: item.attempt_token,
+      providerBoundaryCrossed: false, reason: 'ak_observed_provenance_required',
+    } }],
     emmettReservation: [],
     tickBlocks: [{ payload: { reason: 'ak_observed_provenance_required' } }],
   };
