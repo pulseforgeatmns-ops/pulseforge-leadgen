@@ -19,7 +19,7 @@ async function createApp(cfg, pool, { sessionMs = 30 * 60 * 1000 } = {}) {
   // Hosted runtime assumes exactly one trusted ingress proxy, not arbitrary hops.
   app.set('trust proxy', cfg.mode === 'hosted' ? 1 : false);
   app.use((req, res, next) => {
-    res.set({ 'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff', 'Referrer-Policy':'no-referrer', 'Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" });
+    res.set({ 'Cache-Control':'no-store', 'X-Content-Type-Options':'nosniff', 'Referrer-Policy':'no-referrer', 'Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" });
     if (req.get('host') !== new URL(cfg.origin).host || (cfg.mode === 'hosted' && !req.secure)) return res.sendStatus(400);
     next();
   });
