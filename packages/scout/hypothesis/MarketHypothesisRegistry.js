@@ -188,6 +188,46 @@ const MARKET_HYPOTHESES = Object.freeze({
       }),
     ]),
   }),
+  managed_facilities: Object.freeze({
+    id: 'managed_facilities',
+    statement: 'Larger local facilities with operational complexity are likely recurring commercial-cleaning buyers.',
+    buyerRole: 'facilities_or_operations',
+    segmentKey: 'managed_facilities',
+    searchStrategies: Object.freeze([
+      Object.freeze({
+        source: SEARCH_SOURCES.GOOGLE_PLACES,
+        priority: 1,
+        queryTemplates: Object.freeze([
+          'auto dealership {city} {state}',
+          'private school {city} {state}',
+          'academy {city} {state}',
+          'college campus {city} {state}',
+          'manufacturing facility {city} {state}',
+          'warehouse distribution center {city} {state}',
+          'commercial property management {city} {state}',
+          'office park {city} {state}',
+        ]),
+        rationale: 'Managed facilities are discoverable through concrete facility and operator categories.',
+      }),
+      Object.freeze({
+        source: SEARCH_SOURCES.PUBLIC_BUSINESS_DATA,
+        priority: 2,
+        queryTemplates: Object.freeze([
+          'dealer group {city} {state}',
+          'industrial facility {city} {state}',
+          'multi location property management {city} {state}',
+        ]),
+      }),
+      Object.freeze({
+        source: SEARCH_SOURCES.LINKEDIN,
+        priority: 3,
+        queryTemplates: Object.freeze([
+          'facilities manager {city} {state}',
+          'operations manager {city} {state}',
+        ]),
+      }),
+    ]),
+  }),
   commercial_office: Object.freeze({
     id: 'commercial_office',
     statement: 'Commercial office operators are likely direct buyers.',
