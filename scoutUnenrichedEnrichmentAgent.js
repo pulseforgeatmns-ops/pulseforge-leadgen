@@ -8,7 +8,10 @@ const AGENT_NAME = 'scout_unenriched_enrichment';
 const ANCHOR_CLIENT_ID = 10;
 const DEFAULT_LIMIT = 5;
 const DEFAULT_RETRY_HOURS = 7 * 24;
-const DEFAULT_MAX_ATTEMPTS = 3;
+const DEFAULT_MAX_ATTEMPTS = 6;
+const DAILY_RETRY_AFTER_ATTEMPT = 3;
+const DAILY_RETRY_HOURS = 24;
+const LONG_HOLD_RETRY_HOURS = 7 * 24;
 const SCHEDULED_HOUR_ET = 17;
 const ANCHOR_PRIORITY_VERTICALS = ENRICHABLE_SCOUT_VERTICALS;
 
@@ -60,13 +63,25 @@ async function run(params = {}) {
     SELECT *
     FROM scout_unenriched
     WHERE client_id = $1
-      AND (COALESCE(enrichment_attempts, 0) < $2
-        OR last_attempt_at <= NOW() - INTERVAL '7 days')
-      AND COALESCE(last_attempt_at, NOW() - INTERVAL '100 years') <= NOW() - ($3::numeric * INTERVAL '1 hour')
+      AND (
+        (COALESCE(enrichment_attempts, 0) < $6
+          AND COALESCE(last_attempt_at, NOW() - INTERVAL '100 years')
+            <= NOW() - ($3::numeric * INTERVAL '1 hour'))
+        OR
+        (COALESCE(enrichment_attempts, 0) >= $6
+          AND COALESCE(enrichment_attempts, 0) < $2
+          AND COALESCE(last_attempt_at, NOW() - INTERVAL '100 years')
+            <= NOW() - ($7::numeric * INTERVAL '1 hour'))
+        OR
+        (COALESCE(enrichment_attempts, 0) >= $2
+          AND COALESCE(last_attempt_at, NOW() - INTERVAL '100 years')
+            <= NOW() - ($8::numeric * INTERVAL '1 hour'))
+      )
       AND ($5::text[] IS NULL OR vertical = ANY($5::text[]))
     ORDER BY last_attempt_at ASC, id ASC
     LIMIT $4
-  `, [clientId, maxAttempts, retryHours, limit, verticals]);
+  `, [clientId, maxAttempts, retryHours, limit, verticals,
+    DAILY_RETRY_AFTER_ATTEMPT, DAILY_RETRY_HOURS, LONG_HOLD_RETRY_HOURS]);
 
   const summary = {
     client_id: clientId,
@@ -80,6 +95,10 @@ async function run(params = {}) {
     outcomes: [],
     limit,
     retry_hours: retryHours,
+    daily_retry_after_attempt: DAILY_RETRY_AFTER_ATTEMPT,
+    daily_retry_hours: DAILY_RETRY_HOURS,
+    long_hold_after_attempt: maxAttempts,
+    long_hold_retry_hours: LONG_HOLD_RETRY_HOURS,
     verticals,
   };
   const promotionIds = [];
@@ -139,7 +158,8 @@ function startAnchorUnenrichedEnrichmentScheduler() {
 module.exports = {
   run,
   startAnchorUnenrichedEnrichmentScheduler,
-  _test: { easternParts, scheduledWindowOpen, ANCHOR_PRIORITY_VERTICALS },
+  _test: { easternParts, scheduledWindowOpen, ANCHOR_PRIORITY_VERTICALS,
+    DEFAULT_MAX_ATTEMPTS, DAILY_RETRY_AFTER_ATTEMPT, DAILY_RETRY_HOURS, LONG_HOLD_RETRY_HOURS },
 };
 
 if (require.main === module) {
