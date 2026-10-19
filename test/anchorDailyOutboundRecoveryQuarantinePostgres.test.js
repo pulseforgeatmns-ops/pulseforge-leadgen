@@ -33,7 +33,7 @@ test('SPEC-261 quarantine, schema guards and preflight on native PostgreSQL', { 
   const instance = await startDisposablePostgres('anchor-quarantine-');
   const pool = new Pool({ connectionString: instance.connectionString, max: 12 });
   t.after(async () => { await pool.end(); await instance.stop(); });
-  assert.match((await pool.query('SHOW server_version')).rows[0].server_version, /^17\./);
+  assert.ok(Number((await pool.query('SHOW server_version_num')).rows[0].server_version_num) >= 140000);
   async function install() {
     const db = await pool.connect();
     try {

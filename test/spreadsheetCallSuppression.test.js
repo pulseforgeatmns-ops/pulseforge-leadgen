@@ -197,19 +197,37 @@ test('outreach review hold independently prevents email eligibility', () => {
   assert.equal(canonicalOutboundEmailIneligibilityReason({ ...row, ao_outreach_review_required: false }), null);
 });
 
-test('email provider shares the admission lock but respects call-only scope', async () => {
-  for (const held of [false, true]) {
+function emailGuardWithRecoveryDisabled() {
+  const recovery = require('../services/anchorEmailRecovery');
+  return loadIsolated('utils/callEligibility.js', {
+    '../services/anchorEmailRecovery': {
+      loadRecoveryState: db => recovery.loadRecoveryState(db, { env: {} }),
+      assertRecoveryLeaf: (db, input) => recovery.assertRecoveryLeaf(db, input, { env: {} }),
+    },
+    '../services/anchorScopedResume': require('../services/anchorScopedResume'),
+  });
+}
+
+test('legacy email shares the admission lock and respects call-only scope for Anchor and other tenants', async () => {
+  for (const clientId of [10, 13]) for (const held of [false, true]) {
     const queries = []; const sent = []; let crossed = false;
     const connection = { query: async config => {
       queries.push(config.text);
-      return { rows: [{ ao_call_suppressed: true, do_not_contact: false, ao_outreach_review_required: held }] };
+      if (clientId !== 10) assert.doesNotMatch(config.text, /to_regclass|anchor_email|recovery|quarantine/i);
+      if (/to_regclass/.test(config.text)) return { rows: [{ control_table: null }] };
+      if (/FROM prospects/.test(config.text)) {
+        assert.deepEqual(Array.from(config.values), ['id', clientId]);
+        return { rows: [{ ao_call_suppressed: true, do_not_contact: false, ao_outreach_review_required: held }] };
+      }
+      assert.match(config.text, /^(BEGIN READ ONLY|COMMIT|ROLLBACK|SELECT (set_config|pg_advisory_xact_lock))/);
+      return { rows: [] };
     }, release() {} };
     const send = loadIsolated('packages/providers/brevo/sendEmail.js', {
       axios: { post: async (...args) => { sent.push(args); return { data: { messageId: 'stub' } }; } },
-      '../../../utils/callEligibility': guard,
+      '../../../utils/callEligibility': emailGuardWithRecoveryDisabled(),
     }).sendEmail;
     const result = await send({ toEmail: 'pat@example-business.com', subject: 'Approved message', body: 'Reviewed copy', apiKey: 'fake-key',
-      outreachAuthorization: { pool: { connect: async () => connection }, prospectId: 'id', clientId: 10 },
+      outreachAuthorization: { pool: { connect: async () => connection }, prospectId: 'id', clientId },
       providerBoundary: { markCrossed() { crossed = true; } },
     });
     assert.equal(result.success, !held);
@@ -219,6 +237,41 @@ test('email provider shares the admission lock but respects call-only scope', as
     assert.equal(queries.at(-1), held ? 'ROLLBACK' : 'COMMIT');
     if (held) assert.equal(result.providerErrorCode, 'outreach_review_required');
   }
+});
+
+test('armed Anchor recovery rejects unscoped email without crossing the provider or consuming authority', async () => {
+  const queries = []; const releases = []; let providerCalls = 0; let crossed = false;
+  const connection = {
+    async query(config) {
+      const sql = config.text;
+      queries.push(sql);
+      assert.doesNotMatch(sql, /\b(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)\b|reservations|consumption/i);
+      if (/to_regclass/.test(sql)) return { rows: [{ control_table: 'anchor_email_recovery_control' }] };
+      if (/FROM anchor_email_recovery_control/.test(sql)) return { rows: [{ singleton: true, maintenance_armed: true, manifest: null }] };
+      if (/FROM prospects/.test(sql)) return { rows: [{ id: 'id', client_id: 10, company_id: 'company', email: 'pat@example.test',
+        ao_call_suppressed: true, do_not_contact: false, is_synthetic: false, ao_outreach_review_required: false }] };
+      if (/FROM anchor_email_quarantines/.test(sql)) return { rows: [] };
+      assert.match(sql, /^(BEGIN|ROLLBACK|SELECT (set_config|pg_advisory_xact_lock))/);
+      return { rows: [] };
+    },
+    release(discard) { releases.push(discard); },
+  };
+  const send = loadIsolated('packages/providers/brevo/sendEmail.js', {
+    axios: { post: async () => { providerCalls++; throw new Error('Unexpected provider call'); } },
+    '../../../utils/callEligibility': emailGuardWithRecoveryDisabled(),
+  }).sendEmail;
+  const result = await send({ toEmail: 'pat@example.test', subject: 'Synthetic message', body: 'Local fixture only', apiKey: 'fake-key',
+    outreachAuthorization: { pool: { connect: async () => connection }, prospectId: 'id', clientId: 10 },
+    providerBoundary: { markCrossed() { crossed = true; } },
+  });
+  assert.equal(result.success, false);
+  assert.equal(result.providerErrorCode, 'anchor_recovery_maintenance');
+  assert.equal(result.failureStage, 'authorization');
+  assert.equal(result.providerBoundaryCrossed, false);
+  assert.equal(crossed, false);
+  assert.equal(providerCalls, 0);
+  assert.equal(queries.at(-1), 'ROLLBACK');
+  assert.deepEqual(releases, [true]);
 });
 
 test('mailbox verification exemption requires server-owned purpose and exact non-CRM identity', () => {
