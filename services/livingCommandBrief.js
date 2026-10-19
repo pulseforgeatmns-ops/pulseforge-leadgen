@@ -1,5 +1,14 @@
 'use strict';
 
+// Field intelligence can fail independently of Penny's account evidence.
+// Reuse its Ads read when present; otherwise load the selected account directly.
+async function resolveLivingGoogleAds({ clientId, pool, operatorBrief, loadGoogleAds }) {
+  if (operatorBrief?.googleAds) return operatorBrief.googleAds;
+  const load = loadGoogleAds || require('../packages/penny-paid-acquisition/googleAdsOperatorBrief').loadGoogleAdsOperatorBriefSection;
+  try { return await load({ tenantId: clientId, pool }); }
+  catch (_) { return { live: { available: false } }; }
+}
+
 // Read-only, tenant-scoped facts for Max's opening brief. Unavailable is never zero.
 async function buildLivingCommandBrief({ clientId, pool, googleAds, now = new Date() }) {
   const tenantId = Number(clientId);
@@ -31,4 +40,4 @@ async function buildLivingCommandBrief({ clientId, pool, googleAds, now = new Da
   };
 }
 
-module.exports = { buildLivingCommandBrief };
+module.exports = { buildLivingCommandBrief, resolveLivingGoogleAds };
