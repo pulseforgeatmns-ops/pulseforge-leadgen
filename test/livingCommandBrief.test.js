@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildLivingCommandBrief } = require('../services/livingCommandBrief');
+const { buildLivingCommandBrief, resolveLivingGoogleAds } = require('../services/livingCommandBrief');
 const { buildGoogleAdsOperatorBrief } = require('../packages/penny-paid-acquisition/googleAdsOperatorBrief');
 
 test('opening brief scopes every fact query to the selected workspace', async () => {
@@ -35,6 +35,21 @@ test('missing or invalid workspace cannot query the database', async () => {
   for (const clientId of [null, 0, -1, 'other', 1.5]) {
     await assert.rejects(buildLivingCommandBrief({ clientId, pool: { query() { assert.fail('must not query'); } } }), /workspace/);
   }
+});
+
+test('Penny evidence survives a failed field brief and stays scoped to the selected tenant', async () => {
+  const pool = {};
+  const evidence = { live: { available: true, campaigns: [{ name: 'Search', status: 'ENABLED' }] } };
+  const section = await resolveLivingGoogleAds({
+    clientId: 10, pool, operatorBrief: null,
+    loadGoogleAds: async input => {
+      assert.deepEqual(input, { tenantId: 10, pool });
+      return evidence;
+    },
+  });
+  assert.equal(section, evidence);
+  assert.equal(await resolveLivingGoogleAds({ clientId: 10, pool, operatorBrief: { googleAds: evidence }, loadGoogleAds() { assert.fail('should reuse account evidence'); } }), evidence);
+  assert.deepEqual(await resolveLivingGoogleAds({ clientId: 11, pool, loadGoogleAds: async () => { throw new Error('unavailable'); } }), { live: { available: false } });
 });
 
 test('Ads opening facts retain campaign status, dates and unknown conversions', () => {

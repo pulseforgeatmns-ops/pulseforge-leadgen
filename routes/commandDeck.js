@@ -20,7 +20,7 @@ const {
 } = require('../utils/clientContext');
 const { getMaxRuntime } = require('../utils/maxRuntime');
 const { buildOperatorBrief } = require('../services/commandDeckOperatorBrief');
-const { buildLivingCommandBrief } = require('../services/livingCommandBrief');
+const { buildLivingCommandBrief, resolveLivingGoogleAds } = require('../services/livingCommandBrief');
 const {
   listMissions,
   toCommandDeckCard,
@@ -152,7 +152,7 @@ router.get('/api/v1/command-deck', requireDashboardRead, async (req, res) => {
     model.livingBrief = await buildLivingCommandBrief({
       clientId,
       pool: require('../db'),
-      googleAds: operatorBrief?.googleAds,
+      googleAds: await resolveLivingGoogleAds({ clientId, pool: require('../db'), operatorBrief }),
     });
 
     res.set('Cache-Control', 'no-store');
