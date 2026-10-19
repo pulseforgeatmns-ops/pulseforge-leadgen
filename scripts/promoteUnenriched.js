@@ -50,6 +50,9 @@ async function findUnenrichedRecord({ domain, company }) {
 }
 
 async function findOrCreateCompanyForClient({ name, domain, websiteUrl, vertical, location, clientId }, db = pool, inTransaction = false) {
+  // Pool-level DDL must commit before checkout/BEGIN (also safe with pool max=1).
+  // The recursive transaction-client call only reads the now-visible columns.
+  await ensureBusinessNameShortColumns(db);
   // Serialize canonical company creation across concurrent replenishment runs.
   if (!inTransaction && typeof db.connect === 'function') {
     const client = await db.connect();
@@ -61,7 +64,6 @@ async function findOrCreateCompanyForClient({ name, domain, websiteUrl, vertical
     } catch (error) { await client.query('ROLLBACK'); throw error; }
     finally { client.release(); }
   }
-  await ensureBusinessNameShortColumns(db);
   const canonicalDomain = require('../utils/marketCompanyResolve').normalizeDomain(domain || websiteUrl);
   for (const key of [`domain:${canonicalDomain}`, `name:${companyIdentityNameKey(name)}`].sort()) {
     await db.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`scout-company:${clientId}:${key}`]);

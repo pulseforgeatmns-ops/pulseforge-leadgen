@@ -304,3 +304,18 @@ it('research provider pause leaves and callers select the Anchor suite', () => {
   }
   assert.match(require('../package.json').scripts['test:anchor-outbound'], /test\/anchorResearchProviderPause\*\.test\.js/);
 });
+
+describe('promotion schema lifecycle CI coverage', () => {
+  it('runs both Max CRM admission and native Anchor coverage for the shared schema helper', () => {
+    const suites = buildPlan(['utils/businessNameShort.js']).suites;
+    assert.ok(suites.includes('max'), 'shared CRM admission schema changes must select Max');
+    assert.ok(suites.includes('anchor-outbound'), 'shared promotion schema changes must select native Anchor');
+  });
+  it('runs native Anchor regressions for both runtime paths and the concurrency test', () => {
+    for (const file of ['utils/businessNameShort.js', 'scripts/promoteUnenriched.js',
+      'test/anchorDailyOutboundPromotionSchemaPostgres.test.js']) {
+      assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
+    }
+    assert.match(require('../package.json').scripts['test:anchor-outbound'], /test\/anchorDailyOutbound\*\.test\.js/);
+  });
+});

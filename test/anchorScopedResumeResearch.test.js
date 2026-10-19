@@ -18,9 +18,9 @@ function setEnv(t, values) {
 }
 function scopedFixture(t) {
   const f = scopedResumeFixture();
-  // Adapter entrypoints use the real clock. Keep these synthetic grants valid
-  // independently of the day on which the repository suite is run.
-  f.now = new Date();
+  // Bind adapter entrypoints to the fixture's valid weekday/business-hour clock.
+  // Keep the real policy window and expiry validation active.
+  t.mock.timers.enable({ apis: ['Date'], now: +f.now });
   f.program.policy.startsAt = new Date(+f.now - 2 * 3600000).toISOString();
   f.program.policy.expiresAt = new Date(+f.now + 2 * 3600000).toISOString();
   f.program.policy_hash = hash(f.program.policy);
