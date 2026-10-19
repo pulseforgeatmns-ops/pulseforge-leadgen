@@ -33,6 +33,11 @@ function canonicalItem(artifact) {
     decisionMode: 'exact_preview', blocker: null };
 }
 
+function createdTime(item) {
+  const timestamp = new Date(item.createdAt || 0).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
 async function readContentReview({ clientId, pool, socialStore, now = new Date() }) {
   const id = Number(clientId);
   if (!Number.isSafeInteger(id) || id <= 0) throw new Error('tenant_scope_required');
@@ -52,13 +57,14 @@ async function readContentReview({ clientId, pool, socialStore, now = new Date()
     if (mirrored.has(String(row.id))) continue;
     const requiresBinding = isPaigeSocialPublishChannel(row.channel);
     items.push({ id: `pending:${row.id}`, pendingCommentId: row.id, source: 'legacy', channel: row.channel,
-      title: row.author_name || 'Content draft', body: row.comment || '',
+      kind: row.channel === 'ads_report' ? 'report' : 'content',
+      title: row.channel === 'ads_report' ? 'Google Ads report' : row.author_name || 'Content draft', body: row.comment || '',
       originalPost: row.post_content || null, postUrl: safeMediaUrl(row.post_url),
       media: mediaFor(row), status: 'PENDING_APPROVAL', createdAt: row.created_at,
       canReview: !requiresBinding, decisionMode: requiresBinding ? 'binding_required' : 'legacy',
       blocker: requiresBinding ? 'This older draft needs a verified post version and destination before it can be approved.' : null });
   }
-  items.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  items.sort((a, b) => createdTime(b) - createdTime(a));
   return { clientId: id, generatedAt: now.toISOString(), items, pendingCount: items.length, warnings };
 }
 

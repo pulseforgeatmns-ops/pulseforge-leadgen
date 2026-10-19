@@ -79,3 +79,15 @@ test('review API preserves operator permissions and uses the authorized active w
   const ok = await request({ user: { id: 7, role: 'manager', client_id: 10 }, active_client_id: 10 });
   assert.equal(ok.status, 200); assert.equal(ok.body.clientId, 10); assert.equal(reads, 1);
 });
+
+test('Postgres Date objects sort newest first and saved reports are labeled as reports', async () => {
+  const result = await readContentReview({ clientId: 10,
+    pool: { query: async () => ({ rows: [
+      { id: 1, channel: 'ads_report', comment: 'Older report', author_name: 'Anchor', created_at: new Date('2026-10-14T12:00:00Z') },
+      { id: 2, channel: 'ads_report', comment: 'Latest report', author_name: 'Anchor', created_at: new Date('2026-10-19T17:20:00Z') },
+    ] }) }, socialStore: { listByTenant: async () => [] },
+  });
+  assert.deepEqual(result.items.map(item => item.pendingCommentId), [2, 1]);
+  assert.equal(result.items[0].kind, 'report');
+  assert.equal(result.items[0].title, 'Google Ads report');
+});
