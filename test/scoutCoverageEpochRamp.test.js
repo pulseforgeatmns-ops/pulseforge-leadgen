@@ -17,7 +17,10 @@ async function run({ tenantId = '13', durable = true } = {}) {
   const tickets = { tenantId, assertReady: async () => {}, claimDue: async () => { calls.claims++; return []; },
     snapshot: async () => ({ status: 'observed_candidate_set_handled', total: 0, due: 0, claimed: 0, byState: {}, byReason: {} }) };
   const result = await defaultScoutRamp({
-    pool: { query: async () => { throw Error('Unexpected database or provider call'); } },
+    pool: { query: async sql => {
+      if (sql === "SELECT to_regclass('public.anchor_email_recovery_control') AS control_table") return { rows: [{ control_table: null }] };
+      throw Error('Unexpected database or provider call');
+    } },
     store: { tenantId, clientId: Number(tenantId), event: async (...args) => calls.events.push(args) },
     program: { id: 'fixture', tenant_id: tenantId, policy: {} },
     source: { payload: { structuredMission: { market: { segment: 'small_business_owners' },
