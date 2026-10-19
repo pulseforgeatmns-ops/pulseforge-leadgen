@@ -186,6 +186,7 @@
       "services/governedOutboundTenant.js",
       "services/governedMailboxBridge.js",
       "anchorDailyOutboundCron.js",
+      "utils/businessNameShort.js",
       "scripts/anchorMailbox.js",
       "scripts/executeAnchor",
       "test/anchorDailyOutbound",
@@ -302,6 +303,7 @@
       "scripts/studioSubstral"
     ],
     "max": [
+      "utils/businessNameShort.js",
       "maxAgent.js",
       "maxDecayAgent.js",
       "packages/max/",

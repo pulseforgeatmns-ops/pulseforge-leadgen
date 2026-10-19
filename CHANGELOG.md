@@ -1,3 +1,8 @@
+## Local-only: promotion schema lifecycle repair (2026-10-19)
+
+- [SPEC-SCOUT-SCHEMA-001](docs/specs/SPEC-SCOUT-SCHEMA-001_Promotion_Schema_Lifecycle.md): complete existing business-name schema ensure before promotion transactions, check visible columns before lazy DDL, and coalesce only pending work per query object. Prevent inherited schema/advisory deadlocks and rolled-back ensure-cache poisoning while preserving tenant-scoped canonical dedup.
+- Add deterministic native PostgreSQL regression coverage. No new migration, provider behavior, deployment, or production operation is included.
+
 ## Unreleased — SPEC-265 local research-provider pause
 
 - Add a default-off tenant-10 research/discovery/contact-enrichment/email-verification pause at reviewed provider handoffs and trusted caller boundaries. Preserve field-route geocoding, call/SMS and unrelated presentation paths.
