@@ -1,12 +1,12 @@
 'use strict';
 (function () {
   let model = null, selectedId = null, generation = 0, previousFocus = null, previousOverflow = '', preview = null, busy = false;
-  const channelNames = { facebook: 'Facebook comment', facebook_page: 'Facebook', linkedin: 'LinkedIn comment', linkedin_page: 'LinkedIn Page', linkedin_personal: 'LinkedIn', google_business: 'Google Business', google_review: 'Review response', blog: 'Blog' };
+  const channelNames = { facebook: 'Facebook comment', facebook_page: 'Facebook', linkedin: 'LinkedIn comment', linkedin_page: 'LinkedIn Page', linkedin_personal: 'LinkedIn', google_business: 'Google Business', google_review: 'Review response', blog: 'Blog', ads_report: 'Google Ads report' };
   const node = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = String(text); if (cls) el.className = cls; return el; };
   const dialog = document.createElement('section');
   dialog.id = 'contentReview'; dialog.className = 'cr-overlay'; dialog.hidden = true;
   dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); dialog.setAttribute('aria-labelledby', 'crTitle');
-  dialog.innerHTML = '<div class="cr-backdrop" data-cr-close></div><div class="cr-panel"><header class="cr-header"><div><p class="cr-eyebrow">YOUR WORKSPACE · CONTENT</p><h2 id="crTitle">Content review</h2><p id="crSubtitle"></p></div><button type="button" class="cr-button" data-cr-close aria-label="Close content review">Close</button></header><p id="crNotice" class="cr-notice" role="status" aria-live="polite"></p><div class="cr-layout"><aside class="cr-sidebar"><label for="crChannel">Channel</label><select id="crChannel"><option value="all">All channels</option></select><div id="crList" class="cr-list" aria-label="Drafts awaiting review"></div></aside><article id="crDetail" class="cr-detail" aria-label="Selected draft preview"></article></div></div>';
+  dialog.innerHTML = '<div class="cr-backdrop" data-cr-close></div><div class="cr-panel"><header class="cr-header"><div><p class="cr-eyebrow">YOUR WORKSPACE · CONTENT</p><h2 id="crTitle">Content review</h2><p id="crSubtitle"></p></div><button type="button" class="cr-button" data-cr-close aria-label="Close content review">Close</button></header><p id="crNotice" class="cr-notice" role="status" aria-live="polite"></p><div class="cr-layout"><aside class="cr-sidebar"><label for="crChannel">Channel</label><select id="crChannel"><option value="all">All channels</option></select><div id="crList" class="cr-list" aria-label="Items awaiting review"></div></aside><article id="crDetail" class="cr-detail" aria-label="Selected content preview"></article></div></div>';
   document.body.append(dialog);
   const $ = id => document.getElementById(id);
   const activeClient = () => window.PulseforgeTenantCoordinator?.getActiveClientId?.() ?? window.PulseforgeShell?.activeClientId;
@@ -21,6 +21,35 @@
   }
   function button(parent, text, action, primary = false) {
     const b = node('button', text, `cr-button${primary ? ' cr-primary' : ''}`); b.type = 'button'; b.addEventListener('click', action); parent.append(b); return b;
+  }
+  function createdLabel(value) {
+    const date = new Date(value);
+    return value && Number.isFinite(date.getTime()) ? date.toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+  }
+  function appendInline(parent, text) {
+    String(text).split(/(\*\*[^*]+\*\*|\*[^*\n]+\*)/g).forEach(part => {
+      if (part.startsWith('**') && part.endsWith('**')) parent.append(node('strong', part.slice(2, -2)));
+      else if (part.startsWith('*') && part.endsWith('*') && part.length > 2) parent.append(node('em', part.slice(1, -1)));
+      else parent.append(document.createTextNode(part));
+    });
+  }
+  function postBody(item) {
+    if (item.channel !== 'ads_report') return node('p', item.body, 'cr-post-body');
+    const result = node('div', null, 'cr-report-body');
+    let list = null;
+    for (const line of String(item.body || '').split(/\r?\n/)) {
+      const text = line.trim();
+      if (!text) { list = null; continue; }
+      if (/^-{3,}$/.test(text)) { result.append(node('hr')); list = null; continue; }
+      const heading = text.match(/^#{1,4}\s+(.+)$/) || text.match(/^\*\*([^*]+)\*\*$/);
+      if (heading) { const h = node('h4'); appendInline(h, heading[1]); result.append(h); list = null; continue; }
+      const bullet = text.match(/^[-*]\s+(.+)$/);
+      if (bullet) {
+        if (!list) { list = node('ul'); result.append(list); }
+        const li = node('li'); appendInline(li, bullet[1]); list.append(li);
+      } else { const p = node('p'); appendInline(p, text); result.append(p); list = null; }
+    }
+    return result;
   }
   function attachment(media, thumb = false) {
     const url = media?.url;
@@ -43,9 +72,11 @@
       const thumb = attachment(item.media?.[0], true);
       if (thumb) b.append(thumb); else b.append(node('span', 'Aa', 'cr-text-thumb'));
       const copy = node('span', null, 'cr-draft-copy'); copy.append(node('strong', channelNames[item.channel] || item.channel || 'Draft'), node('span', item.body || item.title || 'Untitled draft'));
+      const created = createdLabel(item.createdAt);
+      if (created) copy.append(node('time', created));
       b.append(copy); b.addEventListener('click', () => select(item.id)); list.append(b);
     }
-    if (!items.length) list.append(node('p', 'No drafts in this channel.', 'cr-muted'));
+    if (!items.length) list.append(node('p', 'No items in this channel.', 'cr-muted'));
   }
   async function select(id) {
     if (busy) return;
@@ -56,10 +87,12 @@
     const head = node('div', null, 'cr-preview-head');
     head.append(node('span', channelNames[item.channel] || item.channel || 'Draft', 'cr-channel'), node('span', item.canReview ? 'Awaiting review' : 'Needs verification', 'cr-status'));
     detail.append(head, node('h3', item.title || 'Content draft'));
+    const created = createdLabel(item.createdAt);
+    if (created) detail.append(node('p', `Created ${created}`, 'cr-created'));
     const media = node('div', null, 'cr-media-group');
     for (const ref of item.media || []) { const el = attachment(ref); if (el) media.append(el); }
-    if (!media.children.length) media.append(node('div', 'Text post · No image attached', 'cr-text-preview'));
-    const body = node('p', item.body, 'cr-post-body');
+    if (!media.children.length) media.append(node('div', item.channel === 'ads_report' ? 'Prepared by Penny · Saved report' : 'Text post · No image attached', 'cr-text-preview'));
+    const body = postBody(item);
     detail.append(media, body);
     if (item.originalPost && ['linkedin', 'facebook', 'google_review'].includes(item.channel)) {
       const context = node('details', null, 'cr-original'); context.append(node('summary', 'Original post'), node('p', item.originalPost, 'cr-post-body'));
@@ -71,8 +104,8 @@
     const blocker = node('p', item.blocker || '', 'cr-blocker');
     const actions = node('div', null, 'cr-actions');
     const publishesOnApprove = item.decisionMode === 'legacy' && ['linkedin', 'facebook', 'blog'].includes(item.channel);
-    const approve = button(actions, publishesOnApprove ? 'Approve & post' : 'Approve draft', () => decide(item, 'approve'), true);
-    const reject = button(actions, 'Reject draft', () => decide(item, 'reject'));
+    const approve = button(actions, publishesOnApprove ? 'Approve & post' : item.channel === 'ads_report' ? 'Approve report' : 'Approve draft', () => decide(item, 'approve'), true);
+    const reject = button(actions, item.channel === 'ads_report' ? 'Reject report' : 'Reject draft', () => decide(item, 'reject'));
     approve.disabled = !item.canReview || item.source === 'canonical'; reject.disabled = !item.canReview;
     detail.append(destination, blocker, actions, node('p', item.source === 'canonical' ? 'Approving saves your decision. Publishing is a separate action.' : publishesOnApprove ? 'Approve & post publishes this content. Reject removes it from the review queue.' : item.canReview ? 'Approving saves your decision. Reject removes it from the review queue.' : 'The draft is visible for review. Approval stays unavailable until its version and destination can be verified.', 'cr-footnote'));
     if (item.source !== 'canonical' || !item.canReview) return;
@@ -111,14 +144,14 @@
       else await request(`/api/approvals/${encodeURIComponent(item.pendingCommentId)}`, { method: 'POST', body: { action: decision === 'approve' ? 'approved' : 'rejected' } });
       if (!current(token)) return;
       busy = false;
-      await load(); notice(decision === 'approve' ? 'Approval recorded.' : 'Draft rejected.');
+      await load(); notice(decision === 'approve' ? 'Approval recorded.' : item.channel === 'ads_report' ? 'Report rejected.' : 'Draft rejected.');
       document.dispatchEvent(new CustomEvent('pulseforge:content-reviewed'));
     } catch (error) { if (current(token)) { busy = false; await select(item.id); notice(/preview_changed/i.test(error.message) ? 'This draft changed. Review the latest version before approving.' : 'The decision could not be saved. Refresh and try again.', true); } }
     finally { busy = false; }
   }
   async function load() {
     const token = ++generation; preview = null; model = null;
-    $('crList').replaceChildren(node('p', 'Loading drafts…', 'cr-muted'));
+    $('crList').replaceChildren(node('p', 'Loading items…', 'cr-muted'));
     $('crDetail').replaceChildren(node('p', 'Preparing your visual review…', 'cr-muted'));
     notice('');
     try {

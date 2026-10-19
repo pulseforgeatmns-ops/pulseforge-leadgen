@@ -34,6 +34,7 @@ function reviewModel() {
     { id: 'social:post-a', artifactId: 'post-a', source: 'canonical', channel: 'facebook_page', title: 'Ready for the week ahead', body: 'A prepared workspace makes Monday easier.\n\nOur team handles the details so yours can focus.', media: [{ url: '/fixture-content.svg', alt: 'A clean workspace', type: 'image' }], canReview: true, decisionMode: 'exact_preview' },
     { id: 'pending:old', pendingCommentId: 'old', source: 'legacy', channel: 'google_business', title: 'Older social draft', body: 'A text-only post waiting for verification.', media: [], canReview: false, decisionMode: 'binding_required', blocker: 'This older draft needs a verified post version and destination before it can be approved.' },
     { id: 'pending:comment', pendingCommentId: 'comment', source: 'legacy', channel: 'linkedin', title: 'A prospect', body: '<img src=x onerror="window.injected=true"> is displayed as draft text.', originalPost: 'A prospect’s original post.', media: [], canReview: true, decisionMode: 'legacy' },
+    { id: 'pending:report', pendingCommentId: 'report', source: 'legacy', channel: 'ads_report', kind: 'report', title: 'Google Ads report', body: '# Google Ads evidence\n\n**CURRENTLY ENABLED CAMPAIGNS**\n\n- **Search**: 3 clicks.\n- <img src=x onerror="window.injected=true">\n\n---\n\nPrepared by Penny.', media: [], canReview: true, decisionMode: 'legacy', createdAt: '2026-10-19T17:20:00Z' },
   ] };
 }
 
@@ -147,6 +148,14 @@ test('content review opens visual drafts directly, without chat or approval side
   assert.equal(await page.$('.cr-post-body img'), null);
   assert.equal(await page.evaluate(() => window.injected), undefined);
   assert.equal(await page.$eval('.cr-primary', el => el.textContent), 'Approve & post');
+  await page.select('#crChannel', 'ads_report');
+  assert.match(await page.$eval('.cr-text-preview', el => el.textContent), /Saved report/);
+  assert.equal(await page.$eval('.cr-primary', el => el.textContent), 'Approve report');
+  assert.equal(await page.$$('.cr-report-body h4').then(nodes => nodes.length), 2);
+  assert.equal(await page.$$('.cr-report-body li').then(nodes => nodes.length), 2);
+  assert.equal(await page.$('.cr-report-body img'), null);
+  assert.equal(await page.evaluate(() => window.injected), undefined);
+  assert.match(await page.$eval('.cr-created', el => el.textContent), /2026/);
   await page.focus('#crChannel'); await page.keyboard.press('Escape');
   assert.equal(await page.$eval('#contentReview', el => el.hidden), true);
   await page.click('a[href="/command-deck#content-review"]');

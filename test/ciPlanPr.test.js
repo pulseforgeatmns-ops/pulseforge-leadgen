@@ -12,6 +12,15 @@ describe('CI plan PR selector (SPEC-CI-LEAN-001)', () => {
     assert.equal(pathMatchesPattern('routes/revenue.js', 'packages/signal-v1/'), false);
   });
 
+  it('runs Max and its browser acceptance for changes to Living Command and content review', () => {
+    for (const file of [
+      'public/command-deck/command-deck.js', 'public/command-deck.html',
+      'public/shared/content-review.js', 'public/shared/content-review.css', 'public/shared/shell.js',
+      'services/contentReview.js', 'services/livingCommandBrief.js', 'routes/contentReview.js',
+      'test/contentReview.test.js', 'test/livingCommandBrief.test.js', 'test/browser/livingCommandUi.test.js',
+    ]) assert.ok(buildPlan([file]).suites.includes('max'), `${file} must run review browser coverage`);
+  });
+
   const cases = [
     {
       name: 'Signal-only (PR #899 shape)',
