@@ -147,6 +147,7 @@
       "services/substralPreparationGrant.js",
       "services/anchorGovernedScheduler.js",
       "services/anchorEmail",
+      "scripts/anchorCrmPreparationOnce.js",
       "services/anchorScopedResume",
       "test/anchorScopedResume",
       "test/helpers/anchorScopedResume",
