@@ -6,6 +6,12 @@ const {
   readScoutPersonalizationFromMetadata,
 } = require('./scoutPersonalizationEvidence');
 const {
+  MANAGED_FACILITIES_COHORT,
+  PORTAL_ARM,
+  appendPortalDifferentiator,
+  managedFacilitiesExperiment,
+} = require('./anchorManagedFacilities');
+const {
   ANCHOR_CLIENT_ID,
   DEFAULT_SENDER_NAME,
   LIFECYCLE_STAGES,
@@ -41,6 +47,7 @@ function buildAnchorLifecycleEmail({
   plan = {},
   mission = {},
   lifecycleStage = LIFECYCLE_STAGES.COLD,
+  candidateId = null,
 } = {}) {
   const normalizedEvidence = evidence || readScoutPersonalizationFromMetadata(prospect?.acquisition_metadata) || {
     personalization_status: PERSONALIZATION_STATUS.NO_USEFUL_FACT,
@@ -50,7 +57,7 @@ function buildAnchorLifecycleEmail({
   const serviceArea = resolveServiceAreaLabel(plan, company);
   const segment = resolveSegment(plan, mission, normalizedEvidence);
 
-  const draft = buildAnchorCopy({
+  let draft = buildAnchorCopy({
     lifecycleStage,
     firstName,
     companyName,
@@ -60,6 +67,13 @@ function buildAnchorLifecycleEmail({
     evidence: normalizedEvidence,
     company,
   });
+
+  const experiment = lifecycleStage === LIFECYCLE_STAGES.COLD
+    ? managedFacilitiesExperiment({ prospect, company, candidateId })
+    : { cohort: null, score: 0, arm: null };
+  if (experiment.cohort === MANAGED_FACILITIES_COHORT && experiment.arm === PORTAL_ARM) {
+    draft = { ...draft, body: appendPortalDifferentiator(draft.body, draft.cta) };
+  }
 
   const validation = validateAnchorCopyDoctrine({
     subject: draft.subject,
@@ -76,6 +90,7 @@ function buildAnchorLifecycleEmail({
       plan,
       mission,
       lifecycleStage,
+      candidateId,
     });
   }
 
@@ -85,6 +100,9 @@ function buildAnchorLifecycleEmail({
     cta: draft.cta,
     usedPersonalization: draft.usedPersonalization === true,
     evidence: normalizedEvidence,
+    cohort: experiment.cohort,
+    experimentArm: experiment.arm,
+    managedFacilitiesScore: experiment.score,
   };
 }
 
@@ -120,6 +138,7 @@ function buildAnchorLifecycleVariant({
     plan,
     mission,
     lifecycleStage,
+    candidateId: candidate.candidateId || candidate.prospectId || candidate.id || crmRecord?.prospect_id || crmRecord?.id || null,
   });
 }
 
