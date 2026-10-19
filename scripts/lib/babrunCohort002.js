@@ -6,6 +6,7 @@
  */
 
 const crypto = require('node:crypto');
+const { withResearchProviderScope, rethrowResearchProviderControl } = require('../../utils/anchorResearchProviderPause');
 const { BABRUN_FIRST_TEN } = require('../operationalizeAcquisitionProspects');
 const { createKnowledge } = require('../../services/acquisitionKnowledge');
 const { operationalizeAcquisitionProspect } = require('../../services/acquisitionProspectOperationalization');
@@ -264,6 +265,10 @@ async function enrichCandidateFromWebsite(candidate) {
 }
 
 async function discoverViaPlaces(apiKey, dedupe, limit = DISCOVERY_TARGET, deps = {}) {
+  return withResearchProviderScope(CLIENT_ID, () => discoverViaPlacesScoped(apiKey, dedupe, limit, deps));
+}
+
+async function discoverViaPlacesScoped(apiKey, dedupe, limit = DISCOVERY_TARGET, deps = {}) {
   if (!apiKey) return [];
   const discovered = [];
   const seenDomains = new Set();
@@ -274,7 +279,8 @@ async function discoverViaPlaces(apiKey, dedupe, limit = DISCOVERY_TARGET, deps 
     try {
       const response = await (deps.textSearch || legacyTextSearch)({ query: seed.query, apiKey, record: { clientId: CLIENT_ID, tenantId: TENANT_ID, caller: 'babrun_cohort_002' } });
       results = response.ok && Array.isArray(response.data?.results) ? response.data.results : [];
-    } catch {
+    } catch (error) {
+      rethrowResearchProviderControl(error);
       continue;
     }
     for (const hit of results.slice(0, 8)) {
@@ -284,7 +290,8 @@ async function discoverViaPlaces(apiKey, dedupe, limit = DISCOVERY_TARGET, deps 
         try {
           const response = await (deps.placeDetails || legacyPlaceDetails)({ placeId: hit.place_id, apiKey, fields: 'name,website,formatted_address,place_id', record: { clientId: CLIENT_ID, tenantId: TENANT_ID, caller: 'babrun_cohort_002' } });
           details = response.ok && response.data?.result ? response.data.result : hit;
-        } catch {
+        } catch (error) {
+          rethrowResearchProviderControl(error);
           details = hit;
         }
       }

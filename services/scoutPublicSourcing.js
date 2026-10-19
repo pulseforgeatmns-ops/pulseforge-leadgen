@@ -1,4 +1,5 @@
 'use strict';
+const { withResearchProviderScope, assertResearchProviderAllowed, rethrowResearchProviderControl } = require('../utils/anchorResearchProviderPause');
 
 /**
  * Scout public-source prospect sourcing (SPEC-077).
@@ -468,6 +469,16 @@ function dedupeCandidates(rows) {
  * @returns {Promise<{ ok: boolean, candidates: object[], warnings: string[], error: string|null, queried: string[], crmWritesMade: boolean, outreachCopyGenerated: boolean, accountChangesMade: boolean }>}
  */
 async function sourceScoutCandidatesFromPublicSources(input = {}) {
+  const request = input.workRequest || input;
+  const tenant = request?.clientId ?? request?.client_id ?? input.opts?.clientId;
+  return withResearchProviderScope(tenant, () => {
+    if (input.opts?.clientId != null) assertResearchProviderAllowed('research', input.opts.clientId);
+    if (request?.client_id != null) assertResearchProviderAllowed('research', request.client_id);
+    return sourceScoutCandidatesResearchScoped(input);
+  });
+}
+
+async function sourceScoutCandidatesResearchScoped(input = {}) {
   const workRequest = input.workRequest || input;
   const opts = input.opts || {};
   return withPlacesContext(
@@ -569,6 +580,7 @@ async function sourceScoutCandidatesFromPublicSourcesCore(input = {}) {
       if (rawHits.length >= targetMax * 3) break;
     }
   } catch (err) {
+    rethrowResearchProviderControl(err);
     return {
       ok: false,
       candidates: [],

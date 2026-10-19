@@ -6,6 +6,7 @@
  */
 
 const axios = require('axios');
+const { withResearchProviderScope, assertResearchProviderAllowed, rethrowResearchProviderControl } = require('../utils/anchorResearchProviderPause');
 const {
   normalizeDomain,
   resolveEmailVerification,
@@ -265,6 +266,7 @@ async function listHunterContactsForDomain(domain) {
   const hunterKey = process.env.HUNTER_API_KEY;
   if (!hunterKey) return { status: 'unavailable', contacts: [] };
   try {
+    assertResearchProviderAllowed('hunter');
     const res = await axios.get('https://api.hunter.io/v2/domain-search', {
       params: { domain, api_key: hunterKey, limit: 10 },
       timeout: 8000,
@@ -282,6 +284,7 @@ async function listHunterContactsForDomain(domain) {
     }
     return { status: 'ok', contacts };
   } catch (_err) {
+    rethrowResearchProviderControl(_err);
     return { status: 'error', contacts: [] };
   }
 }
@@ -506,7 +509,20 @@ function recoveryTenantBlockReason(store, scoutContext, tenantId) {
   return normalized[0] === '10' ? null : 'recovery_tenant_unsupported';
 }
 
-async function attemptSameCompanyAlternateRecovery(store, pool, {
+async function attemptSameCompanyAlternateRecovery(store, pool, options = {}) {
+  const stats = options.telemetry || emptyAlternateContactTelemetry();
+  const tenantBlock = recoveryTenantBlockReason(store, options.scoutContext || {}, options.tenantId);
+  if (tenantBlock) {
+    recordAlternateLoss(stats, tenantBlock);
+    return { ok: false, reason: tenantBlock, telemetry: stats };
+  }
+  // The existing tenant validation proves every supplied identity is 10.
+  return withResearchProviderScope(10, () => attemptSameCompanyAlternateRecoveryScoped(store, pool, {
+    ...options, telemetry: stats,
+  }));
+}
+
+async function attemptSameCompanyAlternateRecoveryScoped(store, pool, {
   company,
   tenantId = null,
   ownership = null,
@@ -518,11 +534,6 @@ async function attemptSameCompanyAlternateRecovery(store, pool, {
   sources = {},
 } = {}) {
   const stats = telemetry || emptyAlternateContactTelemetry();
-  const tenantBlock = recoveryTenantBlockReason(store, scoutContext, tenantId);
-  if (tenantBlock) {
-    recordAlternateLoss(stats, tenantBlock);
-    return { ok: false, reason: tenantBlock, telemetry: stats };
-  }
   stats.sameCompanyCandidatesAttempted += 1;
 
   const name = String(company.name || '').trim();

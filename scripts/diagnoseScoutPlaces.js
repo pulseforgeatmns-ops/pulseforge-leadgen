@@ -22,6 +22,7 @@ const {
   diagnoseScoutPlaces,
   formatScoutPlacesDiagnostic,
 } = require('../services/scoutPlacesDiagnostic');
+const { withResearchProviderScope } = require('../utils/anchorResearchProviderPause');
 
 function parseArgs(argv = process.argv.slice(2)) {
   const options = {
@@ -29,9 +30,22 @@ function parseArgs(argv = process.argv.slice(2)) {
     comparePlacesNew: true,
     query: null,
     help: false,
+    client_id: undefined,
+    clientIds: [],
   };
 
-  for (const arg of argv) {
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index];
+    if (arg.startsWith('--client_id=')) {
+      options.client_id = arg.slice('--client_id='.length);
+      options.clientIds.push(options.client_id);
+      continue;
+    }
+    if (arg === '--client_id') {
+      options.client_id = argv[++index] ?? '';
+      options.clientIds.push(options.client_id);
+      continue;
+    }
     if (arg === '--json') {
       options.json = true;
       continue;
@@ -62,8 +76,11 @@ Never logs the full GOOGLE_PLACES_KEY. Never writes CRM or outreach.
 Usage:
   node scripts/diagnoseScoutPlaces.js
   node scripts/diagnoseScoutPlaces.js --json
+  node scripts/diagnoseScoutPlaces.js --client_id=11
   node scripts/diagnoseScoutPlaces.js --skip-places-new
   node scripts/diagnoseScoutPlaces.js --query="law firm Manchester NH"
+
+When the research-provider pause is armed, --client_id is required.
 
 Reports:
   endpoint family, request host/path, HTTP status, Google status,
@@ -79,10 +96,13 @@ async function main() {
     process.exit(0);
   }
 
-  const report = await diagnoseScoutPlaces({
-    comparePlacesNew: options.comparePlacesNew,
-    query: options.query || undefined,
-  });
+  const run = options.clientIds.reduceRight((next, tenant) => () => withResearchProviderScope(tenant, next),
+    () => diagnoseScoutPlaces({
+      client_id: options.client_id,
+      comparePlacesNew: options.comparePlacesNew,
+      query: options.query || undefined,
+    }));
+  const report = await run();
 
   if (options.json) {
     console.log(JSON.stringify(report, null, 2));

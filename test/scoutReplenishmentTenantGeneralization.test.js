@@ -410,7 +410,7 @@ test('missing tenant context fails closed instead of defaulting to 10', async ()
   );
   await assert.rejects(
     () => defaultScoutRamp({
-      pool: { query: async () => ({ rows: [] }) },
+      pool: { query: async sql => ({ rows: /to_regclass/.test(sql) ? [{ control_table: null }] : [] }) },
       store: { candidateOwnership: async () => null },
       program: { id: 'outbound_missing', mode: 'active' },
       source: {

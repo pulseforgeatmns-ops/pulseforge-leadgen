@@ -1,4 +1,5 @@
 const pool = require('./db');
+const { withResearchProviderScope, isResearchProviderControlError } = require('./utils/anchorResearchProviderPause');
 const { ensureScoutUnenrichedTable } = require('./utils/scoutUnenrichedSchema');
 const { ensureEmailVerificationColumns } = require('./utils/emailVerificationSchema');
 const { promoteRecord } = require('./scripts/promoteUnenriched');
@@ -43,6 +44,13 @@ async function logRun(clientId, payload, status = 'success', error = null, db = 
 }
 
 async function run(params = {}) {
+  const tenantId = params.client_id ?? params.clientId ?? ANCHOR_CLIENT_ID;
+  return withResearchProviderScope(tenantId, () => params.client_id != null && params.clientId != null
+    ? withResearchProviderScope(params.clientId, () => runScoped(params))
+    : runScoped(params));
+}
+
+async function runScoped(params = {}) {
   const clientId = Number(params.client_id || params.clientId || ANCHOR_CLIENT_ID);
   const limit = Math.max(1, Math.min(Number(params.limit || DEFAULT_LIMIT), DEFAULT_LIMIT));
   const retryHours = Math.max(1, Number(params.retryHours || DEFAULT_RETRY_HOURS));
@@ -85,8 +93,9 @@ async function run(params = {}) {
   const promotionIds = [];
   require('./services/scoutPromotionCohort').retainPromotionIds(summary, promotionIds);
   for (const record of rows.rows) {
+    let controlRejected = false;
     try {
-      const result = await promote(record, { db });
+      const result = await withResearchProviderScope(record.client_id, () => promote(record, { db }));
       summary.outcomes.push({ company: record.company, domain: record.domain,
         emailResolved: result?.emailResolved === true, emailVerified: result?.emailVerified === true,
         promoted: result?.promoted === true, recovered: result?.recovered === true, reason: result?.reason || null });
@@ -99,6 +108,8 @@ async function run(params = {}) {
       else if (recovered) summary.recovered++;
       else summary.unresolved++;
     } catch (error) {
+      controlRejected = isResearchProviderControlError(error);
+      if (controlRejected) throw error;
       summary.failed++;
       await db.query(`
         UPDATE scout_unenriched
@@ -111,9 +122,12 @@ async function run(params = {}) {
     } finally {
       // Verification and binding rejections also consume an attempt. Otherwise
       // the next batch immediately selects the same permanently invalid row.
-      await db.query(`UPDATE scout_unenriched SET enrichment_attempts = GREATEST(COALESCE(enrichment_attempts, 0), $3),
-        last_attempt_at = NOW() WHERE id = $1 AND client_id = $2`,
-      [record.id, clientId, Number(record.enrichment_attempts || 0) + 1]);
+      // A pause is not a failed candidate or a consumed enrichment attempt.
+      if (!controlRejected) {
+        await db.query(`UPDATE scout_unenriched SET enrichment_attempts = GREATEST(COALESCE(enrichment_attempts, 0), $3),
+          last_attempt_at = NOW() WHERE id = $1 AND client_id = $2`,
+        [record.id, clientId, Number(record.enrichment_attempts || 0) + 1]);
+      }
     }
   }
 
@@ -124,13 +138,18 @@ async function run(params = {}) {
 
 function startAnchorUnenrichedEnrichmentScheduler() {
   let lastRunDate = null;
+  let running = false;
   const tick = () => {
     const local = easternParts();
-    if (!scheduledWindowOpen() || lastRunDate === local.date) return;
+    if (!scheduledWindowOpen() || running || lastRunDate === local.date) return;
+    running = true;
     lastRunDate = local.date;
-    run({ client_id: ANCHOR_CLIENT_ID }).catch(error =>
-      console.error(`[${AGENT_NAME}] scheduled run failed: ${error.message}`)
-    );
+    return run({ client_id: ANCHOR_CLIENT_ID }).catch(error => {
+      // A control rejection may retry after unpausing in the same daily window.
+      // Ordinary failures retain the existing once-per-day scheduling behavior.
+      if (isResearchProviderControlError(error)) lastRunDate = null;
+      console.error(`[${AGENT_NAME}] scheduled run failed: ${error.message}`);
+    }).finally(() => { running = false; });
   };
   setTimeout(tick, 30_000).unref();
   setInterval(tick, 60 * 60 * 1000).unref();

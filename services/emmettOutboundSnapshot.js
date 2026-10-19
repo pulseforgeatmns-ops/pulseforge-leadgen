@@ -86,12 +86,17 @@ async function queryFirstOperationalSendAt(pool, clientId, _opts = {}) {
 }
 
 async function buildInboxSnapshot(clientId, opts = {}) {
-  const pool = opts.pool;
+  // Explicit preparation-only callers may require preinitialized, fail-closed
+  // telemetry. The legacy default keeps its historical schema/fallback behavior.
+  const pool = opts.strictReadOnly === true ? { async query(...args) {
+    try { return await opts.pool.query(...args); }
+    catch (cause) { throw Object.assign(new Error('emmett_telemetry_unavailable'), { code: 'emmett_telemetry_unavailable', cause }); }
+  } } : opts.pool;
   const now = opts.now instanceof Date ? opts.now : new Date(opts.now || Date.now());
   const timeZone = opts.timeZone || 'America/New_York';
   const tenantId = String(clientId);
   const localDate = opts.localDate || localDateOf(now, timeZone);
-  if (pool) {
+  if (pool && opts.skipEnsure !== true) {
     try {
       await ensureSenderIdentityEventSchema(pool);
     } catch (_) {
@@ -172,7 +177,8 @@ async function buildInboxSnapshot(clientId, opts = {}) {
   let warmupProgress = { activeSendDays: 0, reset: true };
   try {
     warmupProgress = await getWarmupProgress(pool, clientId, 7, now);
-  } catch (_) {
+  } catch (error) {
+    if (opts.strictReadOnly === true) throw error;
     warmupProgress = { activeSendDays: 0, reset: true };
   }
 

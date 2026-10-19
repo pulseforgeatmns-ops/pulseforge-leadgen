@@ -62,6 +62,7 @@
     host: () => document.getElementById('mxSpreadsheetProposal'),
     scopeHost: () => document.getElementById('mxSpreadsheetScope'),
     onMessage: text => appendSystemMessage(text),
+    onReviewAccounts: owner => { closeWorkspace(); window.PulseforgeAccountReview?.open(owner); },
     getTenantId: () => window.PulseforgeTenantCoordinator?.getActiveClientId(),
   });
 
@@ -1704,6 +1705,7 @@
   }
 
   function clearSections() {
+    window.LivingCommand?.clear();
     document.body.classList.remove('cd-operator-mode', 'cd-living-deck');
     if (window.SpatialDeck) window.SpatialDeck.clear();
     for (const key of [
@@ -1750,6 +1752,7 @@
   }
 
   function showError(options = {}) {
+    window.LivingCommand?.unavailable();
     const hasCache = Boolean(readCache() && readCache().model);
     els.error.hidden = false;
     els.error.innerHTML = `
@@ -4756,7 +4759,13 @@
     const hasAttachments = mxPendingComposerFiles.length > 0;
     if (!q && !hasAttachments) return;
     if (workspaceAskInFlight) return;
+    if (!hasAttachments && spreadsheetReview.isAccountReviewRequest(q)) {
+      resetAskInput();
+      await spreadsheetReview.handleAccountReview(q);
+      return;
+    }
     workspaceAskInFlight = true;
+    document.body.classList.add('lc-thinking');
     console.info('[mission-objective-len]', {
       stage: 'frontend',
       chars: q.length,
@@ -4770,7 +4779,7 @@
     if (!hasAttachments && spreadsheetReview.hasPending()) {
       try { await spreadsheetReview.handleText(q); }
       catch (err) { appendSystemMessage(err.message); }
-      finally { workspaceAskInFlight = false; if (els.mxAskSend) els.mxAskSend.disabled = false; }
+      finally { workspaceAskInFlight = false; document.body.classList.remove('lc-thinking'); if (els.mxAskSend) els.mxAskSend.disabled = false; }
       return;
     }
 
@@ -4784,6 +4793,7 @@
         appendSystemMessage(err.message || 'Composer failed');
       } finally {
         workspaceAskInFlight = false;
+        document.body.classList.remove('lc-thinking');
         if (els.mxAskSend) els.mxAskSend.disabled = false;
         els.mxAskInput?.focus();
       }
@@ -4846,6 +4856,12 @@
         els.mxSwitch.hidden = false;
         els.mxSwitch.textContent = result.contextSwitch;
       }
+      if (result.uiAction?.type === 'open_content_review' && window.PulseforgeContentReview) {
+        thinking.clear();
+        closeWorkspace();
+        window.PulseforgeContentReview.open();
+        return;
+      }
       await appendMaxResponse(result, {
         startedAtMs,
         provisionalWeight,
@@ -4888,6 +4904,7 @@
       );
     } finally {
       workspaceAskInFlight = false;
+      document.body.classList.remove('lc-thinking');
       if (els.mxAskSend) els.mxAskSend.disabled = false;
       els.mxAskInput?.focus();
     }
@@ -4968,6 +4985,7 @@
       renderOperatorBrief(model);
     }
     const spatialMode = renderSpatialOverview(model);
+    window.LivingCommand?.render(model, options);
 
     if (!operatorMode && !spatialMode) {
       applyPresentationLayout(model);
@@ -5150,6 +5168,11 @@
 
       if (payload.deck) {
         const next = payload.deck;
+        // The live intelligence model has a separate composer. Keep the opening
+        // snapshot, with its original timestamp, only within the same tenant.
+        if (!next.livingBrief && currentModel?.livingBrief && String(tenantIdFromModel(next)) === String(currentModel.livingBrief.clientId)) {
+          next.livingBrief = currentModel.livingBrief;
+        }
         if (next.live && next.live.cursor) liveCursor = next.live.cursor;
         writeCache(next);
         const shouldEvolve =
@@ -5192,6 +5215,7 @@
     const wasHla = els.hla ? els.hla.innerHTML : '';
     clearSections();
     hideError();
+    window.LivingCommand?.render(model);
     const operatorMode = Boolean(model.operatorBrief);
     const spatialMode = model.spatialOverview && window.SpatialDeck
       ? window.SpatialDeck.render(model.spatialOverview)
@@ -5227,6 +5251,7 @@
   }
 
   async function loadDeck(options = {}) {
+    currentModel = null;
     setStatus(options.force ? 'Retrying…' : 'Assembling today’s briefing…');
     hideError();
     clearSections();
@@ -5402,6 +5427,7 @@
   }
 
   function invalidateWorkspaceForTenantChange() {
+    currentModel = null;
     workspaceSessionId = null;
     workspaceContext = null;
     if (els.workspace && !els.workspace.hidden) {
@@ -5422,6 +5448,12 @@
   }
 
   document.addEventListener('pulseforge:shell-ready', applyClientCommandDeckPresentation);
+  document.addEventListener('pulseforge:living-ask', event => {
+    if (!currentModel) return;
+    openWorkspaceFromAction({ page: 'command-deck', context: 'daily_brief', prompt: String(event.detail?.prompt || '') });
+  });
+  document.addEventListener('pulseforge:living-refresh', () => loadDeck({ force: true }));
+  document.addEventListener('pulseforge:content-reviewed', () => loadDeck({ force: true }));
   document.addEventListener('pulseforge:tenant-changed', applyClientCommandDeckPresentation);
   document.addEventListener('pulseforge:tenant-changed', onTenantChanged);
   if (window.PulseforgeShell) applyClientCommandDeckPresentation();
@@ -5439,12 +5471,7 @@
           prompt: null,
         }),
       onOpenMission: (missionId) => openMissionWorkspace(missionId),
-      onReviewRecommendation: (recommendationId) =>
-        openWorkspaceFromAction({
-          page: 'command-deck',
-          context: 'content_recommendation',
-          recommendationId,
-        }),
+      onReviewRecommendation: () => window.PulseforgeContentReview?.open(),
       onAskMax: (payload) => openWorkspaceFromAction(payload || {}),
     });
   }

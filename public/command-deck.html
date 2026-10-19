@@ -9,14 +9,17 @@
   <link rel="stylesheet" href="/shared/tokens.css">
   <link rel="stylesheet" href="/shared/shell.css">
   <link rel="stylesheet" href="/command-deck/command-deck.css">
+  <link rel="stylesheet" href="/command-deck/living-command.css">
+  <link rel="stylesheet" href="/shared/content-review.css">
+  <link rel="stylesheet" href="/shared/account-review.css">
 </head>
-<body class="cd-page">
+<body class="cd-page lc-page">
   <a class="cd-skip" href="#command-deck-main">Skip to briefing</a>
 
   <main id="command-deck-main" class="cd-main" aria-label="Command Deck">
     <header class="cd-masthead" aria-label="Briefing masthead">
       <div class="cd-field-header">
-        <p class="cd-field-label" id="cdFieldLabel">Max</p>
+        <p class="cd-field-label" id="cdFieldLabel">Living Command</p>
         <p class="cd-field-state" id="cdFieldState" aria-live="polite">
           <span id="cdStatus" class="cd-status-inline" role="status"></span>
           <span class="cd-field-sep" aria-hidden="true">·</span>
@@ -27,6 +30,20 @@
     <div id="cdLiveNotify" class="cd-live-notify" hidden role="status" aria-live="polite"></div>
     <div id="cdUnseenBanner" class="cd-unseen-banner" hidden role="status" aria-live="polite"></div>
     <div id="cdError" class="cd-error" hidden></div>
+
+    <div class="lc-page-heading">
+      <div><h1>Your business, <span>in view.</span></h1><p>One conversation. A clear next move.</p></div>
+      <span class="lc-workspace-label" id="lcWorkspaceLabel"></span>
+    </div>
+    <div class="lc-layout">
+    <aside class="lc-brief" aria-labelledby="lcBriefTitle">
+      <div class="lc-brief-header"><span class="lc-max-mark" aria-hidden="true">✦</span><div><strong>Max</strong><span>Your daily brief</span></div><button type="button" class="lc-quiet-button" id="lcRefresh" aria-label="Refresh daily brief">↻</button></div>
+      <h2 id="lcBriefTitle">Getting your brief ready.</h2>
+      <p class="lc-brief-intro" id="lcBriefIntro">I’m checking this workspace’s latest activity.</p>
+      <div class="lc-brief-lines" id="lcBriefLines"></div>
+      <button type="button" class="lc-primary-button" data-lc-ask="Walk me through today's daily brief and recommend the next action, using the current workspace's live data.">Walk me through it <span aria-hidden="true">↗</span></button>
+      <p class="lc-brief-source" id="lcBriefSource">Preparing workspace intelligence…</p>
+    </aside>
 
     <!-- SPEC-097 Living Command Deck — spatial intelligence surface -->
     <section id="cdSpatialDeck" class="cd-spatial-deck" aria-label="Living Command Deck" hidden>
@@ -41,7 +58,10 @@
         </div>
         <svg class="cd-intel-connections" id="cdIntelConnections" aria-hidden="true" focusable="false"></svg>
         <div class="cd-spatial-orbit" id="cdSpatialOrbit">
-          <article class="cd-spatial-max" id="cdSpatialMax" aria-label="Max intelligence anchor">
+          <article class="cd-spatial-max" id="cdSpatialMax" role="button" tabindex="0" aria-label="Talk to Max">
+            <span class="lc-ring lc-ring-one" aria-hidden="true"></span>
+            <span class="lc-ring lc-ring-two" aria-hidden="true"></span>
+            <span class="lc-ring lc-ring-three" aria-hidden="true"></span>
             <div class="cd-spatial-max-halo" aria-hidden="true">
               <span class="cd-max-illumination"></span>
               <span class="cd-max-bloom"></span>
@@ -56,6 +76,7 @@
       </div>
       <div id="cdSpatialList" class="cd-spatial-list" hidden aria-label="Domain list view"></div>
     </section>
+    </div>
 
     <div id="cdOperatorLayout" class="cd-operator-layout" hidden>
       <div class="cd-operator-main">
@@ -210,6 +231,7 @@
       </header>
       <div id="cdDomainDrawerBody" class="cd-domain-body"></div>
       <footer class="cd-domain-footer">
+        <button type="button" class="cd-btn cd-btn-primary" id="cdDomainReviewContent" hidden>Review content</button>
         <button type="button" class="cd-btn cd-btn-primary" id="cdDomainDiscussMax">Discuss with Max</button>
       </footer>
     </div>
@@ -237,6 +259,9 @@
 <link rel="stylesheet" href="/shared/spreadsheetReview.css">
   <script src="/command-deck/investigation.js"></script>
   <script src="/command-deck/spatial-deck.js"></script>
+  <script src="/shared/content-review.js"></script>
+  <script src="/shared/account-review.js"></script>
+  <script src="/command-deck/living-command.js"></script>
   <script src="/command-deck/command-deck.js"></script>
 </body>
 </html>

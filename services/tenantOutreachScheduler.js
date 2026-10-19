@@ -37,7 +37,7 @@ const PAST_DUE_POLICY = Object.freeze({
   EXECUTE_ANYTIME: 'execute_anytime',
 });
 
-const EXECUTOR_LOCK_NAMESPACE = 701252;
+const { EXECUTOR_LOCK_NAMESPACE } = require('./tenantOutreachExecutorLock');
 const DEFAULT_MAX_LATENESS_MINUTES = 30;
 const DEFAULT_TIMEZONE = 'America/New_York';
 

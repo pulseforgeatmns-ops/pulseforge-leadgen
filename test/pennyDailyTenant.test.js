@@ -75,4 +75,36 @@ describe('Penny tenant-scoped daily review', () => {
       /not enabled for client_id=10/
     );
   });
+
+  it('uses the evidence report in a real Google reporting run without a model-generated recommendation', async () => {
+    let savedReport;
+    await run({ client_id: 10 }, {
+      pool: {},
+      async logAgentAction() {},
+      async getClientConfig() { return { id: 10, name: 'Anchor Cleaning' }; },
+      async isAgentEnabledForClient() { return { allowed: true }; },
+      async ensureAdAccountsSchema() {},
+      async resolveAdAccountsForClient() { return [{ id: 'google', platform: 'google_ads' }]; },
+      async fetchPlatformEvidence() {
+        return {
+          currency: 'USD',
+          campaigns: [
+            { name: 'Old PMax', status: 'PAUSED', type: 'PERFORMANCE_MAX', impressions: 16003, clicks: 257, spend: 99.25, conversions: 0, daily_budget: 32 },
+            { name: 'Residential Search', status: 'ENABLED', type: 'SEARCH', impressions: 20, clicks: 3, spend: 20.42, conversions: 0, daily_budget: 25 },
+          ],
+          flags: [],
+        };
+      },
+      async saveReport(clientId, company, platform, report) {
+        assert.equal(clientId, 10);
+        assert.equal(platform, 'google_ads');
+        savedReport = report;
+        return '12345678-1234-1234-1234-123456789012';
+      },
+      async sleep() {},
+    });
+    assert.match(savedReport, /Old PMax \[PAUSED; PERFORMANCE_MAX\]/);
+    assert.match(savedReport, /small traffic sample/);
+    assert.doesNotMatch(savedReport, /raise|reallocate|pause it|under-pacing|over budget/i);
+  });
 });

@@ -12,6 +12,15 @@ describe('CI plan PR selector (SPEC-CI-LEAN-001)', () => {
     assert.equal(pathMatchesPattern('routes/revenue.js', 'packages/signal-v1/'), false);
   });
 
+  it('runs Max and its browser acceptance for changes to Living Command and content review', () => {
+    for (const file of [
+      'public/command-deck/command-deck.js', 'public/command-deck.html',
+      'public/shared/content-review.js', 'public/shared/content-review.css', 'public/shared/shell.js',
+      'services/contentReview.js', 'services/livingCommandBrief.js', 'routes/contentReview.js',
+      'test/contentReview.test.js', 'test/livingCommandBrief.test.js', 'test/browser/livingCommandUi.test.js',
+    ]) assert.ok(buildPlan([file]).suites.includes('max'), `${file} must run review browser coverage`);
+  });
+
   const cases = [
     {
       name: 'Small-business website evidence safety',
@@ -239,5 +248,81 @@ describe('Scout business evidence cursor CI coverage', () => {
     assert.ok(native.includes("process.env.SCOUT_EVIDENCE_CURSOR_REQUIRE_POSTGRES !== 'true'"));
     assert.ok(native.includes("await startDisposablePostgres('scout-evidence-cursor-')"));
     assert.equal(native.includes('t.skip('), false, 'native prerequisites must throw, not silently skip');
+  });
+});
+
+
+describe('SPEC262 scoped recovery CI coverage', () => {
+  it('maps runtime, native tests and manual schema to the real PostgreSQL Anchor suite', () => {
+    for (const file of ['scripts/anchorCrmPreparationOnce.js','services/anchorScopedResume.js','services/anchorScopedResumeControl.js',
+      'test/anchorScopedResumeLifecyclePostgres.test.js','test/helpers/anchorScopedResumePostgresFixture.js',
+      'docs/sql/anchor-scoped-resume-schema-proposal.sql']) {
+      assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
+    }
+    assert.match(require('../package.json').scripts['test:anchor-outbound'], /test\/anchorScopedResume\*\.test\.js/);
+  });
+});
+
+// SPEC-265: the reviewed provider pause cannot change without its regressions.
+it('research provider pause leaves and callers select the Anchor suite', () => {
+  for (const file of [
+    "leadgen.js",
+    "lib/serpapi.js",
+    "packages/capabilities/acquisition/ProspectAcquisition.js",
+    "packages/capabilities/acquisition/providerContract.js",
+    "packages/capabilities/discovery/ProspectDiscovery.js",
+    "packages/capabilities/discovery/providers/PlacesProvider.js",
+    "packages/max/scoutAcquisition/DiscoveryAdapters.js",
+    "packages/max/scoutAcquisition/ScoutAdapter.js",
+    "packages/max/workspace/MissionBoundWebsiteDiscovery.js",
+    "packages/max/workspace/ScoutDiscoveryExecutor.js",
+    "packages/scout/DiscoveryPipeline.js",
+    "packages/scout/coverage/DiscoveryCoverageEngine.js",
+    "packages/scout/coverage/HypothesisDrivenDiscoveryEngine.js",
+    "packages/scout/investigation/CandidateInvestigation.js",
+    "phoneEnrich.js",
+    "routes/clientIntelligence.js",
+    "routes/cron.js",
+    "scoutUnenrichedEnrichmentAgent.js",
+    "scripts/backfill_email_verification.js",
+    "scripts/diagnoseScoutPlaces.js",
+    "scripts/importAnchorCallList.js",
+    "scripts/lib/anchorMissionBoundEnrichment.js",
+    "scripts/lib/babrunCohort002.js",
+    "scripts/lib/babrunContactResolution.js",
+    "scripts/lib/webCohort002.js",
+    "scripts/lib/webCohort003.js",
+    "scripts/promoteUnenriched.js",
+    "scripts/resolveBabrunFirstTenContacts.js",
+    "server.js",
+    "services/emailVerificationRecovery.js",
+    "services/governedOutboundAdapters.js",
+    "services/maxOutboundControlLoop.js",
+    "services/sameCompanyContactRecovery.js",
+    "services/scoutPlacesDiagnostic.js",
+    "services/scoutPublicSourcing.js",
+    "tieredEnrichmentAgent.js",
+    "utils/anchorResearchProviderPause.js",
+    "utils/emailVerifier.js",
+    "utils/placesApi.js",
+    "test/anchorResearchProviderPauseCore.test.js"
+]) {
+    assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
+  }
+  assert.match(require('../package.json').scripts['test:anchor-outbound'], /test\/anchorResearchProviderPause\*\.test\.js/);
+});
+
+describe('promotion schema lifecycle CI coverage', () => {
+  it('runs both Max CRM admission and native Anchor coverage for the shared schema helper', () => {
+    const suites = buildPlan(['utils/businessNameShort.js']).suites;
+    assert.ok(suites.includes('max'), 'shared CRM admission schema changes must select Max');
+    assert.ok(suites.includes('anchor-outbound'), 'shared promotion schema changes must select native Anchor');
+  });
+  it('runs native Anchor regressions for both runtime paths and the concurrency test', () => {
+    for (const file of ['utils/businessNameShort.js', 'scripts/promoteUnenriched.js',
+      'test/anchorDailyOutboundPromotionSchemaPostgres.test.js']) {
+      assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
+    }
+    assert.match(require('../package.json').scripts['test:anchor-outbound'], /test\/anchorDailyOutbound\*\.test\.js/);
   });
 });

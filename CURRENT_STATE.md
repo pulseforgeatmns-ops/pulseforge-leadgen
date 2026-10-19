@@ -1,4 +1,18 @@
+[SPEC-SCOUT-SCHEMA-001](docs/specs/SPEC-SCOUT-SCHEMA-001_Promotion_Schema_Lifecycle.md) is an in-progress local-only repair for the inherited promotion schema/advisory lock race. No publication, deployment, production schema action, provider action, or activation is authorized.
+
+[SPEC-265](docs/specs/SPEC-265_Anchor_Research_Provider_Pause.md) is in-progress local-only preparation of a default-off tenant-10 research-provider pause. No publication, deployment or arming authority. See [ADR-107](docs/adr/ADR-107_Explicit_Research_Provider_Pause.md).
+
+[SPEC-264](docs/specs/SPEC-264_Anchor_Crm_One_Shot_Invocation.md) is a separate local-only one-shot operator invocation proposal; not approved for publication or production execution. Frozen SPEC262/263 artifacts remain unchanged.
+
+[SPEC-263](docs/specs/SPEC-263_Anchor_Existing_Crm_Canonical_Preparation.md) is a separate local-only CRM preparation bridge on frozen SPEC262. No current fresh production candidates or activation authority exist.
+
+[SPEC-262](docs/specs/SPEC-262_Anchor_Scoped_Resume.md) is in-progress local-only tenant-10-isolated recovery, superseding the unpublished broad-gate SPEC261 rollout. Non-Anchor flows retain their original paths. Paid research stays closed; no current ready batch has been verified. All real activation/schema/admission/preparation/send approvals remain unset. See the [current operator proposal](docs/anchor-scoped-resume-operator-proposal.md).
+
 # CURRENT_STATE
+
+[SPEC-261](docs/specs/SPEC-261_Anchor_Quarantined_Email_Recovery.md) is in-progress local-only gated recovery preparation. It explicitly layers PR956 safety and SPEC260 boundary diagnostics; production migration, admission policy, manifest activation and sends remain unapproved.
+
+[SPEC-260](docs/specs/SPEC-260_Anchor_Brevo_Boundary_Diagnostics.md) is an in-progress local-only boundary diagnostics repair at base 8cbeba9. Default off, tenant-10 governed Brevo only; authorization/schema, historical holds, sends and production configuration remain unchanged.
 
 > Repository architecture snapshot refreshed 2026-09-17. The older sprint and deployment notes below are retained as history, not current production status.
 

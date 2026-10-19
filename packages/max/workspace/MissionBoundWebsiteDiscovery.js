@@ -13,6 +13,7 @@
  * Never fabricates domains from company names.
  */
 
+const { withResearchProviderScope } = require('../../../utils/anchorResearchProviderPause');
 const { legacyPlaceDetails, legacyTextSearch } = require('../../../utils/placesApi');
 const { PLACES_FEATURES } = require('../../../utils/placesCostAttribution');
 const { normalizeDomain: canonNormalizeDomain, classifyCompanyUrl } = require('../../../utils/canonicalEmailEligibility');
@@ -192,7 +193,18 @@ function buildDiscoveryInput(candidate = {}, crmRow = null) {
   };
 }
 
+function withWebsiteResearchScope(opts, fn) {
+  const tenantId = opts.tenantId ?? opts.crmRow?.client_id;
+  // Internal helpers inherit the captured authority; standalone calls must bind it.
+  return withResearchProviderScope(tenantId, () => opts.tenantId != null && opts.crmRow?.client_id != null
+    ? withResearchProviderScope(opts.crmRow.client_id, fn) : fn());
+}
+
 async function fetchPlaceDetailsWebsite(placeId, deps = {}) {
+  return withWebsiteResearchScope(deps, () => fetchPlaceDetailsWebsiteScoped(placeId, deps));
+}
+
+async function fetchPlaceDetailsWebsiteScoped(placeId, deps = {}) {
   const apiKey = deps.apiKey || process.env.GOOGLE_PLACES_KEY || '';
   if (!placeId || !apiKey) return null;
   const traced = await legacyPlaceDetails({
@@ -212,6 +224,10 @@ async function fetchPlaceDetailsWebsite(placeId, deps = {}) {
 }
 
 async function searchPlaceByIdentity(candidate, deps = {}) {
+  return withWebsiteResearchScope(deps, () => searchPlaceByIdentityScoped(candidate, deps));
+}
+
+async function searchPlaceByIdentityScoped(candidate, deps = {}) {
   const apiKey = deps.apiKey || process.env.GOOGLE_PLACES_KEY || '';
   if (!apiKey) return null;
   const query = [candidate.company, candidate.location || candidate.address, 'NH']
@@ -317,6 +333,10 @@ function resolutionFromPlaceDetails(candidate, placeDetails, source) {
  * @returns {Promise<object>}
  */
 async function discoverMissionBoundWebsite(candidate = {}, opts = {}) {
+  return withWebsiteResearchScope(opts, () => discoverMissionBoundWebsiteScoped(candidate, opts));
+}
+
+async function discoverMissionBoundWebsiteScoped(candidate = {}, opts = {}) {
   const crmRow = opts.crmRow || null;
   const input = buildDiscoveryInput(candidate, crmRow);
 

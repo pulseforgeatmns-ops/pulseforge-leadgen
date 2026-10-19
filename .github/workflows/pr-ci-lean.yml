@@ -317,7 +317,18 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - run: node --test test/anchorCanonicalOutboundRecovery.test.js
+      - uses: ./.github/actions/setup-postgres-environment
+      - name: Canonical recovery and fail-closed reconciliation regressions
+        run: >-
+          node --require ./test/helpers/denyWebsiteEvidenceNetwork.cjs --test
+          test/anchorCanonicalOutboundRecovery.test.js
+          test/governedReconciliationReadOnly.test.js
+          test/reconcileAnchorUncertainSend.test.js
+          test/governedProvenanceProviderBoundary.test.js
+          test/governedUncertainSendReconciliation.test.js
+          test/tenantOutreachScheduler.test.js
+      - name: Reconciliation native PostgreSQL attempt and race boundaries (required)
+        run: node --test test/anchorReconciliationPostgres.test.js
 
   studio-substral:
     name: Studio Substral doctrine
@@ -369,6 +380,18 @@ jobs:
             tail -n 80 max-test-output.log | cut -c1-400
           }
           exit "$test_status"
+      - name: Living Command brief and browser acceptance
+        run: |
+          node --test test/livingCommandBrief.test.js test/contentReview.test.js test/maxAccountReview.test.js test/maxSpreadsheetReviewUi.test.js
+          CHROMIUM_PATH="$(command -v google-chrome)" LIVING_COMMAND_QA_DIR="$RUNNER_TEMP" node --test test/browser/livingCommandUi.test.js
+      - name: Retain Living Command previews
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: living-command-ui-${{ github.run_id }}
+          path: ${{ runner.temp }}/living-command-*.png
+          retention-days: 3
+          if-no-files-found: warn
       - name: Retain complete Max test output
         if: always()
         uses: actions/upload-artifact@v4

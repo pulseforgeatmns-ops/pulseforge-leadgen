@@ -5,6 +5,7 @@
  * Never sends mail. Never revises CAPACITY.
  */
 
+const { withResearchProviderScope } = require('../../utils/anchorResearchProviderPause');
 const { getAcquisitionMissionRuntime } = require('../../services/acquisitionMissionRuntime');
 const {
   buildMissionBoundCandidates,
@@ -287,6 +288,12 @@ function reportProvenanceFields(row = {}, extras = {}) {
 }
 
 async function enrichProspectRow(row, options = {}) {
+  return withResearchProviderScope(row.client_id, () => options.tenantId != null
+    ? withResearchProviderScope(options.tenantId, () => enrichProspectRowScoped(row, options))
+    : enrichProspectRowScoped(row, options));
+}
+
+async function enrichProspectRowScoped(row, options = {}) {
   const company = row.company_name || row.company || null;
   const processProspect = options.processProspect || ((prospectRow, processOptions) => (
     tiered._test.processProspect(prospectRow, processOptions)

@@ -5,6 +5,7 @@
  */
 
 const axios = require('axios');
+const { hasResearchProviderScope, assertResearchProviderAllowed, rethrowResearchProviderControl } = require('./anchorResearchProviderPause');
 const { reserveApiCall, settleApiCall } = require('./apiSpendControl');
 const { PLACES_UPPER_BOUND } = require('./apiPricing');
 const {
@@ -27,6 +28,13 @@ const {
 
 async function guardedPlacesCall(recordBase, deps, execute) {
   const row = buildAttributionRow(recordBase, getPlacesContext());
+  const research = hasResearchProviderScope() || row.endpoint !== PLACES_ENDPOINTS.GEOCODE || ['Leadgen', 'Discovery', 'Diagnostic'].includes(row.feature);
+  const checkResearch = () => {
+    if (!research) return; // Field-route geocoding is outside this research pause.
+    assertResearchProviderAllowed('google_places');
+    if (row.tenantId != null) assertResearchProviderAllowed('google_places', row.tenantId);
+  };
+  checkResearch();
   const reserve = deps.reserveApiCall || reserveApiCall;
   const settle = deps.settleApiCall || settleApiCall;
   const estimate = PLACES_UPPER_BOUND[row.endpoint] ?? null;
@@ -34,10 +42,12 @@ async function guardedPlacesCall(recordBase, deps, execute) {
   try { id = await reserve({ provider: 'google_places', agentName: row.caller,
     tenantId: row.tenantId, missionId: row.missionId, operation: row.endpoint,
     estimatedUsd: estimate, pricingBasis: 'places_gross_upper_field_tier_2026_10_14' }, { db: deps.db });
-  } catch (err) { err.apiUsageNoNetwork = true; throw err; }
+  } catch (err) {
+    rethrowResearchProviderControl(err); err.apiUsageNoNetwork = true; throw err; }
   let result;
-  try { result = await execute(); }
+  try { checkResearch(); result = await execute(); }
   catch (err) {
+    rethrowResearchProviderControl(err);
     await settle(id, { status: 'uncertain', httpStatus: err.response?.status }, { db: deps.db })
       .catch(() => console.warn('[api-usage] Places attempt remains reserved.'));
     throw err;
@@ -134,6 +144,7 @@ async function recordCall(recordBase, result, params, deps, started, cacheMeta =
       deps
     );
   } catch (err) {
+    rethrowResearchProviderControl(err);
     console.warn('[placesApi] attribution record failed:', err.message);
   }
 }
@@ -244,6 +255,7 @@ async function legacyTextSearch(params = {}, deps = {}) {
     reused = pending.reused;
     result = await pending.promise;
   } catch (err) {
+    rethrowResearchProviderControl(err);
     if (err.apiUsageNoNetwork) throw err;
     await recordCall(
       recordBase,
@@ -368,6 +380,7 @@ async function legacyPlaceDetails(params = {}, deps = {}) {
     reused = pending.reused;
     result = await pending.promise;
   } catch (err) {
+    rethrowResearchProviderControl(err);
     if (err.apiUsageNoNetwork) throw err;
     await recordCall(
       recordBase,
@@ -461,6 +474,7 @@ async function v1SearchText(params = {}, deps = {}) {
       ok: res.status >= 200 && res.status < 300,
     };
   } catch (err) {
+    rethrowResearchProviderControl(err);
     if (err.apiUsageNoNetwork) throw err;
     result = {
       httpStatus: err.response?.status ?? null,
@@ -509,6 +523,7 @@ async function v1PlaceDetails(params = {}, deps = {}) {
       ok: res.status >= 200 && res.status < 300,
     };
   } catch (err) {
+    rethrowResearchProviderControl(err);
     if (err.apiUsageNoNetwork) throw err;
     result = {
       httpStatus: err.response?.status ?? null,
@@ -550,6 +565,7 @@ async function geocodeAddress(params = {}, deps = {}) {
       ok: res.status >= 200 && res.status < 300,
     };
   } catch (err) {
+    rethrowResearchProviderControl(err);
     if (err.apiUsageNoNetwork) throw err;
     result = {
       httpStatus: err.response?.status ?? null,

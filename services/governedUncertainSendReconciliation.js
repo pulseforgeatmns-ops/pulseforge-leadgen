@@ -2,15 +2,17 @@
 
 const { hash } = require('../packages/acquisition-mission/DailyOutboundPolicy');
 const { GovernedOutboundStore } = require('./governedOutboundStore');
-const { isPreProviderOutboundFailure } = require('./governedOutboundProviderBoundary');
-const { isRetryablePreProviderScheduleRejection } = require('./governedOutboundProviderBoundary');
+const { withTenantOutreachExecutorLock } = require('./tenantOutreachExecutorLock');
+const {
+  PRE_PROVIDER_FAILURE_CODES,
+  isRetryablePreProviderScheduleRejection,
+} = require('./governedOutboundProviderBoundary');
 
 const PRE_PROVIDER_UNCERTAIN_REASONS = new Set([
   'ak_observed_provenance_required',
   'governed_paige_lineage_missing',
   'governed_paige_lineage_revision_mismatch',
   'governed_paige_lineage_copy_mismatch',
-  'provider_or_persistence_error',
   'emmett_capacity_exhausted',
   'emmett_envelope_missing',
   'emmett_envelope_expired',
@@ -23,9 +25,9 @@ const PRE_PROVIDER_UNCERTAIN_REASONS = new Set([
 
 async function loadItemWithEnvelope(pool, tenantId, itemId) {
   const row = (await pool.query(
-    `SELECT i.*, e.mission_id, e.local_day, e.program_id
+    `SELECT i.*, i.attempted_at::text AS attempt_token, e.mission_id, e.local_day, e.program_id
        FROM acquisition_outbound_items i
-       JOIN acquisition_outbound_envelopes e ON e.id = i.envelope_id
+       JOIN acquisition_outbound_envelopes e ON e.id = i.envelope_id AND e.tenant_id = i.tenant_id
       WHERE i.id = $1 AND i.tenant_id = $2`,
     [itemId, String(tenantId)],
   )).rows[0] || null;
@@ -44,7 +46,8 @@ async function gatherUncertainSendEvidence(pool, item) {
        FROM tenant_outreach_scheduled_sends
       WHERE tenant_id = $1
         AND (prospect_id = $2 OR lower(recipient_email) = $3)
-      ORDER BY created_at DESC
+      ORDER BY (status IN ('SCHEDULED','EXECUTING','SENT') OR outbound_message_id IS NOT NULL) DESC,
+               created_at DESC
       LIMIT 20`,
     [tenantId, prospectId, email],
   )).rows;
@@ -55,7 +58,8 @@ async function gatherUncertainSendEvidence(pool, item) {
       WHERE tenant_id = $1
         AND direction = 'OUTBOUND'
         AND (prospect_id = $2 OR lower(recipients::text) LIKE $3)
-      ORDER BY created_at DESC
+      ORDER BY (provider_message_id IS NOT NULL OR rfc_message_id IS NOT NULL OR sent_at IS NOT NULL) DESC,
+               created_at DESC
       LIMIT 20`,
     [tenantId, prospectId, `%${email}%`],
   )).rows;
@@ -65,7 +69,8 @@ async function gatherUncertainSendEvidence(pool, item) {
        FROM acquisition_mission_outbound_executions
       WHERE tenant_id = $1
         AND (prospect_id = $2 OR lower(payload->>'email') = $3)
-      ORDER BY attempted_at DESC NULLS LAST
+      ORDER BY (status = 'sent' OR provider_message_id IS NOT NULL OR sent_at IS NOT NULL) DESC,
+               attempted_at DESC NULLS LAST
       LIMIT 20`,
     [tenantId, prospectId, email],
   )).rows;
@@ -74,7 +79,9 @@ async function gatherUncertainSendEvidence(pool, item) {
     `SELECT event_type, payload, created_at
        FROM acquisition_outbound_events
       WHERE tenant_id = $1 AND item_id = $2
-      ORDER BY created_at DESC
+      ORDER BY (COALESCE(payload->>'providerMessageId',payload->>'provider_message_id','') <> ''
+        OR payload->>'providerOutcome' = 'PROVIDER_CONFIRMED_SENT'
+        OR payload->>'providerBoundaryCrossed' = 'true') DESC NULLS LAST, created_at DESC
       LIMIT 50`,
     [tenantId, item.id],
   )).rows;
@@ -115,14 +122,21 @@ async function gatherUncertainSendEvidence(pool, item) {
 
 function extractPreProviderFailureCode(item, evidence) {
   const reason = String(item.reason || '').trim();
-  if (PRE_PROVIDER_UNCERTAIN_REASONS.has(reason) || isPreProviderOutboundFailure({ code: reason })) return reason;
-  for (const row of evidence.tickBlocks) {
+  // An ambiguous provider result cannot be cleared using an unrelated failure
+  // elsewhere in the tenant's one-hour diagnostic window. Missing local receipt
+  // rows are not proof that the provider did not accept this attempt.
+  if (['provider_or_persistence_error', 'provider_acceptance_unknown'].includes(reason)) return null;
+  // Item IDs are reused across retries. A reason string or same-item historical
+  // event cannot prove this attempt stayed before the provider boundary. Only
+  // exact current-attempt evidence is eligible; legacy unversioned events hold.
+  if (!item.attempt_token) return null;
+  for (const row of [...evidence.tickBlocks, ...evidence.events]) {
+    if (String(row.payload?.itemId || '') !== String(item.id)
+      || String(row.payload?.envelopeId || '') !== String(item.envelope_id)
+      || row.payload?.attemptToken !== item.attempt_token
+      || row.payload?.providerBoundaryCrossed !== false) continue;
     const code = String(row.payload?.reason || '').trim();
-    if (PRE_PROVIDER_UNCERTAIN_REASONS.has(code) || isPreProviderOutboundFailure({ code })) return code;
-  }
-  for (const row of evidence.events) {
-    const code = String(row.payload?.reason || row.reason || '').trim();
-    if (PRE_PROVIDER_UNCERTAIN_REASONS.has(code)) return code;
+    if (PRE_PROVIDER_UNCERTAIN_REASONS.has(code) || PRE_PROVIDER_FAILURE_CODES.has(code)) return code;
   }
   return null;
 }
@@ -136,7 +150,15 @@ function classifyProvenUnsent(item, evidence) {
   if (item.provider_message_id) {
     return { outcome: 'SKIP', reason: 'provider_message_id_present' };
   }
-  const sentSchedule = evidence.schedules.find((row) => String(row.status) === 'SENT' && row.outbound_message_id);
+  if (evidence.events.some((row) => row.payload?.providerMessageId
+    || row.payload?.provider_message_id
+    || row.payload?.providerOutcome === 'PROVIDER_CONFIRMED_SENT')) {
+    return { outcome: 'SKIP', reason: 'item_event_provider_receipt' };
+  }
+  if (evidence.events.some((row) => row.payload?.providerBoundaryCrossed === true)) {
+    return { outcome: 'UNKNOWN', reason: 'item_event_provider_boundary_crossed' };
+  }
+  const sentSchedule = evidence.schedules.find((row) => String(row.status) === 'SENT' || row.outbound_message_id);
   if (sentSchedule) return { outcome: 'SKIP', reason: 'schedule_shows_send_path' };
 
   const durableSchedule = evidence.schedules.find((row) => ['SCHEDULED', 'EXECUTING'].includes(String(row.status)));
@@ -151,19 +173,15 @@ function classifyProvenUnsent(item, evidence) {
     if (!matchingSkip) return { outcome: 'UNKNOWN', reason: 'pre_provider_schedule_rejection_not_proven' };
   }
 
-  const sentMailbox = evidence.mailboxMessages.find((row) => row.status === 'sent' && (row.provider_message_id || row.sent_at));
+  const sentMailbox = evidence.mailboxMessages.find((row) => row.provider_message_id || row.rfc_message_id || row.sent_at);
   if (sentMailbox) return { outcome: 'SKIP', reason: 'mailbox_message_sent' };
 
-  const sentExecution = evidence.executions.find((row) => row.status === 'sent' && row.provider_message_id);
+  const sentExecution = evidence.executions.find((row) => row.status === 'sent' || row.provider_message_id || row.sent_at);
   if (sentExecution) return { outcome: 'SKIP', reason: 'canonical_execution_sent' };
 
   const preProviderCode = extractPreProviderFailureCode(item, evidence);
   if (!preProviderCode) {
     return { outcome: 'UNKNOWN', reason: 'pre_provider_failure_not_proven' };
-  }
-
-  if (evidence.executions.some((row) => row.status === 'sent' || row.provider_message_id)) {
-    return { outcome: 'SKIP', reason: 'execution_provider_id' };
   }
 
   if (evidence.emmettReservation.some((row) => row.action === 'email_sent')) {
@@ -210,36 +228,60 @@ async function persistReconciliationEvidence(pool, item, classification) {
 }
 
 async function reconcileUncertainItemFromEvidence(pool, tenantId, itemId, opts = {}) {
-  const item = await loadItemWithEnvelope(pool, tenantId, itemId);
-  if (!item) return { itemId, skipped: true, reason: 'item_not_found' };
-  if (item.status === 'pending' && item.reason === 'reconciled_not_sent') {
-    return { itemId, skipped: true, reason: 'already_reconciled' };
+  const store = opts.dryRun ? null : new GovernedOutboundStore(pool, tenantId);
+  async function inspectAndReconcile() {
+    // Apply reads fresh evidence only after acquiring the tenant's send lock.
+    // Inspection deliberately avoids the lock and every mutation path.
+    const item = await loadItemWithEnvelope(pool, tenantId, itemId);
+    if (!item) return { itemId, skipped: true, reason: 'item_not_found', applied: false, retryAllowed: false };
+    if (item.status === 'pending' && item.reason === 'reconciled_not_sent') {
+      return { itemId, skipped: true, reason: 'already_reconciled', applied: false, retryAllowed: false };
+    }
+    try {
+      await require('./anchorEmailRecoveryIntegration').assertNotQuarantinedWhenInstalled(pool, {
+        tenantId: String(tenantId), itemId: item.id, prospectId: item.prospect_id,
+        companyId: item.company_id, email: item.email,
+      });
+    } catch (error) {
+      // Quarantine is a permanent operational hold, not proof of non-delivery.
+      // No diagnostic write or reset is permitted on this path, including dry-run.
+      return { itemId, classification: { outcome: 'UNKNOWN', reason: error.code || 'recovery_guard_unavailable' },
+        applied: false, retryAllowed: false, skipped: true, dryRun: Boolean(opts.dryRun) };
+    }
+    const evidence = await gatherUncertainSendEvidence(pool, item);
+    const classification = classifyProvenUnsent(item, evidence);
+    // Inspection must return before every write, including diagnostic evidence.
+    if (opts.dryRun) {
+      return { itemId, classification, applied: false, dryRun: true,
+        ...(classification.outcome !== 'PROVEN_UNSENT' ? { skipped: true } : {}) };
+    }
+    await persistReconciliationEvidence(pool, item, classification);
+    if (classification.outcome !== 'PROVEN_UNSENT') {
+      return { itemId, skipped: true, classification, applied: false, retryAllowed: false };
+    }
+    const released = await store.releaseUnsent(item, 'reconciled_not_sent', {
+      reconciled: true,
+      evidence: JSON.stringify(classification.evidenceSummary || {}),
+      actor: 'canonical_evidence_reconciler',
+      providerOutcome: classification.providerOutcome,
+      canonicalPreProviderRejection: true,
+      missionId: item.mission_id,
+      expectedAttempt: { status: item.status, reason: item.reason, attemptedAt: item.attempt_token },
+    });
+    return {
+      itemId,
+      classification,
+      applied: true,
+      status: released.status,
+      retryAllowed: true,
+    };
   }
-  const evidence = await gatherUncertainSendEvidence(pool, item);
-  const classification = classifyProvenUnsent(item, evidence);
-  await persistReconciliationEvidence(pool, item, classification);
-  if (classification.outcome !== 'PROVEN_UNSENT') {
-    return { itemId, skipped: true, classification, applied: false };
+  if (opts.dryRun) return inspectAndReconcile();
+  const result = await store.lock(() => withTenantOutreachExecutorLock(pool, inspectAndReconcile));
+  if (result?.halted) {
+    return { itemId, skipped: true, reason: result.halted, halted: result.halted, applied: false, retryAllowed: false };
   }
-  if (opts.dryRun) {
-    return { itemId, classification, applied: false, dryRun: true };
-  }
-  const store = new GovernedOutboundStore(pool, tenantId);
-  const released = await store.lock(async () => store.releaseUnsent(item, 'reconciled_not_sent', {
-    reconciled: true,
-    evidence: JSON.stringify(classification.evidenceSummary || {}),
-    actor: 'canonical_evidence_reconciler',
-    providerOutcome: classification.providerOutcome,
-    canonicalPreProviderRejection: true,
-    missionId: item.mission_id,
-  }));
-  return {
-    itemId,
-    classification,
-    applied: true,
-    status: released?.status || null,
-    retryAllowed: true,
-  };
+  return result;
 }
 
 module.exports = {

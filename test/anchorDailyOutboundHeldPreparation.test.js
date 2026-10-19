@@ -24,6 +24,7 @@ function fixture(extra = {}, options = {}) {
     domain: 'harbor.example', client_id: 10, email: 'office@harbor.example', email_verified: true, email_status: 'valid',
     service_area_match: true, vertical: 'property_management', enrichment_provenance: { email: { source: 'website_email', source_url: 'https://harbor.example/contact' } }, ...extra };
   const pool = { query: async sql => {
+    if (/to_regclass/.test(sql)) return { rows: [{ control_table: null }] };
     if (/acquisition_knowledge_objects/.test(sql)) return { rows: [] };
     if (/SELECT p\.\*, c\.name/.test(sql)) return { rows: [crm] };
     throw new Error(`Unexpected database operation: ${sql}`);
@@ -168,7 +169,7 @@ test('two same-hour critical control cycles retain separate fresh summaries and 
   const store = { tenantId: '10', clientId: 10, envelope: async () => null,
     event: async (type, key, payload) => { if (!durableEvents.has(hash([type, key]))) durableEvents.set(hash([type, key]), payload); } };
   const options = {
-    pool: {}, tenantId: '10', store, now, program: f.program, source: f.source, timestamps: {}, funnel: {},
+    pool: { query: async sql => { assert.match(sql, /to_regclass/); return { rows: [{ control_table: null }] }; } }, tenantId: '10', store, now, program: f.program, source: f.source, timestamps: {}, funnel: {},
     inventory: { clean: [], excluded: [{ prospectId: 'p1', reason: 'missing_email_provenance' }], scope: {}, exclusionCounts: { missing_email_provenance: 1 } },
     infrastructure: { cap: 5, snapshot: { sentToday: 0 }, assessed: { governor: { outcome: 'proceed' } },
       operating: { dispatchCapacityNow: 5, planningDailyCapacity: 5, recommendedSafeDailyCapacity: 5, governor: 'proceed' } },

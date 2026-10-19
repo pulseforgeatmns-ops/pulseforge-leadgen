@@ -1,3 +1,36 @@
+## Local-only: promotion schema lifecycle repair (2026-10-19)
+
+- [SPEC-SCOUT-SCHEMA-001](docs/specs/SPEC-SCOUT-SCHEMA-001_Promotion_Schema_Lifecycle.md): complete existing business-name schema ensure before promotion transactions, check visible columns before lazy DDL, and coalesce only pending work per query object. Prevent inherited schema/advisory deadlocks and rolled-back ensure-cache poisoning while preserving tenant-scoped canonical dedup.
+- Add deterministic native PostgreSQL regression coverage. No new migration, provider behavior, deployment, or production operation is included.
+
+## Unreleased — SPEC-265 local research-provider pause
+
+- Add a default-off tenant-10 research/discovery/contact-enrichment/email-verification pause at reviewed provider handoffs and trusted caller boundaries. Preserve field-route geocoding, call/SMS and unrelated presentation paths.
+- Require explicit tenant context for previously unscoped research diagnostics while armed; keep known non-Anchor utilities bound to their existing scope. Typed interruption preserves candidate state and completed accounting.
+- No new DDL, budget, research-resume permission or activation. See [SPEC-265](docs/specs/SPEC-265_Anchor_Research_Provider_Pause.md), [ADR-107](docs/adr/ADR-107_Explicit_Research_Provider_Pause.md), and [operator proposal](docs/anchor-research-provider-pause.md).
+
+
+## Local SPEC-264 operator invocation proposal
+
+
+Default-read-only fixed tenant-10 CRM preparation command; explicit exact revision/manifest/source hashes and --apply required for later separately approved writes. No new route, activation or provider authority.
+
+## Local SPEC-263 follow-on
+
+Default-closed deterministic existing-CRM canonical preparation, no Scout fallback/provider calls, review-only READY. See ADR-106. Separate implementation and native review on the frozen SPEC262 base; not part of that immutable publication artifact. Draft identities and later frozen items are separately charged; manual schema extension is opt-in.
+
+## Local SPEC-262 proposal
+
+Tenant-10-only approved identity-batch email and existing-artifact/deterministic preparation resume while quarantine persists. Non-Anchor query/lock/preparation behavior remains unchanged. Paid research is rejected; source currently lacks ready artifacts. See ADR-105 and the scoped operator proposal. No production action approved.
+
+# Local SPEC-261 milestone
+
+Default-disabled Anchor email recovery, dedicated no-resend quarantine and strict manifest preparation. See SPEC-261 and ADR-103; no production action approved.
+
+## Local proposal 2026-10-19: SPEC-260
+
+Default-disabled Anchor-only Brevo boundary diagnostics; exact 42703 and post-HTTP COMMIT regressions. No migration, admission widening, hold release, publication or deployment. See ADR-104 (combined-artifact metadata-only renumber; frozen boundary patch unchanged).
+
 # Changelog
 
 All notable changes to this project are documented here. Format inspired by [Keep a Changelog](https://keepachangelog.com/). Versions follow the release plans in `docs/releases/`.

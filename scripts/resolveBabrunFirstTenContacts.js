@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
+const { withResearchProviderScope } = require('../utils/anchorResearchProviderPause');
+
 /**
  * Babrun tenant 13 — resolve remaining first-ten contacts (7 prospects).
  *
@@ -104,6 +106,10 @@ function printReportTable(rows, totals) {
 }
 
 async function run(options = {}) {
+  return withResearchProviderScope(CLIENT_ID, () => runScoped(options));
+}
+
+async function runScoped(options = {}) {
   if (options.help) {
     printUsage();
     return { help: true };

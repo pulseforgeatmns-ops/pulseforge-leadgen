@@ -1,5 +1,7 @@
 'use strict';
 
+const { rethrowResearchProviderControl } = require('../../../utils/anchorResearchProviderPause');
+
 /**
  * SPEC-177 — Hypothesis-Driven Discovery Engine.
  *
@@ -243,6 +245,7 @@ async function executeProviderAssignment(assignment, searchDefinition, adapters,
     const report = await withPlacesContext(placesCtx, () => adapter.discover(scoped));
     return normalizeProviderReport(report, assignment);
   } catch (err) {
+    rethrowResearchProviderControl(err);
     return normalizeProviderReport(
       { candidates: [], errors: [{ message: err.message || String(err) }] },
       assignment

@@ -289,6 +289,7 @@ function handlerContext(request, context, mission, runtimeOwner) {
     persist: context.persist,
     pool: context.pool,
     persistStage: context.persistStage,
+    preinitializedSchema: context.preinitializedSchema === true,
     maxSends: context.maxSends || payload.maxSends,
     returnToStage: context.returnToStage || payload.returnToStage || null,
     prospectId: context.prospectId || payload.prospectId || null,
