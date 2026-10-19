@@ -36,6 +36,16 @@ function preparation(f, operations = ['reuse_existing_artifacts', 'refill']) {
   f.manifest.scopes.preparation = { enabled: true, approvalReference: 'local-preparation-only',
     dailyCap: 3, totalCap: 6, dailyItemCap: 3, totalItemCap: 6, operations };
 }
+
+test('preparation gate uses the same supplied clock and activation environment at both checks', async () => {
+  const f = scopedResumeFixture(); preparation(f, ['approve_canonical_envelope']);
+  const { assertLegacyPreparation } = require('../services/anchorEmailRecoveryIntegration');
+  const input = { tenantId: '10', program: f.program, operation: 'approve_canonical_envelope' };
+  const grant = await assertLegacyPreparation(f.db, input, { now: f.now, env: f.env });
+  assert.equal(grant.resumeGrant.id, f.manifest.id);
+  await assert.rejects(assertLegacyPreparation(f.db, input, { now: new Date(Date.parse(f.manifest.expiresAt) + 1), env: f.env }),
+    { code: 'anchor_recovery_separate_preparation_approval_required' });
+});
 function baseMax(tenantId = '13') {
   const inventory = { clean: [], excluded: [], scope: {}, exclusionCounts: {} };
   return { pool: noDatabase, tenantId, logger: quiet, now: new Date('2026-10-19T16:00:00Z'),

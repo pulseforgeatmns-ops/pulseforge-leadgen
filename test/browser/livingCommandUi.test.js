@@ -278,7 +278,7 @@ test('typing review Tony’s accounts routes to verified account data before gen
 
 test('mobile account review fits the viewport and workspace changes clear late responses', async t => {
   const { page, errors, writes } = await setup(t, { width: 390, motion: 'reduce' });
-  await page.click('#cdSpatialMax'); await page.waitForSelector('[data-spreadsheet-ao]');
+  await page.click('#cdAskForm button[type="submit"]'); await page.waitForSelector('[data-spreadsheet-ao]');
   await page.select('[data-spreadsheet-ao]', '24'); await page.click('[data-account-review]');
   await page.waitForSelector('#arDetail .ar-event');
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
