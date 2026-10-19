@@ -11,6 +11,7 @@ function model(clientId = 10) {
     meta: { tenantId: String(clientId), generatedAt: '2026-10-19T12:00:00Z' },
     spatialOverview: {
       generatedAt: '2026-10-19T12:00:00Z', maxAnchor: {},
+      listFallback: ['content', 'acquisition', 'clients', 'campaigns'].map(id => ({ id, label: id[0].toUpperCase() + id.slice(1), priority: 'normal', summary: 'Monitoring activity', intelligence: false })),
       domains: ['content', 'acquisition', 'clients', 'campaigns'].map((id, i) => ({
         id, label: id[0].toUpperCase() + id.slice(1), priority: 'normal',
         position: { slot: ['top', 'left', 'right', 'bottom'][i] },
@@ -84,6 +85,12 @@ test('desktop opening brief, scoped Ads facts and real Max conversation path', a
   const question = writes.find(write => write.path.endsWith('/ask'));
   assert.match(question.body.question, /Penny/);
   assert.equal(question.body.context.tenantId, '10');
+  await page.click('button[data-mx-close]');
+  const openedAgain = page.waitForResponse(response => response.url().endsWith('/api/v1/max/workspace/open'));
+  await page.focus('#cdSpatialMax');
+  await page.keyboard.press('Enter');
+  await openedAgain;
+  assert.equal(writes.filter(write => write.path.endsWith('/ask')).length, 1);
   assert.deepEqual(errors, []);
 });
 
@@ -97,5 +104,8 @@ test('mobile and reduced motion remain usable; tenant transition clears prior fa
   await page.evaluate(() => window.LivingCommand.clear());
   assert.equal(await page.$eval('#lcBriefLines', element => element.children.length), 0);
   assert.equal(await page.$eval('[data-lc-ask]', element => element.disabled), true);
+  await page.evaluate(() => window.LivingCommand.unavailable());
+  assert.equal(await page.$eval('#lcRefresh', element => element.disabled), false);
+  assert.match(await page.$eval('#lcBriefIntro', element => element.textContent), /couldn’t load/);
   assert.deepEqual(errors, []);
 });

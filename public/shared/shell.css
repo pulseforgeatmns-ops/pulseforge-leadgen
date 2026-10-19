@@ -587,8 +587,9 @@
 }
 /* Living Command: three useful destinations, contextual workspace tools. */
 .pf-shell-nav.pf-living-shell { min-height: 76px; padding: 12px 4%; gap: 32px; border-bottom: 1px solid color-mix(in srgb, var(--pf-gold) 15%, transparent); background: var(--pf-nav-bg); box-sizing: border-box; font-family: var(--pf-font-body); text-transform: none; letter-spacing: 0; }
-.pf-living-shell .pf-nav-brand { font-family: var(--pf-font-body); font-weight: 700; font-size: 24px; text-transform: none; letter-spacing: -1.2px; color: var(--pf-nav-text); margin: 0; }
-.pf-living-shell .pf-nav-brand::after { content: '.'; color: var(--pf-gold); }
+.pf-living-shell .pf-nav-brand { font-family: var(--pf-font-body); font-weight: 700; font-size: 24px; text-transform: none; letter-spacing: -1.2px; color: var(--pf-nav-text); margin: 0; gap: 0; }
+.pf-living-shell .pf-nav-brand::before { margin-right: 10px; }
+.pf-living-shell .pf-nav-brand::after { content: '.'; color: var(--pf-gold); margin-left: 2px; }
 .pf-living-shell .pf-nav-links { gap: 5px; }
 .pf-living-shell .pf-nav-link { font-family: var(--pf-font-body); text-transform: none; letter-spacing: 0; font-size: 12px; padding: 10px 15px; border-radius: 10px; border: 1px solid transparent; }
 .pf-living-shell a.pf-nav-link[aria-current="page"] { background: color-mix(in srgb, var(--pf-nav-text) 5%, transparent); color: var(--pf-nav-text); border-color: color-mix(in srgb, var(--pf-gold) 25%, transparent); box-shadow: inset 0 0 15px var(--pf-gold-glow); }

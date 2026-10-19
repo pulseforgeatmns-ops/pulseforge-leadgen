@@ -89,13 +89,16 @@ test('non-approvers have no save control; full evidence is escaped and held rows
 function extracted(file, start, end) { const source = readFileSync(file, 'utf8'); return source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start))); }
 for (const surface of ['ao', 'deck']) test(`${surface}: actual text submission routes pending Save and no-save through review, never generic chat`, async () => {
   const { review, calls } = harness();
-  const context = { spreadsheetReview: review, pendingComposerAttachments: [], mxPendingComposerFiles: [], pendingVoiceReview: null, wizardSessionId: null, workspaceAskInFlight: false, messageInput: { value: '' }, addMsg() {}, appendOperatorMessage() {}, appendSystemMessage() {}, resetAskInput() {}, els: { mxAskSend: { disabled: false } }, console: { info() {} }, askMaxFreeform: () => { throw new Error('generic chat must not run'); } };
+  const motionClasses = new Set();
+  const context = { document: { body: { classList: { add: name => motionClasses.add(name), remove: name => motionClasses.delete(name) } } }, spreadsheetReview: review, pendingComposerAttachments: [], mxPendingComposerFiles: [], pendingVoiceReview: null, wizardSessionId: null, workspaceAskInFlight: false, messageInput: { value: '' }, addMsg() {}, appendOperatorMessage() {}, appendSystemMessage() {}, resetAskInput() {}, els: { mxAskSend: { disabled: false } }, console: { info() {} }, askMaxFreeform: () => { throw new Error('generic chat must not run'); } };
   vm.createContext(context);
   const fn = surface === 'ao' ? extracted('public/ao-dashboard.html', 'async function sendMessage(text)', 'async function startNewConversation()') : extracted('public/command-deck/command-deck.js', '  async function askWorkspace(question)', '  function inviteAskMax(');
   vm.runInContext(fn, context);
   const submit = surface === 'ao' ? context.sendMessage : context.askWorkspace;
   await submit('Do not save those updates yet'); assert.equal(calls.length, 0);
+  assert.equal(motionClasses.has('lc-thinking'), false);
   await submit('Save'); assert.equal(calls.length, 1);
+  assert.equal(motionClasses.has('lc-thinking'), false);
 });
 
 test('reviewed resolutions require evidence and only create a fresh server proposal', async () => {

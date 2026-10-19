@@ -42,7 +42,8 @@
     const shell = window.PulseforgeShell;
     byId('lcWorkspaceLabel').textContent = shell?.tenantName || '';
     if (!latestBrief) return;
-    const firstName = String(shell?.context?.user?.name || '').trim().split(/\s+/)[0];
+    const accountName = String(shell?.context?.user?.name || '').trim();
+    const firstName = /\b(admin|legacy)\b/i.test(accountName) ? '' : accountName.split(/\s+/)[0];
     byId('lcBriefTitle').textContent = firstName && firstName !== 'Legacy' ? `Here’s your brief, ${firstName}.` : 'Here’s your daily brief.';
     const count = byId('pfNeedsCount');
     if (count) {
@@ -119,6 +120,10 @@
 
   document.querySelectorAll('[data-lc-ask]').forEach(button => button.addEventListener('click', () => ask(button.dataset.lcAsk)));
   byId('lcRefresh').addEventListener('click', () => document.dispatchEvent(new CustomEvent('pulseforge:living-refresh')));
+  byId('cdSpatialMax').addEventListener('click', () => ask(''));
+  byId('cdSpatialMax').addEventListener('keydown', event => {
+    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); ask(''); }
+  });
   document.addEventListener('pulseforge:shell-ready', updateIdentity);
   document.addEventListener('pulseforge:tenant-changed', () => { clear(); updateIdentity(); });
   document.addEventListener('visibilitychange', () => document.body.classList.toggle('lc-motion-paused', document.hidden));

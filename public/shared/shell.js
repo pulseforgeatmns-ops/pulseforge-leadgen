@@ -384,6 +384,7 @@
     tools.addEventListener('keydown', event => {
       if (event.key === 'Escape') { tools.open = false; summary.focus(); }
     });
+    toolLinks.addEventListener('click', event => { if (event.target.closest('a')) tools.open = false; });
     document.addEventListener('click', event => { if (!tools.contains(event.target)) tools.open = false; });
 
     nav.appendChild(group);
