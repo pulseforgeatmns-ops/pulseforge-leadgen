@@ -20,6 +20,7 @@ const {
 } = require('../utils/clientContext');
 const { getMaxRuntime } = require('../utils/maxRuntime');
 const { buildOperatorBrief } = require('../services/commandDeckOperatorBrief');
+const { buildLivingCommandBrief } = require('../services/livingCommandBrief');
 const {
   listMissions,
   toCommandDeckCard,
@@ -147,6 +148,12 @@ router.get('/api/v1/command-deck', requireDashboardRead, async (req, res) => {
     } catch (err) {
       console.warn('[command-deck] operator brief failed:', err.message);
     }
+
+    model.livingBrief = await buildLivingCommandBrief({
+      clientId,
+      pool: require('../db'),
+      googleAds: operatorBrief?.googleAds,
+    });
 
     res.set('Cache-Control', 'no-store');
     return res.json(model);

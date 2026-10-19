@@ -37,7 +37,7 @@
   const CALIBRATE_SETTLE_MS = 1400;
   const HALO_EXTENT_PX = 8;
   const PROTECTED_GAP_PX = 12;
-  const NODE_ESTIMATE = Object.freeze({ w: 132, h: 72 });
+  const NODE_ESTIMATE = Object.freeze({ w: 124, h: 124 });
 
   /** Desktop center-to-center band targets. Urgent is 24px closer than 097B (SPEC-097D). */
   const BAND_DESKTOP = Object.freeze({

@@ -372,6 +372,18 @@ jobs:
             tail -n 80 max-test-output.log | cut -c1-400
           }
           exit "$test_status"
+      - name: Living Command brief and browser acceptance
+        run: |
+          node --test test/livingCommandBrief.test.js
+          CHROMIUM_PATH="$(command -v google-chrome)" LIVING_COMMAND_QA_DIR="$RUNNER_TEMP" node --test test/browser/livingCommandUi.test.js
+      - name: Retain Living Command previews
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: living-command-ui-${{ github.run_id }}
+          path: ${{ runner.temp }}/living-command-*.png
+          retention-days: 3
+          if-no-files-found: warn
       - name: Retain complete Max test output
         if: always()
         uses: actions/upload-artifact@v4
