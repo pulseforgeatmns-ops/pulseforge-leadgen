@@ -55,3 +55,6 @@ Current operator plan: [tenant-10 scoped recovery](../anchor-scoped-resume-opera
 
 
 The discover-to-READY CRM-only bridge is a separately authorized local follow-on, not implemented by this frozen SPEC262 artifact. This artifact requires pre-existing READY canonical artifacts for preparation and does not authorize a Scout fallback.
+
+## Separate local follow-on
+[SPEC263](SPEC-263_Anchor_Existing_Crm_Canonical_Preparation.md) adds an explicitly approved, no-fallback CRM-only canonical preparation API for future genuinely fresh input. It has a separate source delta, manual constraint extension, item accounting and native review. It does not change the frozen SPEC262 artifact or establish current production inventory.

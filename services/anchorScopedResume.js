@@ -12,7 +12,7 @@ const TOP_KEYS = ['version', 'kind', 'id', 'approvalReference', 'operatorId', 'o
 const IDENTITY_KEYS = ['prospectId', 'companyId', 'recipientEmail', 'companyNameKey', 'companyDomain', 'identityFingerprint', 'approvalReference'];
 const READ_ONLY = Symbol('read-only scoped inspection');
 const OPERATIONS = Object.freeze({ research: ['research_existing_source'],
-  preparation: ['reuse_existing_artifacts', 'generate_deterministic_existing_template', 'freeze', 'refill', 'approve_canonical_envelope'], email: ['dispatch'] });
+  preparation: ['prepare_existing_crm', 'reuse_existing_artifacts', 'generate_deterministic_existing_template', 'freeze', 'refill', 'approve_canonical_envelope'], email: ['dispatch'] });
 function fail(code, reason = code) { throw Object.assign(new Error(reason), { code, reason, status: 409, providerBoundaryCrossed: false }); }
 const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const text = (v, n = 512) => typeof v === 'string' && v.length > 0 && v.length <= n && v === v.trim() && !/[\x00-\x1f\x7f]/.test(v);

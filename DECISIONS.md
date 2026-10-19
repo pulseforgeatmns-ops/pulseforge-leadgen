@@ -1,3 +1,5 @@
+[ADR-106](docs/adr/ADR-106_Crm_Only_Canonical_Preparation.md): fixed no-fallback CRM-only canonical preparation under SPEC263.
+
 [ADR-105](docs/adr/ADR-105_Explicit_Scoped_Recovery_Resume.md): explicit scoped recovery resume under SPEC-262.
 
 [ADR-103](docs/adr/ADR-103_Anchor_Recovery_Quarantine.md): local-only permanent no-resend isolation and separately approved bounded email recovery under SPEC-261.

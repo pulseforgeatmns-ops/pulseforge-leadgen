@@ -1,3 +1,7 @@
+## Local SPEC-263 follow-on
+
+Default-closed deterministic existing-CRM canonical preparation, no Scout fallback/provider calls, review-only READY. See ADR-106. Separate implementation and native review on the frozen SPEC262 base; not part of that immutable publication artifact. Draft identities and later frozen items are separately charged; manual schema extension is opt-in.
+
 ## Local SPEC-262 proposal
 
 Tenant-10-only approved identity-batch email and existing-artifact/deterministic preparation resume while quarantine persists. Non-Anchor query/lock/preparation behavior remains unchanged. Paid research is rejected; source currently lacks ready artifacts. See ADR-105 and the scoped operator proposal. No production action approved.

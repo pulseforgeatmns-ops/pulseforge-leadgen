@@ -2,6 +2,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const { Pool } = require('pg');
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
+const { applyCrmPreparationSchema, schema: crmSchema } = require('./helpers/anchorCrmPreparationSchema');
 const { schema, applyScopedSchema, seedScopedResume } = require('./helpers/anchorScopedResumePostgresFixture');
 const control = require('../services/anchorScopedResumeControl');
 const { hash } = require('../packages/acquisition-mission/DailyOutboundPolicy');
@@ -86,6 +87,36 @@ test('native SPEC262 scoped control and immutable consumption', { timeout: 12000
     await pool.query("UPDATE users SET role='admin'");
     await pool.query("UPDATE acquisition_outbound_programs SET authorized_by='different-operator'");
     await assert.rejects(control.assertInstalledScopedResume(pool, f.manifest, options(f)), /operator_invalid/);
+  });
+  await t.test('CRM operation schema is manual, closed-only, exact and preserves prior consumption on repeat', async () => {
+    const f = await seedScopedResume(pool, { preparation: true });
+    const db = await pool.connect();
+    try { await assert.rejects(db.query(crmSchema), /schema_approval_required/); await db.query('ROLLBACK'); } finally { db.release(); }
+    await install(pool, f);
+    await consume(pool, f, 'local-synthetic-preexisting-consumption');
+    const before = await rows(pool, 'SELECT row_to_json(c) AS row FROM anchor_scoped_resume_consumption c');
+    await assert.rejects(applyCrmPreparationSchema(pool), /tenant_10_closed_required/);
+    await revoke(pool, f);
+    await applyCrmPreparationSchema(pool);
+    await applyCrmPreparationSchema(pool);
+    assert.deepEqual(await rows(pool, 'SELECT row_to_json(c) AS row FROM anchor_scoped_resume_consumption c'), before);
+    await pool.query('ALTER TABLE anchor_scoped_resume_consumption DROP CONSTRAINT anchor_scoped_resume_consumption_check1');
+    await assert.rejects(applyCrmPreparationSchema(pool), /schema_drift/);
+  });
+  await t.test('CRM draft identities and later frozen items each consume the explicit preparation item budget', async () => {
+    const f = await seedScopedResume(pool, { preparation: true });
+    await applyCrmPreparationSchema(pool);
+    f.manifest.scopes.preparation.operations.push('prepare_existing_crm');
+    f.manifest.scopes.preparation.dailyItemCap = 1;
+    f.manifest.scopes.preparation.totalItemCap = 1;
+    await install(pool, f);
+    const input = { manifest: f.manifest, capability: 'preparation', operation: 'prepare_existing_crm',
+      operationId: 'local-synthetic-crm-draft-budget', identities: f.manifest.admissions.slice(0, 1) };
+    await assert.rejects(control.consumeScopedOperation(pool, { ...input, itemCount: 0 }, options(f)), /operation_item_count_invalid/);
+    const result = await control.consumeScopedOperation(pool, input, options(f));
+    assert.equal(result.itemCount, 1);
+    await assert.rejects(consume(pool, f, 'local-synthetic-freeze-after-draft', { identities: input.identities }), /operation_cap_reached/);
+    assert.equal((await rows(pool, 'SELECT item_count FROM anchor_scoped_resume_consumption'))[0].item_count, 1);
   });
   await t.test('NULL initialization requires independent exact fingerprint approval; true cannot be released', async () => {
     const f = await seedScopedResume(pool);

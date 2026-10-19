@@ -1,3 +1,5 @@
+[SPEC-263](docs/specs/SPEC-263_Anchor_Existing_Crm_Canonical_Preparation.md) is a separate local-only CRM preparation bridge on frozen SPEC262. No current fresh production candidates or activation authority exist.
+
 [SPEC-262](docs/specs/SPEC-262_Anchor_Scoped_Resume.md) is in-progress local-only tenant-10-isolated recovery, superseding the unpublished broad-gate SPEC261 rollout. Non-Anchor flows retain their original paths. Paid research stays closed; no current ready batch has been verified. All real activation/schema/admission/preparation/send approvals remain unset. See the [current operator proposal](docs/anchor-scoped-resume-operator-proposal.md).
 
 # CURRENT_STATE

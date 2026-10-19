@@ -193,9 +193,9 @@ async function consumeScopedOperation(pool, input, options = {}) {
   const identities = input.identities === undefined ? manifest.admissions : input.identities;
   if (!Array.isArray(identities) || !identities.length || new Set(identities.map(a => a.prospectId)).size !== identities.length
     || identities.some(a => !manifest.admissions.some(admitted => hash(a) === hash(admitted)))) fail('anchor_scoped_resume_operation_identity_invalid');
-  // Item budgets count newly frozen entries, not their later canonical approval.
-  // Read-only artifact reuse is not a consumed operation.
-  const itemCount = ['freeze', 'refill'].includes(input.operation) ? identities.length : 0;
+  // Item budgets count new CRM draft identities and separately frozen/refilled entries.
+  // Draft then freeze charges twice; canonical approval and read-only reuse add no items.
+  const itemCount = ['prepare_existing_crm', 'freeze', 'refill'].includes(input.operation) ? identities.length : 0;
   if (input.itemCount !== undefined && input.itemCount !== itemCount) fail('anchor_scoped_resume_operation_item_count_invalid');
   return transaction(pool, async (db, control) => {
     if (hash(control.manifest) !== hash(manifest) || (options.env || process.env).ANCHOR_EMAIL_SCOPED_RESUME_ID !== manifest.id) fail('anchor_scoped_resume_closed');
