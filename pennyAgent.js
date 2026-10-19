@@ -10,6 +10,10 @@ const {
   googleAds,
   metaAds,
 } = require('./packages/penny-paid-acquisition');
+const {
+  googleAdsReportData,
+  buildGoogleAdsDailyReport,
+} = require('./packages/penny-paid-acquisition/googleAdsDailyReport');
 
 // Legacy dashboard/cron reporting agent. Platform reads are delegated to the
 // canonical SPEC-252 evidence adapters; this file retains narrative reporting only.
@@ -24,38 +28,6 @@ async function logPennyAction(database, clientId, action, payload, status, error
       agent_name, action, payload, status, error_msg, ran_at, client_id
     ) VALUES ('penny', $1, $2, $3, $4, NOW(), $5)
   `, [action, JSON.stringify(payload), status, errorMsg, clientId]);
-}
-
-function legacyFlagsFromGoogleEvidence(evidence) {
-  const flags = [];
-  if (!evidence || evidence.availability !== AVAILABILITY.AVAILABLE) {
-    if (evidence?.reason || evidence?.error) {
-      flags.push(`⚠️ Google Ads unavailable: ${evidence.reason || evidence.error}`);
-    }
-    return flags;
-  }
-
-  for (const c of evidence.campaigns || []) {
-    if (c.advertisingChannelType === 'SEARCH' && c.impressions > 100 && (c.ctr || 0) < 0.01) {
-      flags.push(`⚠️ "${c.name}": CTR ${((c.ctr || 0) * 100).toFixed(2)}% below 1% (${c.impressions.toLocaleString()} impressions)`);
-    }
-    const dailyBudget = c.budget?.amount;
-    if (dailyBudget && c.spend > 0) {
-      const weekBudget = dailyBudget * 7;
-      const pace = c.spend / weekBudget;
-      if (pace > 1.25) {
-        flags.push(`🔴 "${c.name}": Over budget — $${c.spend.toFixed(2)} vs $${weekBudget.toFixed(2)} (${((pace - 1) * 100).toFixed(0)}% over)`);
-      } else if (pace < 0.75 && c.impressions > 0) {
-        flags.push(`🟡 "${c.name}": Under-pacing — $${c.spend.toFixed(2)} of $${weekBudget.toFixed(2)} used`);
-      }
-    }
-  }
-  for (const kw of evidence.keywords || []) {
-    if (kw.qualityScore && kw.qualityScore < 5) {
-      flags.push(`🟡 Low Quality Score (${kw.qualityScore}/10): "${kw.text}" in "${kw.campaignName}"`);
-    }
-  }
-  return flags;
 }
 
 function legacyFlagsFromMetaEvidence(evidence) {
@@ -91,27 +63,7 @@ function legacyMetricsForReport(platform, evidence) {
     return { error: evidence?.error || evidence?.reason || 'Platform evidence unavailable' };
   }
   if (platform === 'google_ads') {
-    return {
-      campaigns: (evidence.campaigns || []).map((c) => ({
-        name: c.name,
-        type: c.advertisingChannelType || 'UNKNOWN',
-        impressions: c.impressions,
-        clicks: c.clicks,
-        ctr: (c.ctr || 0) * 100,
-        avg_cpc: c.averageCpc,
-        conversions: c.platformConversions,
-        cost_per_conversion: c.costPerPlatformConversion,
-        spend: c.spend,
-        daily_budget: c.budget?.amount ?? null,
-      })),
-      keywords: (evidence.keywords || []).map((kw) => ({
-        text: kw.text,
-        quality_score: kw.qualityScore,
-        campaign: kw.campaignName,
-        ad_group: kw.adGroupName,
-      })),
-      flags: legacyFlagsFromGoogleEvidence(evidence),
-    };
+    return googleAdsReportData(evidence);
   }
   return {
     adsets: (evidence.campaigns || []).map((a) => ({
@@ -141,6 +93,7 @@ async function fetchPlatformEvidence(account) {
 
 // ── CLAUDE REPORT ──────────────────────────────────────────────────────────
 async function generateReport(companyName, platform, data) {
+  if (platform === 'google_ads') return buildGoogleAdsDailyReport(companyName, data);
   const platformLabel = platform === 'google_ads' ? 'Google Ads' : 'Meta Ads';
   const metricsStr = JSON.stringify(data, null, 2).slice(0, 3000);
 
@@ -200,7 +153,7 @@ async function saveReport(clientId, companyName, platform, report, flags) {
 
   const flagBlock = flags.length > 0
     ? `\n\n---\n**FLAGS (${flags.length})**\n${flags.join('\n')}`
-    : '\n\n---\n✅ No threshold violations detected.';
+    : '\n\n---\nNo configured metric flags.';
 
   const res = await pool.query(`
     INSERT INTO pending_comments (
