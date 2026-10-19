@@ -586,7 +586,7 @@
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 /* Living Command: three useful destinations, contextual workspace tools. */
-.pf-shell-nav.pf-living-shell { min-height: 76px; padding: 12px 4%; gap: 32px; border-bottom: 1px solid color-mix(in srgb, var(--pf-gold) 15%, transparent); background: var(--pf-nav-bg); box-sizing: border-box; }
+.pf-shell-nav.pf-living-shell { min-height: 76px; padding: 12px 4%; gap: 32px; border-bottom: 1px solid color-mix(in srgb, var(--pf-gold) 15%, transparent); background: var(--pf-nav-bg); box-sizing: border-box; font-family: var(--pf-font-body); text-transform: none; letter-spacing: 0; }
 .pf-living-shell .pf-nav-brand { font-family: var(--pf-font-body); font-weight: 700; font-size: 24px; text-transform: none; letter-spacing: -1.2px; color: var(--pf-nav-text); margin: 0; }
 .pf-living-shell .pf-nav-brand::after { content: '.'; color: var(--pf-gold); }
 .pf-living-shell .pf-nav-links { gap: 5px; }
