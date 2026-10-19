@@ -1,3 +1,7 @@
+## Local SPEC-264 operator invocation proposal
+
+Default-read-only fixed tenant-10 CRM preparation command; explicit exact revision/manifest/source hashes and --apply required for later separately approved writes. No new route, activation or provider authority.
+
 ## Local SPEC-263 follow-on
 
 Default-closed deterministic existing-CRM canonical preparation, no Scout fallback/provider calls, review-only READY. See ADR-106. Separate implementation and native review on the frozen SPEC262 base; not part of that immutable publication artifact. Draft identities and later frozen items are separately charged; manual schema extension is opt-in.
