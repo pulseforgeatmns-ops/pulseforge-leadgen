@@ -150,7 +150,7 @@ test('production preparation runs Scout, enrichment, Max, Paige and Emmett throu
   const events = [];
   const queries = [];
   let researchSeen = null;
-  const adapter = adapters({ query: async sql => { queries.push(sql); return { rows: [] }; } }, {
+  const adapter = adapters({ query: async sql => { if (/to_regclass/.test(sql)) return { rows: [{ control_table: null }] }; queries.push(sql); return { rows: [] }; } }, {
     governedContext,
     program,
     persist: false,

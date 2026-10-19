@@ -112,6 +112,9 @@ function isPreProviderOutboundFailure(error = {}, tracker = null) {
 function markLeafProviderSend(sendFn, providerBoundary) {
   if (!providerBoundary || typeof providerBoundary.markCrossed !== 'function') return;
   if (sendFn?.isGovernedTenantMailboxTransport) return;
+  // Only declared, instrumented Brevo transports mark at the actual HTTP leaf.
+  // Unknown/custom leaves keep the existing conservative pre-call mark.
+  if (sendFn?.isInstrumentedBrevoTransport === true) return;
   providerBoundary.markCrossed();
 }
 

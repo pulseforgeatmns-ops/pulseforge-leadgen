@@ -68,11 +68,22 @@ async function sendEmail(input = {}) {
   if (tags.length) payload.tags = tags.map(String);
   if (input.idempotencyKey) payload.headers = { 'Idempotency-Key': String(input.idempotencyKey) };
 
+  // The same immutable request is checked and submitted; a reconstructed
+  // logical command alone is not evidence of the actual provider recipients.
+  const freezePayload = value => {
+    if (value && typeof value === 'object') { Object.values(value).forEach(freezePayload); Object.freeze(value); }
+    return value;
+  };
+  freezePayload(payload);
+  let providerBoundaryCrossed = false;
+  let failureStage = 'authorization';
   try {
     const identity = input.outreachAuthorization || {};
     if (!identity.prospectId || !identity.clientId) throw Object.assign(new Error('CRM identity is required before outreach'), { code: 'outreach_identity_required' });
     const pool = identity.pool || require('../../../db');
     return await withEmailAuthorization(pool, [{ prospectId: identity.prospectId, clientId: identity.clientId }], async () => {
+      failureStage = 'provider_request';
+      providerBoundaryCrossed = true;
       if (input.providerBoundary && typeof input.providerBoundary.markCrossed === 'function') {
         input.providerBoundary.markCrossed();
       }
@@ -90,13 +101,21 @@ async function sendEmail(input = {}) {
         || res.headers?.['x-message-id']
         || null;
 
+      // The authorization transaction commits after this callback returns.
+      // A lost COMMIT response must remain post-provider uncertainty.
+      failureStage = 'authorization_commit';
       return {
         success: true,
         messageId,
         providerMessageId: messageId,
         brevoResponse: res.data || null,
       };
-    });
+    }, { context: input.governedRecoveryContext, command: {
+      toEmail, subject, body, sender, idempotencyKey: input.idempotencyKey, actualPayload: payload,
+      credentialOverride: Object.hasOwn(input, 'apiKey'),
+      // Reject unchecked recipient extensions rather than silently authorizing them.
+      cc: input.cc, bcc: input.bcc, recipients: input.recipients,
+    } });
   } catch (err) {
     const errorDetail = err.response?.data || err.message;
     const providerErrorMessage = typeof errorDetail === 'string'
@@ -110,9 +129,13 @@ async function sendEmail(input = {}) {
       error: providerErrorMessage,
       providerErrorCode,
       providerErrorMessage,
+      providerBoundaryCrossed,
+      failureStage,
     };
   }
 }
+
+Object.defineProperty(sendEmail, 'providerBoundaryInstrumentation', { value: 'brevo_http_v1' });
 
 module.exports = {
   sendEmail,

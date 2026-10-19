@@ -45,7 +45,7 @@ async function loadItem(pool) {
   const { rows } = await pool.query(
     `SELECT i.*, e.mission_id, e.local_day, e.status AS envelope_status
        FROM acquisition_outbound_items i
-       JOIN acquisition_outbound_envelopes e ON e.id = i.envelope_id
+       JOIN acquisition_outbound_envelopes e ON e.id = i.envelope_id AND e.tenant_id = i.tenant_id
       WHERE i.id = $1 AND i.tenant_id = $2`,
     [INCIDENT.itemId, INCIDENT.tenantId],
   );
@@ -76,9 +76,9 @@ function outcomeFromEvidence({ item, executions, brevo }) {
   if (item?.provider_message_id || executions.some(row => row.provider_message_id) || brevo.events.length) {
     return 'PROVIDER_CONFIRMED_SENT';
   }
-  if (!brevo.skipped && brevo.events.length === 0 && executions.length === 0) {
-    return 'PROVIDER_CONFIRMED_NOT_SENT';
-  }
+  // This historical, date-bound lookup cannot prove non-acceptance. Empty
+  // provider results may reflect retention, filters, pagination, or delayed
+  // events; a rolled-back local transaction may also have lost its receipt.
   return 'PROVIDER_STATE_UNKNOWN';
 }
 
@@ -113,6 +113,7 @@ async function run(argv = process.argv.slice(2)) {
   if (!options.confirmProduction) {
     throw Object.assign(new Error('Refusing to run without --confirm-production.'), { code: 'confirm_production_required' });
   }
+  if (options.apply && !options.operator) throw new Error('--operator is required for --apply');
   const pool = require('../db');
   try {
     const item = await loadItem(pool);
@@ -138,12 +139,11 @@ async function run(argv = process.argv.slice(2)) {
       providerOutcome,
       applied: false,
     };
-    await persistEvidence(pool, report);
     if (!options.apply) return report;
     if (providerOutcome !== 'PROVIDER_CONFIRMED_NOT_SENT') {
       throw Object.assign(new Error(`Refusing to apply ${providerOutcome}.`), { code: 'provider_outcome_blocks_apply' });
     }
-    if (!options.operator) throw new Error('--operator is required for --apply');
+    await persistEvidence(pool, report);
     const service = require('../services/governedOutbound').productionService(pool, { tenantId: INCIDENT.tenantId });
     report.applyResult = await service.reconcile(
       INCIDENT.itemId,

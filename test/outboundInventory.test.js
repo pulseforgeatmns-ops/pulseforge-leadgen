@@ -309,6 +309,7 @@ test('promoteRecord recovers an existing same-tenant verified prospect without d
   const db = {
     query: async (sql, params) => {
       queries.push(sql);
+      if (/to_regclass/.test(sql)) return { rows: [{ control_table: null }] };
       if (/ALTER TABLE companies/i.test(sql)) return { rows: [], rowCount: 0 };
       if (/SELECT id, domain, website FROM companies/i.test(sql)) return { rows: [{ id: 3 }], rowCount: 1 };
       if (/INSERT INTO prospects/i.test(sql)) return { rows: [], rowCount: 0 };

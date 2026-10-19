@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": null,
+  "approvalReference": null,
+  "tenantId": "10",
+  "channel": "email",
+  "provider": "brevo",
+  "transport": "governed_brevo",
+  "programId": null,
+  "policyHash": null,
+  "senderEmail": null,
+  "inboxIntegrationId": null,
+  "validFrom": null,
+  "expiresAt": null,
+  "maxFreshSends": 1,
+  "quarantineDecisionHash": null,
+  "admissions": [
+    {
+      "itemId": null,
+      "envelopeId": null,
+      "prospectId": null,
+      "companyId": null,
+      "candidateId": null,
+      "recipientEmail": null,
+      "revision": null,
+      "envelopeApprovalId": null,
+      "manifestHash": null,
+      "subject": null,
+      "body": null
+    }
+  ]
+}

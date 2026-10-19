@@ -1,4 +1,5 @@
 'use strict';
+const { blockingUncertainty } = require('./anchorEmailRecoveryIntegration');
 
 const { hash, fail, missionScope, clock, windowReason } = require('../packages/acquisition-mission/DailyOutboundPolicy');
 
@@ -122,7 +123,7 @@ async function reviewReplenishment(store, input, actor, now, enabled) {
   const envelope = await store.one('SELECT id FROM acquisition_outbound_envelopes WHERE tenant_id=$1 AND (program_id=$2 OR local_day=$3::date) LIMIT 1', [store.tenantId, program.id, day]);
   if (envelope) fail('replenishment_envelope_exists');
   const counts = await store.counts(program, day);
-  if (counts.today || counts.total || counts.uncertain) fail('replenishment_attempt_exists');
+  if (counts.today || counts.total || blockingUncertainty(counts)) fail('replenishment_attempt_exists');
   const execution = await store.one('SELECT id FROM acquisition_mission_outbound_executions WHERE tenant_id=$1 AND mission_id=$2 LIMIT 1', [store.tenantId, previous.id]);
   if (execution) fail('replenishment_execution_exists');
   const research = researchCompanies(input.research, source, now);

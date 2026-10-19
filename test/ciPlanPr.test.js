@@ -234,3 +234,15 @@ describe('Scout business evidence cursor CI coverage', () => {
     assert.equal(native.includes('t.skip('), false, 'native prerequisites must throw, not silently skip');
   });
 });
+
+
+describe('SPEC262 scoped recovery CI coverage', () => {
+  it('maps runtime, native tests and manual schema to the real PostgreSQL Anchor suite', () => {
+    for (const file of ['services/anchorScopedResume.js','services/anchorScopedResumeControl.js',
+      'test/anchorScopedResumeLifecyclePostgres.test.js','test/helpers/anchorScopedResumePostgresFixture.js',
+      'docs/sql/anchor-scoped-resume-schema-proposal.sql']) {
+      assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
+    }
+    assert.match(require('../package.json').scripts['test:anchor-outbound'], /test\/anchorScopedResume\*\.test\.js/);
+  });
+});

@@ -1477,28 +1477,37 @@ async function sendTenantEmail(input = {}, opts = {}) {
       ? `"${identity.senderDisplayName.replace(/"/g, '\\"')}" <${identity.senderEmail}>`
       : identity.senderEmail;
     const providerBoundary = input.metadata?.providerBoundary || opts.providerBoundary;
+    const actualPayload = {
+      from,
+      replyTo: identity.replyToAddress || identity.senderEmail,
+      to: recipients,
+      subject: input.subject,
+      text: input.text || input.body,
+      html: input.html || undefined,
+      headers: {
+        'Message-ID': rfcMessageId,
+        ...(input.inReplyTo ? { 'In-Reply-To': input.inReplyTo } : {}),
+        ...(input.referencesHeader ? { References: input.referencesHeader } : {}),
+      },
+    };
+    // Only Anchor's installed recovery boundary needs immutable request binding;
+    // non-Anchor transports retain their original payload and behavior.
+    if (String(tenantId) === '10') require('./anchorScopedResume').deepFreeze(actualPayload);
     const dispatch = async () => {
       crossedProviderBoundary = true;
       if (providerBoundary && typeof providerBoundary.markCrossed === 'function') {
         providerBoundary.markCrossed();
       }
-      return transport.sendMail({
-        from,
-        replyTo: identity.replyToAddress || identity.senderEmail,
-        to: recipients,
-        subject: input.subject,
-        text: input.text || input.body,
-        html: input.html || undefined,
-        headers: {
-          'Message-ID': rfcMessageId,
-          ...(input.inReplyTo ? { 'In-Reply-To': input.inReplyTo } : {}),
-          ...(input.referencesHeader ? { References: input.referencesHeader } : {}),
-        },
-      });
+      return transport.sendMail(actualPayload);
     };
-    const result = store instanceof PostgresTenantMailboxStore && !isNonCrmMailboxVerification(input, opts)
-      ? await withEmailAuthorization(store.pool, [{ prospectId: message.prospectId, clientId: Number(tenantId) }], dispatch)
-      : await dispatch(); // Explicit memory-store test transport or CLI-only non-CRM verification.
+    const result = store instanceof PostgresTenantMailboxStore
+      ? (!isNonCrmMailboxVerification(input, opts)
+        ? await withEmailAuthorization(store.pool, [{ prospectId: message.prospectId, clientId: Number(tenantId) }], dispatch,
+          { context: { tenantId: String(tenantId), provider: 'smtp', transport: 'smtp' }, command: { transport: 'smtp', actualPayload } })
+        : (String(tenantId) === '10'
+          ? await require('./anchorEmailRecoveryIntegration').withRecoveryMaintenanceBarrier(store.pool, dispatch, { tenantId: '10' })
+          : await dispatch()))
+      : await dispatch(); // Explicit in-memory test transport only.
     const providerMessageId = result?.messageId || result?.response || rfcMessageId;
     const sentAt = nowIso(opts);
     message = await store.saveMessage({

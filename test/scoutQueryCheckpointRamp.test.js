@@ -11,7 +11,7 @@ test('governed ramp wires mission-bound checkpoints and emits only bounded progr
   const snapshot = { status: 'pending_query_work', observedQueries: 2, handledQueries: 1,
     fetchedQueries: 0, replayedQueries: 0, pendingAcknowledgements: 0, unresolvedQueries: 1,
     privateQuery: 'private@example.com' };
-  const pool = { query: async () => { throw Error('unexpected database access'); } };
+  const pool = { query: async sql => { if (/to_regclass/.test(sql)) return { rows: [{ control_table: null }] }; throw Error('unexpected database access'); } };
   const result = await defaultScoutRamp({
     cycleId: 'moc_13_fixture', pool,
     program: { id: 'fixture', tenant_id: '13', policy: {} },

@@ -67,6 +67,7 @@ function createFakePool({ capacity = 1, onQuery = null } = {}) {
   }
   return { events, calls, faults, releases, get active() { return active; },
     async query(sql, params) {
+      if (/to_regclass/.test(sql)) return { rows: [{ control_table: null }] };
       assert.ok(active < capacity, 'pool query would deadlock behind a pinned cursor client');
       return execute(sql, params);
     },
