@@ -245,6 +245,9 @@ function buildFirstTouchCopy(row, crm, sender) {
     companyId: String(crm.company_id),
     companyName: crm.company_name || crm.company,
     cta: lifecycle.cta || null,
+    cohort: lifecycle.cohort || null,
+    experimentArm: lifecycle.experimentArm || null,
+    managedFacilitiesScore: lifecycle.managedFacilitiesScore ?? null,
   };
 }
 
