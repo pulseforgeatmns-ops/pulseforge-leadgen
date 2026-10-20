@@ -20,16 +20,19 @@ function successorMission(row) {
   const payload = structuredClone(row.payload || {});
   const structured = payload.structuredMission || {};
   const market = structured.market || {};
-  const eligible = [...new Set([...(market.eligibleSubsegments || []), 'restaurant_foh'])];
+  const eligible = [...new Set([...(market.eligibleSubsegments || []), 'restaurant_foh', 'managed_facilities'])];
   const constraints = [...new Set([
     ...(Array.isArray(payload.constraints)
       ? payload.constraints.filter(value => !/restaurants?\s+(?:are\s+)?excluded/i.test(String(value)))
       : []),
     'Manchester restaurant acquisition is front-of-house only.',
     'Back-of-house, commissary, ghost-kitchen, food-production, and catering-only work remains outside standard scope.',
+    'Managed facilities prioritizes dealerships, schools/campuses, larger facilities, manufacturers/warehouses with meaningful common or office areas, and multi-site property managers.',
+    'Managed facilities requires operational complexity; small/simple accounts are not promoted solely because of vertical.',
+    'Client portal is a managed-service differentiator, not a software offer; first-touch cold email remains image-free.',
   ])];
   const id = `mission_anchor_inventory_capacity_${hash([row.id, eligible, '2026-10-08']).slice(0, 20)}`;
-  const objective = `${row.objective} Maintain enough qualified inventory for governed outbound and AO books; include bounded Manchester restaurant front-of-house acquisition.`;
+  const objective = `${row.objective} Maintain enough qualified inventory for governed outbound and AO books; include bounded Manchester restaurant front-of-house acquisition and a managed-facilities motion for larger recurring accounts.`;
   return {
     id,
     tenantId: TENANT_ID,
@@ -55,7 +58,7 @@ function successorMission(row) {
     authorizationEvidence: {
       kind: 'operator_instruction',
       receivedAt: now,
-      scope: 'Anchor inventory capacity; Manchester restaurant front-of-house only; BOH separate/premium',
+      scope: 'Anchor inventory capacity; Manchester restaurant front-of-house only; BOH separate/premium; managed facilities cohort with controlled portal-led first-touch experiment',
     },
     createdAt: now,
     updatedAt: now,

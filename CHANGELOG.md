@@ -1,3 +1,11 @@
+## Local-only: PR960 managed-facilities enrichment boundary (2026-10-20)
+
+- Keep portal-copy experimentation off by default. Require explicit hash-bound approved tenant-10 mission opt-in; preserve legacy copy for existing high-score prospects, with no successor auto-opt-in or refill behavior expansion.
+
+- [SPEC-SCOUT-FACILITIES-001](docs/specs/SPEC-SCOUT-FACILITIES-001_Legacy_Enrichment_Boundary.md): keep facilities canonical without widening shared legacy enrichment defaults or scheduled retries. Explicit Anchor facilities missions select only their reviewed categories, including restaurant FOH when approved; unsupported mixed scopes fail closed.
+- Use canonical recognition for the legacy queue reconciler so legitimate facility rows are not mistaken for query-slug contamination. Preserve other tenant paths and the Pulseforge reviewed-trade gate.
+- Add focused regression coverage. Local/test only; no publication, provider action, migration or production activation.
+
 ## Local-only: promotion schema lifecycle repair (2026-10-19)
 
 - [SPEC-SCOUT-SCHEMA-001](docs/specs/SPEC-SCOUT-SCHEMA-001_Promotion_Schema_Lifecycle.md): complete existing business-name schema ensure before promotion transactions, check visible columns before lazy DDL, and coalesce only pending work per query object. Prevent inherited schema/advisory deadlocks and rolled-back ensure-cache poisoning while preserving tenant-scoped canonical dedup.

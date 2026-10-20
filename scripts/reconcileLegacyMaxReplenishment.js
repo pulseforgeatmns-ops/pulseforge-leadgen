@@ -15,7 +15,7 @@ require('dotenv').config();
 const pool = require('../db');
 const { normalizeVertical } = require('../utils/normalize');
 const {
-  ENRICHABLE_SCOUT_VERTICALS,
+  isCanonicalEnrichableVertical,
   evaluateReplenishmentAdmission,
   resolveLegacyReconciliationOutcome,
 } = require('../utils/replenishmentVertical');
@@ -55,9 +55,7 @@ Defaults to dry-run. Writes require both --confirm-production and --apply.`);
 }
 
 function isNonCanonicalVertical(vertical) {
-  const normalized = normalizeVertical(vertical);
-  if (!normalized) return true;
-  return !ENRICHABLE_SCOUT_VERTICALS.includes(normalized);
+  return !isCanonicalEnrichableVertical(vertical);
 }
 
 function parseDiscoveryFromNotes(notes) {

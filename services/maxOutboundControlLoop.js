@@ -12,6 +12,7 @@ const { canonicalOutboundEmailIneligibilityReason, normalizeDomain } = require('
 const { normalizeVertical } = require('../utils/normalize');
 const {
   ENRICHABLE_SCOUT_VERTICALS,
+  MISSION_SCOPED_FACILITIES_VERTICALS,
   CANONICAL_ENRICHABLE_SCOUT_VERTICALS,
   evaluateReplenishmentAdmission,
   restaurantBusinessScopeReason,
@@ -291,6 +292,9 @@ function segmentAliases(scope) {
     ['property_manager', 'property_management', 'str_manager'].forEach(x => aliases.add(x));
   }
   if (scope.segment === 'restaurant_foh') aliases.add('restaurant');
+  if (scope.segment === 'managed_facilities') {
+    missionCompatibleVerticals({ missionSegment: scope.segment }).forEach(x => aliases.add(x));
+  }
   if (isSmallBusinessOwnerSegment(scope.segment)) {
     missionCompatibleVerticals({ missionSegment: scope.segment }).forEach(x => aliases.add(x));
   }
@@ -904,6 +908,16 @@ function enrichmentVerticals(tenant, tenantContext) {
     if (reason) throw Object.assign(new Error(reason), { code: reason });
     const scope = sourceScope(source);
     verticals = missionCompatibleVerticals({ missionSegments: scope.eligibleSubsegments });
+  } else if (tenant.tenantId === '10') {
+    const scope = tenantContext?.scope || sourceScope(tenantContext?.source);
+    const segments = scope.eligibleSubsegments?.length ? scope.eligibleSubsegments : [scope.segment];
+    // Only an explicit Anchor facilities mission opts into the new categories.
+    // Keep its entire reviewed scope (including restaurant FOH), not the legacy
+    // catch-all. Unsupported mixed scopes resolve to [] and select no queue rows.
+    if (segments.some(segment => segment === 'managed_facilities'
+      || MISSION_SCOPED_FACILITIES_VERTICALS.includes(segment))) {
+      verticals = missionCompatibleVerticals({ missionSegments: segments });
+    }
   }
   return verticals;
 }

@@ -211,6 +211,9 @@ function buildPerProspectVariants(input = {}) {
         subject: lifecycle.subject,
         body: lifecycle.body,
         cta: lifecycle.cta || 'Want me to send over what we\'d need for a quote?',
+        cohort: lifecycle.cohort || null,
+        experimentArm: lifecycle.experimentArm || null,
+        managedFacilitiesScore: lifecycle.managedFacilitiesScore ?? null,
       };
       usedPersonalization = lifecycle.usedPersonalization;
       scoutPersonalization = lifecycle.evidence || null;
@@ -268,6 +271,9 @@ function buildPerProspectVariants(input = {}) {
         companyName,
         scoutPersonalization,
         usedPersonalization,
+        cohort: copy.cohort || null,
+        experimentArm: copy.experimentArm || null,
+        managedFacilitiesScore: copy.managedFacilitiesScore ?? null,
       },
     });
   }

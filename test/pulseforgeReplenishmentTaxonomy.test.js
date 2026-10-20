@@ -6,7 +6,7 @@ const { pulseforgeStructuredMission } = require('../utils/pulseforgeCashflowTena
 const { freezeStructuredMission } = require('../packages/acquisition-mission/StructuredMission');
 const { scoutDelegationFromMission } = require('../packages/acquisition-mission/SpecialistInputs');
 const taxonomy = require('../utils/canonicalBusinessTaxonomy');
-const { missionCompatibleVerticals, resolveReplenishmentVertical, evaluateReplenishmentAdmission, ENRICHABLE_SCOUT_VERTICALS, CANONICAL_ENRICHABLE_SCOUT_VERTICALS } = require('../utils/replenishmentVertical');
+const { missionCompatibleVerticals, resolveReplenishmentVertical, evaluateReplenishmentAdmission, ENRICHABLE_SCOUT_VERTICALS, CANONICAL_ENRICHABLE_SCOUT_VERTICALS, MISSION_SCOPED_FACILITIES_VERTICALS } = require('../utils/replenishmentVertical');
 const { sourceScope, missionCandidateReason, _test: { scoutInput, persistDiscoveredCompanies, runEnrichmentBatches } } = require('../services/maxOutboundControlLoop');
 const { buildAcquisitionSearchDefinition } = require('../packages/max/scoutAcquisition/SearchDefinition');
 const { buildMarketDefinition } = require('../packages/scout/intelligence/MarketUnderstanding');
@@ -244,4 +244,109 @@ test('reviewed mixed eligible lists keep their legacy tenant semantic model', ()
     assert.equal(model.segmentKey, 'small_business_owners', tenantId);
     assert.deepEqual(missionCompatibleVerticals({ missionSegments: eligibleSubsegments }), eligibleSubsegments);
   }
+});
+
+
+test('canonical facilities remain outside legacy missions and unscoped admission', () => {
+  assert.deepEqual(MISSION_SCOPED_FACILITIES_VERTICALS,
+    ['dealership', 'school', 'campus', 'manufacturer', 'warehouse']);
+  for (const vertical of MISSION_SCOPED_FACILITIES_VERTICALS) {
+    assert.ok(CANONICAL_ENRICHABLE_SCOUT_VERTICALS.includes(vertical), vertical);
+    assert.equal(require('../scripts/reconcileLegacyMaxReplenishment').isNonCanonicalVertical(vertical), false, vertical);
+    assert.ok(!ENRICHABLE_SCOUT_VERTICALS.includes(vertical), vertical);
+    assert.ok(!missionCompatibleVerticals({}).includes(vertical), vertical);
+    assert.ok(!missionCompatibleVerticals({ missionSegment: 'small_business_owner' }).includes(vertical), vertical);
+    const row = business({ vertical });
+    assert.equal(resolveReplenishmentVertical(row), vertical);
+    assert.equal(evaluateReplenishmentAdmission(row).reason, 'segment_mismatch', vertical);
+    assert.equal(evaluateReplenishmentAdmission(row, { missionSegment: 'managed_facilities' }).admitted, true, vertical);
+  }
+});
+
+function facilitiesSource(market) {
+  return { payload: { tenantId: '10', structuredMission: {
+    market,
+    geography: { cities: ['Manchester'] },
+  } } };
+}
+
+async function selectedEnrichmentVerticals(tenantId, source, scope) {
+  let seen;
+  await runEnrichmentBatches({ run: async input => { seen = input; return { considered: 0 }; } }, {}, 1,
+    { tenantId, source, scope });
+  assert.equal(seen.client_id, Number(tenantId));
+  assert.equal(seen.tenantId, tenantId);
+  return seen.verticals;
+}
+
+test('explicit Anchor facilities mission carries admitted categories into enrichment without a catch-all', async () => {
+  const source = facilitiesSource({ segment: 'commercial_cleaning',
+    eligibleSubsegments: ['property_manager', 'restaurant_foh', 'managed_facilities'] });
+  const scope = sourceScope(source);
+  const expected = ['property_manager', 'str_manager', 'restaurant', 'commercial_office',
+    ...MISSION_SCOPED_FACILITIES_VERTICALS];
+  const { result, writes } = await persist('10', scope,
+    MISSION_SCOPED_FACILITIES_VERTICALS.map((vertical, i) => business({
+      name: `Facility ${i}`, vertical, domain: `facility${i}.example`, website: `https://facility${i}.example`,
+    })));
+  assert.equal(result.inserted, MISSION_SCOPED_FACILITIES_VERTICALS.length);
+  assert.deepEqual(writes.map(row => row.vertical), MISSION_SCOPED_FACILITIES_VERTICALS);
+  assert.ok(writes.every(row => row.clientId === 10));
+  assert.deepEqual(await selectedEnrichmentVerticals('10', source), expected);
+  // Queue duplicate accounting receives the projected scope, while the first
+  // enrichment pass receives the source. Both must use the same eligibility.
+  assert.deepEqual(await selectedEnrichmentVerticals('10', undefined, scope), expected);
+  assert.ok(!expected.includes('cleaning'));
+  assert.ok(!expected.includes('plumbing'));
+});
+
+test('Anchor facilities selection honors scalar, narrow and unsupported mixed mission scopes', async () => {
+  assert.deepEqual(await selectedEnrichmentVerticals('10', facilitiesSource({ segment: 'managed_facilities' })),
+    ['property_manager', 'commercial_office', ...MISSION_SCOPED_FACILITIES_VERTICALS]);
+  for (const vertical of MISSION_SCOPED_FACILITIES_VERTICALS) {
+    assert.deepEqual(await selectedEnrichmentVerticals('10', facilitiesSource({ segment: vertical })), [vertical]);
+    assert.deepEqual(await selectedEnrichmentVerticals('10', facilitiesSource({
+      segment: 'commercial_cleaning', eligibleSubsegments: [vertical],
+    })), [vertical]);
+  }
+  assert.deepEqual(await selectedEnrichmentVerticals('10', facilitiesSource({
+    segment: 'managed_facilities', eligibleSubsegments: ['warehouse', 'unsupported'],
+  })), []);
+  // Explicit subsegments take precedence over the broader parent segment.
+  assert.deepEqual(await selectedEnrichmentVerticals('10', facilitiesSource({
+    segment: 'managed_facilities', eligibleSubsegments: ['restaurant_foh'],
+  })), ENRICHABLE_SCOUT_VERTICALS);
+});
+
+test('facilities opt-in cannot widen other tenants or existing Anchor missions', async () => {
+  const managed = facilitiesSource({ segment: 'managed_facilities' });
+  for (const tenantId of ['13', '17']) {
+    assert.deepEqual(await selectedEnrichmentVerticals(tenantId, managed), ENRICHABLE_SCOUT_VERTICALS);
+  }
+  for (const source of [undefined, facilitiesSource({}),
+    facilitiesSource({ segment: 'short_term_rental' }),
+    facilitiesSource({ segment: 'commercial_cleaning', eligibleSubsegments: ['property_manager', 'restaurant_foh'] })]) {
+    assert.deepEqual(await selectedEnrichmentVerticals('10', source), ENRICHABLE_SCOUT_VERTICALS);
+  }
+});
+
+test('Anchor duplicate queue accounting uses the same facilities selection as enrichment', async () => {
+  const source = facilitiesSource({ eligibleSubsegments: ['restaurant_foh', 'managed_facilities'] });
+  const expected = await selectedEnrichmentVerticals('10', source);
+  let observed = false;
+  const pool = { query: async (sql, params) => {
+    if (/FROM prospects p/.test(sql)) return { rows: [] };
+    if (/INSERT INTO scout_unenriched/.test(sql)) return { rowCount: 0, rows: [] };
+    assert.match(sql, /WHERE u.client_id=\$1/);
+    assert.equal(params[0], 10);
+    assert.deepEqual(params[4], expected);
+    observed = true;
+    return { rows: [{ id: 'existing-facility', client_id: 10, eligibility_bucket: 'eligible_now' }] };
+  } };
+  const result = await persistDiscoveredCompanies(pool, { tenantId: '10', clientId: 10,
+    candidateOwnership: async () => null }, { tenantId: '10', companies: [business({ vertical: 'warehouse' })],
+    scoutContext: { source, scope: sourceScope(source) } });
+  assert.equal(observed, true);
+  assert.equal(result.admission.alreadyQueued, 1);
+  assert.equal(result.admission.queueMatches.firstFailureCounts.eligible_now, 1);
 });

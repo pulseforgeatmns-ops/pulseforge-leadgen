@@ -158,7 +158,7 @@ test('Anchor successor mission adds only bounded restaurant FOH scope and preser
   };
   const before = JSON.stringify(source);
   const next = successorMission(source);
-  assert.deepEqual(next.structuredMission.market.eligibleSubsegments, ['property_manager', 'restaurant_foh']);
+  assert.deepEqual(next.structuredMission.market.eligibleSubsegments, ['property_manager', 'restaurant_foh', 'managed_facilities']);
   assert.ok(next.constraints.some(value => /Back-of-house/.test(value)));
   assert.equal(next.structuredMission.immutable, true);
   assert.equal(JSON.stringify(source), before);
