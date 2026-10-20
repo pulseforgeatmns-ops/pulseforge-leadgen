@@ -3,6 +3,7 @@
 const { ATTENTION_STATUS, UNRESOLVED_STATUSES } = require('../types');
 const { DEFAULT_LEASE_MS, validateLeaseMs, requireClaimToken, claimLost } = require('../claimPolicy');
 const { withAttentionTransaction } = require('../transaction');
+const { MANUAL_REVIEW_NAMESPACE } = require('../manualReviewOnly');
 
 function mapRow(row) {
   if (!row) return null;
@@ -170,6 +171,8 @@ class PostgresAttentionStore {
         `SELECT id FROM max_attention_items
          WHERE client_id = $1
            AND status = ANY($2::text[])
+           AND dedup_fingerprint NOT LIKE $6
+           AND NOT (priority ? 'manual_review_only')
            AND next_review_at IS NOT NULL
            AND next_review_at <= $3::timestamptz
            AND (claim_token IS NULL OR claimed_at IS NULL
@@ -177,7 +180,7 @@ class PostgresAttentionStore {
          ORDER BY next_review_at
          LIMIT $4
          FOR UPDATE SKIP LOCKED`,
-        [clientId, UNRESOLVED_STATUSES, now.toISOString(), limit, this.leaseMs]
+        [clientId, UNRESOLVED_STATUSES, now.toISOString(), limit, this.leaseMs, `${MANUAL_REVIEW_NAMESPACE}%`]
       );
       const claimed = [];
       for (const row of due.rows) {

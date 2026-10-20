@@ -69,7 +69,7 @@ function buildAnchorLifecycleEmail({
   });
 
   const experiment = lifecycleStage === LIFECYCLE_STAGES.COLD
-    ? managedFacilitiesExperiment({ prospect, company, candidateId })
+    ? managedFacilitiesExperiment({ prospect, company, candidateId, mission })
     : { cohort: null, score: 0, arm: null };
   if (experiment.cohort === MANAGED_FACILITIES_COHORT && experiment.arm === PORTAL_ARM) {
     draft = { ...draft, body: appendPortalDifferentiator(draft.body, draft.cta) };

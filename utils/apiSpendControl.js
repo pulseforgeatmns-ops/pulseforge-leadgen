@@ -32,12 +32,12 @@ async function ensureApiUsageSchema(db = defaultDb()) {
   }
   return ready.get(db);
 }
-async function transaction(db, action) {
+async function transaction(db, action, { boundedLock = false } = {}) {
   const c = await db.connect();
   try {
     await c.query('BEGIN');
     await c.query("SET LOCAL statement_timeout = '10s'");
-    await c.query("SET LOCAL lock_timeout = '5s'");
+    await c.query(boundedLock ? "SET LOCAL lock_timeout = '2s'" : "SET LOCAL lock_timeout = '5s'");
     const result = await action(c);
     await c.query('COMMIT');
     return result;
@@ -80,26 +80,37 @@ function enforcePolicy(policy, totals, estimatedUsd) {
     }
   }
 }
-async function reserveApiCall(metadata, { db = defaultDb() } = {}) {
+async function assertApiUsageSchema(db = defaultDb()) {
+  await db.query('SELECT id,provider,agent_name,tenant_id,mission_id,operation,requested_model,model,status,reserved_usd,estimated_usd,pricing_basis,created_at,usage,http_status,finished_at FROM api_usage_events LIMIT 0');
+  await db.query('SELECT provider,paused,daily_request_limit,monthly_request_limit,daily_usd_limit,monthly_usd_limit FROM api_spend_policies LIMIT 0');
+}
+async function reserveApiCall(metadata, { db = defaultDb(), existingSchemaOnly = false } = {}) {
   const provider = validProvider(metadata.provider);
-  await ensureApiUsageSchema(db);
+  await (existingSchemaOnly ? assertApiUsageSchema(db) : ensureApiUsageSchema(db));
   return transaction(db, async c => {
     await lockProvider(c, provider);
     const policy = (await c.query('SELECT * FROM api_spend_policies WHERE provider = $1', [provider])).rows[0];
-    const { rows } = await c.query(`
-      SELECT COUNT(*) FILTER (WHERE created_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') AS daily_calls,
-        COUNT(*) AS monthly_calls,
-        COALESCE(SUM(COALESCE(estimated_usd, reserved_usd)) FILTER (WHERE created_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'), 0) AS daily_usd,
-        COALESCE(SUM(COALESCE(estimated_usd, reserved_usd)), 0) AS monthly_usd,
-        COUNT(*) FILTER (WHERE COALESCE(estimated_usd, reserved_usd) IS NULL AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') AS daily_unknown,
-        COUNT(*) FILTER (WHERE COALESCE(estimated_usd, reserved_usd) IS NULL) AS monthly_unknown
-      FROM api_usage_events WHERE provider = $1
-        AND created_at >= date_trunc('month', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
-    `, [provider]);
-    const totals = { ...rows[0] };
-    if (provider === 'google_places') {
-      const historic = await historicalPlacesTotals(c);
-      for (const key of Object.keys(totals)) totals[key] = Number(totals[key] || 0) + Number(historic[key] || 0);
+    // The bounded path has its own durable lifetime cap. Under the same
+    // provider lock, an uncapped shared policy needs no historical aggregate
+    // to decide permission. Still enforce pause and write one event per attempt.
+    // Any configured limit (including zero) retains the full shared calculation.
+    let totals = {};
+    if (!existingSchemaOnly || LIMITS.some(key => policy?.[key] != null)) {
+      const { rows } = await c.query(`
+        SELECT COUNT(*) FILTER (WHERE created_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') AS daily_calls,
+          COUNT(*) AS monthly_calls,
+          COALESCE(SUM(COALESCE(estimated_usd, reserved_usd)) FILTER (WHERE created_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'), 0) AS daily_usd,
+          COALESCE(SUM(COALESCE(estimated_usd, reserved_usd)), 0) AS monthly_usd,
+          COUNT(*) FILTER (WHERE COALESCE(estimated_usd, reserved_usd) IS NULL AND created_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') AS daily_unknown,
+          COUNT(*) FILTER (WHERE COALESCE(estimated_usd, reserved_usd) IS NULL) AS monthly_unknown
+        FROM api_usage_events WHERE provider = $1
+          AND created_at >= date_trunc('month', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+      `, [provider]);
+      totals = { ...rows[0] };
+      if (provider === 'google_places') {
+        const historic = await historicalPlacesTotals(c);
+        for (const key of Object.keys(totals)) totals[key] = Number(totals[key] || 0) + Number(historic[key] || 0);
+      }
     }
     const estimate = metadata.estimatedUsd == null ? null : Number(metadata.estimatedUsd);
     if (estimate != null && (!Number.isFinite(estimate) || estimate < 0)) throw new ApiSpendError('invalid_api_estimate');
@@ -111,7 +122,7 @@ async function reserveApiCall(metadata, { db = defaultDb() } = {}) {
     [id, provider, label(metadata.agentName), positiveTenant(metadata.tenantId), metadata.missionId == null ? null : label(metadata.missionId),
       label(metadata.operation), metadata.model == null ? null : label(metadata.model), estimate, label(metadata.pricingBasis, 'unpriced')]);
     return id;
-  });
+  }, { boundedLock:existingSchemaOnly });
 }
 async function settleApiCall(id, outcome = {}, { db = defaultDb() } = {}) {
   const status = ['ok', 'error', 'uncertain'].includes(outcome.status) ? outcome.status : 'uncertain';
@@ -168,5 +179,5 @@ async function updateApiPolicy(provider, patch, { actor = 'operator', db = defau
   });
 }
 
-module.exports = { ApiSpendError, PROVIDERS, LIMITS, COST_SQL, ensureApiUsageSchema, reserveApiCall, settleApiCall,
+module.exports = { assertApiUsageSchema, ApiSpendError, PROVIDERS, LIMITS, COST_SQL, ensureApiUsageSchema, reserveApiCall, settleApiCall,
   updateApiPolicy, enforcePolicy, mergePolicy, validatePolicyPatch };

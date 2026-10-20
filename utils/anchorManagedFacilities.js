@@ -1,11 +1,15 @@
 'use strict';
 
 const crypto = require('crypto');
+const { EXECUTION_STATES, validateStructuredMission, hashStructuredMission } =
+  require('../packages/acquisition-mission/StructuredMission');
+const { missionCompatibleVerticals } = require('./replenishmentVertical');
 
 const MANAGED_FACILITIES_COHORT = 'managed_facilities';
 const PORTAL_ARM = 'portal_led';
 const CONTROL_ARM = 'service_led';
 const HIGH_PRIORITY_THRESHOLD = 7;
+const PORTAL_EXPERIMENT_OPT_IN = 'managed_facilities_portal_copy_experiment_v1';
 
 const VERTICAL_SCORES = Object.freeze({
   property_manager: 2,
@@ -85,8 +89,38 @@ function appendPortalDifferentiator(body = '', cta = '') {
   return `${normalized}\n\n${paragraph}`;
 }
 
-function managedFacilitiesExperiment({ prospect = {}, company = {}, candidateId = null } = {}) {
+// Copy experimentation is separate from facility recognition and acquisition
+// scope. Only this explicit, hash-bound operator opt-in can enroll a prospect.
+function isManagedFacilitiesExperimentEnabled(mission = {}, prospect = {}, company = {}) {
+  if (!mission || typeof mission !== 'object') return false;
+  const tenantHints = record => [record?.tenantId, record?.tenant_id, record?.clientId, record?.client_id]
+    .filter(value => value != null);
+  const missionTenants = tenantHints(mission);
+  const prospectTenants = tenantHints(prospect);
+  if (!missionTenants.length || !prospectTenants.length
+    || [...missionTenants, ...prospectTenants, ...tenantHints(company)].some(value => text(value) !== '10')) return false;
+  if (typeof mission.id !== 'string' || !mission.id.trim()) return false;
+  const structured = mission.structuredMission;
+  if (!structured || structured.immutable !== true
+    || structured.execution?.state !== EXECUTION_STATES.APPROVED
+    || !validateStructuredMission(structured).ok
+    || structured.contractHash !== hashStructuredMission(structured)) return false;
+  if (!Array.isArray(structured.constraints) || !structured.constraints.includes(PORTAL_EXPERIMENT_OPT_IN)) return false;
+  const market = structured.market;
+  const segments = (Array.isArray(market.eligibleSubsegments) && market.eligibleSubsegments.length
+    ? market.eligibleSubsegments : [market.segment]).map(normalizeVertical);
+  return segments.includes(MANAGED_FACILITIES_COHORT)
+    && missionCompatibleVerticals({ missionSegments: segments }).length > 0;
+}
+
+function managedFacilitiesExperiment({ prospect = {}, company = {}, candidateId = null, mission = {} } = {}) {
+  if (!isManagedFacilitiesExperimentEnabled(mission, prospect, company)) {
+    return { cohort: null, score: 0, arm: null };
+  }
+  const combined = { ...company, ...prospect };
+  const vertical = normalizeVertical(combined.vertical || combined.industry || combined.segment || combined.business_type);
   const score = managedFacilitiesScore(prospect, company);
+  if (!VERTICAL_SCORES[vertical]) return { cohort: null, score, arm: null };
   if (score < HIGH_PRIORITY_THRESHOLD) {
     return { cohort: null, score, arm: null };
   }
@@ -111,6 +145,8 @@ module.exports = {
   PORTAL_ARM,
   CONTROL_ARM,
   HIGH_PRIORITY_THRESHOLD,
+  PORTAL_EXPERIMENT_OPT_IN,
+  isManagedFacilitiesExperimentEnabled,
   managedFacilitiesScore,
   isManagedFacilitiesCandidate,
   experimentArm,

@@ -1,4 +1,4 @@
-[SPEC-SCOUT-FACILITIES-001](docs/specs/SPEC-SCOUT-FACILITIES-001_Legacy_Enrichment_Boundary.md) is an in-progress local/test PR960 compatibility repair. Canonical managed facilities are separate from legacy enrichment defaults; new Anchor facilities enrichment requires explicit mission scope. No publication, activation or production action is authorized.
+[SPEC-SCOUT-FACILITIES-001](docs/specs/SPEC-SCOUT-FACILITIES-001_Legacy_Enrichment_Boundary.md) is an in-progress local/test PR960 compatibility repair. Canonical managed facilities are separate from legacy enrichment defaults; new Anchor facilities enrichment requires explicit mission scope. Portal-copy experimentation is off by default and requires a separate explicit hash-bound approved mission opt-in. No publication, activation or production action is authorized.
 
 [SPEC-SCOUT-SCHEMA-001](docs/specs/SPEC-SCOUT-SCHEMA-001_Promotion_Schema_Lifecycle.md) is an in-progress local-only repair for the inherited promotion schema/advisory lock race. No publication, deployment, production schema action, provider action, or activation is authorized.
 

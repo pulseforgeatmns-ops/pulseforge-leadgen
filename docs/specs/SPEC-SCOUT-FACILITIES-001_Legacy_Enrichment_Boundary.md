@@ -19,3 +19,12 @@ Repair PR960 without redefining the existing tenant audiences. Canonical facilit
 Local code/test changes only, preserving the [SPEC-100](SPEC-100_Max_Scout_Acquisition_Intelligence_Loop.md) tenant/no-broadening contract. No schema, migration, activation, new provider request, outreach or deployment.
 
 Reproduce the original strict legacy-default assertion without changing its expected audience. Add facility classification/admission, explicit Anchor mission, mixed scope, queue selection and cross-tenant regressions. Run focused suites and the applicable CI domain suites; report missing PostgreSQL infrastructure separately from code failures. Local tests do not establish live readiness.
+
+
+## Safe-default copy experiment gate (2026-10-20)
+
+Facility recognition and score never authorize the portal-copy A/B experiment. It is OFF unless a canonical identified tenant-10 mission has an approved immutable structured mission with a matching contract hash, explicit `managed_facilities` market scope, and the exact constraint `managed_facilities_portal_copy_experiment_v1`. This uses existing structured-mission validation and hashing; no environment, plan, candidate or free-text flag can opt in. Tenant-10 CRM identity is required and conflicting mission/contact/company tenant hints fail closed.
+
+Only cold first touches for qualifying facility records may enroll. Without opt-in, subject/body/CTA remain byte-equivalent to legacy generation and cohort/arm remain null, even for high-scoring existing property managers. Follow-ups, unsupported mixed scope and stale hashes remain off. The successor mission script does not create an opt-in. Refill has no approved mission input and remains off; this repair does not add one. Publication or merging this gate does not activate an experiment, change enrollment scope, authorize copy or send outreach.
+
+`test/anchorDailyOutboundManagedFacilitiesGate.test.js` runs in the existing Anchor CI glob, covering default-off equivalence, canonical approval binding, tenant isolation, valid deterministic arms and existing scope boundaries. Existing strict legacy enrichment-default assertions remain unchanged.

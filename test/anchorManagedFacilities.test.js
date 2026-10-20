@@ -5,12 +5,14 @@ const assert = require('node:assert/strict');
 
 const {
   CONTROL_ARM,
+  PORTAL_EXPERIMENT_OPT_IN,
   PORTAL_ARM,
   managedFacilitiesScore,
   isManagedFacilitiesCandidate,
   experimentArm,
 } = require('../utils/anchorManagedFacilities');
 const { buildAnchorLifecycleVariant } = require('../utils/anchorLifecycleEmail');
+const { freezeStructuredMission } = require('../packages/acquisition-mission/StructuredMission');
 const { evaluateReplenishmentAdmission } = require('../utils/replenishmentVertical');
 const { resolveMarketHypothesisBySegmentKey, expandSearchStrategies } =
   require('../packages/scout/hypothesis/MarketHypothesisRegistry');
@@ -33,6 +35,17 @@ function managedProspect(id) {
       location: 'Manchester, NH',
     },
   };
+}
+
+function optedInMission(overrides = {}) {
+  return { id: 'anchor-facilities-copy-experiment', tenantId: '10', clientId: 10,
+    structuredMission: freezeStructuredMission({
+      missionType: 'acquisition', objective: 'Find recurring managed-facilities cleaning buyers',
+      successMetric: { type: 'customers', target: 1 }, priority: 3,
+      market: { segment: 'managed_facilities', eligibleSubsegments: ['managed_facilities'] },
+      geography: { region: 'Manchester', cities: ['Manchester'] },
+      constraints: [PORTAL_EXPERIMENT_OPT_IN], ...overrides,
+    }, { approvedBy: 'test-operator', approvedAt: '2026-10-20T19:00:00Z' }) };
 }
 
 test('managed facilities scoring promotes operationally complex accounts, not tiny vertical-only matches', () => {
@@ -66,10 +79,12 @@ test('portal-led first touch keeps CTA/cadence copy shape and adds no image mark
   const portal = buildAnchorLifecycleVariant({
     candidate: { candidateId: portalId, name: 'Granite Auto Group' },
     crmRecord: managedProspect(portalId),
+    mission: optedInMission(),
   });
   const control = buildAnchorLifecycleVariant({
     candidate: { candidateId: controlId, name: 'Granite Auto Group' },
     crmRecord: managedProspect(controlId),
+    mission: optedInMission(),
   });
 
   assert.equal(portal.cohort, 'managed_facilities');
