@@ -369,6 +369,9 @@ app.get('/', (req, res) => res.redirect('/login'));
 
 // Login page
 app.get('/login', (req, res) => {
+  // Explicit, fixed identity-only landing. Never accept an arbitrary return URL.
+  const identityCheck = req.query.workflow === 'identity-check';
+  if (identityCheck) res.set('Cache-Control', 'no-store');
   res.send(`<!DOCTYPE html>
 <html>
 <head>
@@ -411,7 +414,9 @@ button:hover { background:#7c3aed; box-shadow:0 0 20px rgba(139,92,246,0.4); }
   ${req.query.error === 'verify' ? '<div class="error">Verification link is invalid or expired</div>' : ''}
   ${req.query.error === 'password' ? '<div class="error">Password must be updated before continuing</div>' : ''}
   ${req.query.error && !['unverified','no_workspace','verify','password'].includes(String(req.query.error)) ? '<div class="error">Invalid credentials — try again</div>' : ''}
+  ${identityCheck ? '<div class="ok">Identity check only — the dashboard will not open</div>' : ''}
   <form method="POST" action="/login">
+    ${identityCheck ? '<input type="hidden" name="workflow" value="identity-check">' : ''}
     <label>Email</label>
     <input type="email" name="email" placeholder="you@pulseforge.com" autofocus>
     <label>Password</label>
@@ -441,6 +446,11 @@ document.addEventListener('click', function(e) {
 
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
+  const identityCheck = req.body.workflow === 'identity-check';
+  if (identityCheck) res.set('Cache-Control', 'no-store');
+  const failedLogin = error => res.redirect(
+    `/login?error=${error}${identityCheck ? '&workflow=identity-check' : ''}`
+  );
   await initAuth();
   const userCount = await getUserCount();
 
@@ -453,9 +463,9 @@ app.post('/login', async (req, res) => {
     `, [email || '']);
     const user = rows[0];
     const ok = user && user.active && await bcrypt.compare(password || '', user.password_hash);
-    if (!ok) return res.redirect('/login?error=1');
-    if (user.email_verified === false) return res.redirect('/login?error=unverified');
-    if (user.role === 'client' && !user.client_id) return res.redirect('/login?error=no_workspace');
+    if (!ok) return failedLogin('1');
+    if (user.email_verified === false) return failedLogin('unverified');
+    if (user.role === 'client' && !user.client_id) return failedLogin('no_workspace');
 
     req.session.user = {
       id: user.id,
@@ -473,6 +483,7 @@ app.post('/login', async (req, res) => {
       : (user.client_id || 1);
     await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
     if (user.password_change_required) return res.redirect('/change-password');
+    if (identityCheck) return res.redirect('/api/me');
     if (user.role === 'setter') return res.redirect('/setter');
     if (user.role === 'closer') return res.redirect('/closer');
     if (user.role === 'sales') return res.redirect('/sales');
@@ -480,6 +491,9 @@ app.post('/login', async (req, res) => {
     if (user.role === 'cleaner' || user.role === 'facility_client') return res.redirect('/portal/anchor');
     return res.redirect('/command-deck');
   }
+
+  // The identity check requires an existing account, never the legacy fallback.
+  if (identityCheck) return failedLogin('1');
 
   if (password === process.env.DASHBOARD_PASSWORD) {
     req.session.user = { id: null, name: 'Legacy Admin', email: email || 'legacy@pulseforge.local', role: 'admin' };

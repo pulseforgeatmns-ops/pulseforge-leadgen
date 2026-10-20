@@ -218,6 +218,7 @@ router.get('/api/emmett/autorun', async (req, res) => {
 });
 
 router.get('/api/me', sessionAuth, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
   const role = req.user?.role || null;
   // SPEC-099 / SPEC-096 — client identity is authoritative from session user.client_id.
   // Never honor query/body client_id for client-role workspace display.
