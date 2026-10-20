@@ -91,10 +91,22 @@ function createBasePageCheckpointStore({ db, tenantId, fingerprint, now = () => 
       }
       return selectPage(rootKey, rows, legacy, now());
     },
-    async reserve(plan) {
+    async reserve(plan, reservationDb = db) {
       if (plan.key !== pageIdentity(plan.rootKey, plan.index)) throw Error('Scout page reservation identity mismatch');
       const reservationId = randomUUID();
-      const epochGuard = plan.originalRootKey ? `AND EXISTS (
+      const epochGuard = plan.coverageVersion === 2 ? `AND EXISTS (
+          SELECT 1 FROM scout_query_coverage_grant_roots r
+          JOIN scout_query_coverage_grants g ON g.tenant_id=r.tenant_id AND g.search_fingerprint=r.search_fingerprint
+            AND g.allocation_hash=r.allocation_hash
+          JOIN scout_query_checkpoints legacy ON legacy.tenant_id=r.tenant_id AND legacy.search_fingerprint=r.search_fingerprint
+            AND legacy.query_key=r.original_root_key
+          WHERE r.tenant_id=$1 AND r.search_fingerprint=$2 AND r.epoch_root_key=$4 AND r.original_root_key=$9
+            AND r.allocation_hash=$10 AND g.grant_hash=$11 AND g.revoked_at IS NULL
+            AND r.original_root_key=ANY(g.root_query_keys) AND g.not_before<=$8 AND g.expires_at>$8
+            AND legacy.state='handled' AND legacy.plan_version='places-market-query-v1'
+            AND NOT EXISTS(SELECT 1 FROM scout_query_pages old WHERE old.tenant_id=$1 AND old.search_fingerprint=$2 AND old.root_query_key=r.original_root_key)
+            AND (SELECT count(*) FROM scout_query_coverage_grant_pages used WHERE used.tenant_id=$1 AND used.search_fingerprint=$2 AND used.grant_hash=g.grant_hash)<g.max_new_pages
+        )` : plan.originalRootKey ? `AND EXISTS (
           SELECT 1 FROM scout_query_coverage_epochs e JOIN scout_query_checkpoints legacy
           ON legacy.tenant_id=e.tenant_id AND legacy.search_fingerprint=e.search_fingerprint AND legacy.query_key=e.original_root_key
           JOIN scout_query_coverage_epoch_receipts receipt ON receipt.tenant_id=e.tenant_id
@@ -105,7 +117,7 @@ function createBasePageCheckpointStore({ db, tenantId, fingerprint, now = () => 
           AND e.manifest_hash=$10 AND e.epoch=1 AND e.not_before<=$8 AND e.expires_at>$8 AND legacy.state='handled' AND legacy.plan_version='places-market-query-v1'
           AND NOT EXISTS (SELECT 1 FROM scout_query_pages old WHERE old.tenant_id=$1 AND old.search_fingerprint=$2
             AND old.root_query_key=e.original_root_key))` : '';
-      const { rows } = await db.query(`INSERT INTO scout_query_pages
+      const { rows } = await reservationDb.query(`INSERT INTO scout_query_pages
         (tenant_id,search_fingerprint,query_key,root_query_key,page_index,state,reservation_id,request_token)
         SELECT $1,$2,$3,$4,$5,'reserved',$6,$7
         WHERE (($5=0 AND NOT EXISTS (SELECT 1 FROM scout_query_checkpoints
@@ -117,7 +129,8 @@ function createBasePageCheckpointStore({ db, tenantId, fingerprint, now = () => 
         ${epochGuard}
         ON CONFLICT DO NOTHING RETURNING reservation_id`,
       [...scope, plan.key, plan.rootKey, plan.index, reservationId, token(plan.pageToken), new Date(now()),
-        ...(plan.originalRootKey ? [plan.originalRootKey, plan.manifestHash] : [])]);
+        ...(plan.coverageVersion === 2 ? [plan.originalRootKey, plan.allocationHash, plan.grantHash]
+          : plan.originalRootKey ? [plan.originalRootKey, plan.manifestHash] : [])]);
       return rows[0]?.reservation_id === reservationId ? reservationId : null;
     },
     async stage(plan, candidates, metadata) {
@@ -150,17 +163,17 @@ function createBasePageCheckpointStore({ db, tenantId, fingerprint, now = () => 
         throw error;
       } finally { client.release(uncertain); }
     },
-    async fail(plan, failure = {}) {
+    async fail(plan, failure = {}, failureDb = db) {
       // A proven pre-network budget denial can release its unused reservation.
       // All other unconfirmed outcomes retain a durable stop; no auto page reset.
       if (failure.noNetwork === true) {
-        await db.query(`DELETE FROM scout_query_pages WHERE tenant_id=$1 AND search_fingerprint=$2
+        await failureDb.query(`DELETE FROM scout_query_pages WHERE tenant_id=$1 AND search_fingerprint=$2
           AND query_key=$3 AND reservation_id=$4 AND state='reserved'`, [...scope, plan.key, plan.reservationId]);
         return;
       }
       const reason = failure.googleStatus === 'INVALID_REQUEST' ? 'continuation_token_invalid'
         : failure.googleStatus === 'REQUEST_DENIED' ? 'page_provider_denied' : 'page_provider_failure';
-      const { rows } = await db.query(`UPDATE scout_query_pages SET state='blocked',blocked_reason=$5,raw_results=$6::jsonb
+      const { rows } = await failureDb.query(`UPDATE scout_query_pages SET state='blocked',blocked_reason=$5,raw_results=$6::jsonb
         WHERE tenant_id=$1 AND search_fingerprint=$2 AND query_key=$3 AND reservation_id=$4 AND state='reserved'
         RETURNING query_key`, [...scope, plan.key, plan.reservationId, reason, JSON.stringify(rawResults(failure.rawResults || []))]);
       if (rows[0]?.query_key !== plan.key) throw Error('Scout page failure unconfirmed');
@@ -169,6 +182,8 @@ function createBasePageCheckpointStore({ db, tenantId, fingerprint, now = () => 
 }
 function createPageCheckpointStore(options) {
   const base = createBasePageCheckpointStore(options);
-  return require('./scoutCoverageEpochStore').wrapCoverageEpochStore(base, options);
+  const config = require('./scoutCoverageEpoch').validateCoverageEpochConfig(options.coverageEpoch, options);
+  const legacy = require('./scoutCoverageEpochStore').wrapCoverageEpochStore(base, { ...options, coverageEpoch: config?.version === 2 ? null : config });
+  return require('./scoutCoverageGrantStore').wrapCoverageGrantStore(base, legacy, { ...options, coverageEpoch: config });
 }
 module.exports = { MAX_PAGES, TOKEN_ACTIVATION_DELAY_MS, pageIdentity, selectPage, createPageCheckpointStore };

@@ -96,6 +96,7 @@ function fixture() {
       const page = url.searchParams.has('pagetoken') ? Number(url.searchParams.get('pagetoken').split('-').at(-1)) : 0;
       const status = options.transientFailure && providerCalls.filter(value => value.includes('textsearch')).length === 1
         ? 'OVER_QUERY_LIMIT' : options.status || (options.invalid && page > 0 ? 'INVALID_REQUEST' : 'OK');
+      if (options.denyAfterFirstSearch) denyBudget = true;
       return { status: 200, ok: true, json: async () => ({ status,
         results: status === 'OK' ? Array.from({ length: options.oversized ? 21 : 20 }, (_, i) => ({
           place_id: `p${page * 20 + i}`, name: options.unknownBusiness ? `Fixture Company ${page * 20 + i}` : `Fixture Painting Contractor ${page * 20 + i}`, types: options.unknownBusiness ? [] : ['painter'],
@@ -364,4 +365,13 @@ test('source fixtures expose finite approved-query counts; Babrun generations do
     ['property_manager','str_manager','realtor','commercial_office']));
   assert.deepEqual(anchor.map(keys=>keys.size),[54,54,54,54]);
   assert.equal(new Set(anchor.flatMap(keys=>[...keys])).size,216);
+});
+
+test('a retry budget denial after an actual HTTP attempt cannot release the durable page', async () => {
+  const f = fixture(); clearFailedCacheAfterAttribution = true;
+  const provider = f.makeProvider(f.newSession(), { transientFailure: true, denyAfterFirstSearch: true });
+  assert.deepEqual(await provider.collectEvidence(request), []);
+  assert.equal(f.providerCalls.length, 1); assert.equal(reservations.length, 1);
+  assert.equal(f.pages.values().next().value.state, 'blocked');
+  assert.equal(provider.lastExecution.errors[0].noNetwork, false);
 });
