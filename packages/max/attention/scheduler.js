@@ -8,6 +8,7 @@ const { newSchedulerRunId } = require('./fingerprints');
 const { ATTENTION_STATUS, UNRESOLVED_STATUSES } = require('./types');
 const { withClaimedStores } = require('./claimExecution');
 const { claimLost } = require('./claimPolicy');
+const { isManualReviewOnlyAttention } = require('./manualReviewOnly');
 
 function buildTriggerForItem(item) {
   if (item.subject_type === SUBJECT_TYPE.EXPECTATION || item.subject_type === 'expectation') {
@@ -41,7 +42,7 @@ async function evaluateOwnedAttentionItem({
 }) {
   // Re-read under the ownership lock. Ingestion may have resolved or rescheduled
   // this row after the initial batch claim, without changing its token.
-  if (!UNRESOLVED_STATUSES.includes(item.status) || !item.next_review_at
+  if (isManualReviewOnlyAttention(item) || !UNRESOLVED_STATUSES.includes(item.status) || !item.next_review_at
     || new Date(item.next_review_at) > now) {
     if (!await attentionStore.releaseClaim(item.id, { claimToken })) throw claimLost();
     return { skipped: true };

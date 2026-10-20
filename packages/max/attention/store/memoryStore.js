@@ -1,6 +1,7 @@
 'use strict';
 
 const { ATTENTION_STATUS, UNRESOLVED_STATUSES } = require('../types');
+const { isManualReviewOnlyAttention } = require('../manualReviewOnly');
 const { DEFAULT_LEASE_MS, validateLeaseMs, requireClaimToken, claimLost } = require('../claimPolicy');
 
 class MemoryAttentionStore {
@@ -68,6 +69,7 @@ class MemoryAttentionStore {
     return this.items
       .filter(i =>
         i.client_id === clientId
+        && !isManualReviewOnlyAttention(i)
         && UNRESOLVED_STATUSES.includes(i.status)
         && i.next_review_at
         && new Date(i.next_review_at).getTime() <= ts
