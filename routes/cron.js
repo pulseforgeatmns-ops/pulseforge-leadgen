@@ -71,6 +71,7 @@ const {
 const { runScoutExpansionCron } = require('../scoutExpansion');
 const { createMaxDecayCronHandler } = require('../utils/maxDecayCron');
 const { diagnoseScoutPlaces } = require('../services/scoutPlacesDiagnostic');
+const { withResearchProviderScope, isResearchProviderControlError } = require('../utils/anchorResearchProviderPause');
 
 const anthropic = new Anthropic();
 
@@ -616,13 +617,18 @@ async function handleScoutPlacesDiagnostic(req, res) {
       if (['1', 'true', 'yes', 'on'].includes(s)) comparePlacesNew = true;
     }
 
-    const report = await diagnoseScoutPlaces({
-      comparePlacesNew,
-      query:
-        req.query.query || req.body?.query
-          ? String(req.query.query || req.body.query)
-          : undefined,
-    });
+    // Unlike legacy cron defaults, a paid diagnostic needs explicit identity
+    // while armed. Preserve all supplied values so conflicts fail closed.
+    const tenants = [req.query.client_id, req.query.clientId, req.body?.client_id, req.body?.clientId]
+      .filter(value => value != null);
+    if (!tenants.length) tenants.push(undefined);
+    const run = tenants.reduceRight((next, tenant) => () => withResearchProviderScope(tenant, next),
+      () => diagnoseScoutPlaces({
+        comparePlacesNew,
+        query: req.query.query || req.body?.query
+          ? String(req.query.query || req.body.query) : undefined,
+      }));
+    const report = await run();
 
     res.set('Cache-Control', 'no-store');
     return res.status(report.ok ? 200 : 422).json({
@@ -636,7 +642,9 @@ async function handleScoutPlacesDiagnostic(req, res) {
     });
   } catch (err) {
     console.error('[cron] scout-places-diagnostic error:', err.message);
-    return res.status(500).json({
+    const status = isResearchProviderControlError(err)
+      ? (err.code === 'anchor_research_provider_paused' ? 423 : 400) : 500;
+    return res.status(status).json({
       ok: false,
       error: err.message,
       crmWritesMade: false,

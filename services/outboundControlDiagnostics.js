@@ -218,6 +218,8 @@ function controlCycleDiagnostic(tenantId, event) {
     state: choice(event.state, ['healthy', 'critical', 'delivery_halted', 'replenish']),
     scoutPromotionCleanCohort: promotionCleanDiagnostic(event.scoutPromotionCleanCohort),
     scoutEvidenceProgression: evidenceProgressionDiagnostic(event.scoutEvidenceProgression),
+    scoutCandidateWork: require('./scoutCandidateTicketDispatch').candidateTicketDiagnostic(event.scoutCandidateWork),
+    scoutQueryProgression: require('./scoutCandidateTicketDispatch').queryProgressionDiagnostic(event.scoutQueryProgression),
     cleanInventoryExclusions: cleanInventoryExclusionDiagnostic(event.cleanInventoryExclusions),
     cleanInventoryBefore: count(event.cleanInventoryBefore), cleanInventoryAfter: count(event.cleanInventoryAfter),
     pendingPrepared: event.pendingPreparedMeasured === true ? count(event.pendingPrepared) : null, preparedAdded: count(event.preparedAdded),

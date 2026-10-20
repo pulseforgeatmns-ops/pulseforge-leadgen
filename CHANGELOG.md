@@ -1,3 +1,26 @@
+## Local-only: PR960 managed-facilities enrichment boundary (2026-10-20)
+
+- [SPEC-SCOUT-FACILITIES-001](docs/specs/SPEC-SCOUT-FACILITIES-001_Legacy_Enrichment_Boundary.md): keep facilities canonical without widening shared legacy enrichment defaults or scheduled retries. Explicit Anchor facilities missions select only their reviewed categories, including restaurant FOH when approved; unsupported mixed scopes fail closed.
+- Use canonical recognition for the legacy queue reconciler so legitimate facility rows are not mistaken for query-slug contamination. Preserve other tenant paths and the Pulseforge reviewed-trade gate.
+- Add focused regression coverage. Local/test only; no publication, provider action, migration or production activation.
+
+## Local-only: promotion schema lifecycle repair (2026-10-19)
+
+- [SPEC-SCOUT-SCHEMA-001](docs/specs/SPEC-SCOUT-SCHEMA-001_Promotion_Schema_Lifecycle.md): complete existing business-name schema ensure before promotion transactions, check visible columns before lazy DDL, and coalesce only pending work per query object. Prevent inherited schema/advisory deadlocks and rolled-back ensure-cache poisoning while preserving tenant-scoped canonical dedup.
+- Add deterministic native PostgreSQL regression coverage. No new migration, provider behavior, deployment, or production operation is included.
+
+## Unreleased — SPEC-265 local research-provider pause
+
+- Add a default-off tenant-10 research/discovery/contact-enrichment/email-verification pause at reviewed provider handoffs and trusted caller boundaries. Preserve field-route geocoding, call/SMS and unrelated presentation paths.
+- Require explicit tenant context for previously unscoped research diagnostics while armed; keep known non-Anchor utilities bound to their existing scope. Typed interruption preserves candidate state and completed accounting.
+- No new DDL, budget, research-resume permission or activation. See [SPEC-265](docs/specs/SPEC-265_Anchor_Research_Provider_Pause.md), [ADR-107](docs/adr/ADR-107_Explicit_Research_Provider_Pause.md), and [operator proposal](docs/anchor-research-provider-pause.md).
+
+
+## Local SPEC-264 operator invocation proposal
+
+
+Default-read-only fixed tenant-10 CRM preparation command; explicit exact revision/manifest/source hashes and --apply required for later separately approved writes. No new route, activation or provider authority.
+
 ## Local SPEC-263 follow-on
 
 Default-closed deterministic existing-CRM canonical preparation, no Scout fallback/provider calls, review-only READY. See ADR-106. Separate implementation and native review on the frozen SPEC262 base; not part of that immutable publication artifact. Draft identities and later frozen items are separately charged; manual schema extension is opt-in.
@@ -21,6 +44,28 @@ All notable changes to this project are documented here. Format inspired by [Kee
 ## [Unreleased]
 
 ### Added
+
+- [SPEC-SCOUT-CONT-002](docs/specs/SPEC-SCOUT-CONT-002_Explicit_Legacy_Coverage_Epoch.md)
+  and [ADR-102](docs/adr/ADR-102_Explicit_Immutable_Legacy_Coverage_Epoch.md):
+  default-off explicit same-fingerprint epoch1 for exact legacy query roots,
+  immutable scope-wide allocation/window receipt, durable staged-page recovery
+  after expiry/removal, and bounded sanitized approval diagnostics. Local tests
+  preserve old candidate/attempt history and enforce cumulative page ceilings.
+  Production release, exact manifest and additional spend remain approval-gated.
+
+- Default-off tenant 10/13 durable Scout candidate tickets and exact immutable
+  query membership, independent backlog draining, fenced queue completion,
+  bounded continuation and explicit dependency holds. Successful no-evidence
+  crawls do not automatically repeat; only explicit transient failures retry.
+  Real PostgreSQL tests exercise sustained simulated queue/clean-inventory flow,
+  crashes, concurrency and preserved cost/attempt limits. Migration, activation,
+  publication and live yield remain separately gated.
+
+- [SPEC-SCOUT-CONT-001](docs/specs/SPEC-SCOUT-CONT-001_Bounded_Query_Page_Continuation.md):
+  authorized local/test, opt-in finite Places pagination with immutable scoped
+  page checkpoints, exact durable candidate handoff, one-page cycle allocation,
+  existing spend reservations and explicit exhaustion/legacy-token blockers.
+  No publication, production migration, activation or live replenishment proof.
 
 - [SPEC-PF-ACCEL-001](docs/specs/SPEC-PF-ACCEL-001_Rollout_Preflight.md):
   default-dry-run rollout preflight for PR897 schema/index/constraint/trigger

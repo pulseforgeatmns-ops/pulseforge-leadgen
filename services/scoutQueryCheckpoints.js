@@ -19,6 +19,7 @@ function createCheckpointStore({ db, tenantId, fingerprint }) {
   const scope = [String(tenantId), String(fingerprint)];
   return {
     tenantId: String(tenantId),
+    fingerprint: String(fingerprint),
     async load(key) {
       const { rows } = await db.query(`SELECT query_key, state, candidates
         FROM scout_query_checkpoints WHERE tenant_id=$1 AND search_fingerprint=$2 AND query_key=$3`, [...scope, key]);
@@ -46,7 +47,7 @@ function createCheckpointStore({ db, tenantId, fingerprint }) {
 
 // One session per acquisition run. Not telemetry: fetched payloads are durable
 // replay units; only the ingestion acknowledgement advances them to handled.
-function createCheckpointSession({ store }) {
+function createCheckpointSession({ store, ticketStore = null, pageStore = null }) {
   if (!store) throw new Error('Checkpoint session requires a store');
   const pending = new Set();
   const observed = new Set();
@@ -55,30 +56,85 @@ function createCheckpointSession({ store }) {
   const skipped = new Set();
   const fetched = new Set();
   const replayed = new Set();
+  const rootPlans = new Map();
+  const observedCheckpointRoots = new Set();
+  const selectedPages = new Map();
+  const pageStatuses = new Map();
+  let newPagesReserved = 0;
+  async function transfer(key, candidates) {
+    if (!ticketStore) { pending.add(key); return candidates; }
+    const receipt = await ticketStore.transferQuery(key);
+    if (receipt?.transferred !== true || receipt.queryKey !== key || !Array.isArray(receipt.candidates)) {
+      throw Error('Scout candidate responsibility transfer unconfirmed');
+    }
+    pending.delete(key); handled.add(key);
+    return receipt.candidates;
+  }
   return {
     assertTenant(tenantId) {
-      if (store.tenantId && String(tenantId || '') !== store.tenantId) throw new Error('Checkpoint tenant mismatch');
+      for (const scopedStore of [store, pageStore, ticketStore].filter(Boolean)) {
+        if (scopedStore.tenantId && String(tenantId || '') !== scopedStore.tenantId) throw new Error('Checkpoint tenant mismatch');
+      }
     },
     async lookup(query, requireWebsite) {
-      const key = queryIdentity(query, requireWebsite);
+      const rootKey = queryIdentity(query, requireWebsite);
+      let key = rootKey;
+      let plan = null;
+      if (pageStore) {
+        if (!rootPlans.has(rootKey)) rootPlans.set(rootKey, await pageStore.plan(rootKey));
+        plan = rootPlans.get(rootKey);
+        if (plan.status) {
+          if (plan.status === 'legacy_continuation_unknown') observedCheckpointRoots.add(rootKey);
+          observed.add(rootKey);
+          pageStatuses.set(rootKey, plan.status);
+          if (plan.status === 'finite_query_exhausted' || plan.status === 'provider_page_limit_reached') handled.add(rootKey);
+          else unresolved.add(rootKey);
+          return { key: rootKey, handled: true, candidates: [], continuationStatus: plan.status };
+        }
+        key = plan.key;
+      }
       observed.add(key); unresolved.add(key);
       const row = await store.load(key);
+      if (key === rootKey && ['fetched','handled'].includes(row?.state)) observedCheckpointRoots.add(rootKey);
       if (row?.state === 'handled') { unresolved.delete(key); handled.add(key); skipped.add(key); return { key, handled: true, candidates: [] }; }
       if (row?.state === 'fetched') {
         if (!Array.isArray(row.candidates)) throw new Error('Invalid staged checkpoint payload');
-        unresolved.delete(key); pending.add(key); replayed.add(key);
-        return { key, handled: false, candidates: row.candidates };
+        const candidates = await transfer(key, row.candidates);
+        unresolved.delete(key); replayed.add(key);
+        return { key, handled: false, candidates };
       }
-      unresolved.add(key);
-      return { key, handled: false, candidates: null };
+      if (pageStore) {
+        // One page for the entire acquisition cycle, shared by every workload.
+        // A denied/failed attempt consumes this local allocation as well.
+        if (newPagesReserved >= 1) {
+          pageStatuses.set(rootKey, 'cycle_page_budget_reached');
+          return { key, handled: true, candidates: [], continuationStatus: 'cycle_page_budget_reached' };
+        }
+        newPagesReserved += 1;
+        const reservationId = await pageStore.reserve(plan);
+        if (!reservationId) {
+          newPagesReserved -= 1;
+          pageStatuses.set(rootKey, 'page_fetch_in_progress');
+          return { key, handled: true, candidates: [], continuationStatus: 'page_fetch_in_progress' };
+        }
+        selectedPages.set(key, { ...plan, reservationId });
+      }
+      return { key, handled: false, candidates: null,
+        ...(pageStore ? { singlePage: true, pageToken: plan.pageToken, pageIndex: plan.index } : {}) };
     },
-    async stage(key, candidates) {
-      const row = await store.stage(key, candidates);
+    async stage(key, candidates, metadata = null) {
+      const plan = selectedPages.get(key);
+      const row = plan ? await pageStore.stage(plan, candidates, metadata) : await store.stage(key, candidates);
       if (!row) throw new Error('Checkpoint staging was not confirmed');
       if (row.state === 'handled') { handled.add(key); unresolved.delete(key); return []; }
       if (row.state !== 'fetched' || !Array.isArray(row.candidates)) throw new Error('Invalid staged checkpoint payload');
-      unresolved.delete(key); pending.add(key); fetched.add(key);
-      return row.candidates;
+      const transferred = await transfer(key, row.candidates);
+      unresolved.delete(key); fetched.add(key);
+      return transferred;
+    },
+    async fail(key, failure) {
+      const plan = selectedPages.get(key);
+      if (plan) await pageStore.fail(plan, failure);
     },
     async acknowledge() {
       const keys = [...pending];
@@ -86,7 +142,14 @@ function createCheckpointSession({ store }) {
       keys.forEach(key => { pending.delete(key); handled.add(key); });
     },
     snapshot() {
+      const coverageApprovalManifest = require('./scoutCoverageEpoch').projectCoverageApprovalManifest({
+        tenantId: store.tenantId, fingerprint: store.fingerprint, rootQueryKeys: [...observedCheckpointRoots],
+      });
       return { observedQueries: observed.size, handledQueries: handled.size, skippedHandled: skipped.size,
+        ...(coverageApprovalManifest ? { coverageApprovalManifest } : {}),
+        ...(pageStore ? { continuation: { enabled: true, maxNewPages: 1, newPagesReserved, statuses: [...pageStatuses.values()].reduce((counts, status) => {
+          counts[status] = (counts[status] || 0) + 1; return counts;
+        }, {}) } } : {}),
         fetchedQueries: fetched.size, replayedQueries: replayed.size, pendingAcknowledgements: pending.size,
         unresolvedQueries: unresolved.size,
         status: !observed.size ? 'not_observed' : handled.size !== observed.size || pending.size || unresolved.size

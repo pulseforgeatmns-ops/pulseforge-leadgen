@@ -1,5 +1,7 @@
 'use strict';
 
+const { withResearchProviderScope } = require('../../utils/anchorResearchProviderPause');
+
 /**
  * AUDIT-WEB-001 — WEB-COHORT-002 live read-only validation.
  * Scout discovery (leadgen Places/Serp path) + live deterministic audit.
@@ -71,7 +73,11 @@ function assertDiscoveryEnv() {
   return { hasPlaces, hasSerp };
 }
 
-async function discoverCandidatesViaScout(clientId, { targetSize = COHORT_SIZE } = {}) {
+async function discoverCandidatesViaScout(clientId, options = {}) {
+  return withResearchProviderScope(clientId, () => discoverCandidatesViaScoutScoped(clientId, options));
+}
+
+async function discoverCandidatesViaScoutScoped(clientId, { targetSize = COHORT_SIZE } = {}) {
   assertDiscoveryEnv();
   const { _test: { searchGoogle } } = require('../../leadgen');
   const candidates = [];

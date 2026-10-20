@@ -39,6 +39,14 @@ function errorStatus(error) {
   return 500;
 }
 
+function publicError(error, fallback = 'spreadsheet_review_failed') {
+  if (error.commitOutcomeUnknown) return { ok: false, error: 'spreadsheet_save_unconfirmed', message: 'The save result has not been confirmed. Retry the same approval to recover its result.', outcome: 'unknown', retry_same_request: true };
+  if (/^[0-9A-Z]{5}$/.test(error.code || '') || error.code === 'SPREADSHEET_DB_TIMEOUT') {
+    return { ok: false, error: 'spreadsheet_review_unavailable', message: 'Saved spreadsheet previews are unavailable right now. You can still review assigned accounts.' };
+  }
+  return { ok: false, error: error.code || fallback, ...(error.message ? { message: error.message } : {}) };
+}
+
 async function previewSpreadsheet(body, scope, { db, store = proposalStore(db, scope) } = {}) {
   const attachments = (body.attachments || []).filter(a => a.type === 'spreadsheet' || supports(a));
   if (attachments.length !== 1 || (body.attachments || []).length !== 1) throw rejected('select_one_spreadsheet', 422);
@@ -121,5 +129,5 @@ async function resolveSpreadsheet(proposalId, body, scope, { db, store = proposa
     spreadsheet_proposal: publicProposal(proposal, scope) };
 }
 
-module.exports = { hasSpreadsheetInput, previewSpreadsheet, commitSpreadsheet, resolveSpreadsheet,
+module.exports = { hasSpreadsheetInput, previewSpreadsheet, commitSpreadsheet, resolveSpreadsheet, publicError,
   proposalStore, publicProposal, getScopedProposal, errorStatus };

@@ -1,5 +1,7 @@
 'use strict';
 
+const { rethrowResearchProviderControl } = require('../../../utils/anchorResearchProviderPause');
+
 /**
  * SPEC-177 — Hypothesis-Driven Discovery Engine.
  *
@@ -153,7 +155,10 @@ function mergeIdentities(candidates = []) {
 
     const existing = byKey.get(key);
     if (existing) {
-      byKey.set(key, fuseCandidateRecords(existing, row, identity));
+      const fused = fuseCandidateRecords(existing, row, identity);
+      byKey.set(key, fused);
+      const index = merged.indexOf(existing);
+      if (index >= 0) merged[index] = fused;
     } else {
       // Secondary match: try name+address against existing entries
       const nameAddrKey = `nameaddr:${lowerText(row.name || row.company)}|${lowerText(candidateAddressText(row))}`;
@@ -196,6 +201,7 @@ function fuseCandidateRecords(existing, incoming, identity) {
   return {
     ...existing,
     ...incoming,
+    ...require('../../../utils/scoutTicketMembership').ticketFields(existing, incoming),
     name: existing.name || incoming.name || incoming.company,
     phone: existing.phone || incoming.phone,
     address: existing.address || incoming.address,
@@ -239,6 +245,7 @@ async function executeProviderAssignment(assignment, searchDefinition, adapters,
     const report = await withPlacesContext(placesCtx, () => adapter.discover(scoped));
     return normalizeProviderReport(report, assignment);
   } catch (err) {
+    rethrowResearchProviderControl(err);
     return normalizeProviderReport(
       { candidates: [], errors: [{ message: err.message || String(err) }] },
       assignment

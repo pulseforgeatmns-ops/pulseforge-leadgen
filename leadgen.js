@@ -1,3 +1,4 @@
+const { withResearchProviderScope, assertResearchProviderAllowed, rethrowResearchProviderControl } = require('./utils/anchorResearchProviderPause');
 /**
  * Pulseforge Lead Engine — Node.js CLI
  * =====================================
@@ -732,6 +733,7 @@ async function enrichWithHunter(domain) {
     return null;
   }
   try {
+    assertResearchProviderAllowed('hunter');
     const res = await axios.get('https://api.hunter.io/v2/domain-search', {
       params: { domain, api_key: HUNTER_KEY, limit: 10 }, timeout: 8000
     });
@@ -748,6 +750,7 @@ async function enrichWithHunter(domain) {
       sourceUrl: match.sources?.[0]?.uri || null
     };
   } catch (err) {
+    rethrowResearchProviderControl(err);
     return null;
   }
 }
@@ -952,6 +955,7 @@ function normalizeProspeoPersonRow(match) {
 async function callProspeoSearchPerson(domain) {
   await awaitProspeoSlot();
 
+  assertResearchProviderAllowed('prospeo');
   const res = await axios.post('https://api.prospeo.io/search-person',
     {
       page: 1,
@@ -985,6 +989,7 @@ async function searchProspeoContactsForDomain(domain, {
   if (process.env.PROSPEO_ENABLED !== 'true' || !PROSPEO_API_KEY) {
     return { ok: false, reason: 'provider_unavailable', contacts: [] };
   }
+  assertResearchProviderAllowed('prospeo');
   const quota = await checkProspeoQuota();
   if (!quota.ok) {
     return { ok: false, reason: 'provider_unavailable', contacts: [] };
@@ -995,6 +1000,7 @@ async function searchProspeoContactsForDomain(domain, {
     const titles = Array.isArray(titleIncludes) && titleIncludes.length
       ? titleIncludes
       : getProspeoTitleIncludes();
+    assertResearchProviderAllowed('prospeo');
     const res = await axios.post('https://api.prospeo.io/search-person',
       {
         page: 1,
@@ -1020,6 +1026,7 @@ async function searchProspeoContactsForDomain(domain, {
     }
     return { ok: true, reason: null, contacts };
   } catch (_err) {
+    rethrowResearchProviderControl(_err);
     return { ok: false, reason: 'provider_error', contacts: [] };
   }
 }
@@ -1030,6 +1037,7 @@ async function listProspeoContactsForDomain(domain, opts = {}) {
 }
 
 async function enrichWithProspeo(domain) {
+  assertResearchProviderAllowed('prospeo');
   if (process.env.PROSPEO_ENABLED !== 'true') {
     return null;
   }
@@ -1039,6 +1047,7 @@ async function enrichWithProspeo(domain) {
     return null;
   }
 
+  assertResearchProviderAllowed('prospeo');
   const quota = await checkProspeoQuota();
   if (!quota.ok) {
     console.warn(`[Prospeo] Skipped (${quota.reason}): ${quota.count ?? '?'}/${quota.cap}`);
@@ -1052,6 +1061,7 @@ async function enrichWithProspeo(domain) {
     try {
       return await callProspeoSearchPerson(domain);
     } catch (err) {
+      rethrowResearchProviderControl(err);
       const rateLimited = isProspeoRateLimited(err);
       if (rateLimited) trip429();
       const backoffMs = PROSPEO_RATE_LIMIT_BACKOFF_MS[attempt];
@@ -1194,6 +1204,7 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
 
         await new Promise(r => setTimeout(r, 200));
       } catch (err) {
+        rethrowResearchProviderControl(err);
         // skip individual place errors
       }
     }
@@ -1207,6 +1218,7 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
     }
     return leads;
   } catch (err) {
+    rethrowResearchProviderControl(err);
     console.error('[Places] Error:', err.response?.data || err.message);
     return [];
   }
@@ -2143,6 +2155,14 @@ function emailRejection(email) {
 }
 
 async function resolveEmailVerification(email, lead) {
+  const tenants = [lead?.client_id, lead?.clientId, lead?.tenantId].filter(value => value != null);
+  return withResearchProviderScope(tenants[0], () => {
+    for (const tenant of tenants) assertResearchProviderAllowed('verification', tenant);
+    return resolveEmailVerificationScoped(email, lead);
+  });
+}
+
+async function resolveEmailVerificationScoped(email, lead) {
   const result = await verifyEmail(email);
   const doNotContact = ['invalid', 'catchall', 'risky'].includes(result.status);
 
@@ -2492,6 +2512,7 @@ async function runLinkedInSourcing({ runId = null } = {}) {
       if (CONFIG.dryRun && outcome.action === 'enriched_existing') persistence.would_be_enrich_existing++;
       if (CONFIG.dryRun) console.log('[LinkedIn dry-run parse]', JSON.stringify({ record, outcome }));
     } catch (err) {
+      rethrowResearchProviderControl(err);
       persistence.errors++;
       outcomes.push({ linkedin_url: record.linkedin_url, action: 'error', error: err.message });
       console.error(`[LinkedIn] Persistence failed for ${record.linkedin_url}: ${err.message}`);
@@ -2884,6 +2905,7 @@ async function saveToDatabase(leads, {
         console.error(`[Setter] Handoff failed for ${companyName}: ${err.message}`);
       }
     } catch (err) {
+      rethrowResearchProviderControl(err);
       incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.DB_ERROR);
       skipped++;
       await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.DB_ERROR, { error: err.message, code: err.code || null, constraint: err.constraint || null }, companyName);
@@ -3342,6 +3364,13 @@ async function resolveScoutTarget({ clientId, industry, location, verticals, ver
 }
 
 async function run(params = {}) {
+  return withResearchProviderScope(params.client_id ?? params.clientId, () => {
+    if (params.client_id != null && params.clientId != null) assertResearchProviderAllowed('research', params.clientId);
+    return runResearchScoped(params);
+  });
+}
+
+async function runResearchScoped(params = {}) {
   const triggerMode = params.cron || params.secret ? TRIGGER_MODES.CRON : TRIGGER_MODES.MANUAL;
   return withPlacesContext(
     {
@@ -3484,6 +3513,7 @@ async function runWithAttribution(params = {}) {
     await reportScoutRun({ runId: observabilityRunId, ...observability });
     return { ...(stats || {}), ...observability };
   } catch (err) {
+    rethrowResearchProviderControl(err);
     await logScoutRun('failed', {
       ...runContext,
       duration_ms: Date.now() - startedAt,
@@ -3531,6 +3561,14 @@ async function configureScoringContext(params = {}) {
 }
 
 async function runEnrichmentChain(domain, jobTitle = 'owner', options = {}) {
+  const tenants = [options.tenantId, options.clientId, options.client_id].filter(value => value != null);
+  return withResearchProviderScope(tenants[0], () => {
+    for (const tenant of tenants) assertResearchProviderAllowed('enrichment', tenant);
+    return runEnrichmentChainScoped(domain, jobTitle, options);
+  });
+}
+
+async function runEnrichmentChainScoped(domain, jobTitle = 'owner', options = {}) {
   const savedTitle = CONFIG.jobTitle;
   CONFIG.jobTitle = jobTitle;
   try {

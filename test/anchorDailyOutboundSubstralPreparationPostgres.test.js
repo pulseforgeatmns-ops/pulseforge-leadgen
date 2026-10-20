@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { Pool } = require('pg');
+const { createTrackedPostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
 const { GovernedOutboundStore } = require('../services/governedOutboundStore');
 
@@ -10,8 +10,8 @@ test('Substral preparation commit locks and lifetime budgets on PostgreSQL', {
   skip: process.env.ANCHOR_OUTBOUND_TEST_POSTGRES !== 'true', timeout: 90000,
 }, async t => {
   const pg = await startDisposablePostgres('substral-prep-');
-  const pool = new Pool({ connectionString: pg.connectionString });
-  t.after(async () => { await pool.end(); await pg.stop(); });
+  const pool = createTrackedPostgresPool({ connectionString: pg.connectionString });
+  t.after(() => closePostgresFixture(pool, pg));
   await pool.query(`
     CREATE TABLE acquisition_outbound_programs(id TEXT PRIMARY KEY, tenant_id TEXT,
       mode TEXT, policy_hash TEXT, scope_hash TEXT);

@@ -75,6 +75,8 @@ describe('MissionBoundWebsiteDiscovery', () => {
     };
     const resolution = await discoverMissionBoundWebsite(candidate, {
       apiKey: 'test-key',
+      placesDeps: { reserveApiCall: async () => 'synthetic', settleApiCall: async () => {},
+        persist: false },
       fetchImpl: async (url) => {
         assert.match(String(url), new RegExp(`place_id=${PLACE_BLUE}`));
         return {
@@ -116,6 +118,8 @@ describe('MissionBoundWebsiteDiscovery', () => {
     };
     const resolution = await discoverMissionBoundWebsite(candidate, {
       apiKey: 'test-key',
+      placesDeps: { reserveApiCall: async () => 'synthetic', settleApiCall: async () => {},
+        persist: false },
       fetchImpl: async () => ({
         ok: true,
         status: 200,
@@ -150,6 +154,8 @@ describe('MissionBoundWebsiteDiscovery', () => {
     };
     const resolution = await discoverMissionBoundWebsite(candidate, {
       apiKey: 'test-key',
+      placesDeps: { reserveApiCall: async () => 'synthetic', settleApiCall: async () => {},
+        persist: false },
       fetchImpl: async () => ({
         ok: true,
         status: 200,
@@ -190,6 +196,8 @@ describe('MissionBoundWebsiteDiscovery', () => {
     const resolution = await discoverMissionBoundWebsite(candidate, {
       crmRow,
       apiKey: 'test-key',
+      placesDeps: { reserveApiCall: async () => 'synthetic', settleApiCall: async () => {},
+        persist: false },
       fetchImpl: async () => ({
         ok: true,
         status: 200,

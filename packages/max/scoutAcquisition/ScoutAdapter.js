@@ -1,5 +1,7 @@
 'use strict';
 
+const { rethrowResearchProviderControl } = require('../../../utils/anchorResearchProviderPause');
+
 /**
  * SPEC-100 — Scout acquisition_intelligence adapter.
  * Intelligence only. Reuses existing company/prospect/evidence records.
@@ -752,6 +754,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       preservedCandidates: opts.preservedCandidates || [],
     });
   } catch (err) {
+    rethrowResearchProviderControl(err);
     const packed = emptyInvestigationResult({
       delegation,
       startedAt,

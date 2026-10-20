@@ -19,19 +19,20 @@ const ENRICHABLE_SCOUT_VERTICALS = Object.freeze([
   'property_manager',
   'str_manager',
   'commercial_office',
-  'dealership',
-  'school',
-  'campus',
-  'manufacturer',
-  'warehouse',
   'realtor',
   ...FOUNDER_LED_SMALL_BUSINESS_VERTICALS,
 ]);
 
+// Facilities are canonical business classifications, not permission to widen a
+// legacy tenant's enrichment queue. They require an explicit mission selection.
+const MISSION_SCOPED_FACILITIES_VERTICALS = Object.freeze([
+  'dealership', 'school', 'campus', 'manufacturer', 'warehouse',
+]);
+
 // Classification support is broader than legacy enrichment defaults. New trades
-// require an explicit mission-scoped enrichment selection.
+// and facilities require an explicit mission-scoped enrichment selection.
 const CANONICAL_ENRICHABLE_SCOUT_VERTICALS = Object.freeze([...new Set([
-  ...ENRICHABLE_SCOUT_VERTICALS, ...SERVICE_TRADE_VERTICALS,
+  ...ENRICHABLE_SCOUT_VERTICALS, ...SERVICE_TRADE_VERTICALS, ...MISSION_SCOPED_FACILITIES_VERTICALS,
 ])]);
 
 const STR_EVIDENCE = [
@@ -129,7 +130,7 @@ const MISSION_VERTICALS = Object.freeze({
   property_management: ['property_manager', 'str_manager'],
   property_manager: ['property_manager', 'str_manager'],
   commercial_office: ['commercial_office'],
-  managed_facilities: ['property_manager', 'commercial_office', 'dealership', 'school', 'campus', 'manufacturer', 'warehouse'],
+  managed_facilities: ['property_manager', 'commercial_office', ...MISSION_SCOPED_FACILITIES_VERTICALS],
   dealership: ['dealership'],
   school: ['school'],
   campus: ['campus'],
@@ -531,6 +532,7 @@ function resolveLegacyReconciliationOutcome(admission = {}) {
 
 module.exports = {
   ENRICHABLE_SCOUT_VERTICALS,
+  MISSION_SCOPED_FACILITIES_VERTICALS,
   CANONICAL_ENRICHABLE_SCOUT_VERTICALS,
   resolveReplenishmentVertical,
   evaluateReplenishmentAdmission,

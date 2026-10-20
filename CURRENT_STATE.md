@@ -1,3 +1,11 @@
+[SPEC-SCOUT-FACILITIES-001](docs/specs/SPEC-SCOUT-FACILITIES-001_Legacy_Enrichment_Boundary.md) is an in-progress local/test PR960 compatibility repair. Canonical managed facilities are separate from legacy enrichment defaults; new Anchor facilities enrichment requires explicit mission scope. No publication, activation or production action is authorized.
+
+[SPEC-SCOUT-SCHEMA-001](docs/specs/SPEC-SCOUT-SCHEMA-001_Promotion_Schema_Lifecycle.md) is an in-progress local-only repair for the inherited promotion schema/advisory lock race. No publication, deployment, production schema action, provider action, or activation is authorized.
+
+[SPEC-265](docs/specs/SPEC-265_Anchor_Research_Provider_Pause.md) is in-progress local-only preparation of a default-off tenant-10 research-provider pause. No publication, deployment or arming authority. See [ADR-107](docs/adr/ADR-107_Explicit_Research_Provider_Pause.md).
+
+[SPEC-264](docs/specs/SPEC-264_Anchor_Crm_One_Shot_Invocation.md) is a separate local-only one-shot operator invocation proposal; not approved for publication or production execution. Frozen SPEC262/263 artifacts remain unchanged.
+
 [SPEC-263](docs/specs/SPEC-263_Anchor_Existing_Crm_Canonical_Preparation.md) is a separate local-only CRM preparation bridge on frozen SPEC262. No current fresh production candidates or activation authority exist.
 
 [SPEC-262](docs/specs/SPEC-262_Anchor_Scoped_Resume.md) is in-progress local-only tenant-10-isolated recovery, superseding the unpublished broad-gate SPEC261 rollout. Non-Anchor flows retain their original paths. Paid research stays closed; no current ready batch has been verified. All real activation/schema/admission/preparation/send approvals remain unset. See the [current operator proposal](docs/anchor-scoped-resume-operator-proposal.md).
@@ -11,6 +19,27 @@
 > Repository architecture snapshot refreshed 2026-09-17. The older sprint and deployment notes below are retained as history, not current production status.
 
 ## Current Repository Architecture
+
+[SPEC-SCOUT-CONT-002](docs/specs/SPEC-SCOUT-CONT-002_Explicit_Legacy_Coverage_Epoch.md)
+is an authorized local, production-wired, default-off epoch-1 implementation for legacy roots
+without continuation tokens. Required local PostgreSQL tests start with 21 legacy roots and prove
+old-ticket preservation, fresh admissions across cycles and no unchanged candidate reprocessing. Exact root scope, expiry and cumulative spending
+require later approval; old checkpoints and tickets are preserved.
+
+[Scout durable candidate integration](docs/engineering/scout-durable-candidate-integration.md)
+is locally production-wired behind the default-off tenant 10/13 flag. Immutable
+per-query membership, independent durable tickets, bounded page continuation and
+structured website outcomes prevent held identities from replaying every query.
+Disposable-PostgreSQL multi-cycle tests cover queue flow and simulated verified
+founder clean inventory. This is not deployed or live-yield validated; additive
+migrations and activation still need separate approval.
+
+[SPEC-SCOUT-CONT-001](docs/specs/SPEC-SCOUT-CONT-001_Bounded_Query_Page_Continuation.md)
+is an authorized local/test, default-off query-page continuation proposal. It
+preserves finite provider and per-cycle budgets and requires durable candidate
+responsibility transfer before progression. Legacy checkpoints without tokens
+cannot be resumed or reset implicitly. Publication, migration, activation and
+live inventory validation remain separately gated.
 
 [SPEC-SCOUT-OWNER-001](docs/specs/SPEC-SCOUT-OWNER-001_Observed_Website_Owner_Evidence.md)
 has an authorized local/test repair for explicit owner evidence on already-fetched

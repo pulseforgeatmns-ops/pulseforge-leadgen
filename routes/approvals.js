@@ -4,6 +4,7 @@ const { requireAuth, requireRole } = require('../middleware/auth');
 const { getRequestClientId } = require('../utils/clientContext');
 
 const managerAccess = [requireAuth, requireRole('admin', 'manager')];
+router.use(require('./contentReview'));
 
 router.get('/approvals', ...managerAccess, (req, res) => {
   res.send(`<!DOCTYPE html>

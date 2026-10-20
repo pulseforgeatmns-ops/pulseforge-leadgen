@@ -29,6 +29,9 @@ const pool     = require('./db');
 const { createObjectCsvWriter } = require('csv-writer');
 const { bcrypt, getUserCount, initAuth, requireAuth, requireRole } = require('./middleware/auth');
 const { ensureClientArchitecture } = require('./utils/clientContext');
+const { resolveCieClientId } = require('./utils/cieAuth');
+const { armed, withResearchProviderScope, assertResearchProviderAllowed,
+  rethrowResearchProviderControl } = require('./utils/anchorResearchProviderPause');
 const { enforceMiraClientState } = require('./utils/miraClientState');
 const { ensureCloserSchema } = require('./utils/closerSchema');
 const { ensureScoutExpansionTables } = require('./scoutExpansion');
@@ -475,14 +478,14 @@ app.post('/login', async (req, res) => {
     if (user.role === 'sales') return res.redirect('/sales');
     if (user.role === 'ao') return res.redirect('/ao');
     if (user.role === 'cleaner' || user.role === 'facility_client') return res.redirect('/portal/anchor');
-    return res.redirect('/dashboard');
+    return res.redirect('/command-deck');
   }
 
   if (password === process.env.DASHBOARD_PASSWORD) {
     req.session.user = { id: null, name: 'Legacy Admin', email: email || 'legacy@pulseforge.local', role: 'admin' };
     req.session.authenticated = true;
     req.session.active_client_id = 1;
-    return res.redirect('/dashboard');
+    return res.redirect('/command-deck');
   }
 
   res.redirect('/login?error=1');
@@ -517,56 +520,66 @@ app.get('/api/search', requireAuth, requireRole('admin', 'manager'), async (req,
   const log = (level, msg) => send('log', { level, msg });
 
   try {
-    log('info', `Starting search: "${industry}" in ${location}`);
+    const actor = req.user || req.session?.user;
+    const selectedTenant = actor?.client_id != null && String(actor.client_id).trim() !== ''
+      ? actor.client_id : req.session?.active_client_id;
+    // Keep raw identity as well as resolver validation: legacy ID normalization
+    // accepts malformed strings, which are not valid research authority.
+    const tenants = [selectedTenant, ...[req.query.client_id, req.query.clientId]
+      .filter(value => value != null)];
+    const run = tenants.reduceRight((next, tenant) => () => withResearchProviderScope(tenant, next), async () => {
+      if (armed()) resolveCieClientId(req, req.query.client_id ?? req.query.clientId);
+      log('info', `Starting search: "${industry}" in ${location}`);
 
-    log('info', 'Querying SerpAPI...');
-    let leads = await searchSerpAPI(`"${industry}" business "${location}" "${title}"`, parseInt(max), log);
-    log('ok', `Found ${leads.length} raw results`);
+      log('info', 'Querying SerpAPI...');
+      let leads = await searchSerpAPI(`"${industry}" business "${location}" "${title}"`, parseInt(max), log);
+      log('ok', `Found ${leads.length} raw results`);
 
-    leads = leads.filter(l => !SKIP_DOMAINS.some(s => l.url.includes(s)));
-    log('ok', `${leads.length} results after filtering directories/social`);
+      leads = leads.filter(l => !SKIP_DOMAINS.some(s => l.url.includes(s)));
+      log('ok', `${leads.length} results after filtering directories/social`);
 
-    leads = deduplicate(leads);
-    log('ok', `${leads.length} unique domains`);
+      leads = deduplicate(leads);
+      log('ok', `${leads.length} unique domains`);
 
-    send('progress', { pct: 30, label: 'Enriching with Hunter...' });
+      send('progress', { pct: 30, label: 'Enriching with Hunter...' });
 
-    for (let i = 0; i < leads.length; i++) {
-      const lead = leads[i];
-      log('info', `[${i+1}/${leads.length}] Enriching ${lead.url}...`);
-      const enriched = await enrichWithHunter(lead.url, title);
-      if (enriched) {
-        Object.assign(lead, enriched);
-        lead.source = [...(lead.source || []), 'hunter'];
-        log('ok', `✓ ${lead.url} → ${enriched.email}`);
+      for (let i = 0; i < leads.length; i++) {
+        const lead = leads[i];
+        log('info', `[${i+1}/${leads.length}] Enriching ${lead.url}...`);
+        const enriched = await enrichWithHunter(lead.url, title);
+        if (enriched) {
+          Object.assign(lead, enriched);
+          lead.source = [...(lead.source || []), 'hunter'];
+          log('ok', `✓ ${lead.url} → ${enriched.email}`);
+        }
+        send('progress', { pct: 30 + Math.round((i+1)/leads.length * 50), label: `Enriching ${i+1}/${leads.length}...` });
+        await delay(1200);
       }
-      send('progress', { pct: 30 + Math.round((i+1)/leads.length * 50), label: `Enriching ${i+1}/${leads.length}...` });
-      await delay(1200);
-    }
 
-    send('progress', { pct: 85, label: 'Scoring & deduplicating...' });
+      send('progress', { pct: 85, label: 'Scoring & deduplicating...' });
 
-    leads = leads.map(l => ({
-      id:      Math.random().toString(36).slice(2,8),
-      company: l.company || 'Unknown',
-      url:     l.url || '',
-      contact: l.contact || '—',
-      email:   l.email || '—',
-      title:   l.title || '—',
-      type:    detectType(l),
-      source:  l.source || ['google'],
-      score:   scoreLead(l),
-    }));
+      leads = leads.map(l => ({
+        id:      Math.random().toString(36).slice(2,8),
+        company: l.company || 'Unknown',
+        url:     l.url || '',
+        contact: l.contact || '—',
+        email:   l.email || '—',
+        title:   l.title || '—',
+        type:    detectType(l),
+        source:  l.source || ['google'],
+        score:   scoreLead(l),
+      }));
 
-    const before = leads.length;
-    leads = leads.filter(l => l.score >= parseInt(minscore));
-    leads.sort((a, b) => b.score - a.score);
+      const before = leads.length;
+      leads = leads.filter(l => l.score >= parseInt(minscore));
+      leads.sort((a, b) => b.score - a.score);
 
-    send('progress', { pct: 100, label: 'Done' });
-    log('ok', `Complete — ${leads.length} leads loaded, ${before - leads.length} filtered below ${minscore}% threshold`);
+      send('progress', { pct: 100, label: 'Done' });
+      log('ok', `Complete — ${leads.length} leads loaded, ${before - leads.length} filtered below ${minscore}% threshold`);
 
-    send('results', { leads });
-
+      send('results', { leads });
+    });
+    await run();
   } catch (err) {
     log('err', `Fatal error: ${err.message}`);
   }
@@ -838,6 +851,7 @@ async function searchSerpAPI(query, numResults, log) {
 
   for (let page = 0; page < pages; page++) {
     try {
+      assertResearchProviderAllowed('serpapi');
       const res = await axios.get('https://serpapi.com/search', {
         params: { api_key: SERPAPI_KEY, q: query, num: 10, start: page * 10, engine: 'google' }
       });
@@ -851,6 +865,7 @@ async function searchSerpAPI(query, numResults, log) {
         });
       }
     } catch (err) {
+      rethrowResearchProviderControl(err);
       log('err', `SerpAPI error: ${err.response?.data?.error || err.message}`);
       break;
     }
@@ -864,6 +879,7 @@ async function enrichWithHunter(domain, titleFilter) {
   if (!HUNTER_KEY) return null;
 
   try {
+    assertResearchProviderAllowed('hunter');
     const res = await axios.get('https://api.hunter.io/v2/domain-search', {
       params: { domain, api_key: HUNTER_KEY, limit: 5, type: 'personal' }
     });
@@ -880,6 +896,7 @@ async function enrichWithHunter(domain, titleFilter) {
       title:   match.position || null,
     };
   } catch (err) {
+    rethrowResearchProviderControl(err);
     return null;
   }
 }

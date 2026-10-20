@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const {
   parseArgs,
   isNonCanonicalVertical,
+  loadLegacyRows,
   parseDiscoveryFromNotes,
   rowToCandidate,
   planLegacyReconciliation,
@@ -48,9 +49,25 @@ test('parseArgs defaults to dry-run and requires confirm-production for apply', 
 });
 
 test('isNonCanonicalVertical flags legacy query slugs and accepts canonical values', () => {
-  assert.equal(isNonCanonicalVertical('short_term_rental_management_manchester_nh'), true);
-  assert.equal(isNonCanonicalVertical('str_manager'), false);
-  assert.equal(isNonCanonicalVertical('property_manager'), false);
+  for (const vertical of [null, '', 'unsupported', 'short_term_rental_management_manchester_nh']) {
+    assert.equal(isNonCanonicalVertical(vertical), true, String(vertical));
+  }
+  for (const vertical of ['str_manager', 'property_manager', 'plumbing', 'heating', 'hvac',
+    'dealership', 'school', 'campus', 'manufacturer', 'warehouse']) {
+    assert.equal(isNonCanonicalVertical(vertical), false, vertical);
+  }
+});
+
+test('legacy reconciliation scan excludes canonical categories even when not legacy enrichment defaults', async () => {
+  const canonical = ['plumbing', 'heating', 'dealership', 'school', 'campus', 'manufacturer', 'warehouse'];
+  const rows = canonical.map((vertical, i) => legacyRow({ id: `canonical-${i}`, vertical }));
+  rows.push(legacyRow({ id: 'legacy-slug' }), legacyRow({ id: 'legacy-null', vertical: null }));
+  const selected = await loadLegacyRows({ query: async (sql, params) => {
+    assert.match(sql, /client_id = \$1/);
+    assert.deepEqual(params, [10, 'max_buffer_replenishment']);
+    return { rows };
+  } });
+  assert.deepEqual(selected.map(row => row.id), ['legacy-slug', 'legacy-null']);
 });
 
 test('planLegacyReconciliation canonicalizes valid legacy rows and removes contradictory rows', () => {

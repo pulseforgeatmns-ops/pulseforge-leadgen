@@ -18,9 +18,9 @@ function setEnv(t, values) {
 }
 function scopedFixture(t) {
   const f = scopedResumeFixture();
-  // Adapter entrypoints use the real clock. Keep these synthetic grants valid
-  // independently of the day on which the repository suite is run.
-  f.now = new Date();
+  // Bind adapter entrypoints to the fixture's valid weekday/business-hour clock.
+  // Keep the real policy window and expiry validation active.
+  t.mock.timers.enable({ apis: ['Date'], now: +f.now });
   f.program.policy.startsAt = new Date(+f.now - 2 * 3600000).toISOString();
   f.program.policy.expiresAt = new Date(+f.now + 2 * 3600000).toISOString();
   f.program.policy_hash = hash(f.program.policy);
@@ -36,6 +36,16 @@ function preparation(f, operations = ['reuse_existing_artifacts', 'refill']) {
   f.manifest.scopes.preparation = { enabled: true, approvalReference: 'local-preparation-only',
     dailyCap: 3, totalCap: 6, dailyItemCap: 3, totalItemCap: 6, operations };
 }
+
+test('preparation gate uses the same supplied clock and activation environment at both checks', async () => {
+  const f = scopedResumeFixture(); preparation(f, ['reuse_existing_artifacts']);
+  const { assertLegacyPreparation } = require('../services/anchorEmailRecoveryIntegration');
+  const input = { tenantId: '10', program: f.program, operation: 'reuse_existing_artifacts' };
+  const grant = await assertLegacyPreparation(f.db, input, { now: f.now, env: f.env });
+  assert.equal(grant.resumeGrant.id, f.manifest.id);
+  await assert.rejects(assertLegacyPreparation(f.db, input, { now: new Date(Date.parse(f.manifest.expiresAt) + 1), env: f.env }),
+    { code: 'anchor_recovery_separate_preparation_approval_required' });
+});
 function baseMax(tenantId = '13') {
   const inventory = { clean: [], excluded: [], scope: {}, exclusionCounts: {} };
   return { pool: noDatabase, tenantId, logger: quiet, now: new Date('2026-10-19T16:00:00Z'),
