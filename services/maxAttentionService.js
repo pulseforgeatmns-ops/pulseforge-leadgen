@@ -102,8 +102,8 @@ async function afterDecisionAttention(clientId, decisionResult, { db = pool, now
 }
 
 async function listOperatorAttention(clientId, { db = pool, limit = 10 } = {}) {
+  // A read endpoint must never migrate/seed production. Missing schema fails closed.
   const attentionStore = new PostgresAttentionStore(db, { clientId });
-  await attentionStore.init();
   const items = await attentionStore.listUnresolved({ clientId });
   return operatorVisibleItems(items, { limit });
 }

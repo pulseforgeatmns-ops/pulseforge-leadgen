@@ -1,6 +1,7 @@
 'use strict';
 
 const { ATTENTION_STATUS, REVIEW_TRIGGER } = require('./types');
+const { isManualReviewOnlyAttention } = require('./manualReviewOnly');
 
 async function wakeAttentionForSubject({
   attentionStore,
@@ -14,6 +15,7 @@ async function wakeAttentionForSubject({
   const items = await attentionStore.listUnresolved({ clientId, subjectType, subjectId });
   const woken = [];
   for (const item of items) {
+    if (isManualReviewOnlyAttention(item)) continue;
     const updated = await attentionStore.updateAttention(item.id, {
       status: item.status === ATTENTION_STATUS.WAITING ? ATTENTION_STATUS.ACTIVE : item.status,
       next_review_at: now.toISOString(),
@@ -54,6 +56,7 @@ async function wakeAttentionForIngestion({
   });
   const woken = [];
   for (const item of related) {
+    if (isManualReviewOnlyAttention(item)) continue;
     const updated = await attentionStore.updateAttention(item.id, {
       status: item.status === ATTENTION_STATUS.WAITING ? ATTENTION_STATUS.ACTIVE : item.status,
       next_review_at: now.toISOString(),
