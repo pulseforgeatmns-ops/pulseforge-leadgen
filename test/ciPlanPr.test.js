@@ -326,3 +326,16 @@ describe('promotion schema lifecycle CI coverage', () => {
     assert.match(require('../package.json').scripts['test:anchor-outbound'], /test\/anchorDailyOutbound\*\.test\.js/);
   });
 });
+
+describe('renewable Scout coverage grants CI coverage', () => {
+  it('selects the native Scout domain for every new grant boundary', () => {
+    for (const file of ['services/scoutCoverageGrant.js', 'services/scoutCoverageGrantStore.js',
+      'migrations/2026-10-20-scout-coverage-grants.sql', 'test/scoutCoverageGrant.test.js',
+      'test/scoutCoverageGrantPostgres.test.js']) {
+      assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
+    }
+    const fs = require('node:fs');
+    const workflow = fs.readFileSync(require('node:path').join(__dirname, '../.github/workflows/pr-ci-lean.yml'), 'utf8');
+    assert.match(workflow, /test\/scoutCoverageGrant\.test\.js test\/scoutCoverageGrantPostgres\.test\.js/);
+  });
+});

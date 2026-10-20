@@ -67,7 +67,7 @@ test('explicit legacy epoch sustains new same-mission admissions and preserves o
   t.after(async () => { for (const name of envNames) old[name] == null ? delete process.env[name] : process.env[name] = old[name];
     await closePostgresFixture(db, instance); });
   for (const file of ['2026-10-17-scout-query-checkpoints.sql', '2026-10-19-scout-query-pages.sql',
-    '2026-10-19-scout-candidate-tickets.sql', '2026-10-19-scout-query-coverage-epochs.sql']) {
+    '2026-10-19-scout-candidate-tickets.sql', '2026-10-19-scout-query-coverage-epochs.sql', '2026-10-20-scout-coverage-grants.sql']) {
     await db.query(fs.readFileSync(path.join(__dirname, '../migrations', file), 'utf8'));
   }
   await db.query(`CREATE TABLE scout_unenriched(id serial PRIMARY KEY,client_id int,company text,website_url text,domain text,
@@ -164,6 +164,34 @@ test('explicit legacy epoch sustains new same-mission admissions and preserves o
     process.env.SCOUT_LEGACY_COVERAGE_EPOCH_ENABLED = 'true'; process.env.SCOUT_LEGACY_COVERAGE_EPOCH_JSON = '{invalid';
     const drained = await run(); assert.equal(drained.discoveredQueued, 1); assert.equal(calls.length - before, 21);
     assert.equal(drained.discovery.reason, 'coverage_epoch_config_invalid'); assert.equal(drained.candidateWork.total, 21);
+  });
+  await t.test('v2 one-page grants renew actual Scout admissions without resetting page or candidate history', async () => {
+    fingerprint = hash('synthetic-renewable-grant-mission'); prefix = 'third'; failTransfer = false;
+    for (const key of roots) await stage(key, [], 'handled');
+    const grant = reference => {
+      process.env.SCOUT_LEGACY_COVERAGE_EPOCH_ENABLED = 'true';
+      process.env.SCOUT_LEGACY_COVERAGE_EPOCH_JSON = JSON.stringify({ version: 2, epoch: 1,
+        approvalRef: reference, tenantId: '13', fingerprint, rootQueryKeys: [root], maxNewPages: 1,
+        notBefore: new Date(now - 1000).toISOString(), expiresAt: new Date(now + 10000).toISOString() });
+    };
+    const before = calls.length;
+    grant('synthetic-first-page');
+    assert.equal((await run()).discoveredQueued, 20); assert.equal(calls.length - before, 21);
+    assert.equal((await run()).discoveredQueued, 0); assert.equal(calls.length - before, 21);
+    grant('synthetic-second-page');
+    assert.equal((await run()).discoveredQueued, 20); assert.equal(calls.length - before, 42);
+    assert.equal((await run()).discoveredQueued, 0); assert.equal(calls.length - before, 42);
+    grant('synthetic-third-page'); failTransfer = true;
+    await run(); assert.equal(calls.length - before, 63);
+    delete process.env.SCOUT_LEGACY_COVERAGE_EPOCH_ENABLED; delete process.env.SCOUT_LEGACY_COVERAGE_EPOCH_JSON;
+    failTransfer = false;
+    assert.equal((await run()).discoveredQueued, 20); assert.equal(calls.length - before, 63);
+    grant('synthetic-cannot-reset');
+    assert.equal((await run()).discoveredQueued, 0); assert.equal(calls.length - before, 63);
+    const pages = (await db.query('SELECT page_index FROM scout_query_pages WHERE search_fingerprint=$1 ORDER BY page_index', [fingerprint])).rows;
+    assert.deepEqual(pages.map(row => row.page_index), [0,1,2]);
+    assert.equal((await db.query('SELECT count(*)::int AS count FROM scout_query_coverage_grant_pages WHERE search_fingerprint=$1', [fingerprint])).rows[0].count, 3);
+    assert.equal((await db.query('SELECT count(*)::int AS count FROM scout_candidate_work WHERE search_fingerprint=$1', [fingerprint])).rows[0].count, 60);
   });
   assert.ok(!JSON.stringify({ logs, events }).includes('private-token'));
   assert.equal(db.waitingCount, 0); assert.equal(db.idleCount, db.totalCount);

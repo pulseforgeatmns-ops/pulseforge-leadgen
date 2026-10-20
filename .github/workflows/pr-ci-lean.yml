@@ -165,7 +165,7 @@ jobs:
           DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
           DATABASE_SSL: 'false'
           SCOUT_CHECKPOINT_REQUIRE_POSTGRES: 'true'
-        run: node --test test/scoutQueryCheckpoints.test.js test/scoutQueryCheckpointRamp.test.js test/scoutQueryCheckpointsPostgres.test.js test/scoutQueryContinuation.test.js test/scoutQueryContinuationPostgres.test.js test/scoutCoverageEpoch.test.js test/scoutCoverageEpochPostgres.test.js test/scoutCoverageEpochRamp.test.js
+        run: node --test test/scoutQueryCheckpoints.test.js test/scoutQueryCheckpointRamp.test.js test/scoutQueryCheckpointsPostgres.test.js test/scoutQueryContinuation.test.js test/scoutQueryContinuationPostgres.test.js test/scoutCoverageEpoch.test.js test/scoutCoverageEpochPostgres.test.js test/scoutCoverageEpochRamp.test.js test/scoutCoverageGrant.test.js test/scoutCoverageGrantPostgres.test.js
       - name: Scout durable candidate protocol (network denied)
         run: node --require ./test/helpers/denyWebsiteEvidenceNetwork.cjs --test test/scoutCandidateTickets.test.js test/scoutCandidateTicketDispatch.test.js
       - name: Scout durable candidate and complete pipeline required PostgreSQL contracts (synthetic providers)

@@ -48,6 +48,7 @@ function validateCoverageEpochConfigInner(value, { tenantId, fingerprint } = {})
   validated.add(result); return result;
 }
 function validateCoverageEpochConfig(value, scope) {
+  if (value?.version === 2) return require('./scoutCoverageGrant').validateCoverageGrantConfig(value, scope);
   try { return validateCoverageEpochConfigInner(value, scope); }
   catch (error) { throw configError(error.message); }
 }
