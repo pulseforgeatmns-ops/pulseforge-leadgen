@@ -124,7 +124,8 @@ function normalizeOutcome(outcome) {
 }
 
 function createCandidateTicketStore({ pool, tenantId, fingerprint, planVersion = PLAN_VERSION,
-  ticketVersion = TICKET_VERSION }) {
+  ticketVersion = TICKET_VERSION, lockTimeoutMs = 5000 }) {
+  if (![2000,5000].includes(lockTimeoutMs)) throw fail('Invalid ticket lock timeout', 'invalid_input');
   if (!pool || typeof pool.query !== 'function' || typeof pool.connect !== 'function') {
     throw fail('Scout candidate tickets require a PostgreSQL pool', 'invalid_input');
   }
@@ -164,7 +165,7 @@ function createCandidateTicketStore({ pool, tenantId, fingerprint, planVersion =
     db.on?.('error', onConnectionError);
     try {
       await db.query('BEGIN'); begun = true;
-      await db.query("SET LOCAL lock_timeout = '5s'");
+      await db.query(lockTimeoutMs === 2000 ? "SET LOCAL lock_timeout = '2s'" : "SET LOCAL lock_timeout = '5s'");
       await db.query("SET LOCAL statement_timeout = '30s'");
       const result = await fn(db);
       if (connectionError) throw connectionError;
@@ -236,19 +237,29 @@ function createCandidateTicketStore({ pool, tenantId, fingerprint, planVersion =
     }
     return rows;
   }
-  async function claimDue({ dependencyKey, limit = MAX_CLAIM } = {}) {
+  async function claimDue({ dependencyKey, limit = MAX_CLAIM, exclusiveQueryKey = null } = {}) {
+    if (exclusiveQueryKey != null && !HEX.test(exclusiveQueryKey)) throw fail('Invalid exclusive query key', 'invalid_input');
     text(dependencyKey, 'dependency key', 1024);
     if (!Number.isInteger(limit) || limit < 1 || limit > MAX_CLAIM) throw fail('Invalid Scout ticket claim limit', 'invalid_input');
     return transaction(async db => {
-      const due = await db.query(`SELECT candidate_key FROM scout_candidate_work
+      const due = await db.query(`SELECT candidate_key FROM scout_candidate_work w
         WHERE ${SCOPE_SQL} AND (claim_token IS NULL OR lease_until <= clock_timestamp())
           AND (next_attempt_at IS NULL OR next_attempt_at <= clock_timestamp())
           AND (state IN ('pending','deferred') OR (state='blocked' AND dependency_key IS DISTINCT FROM $5))
+          ${exclusiveQueryKey == null ? '' : `AND EXISTS (SELECT 1 FROM scout_candidate_memberships m WHERE m.tenant_id=w.tenant_id AND m.search_fingerprint=w.search_fingerprint AND m.plan_version=w.plan_version AND m.ticket_version=w.ticket_version AND m.candidate_key=w.candidate_key AND m.query_key=$7)
+          AND NOT EXISTS (SELECT 1 FROM scout_candidate_memberships m WHERE m.tenant_id=w.tenant_id AND m.search_fingerprint=w.search_fingerprint AND m.plan_version=w.plan_version AND m.ticket_version=w.ticket_version AND m.candidate_key=w.candidate_key AND m.query_key<>$7)`}
         ORDER BY next_attempt_at NULLS FIRST,created_at,candidate_key
-        LIMIT $6 FOR UPDATE SKIP LOCKED`, [...scope, dependencyKey, limit]);
+        LIMIT $6 FOR UPDATE SKIP LOCKED`, [...scope, dependencyKey, limit, ...(exclusiveQueryKey == null ? [] : [exclusiveQueryKey])]);
       if (!due.rows.length) return [];
       const claims = [];
       for (const { candidate_key: key } of due.rows) {
+        // Recheck at a fresh READ COMMITTED snapshot after acquiring the work
+        // row lock. transferQuery takes that same lock before adding members.
+        if (exclusiveQueryKey != null) {
+          const mixed = await db.query(`SELECT 1 FROM scout_candidate_memberships WHERE ${SCOPE_SQL}
+            AND candidate_key=$5 AND query_key<>$6 LIMIT 1`, [...scope,key,exclusiveQueryKey]);
+          if (mixed.rows.length) continue;
+        }
         const result = await db.query(`UPDATE scout_candidate_work SET claim_token=$6::uuid,
           lease_until=clock_timestamp()+($7::bigint * interval '1 millisecond'),claim_revision=membership_revision,
           next_attempt_at=clock_timestamp()+($8::bigint * interval '1 millisecond'),state='pending',

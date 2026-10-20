@@ -145,6 +145,7 @@ async function recordCall(recordBase, result, params, deps, started, cacheMeta =
     );
   } catch (err) {
     rethrowResearchProviderControl(err);
+    if (deps.strictAttribution === true) throw Object.assign(Error('places_attribution_unconfirmed'), { code:'places_attribution_unconfirmed' });
     console.warn('[placesApi] attribution record failed:', err.message);
   }
 }

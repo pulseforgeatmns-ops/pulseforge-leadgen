@@ -678,17 +678,33 @@ async function handleMaxAttentionCycleCron(req, res) {
   }
   res.set('Cache-Control', 'no-store');
   try {
-    const { runAttentionSchedulerAllClients } = require('../services/maxAttentionService');
-    const clientId = normalizeClientId(req.query.client_id || req.query.clientId);
-    const now = req.query.now || req.body?.now ? new Date(req.query.now || req.body.now) : new Date();
-    if (clientId != null) {
-      const { runAttentionScheduler } = require('../services/maxAttentionService');
-      const result = maxAttentionCronResult(await runAttentionScheduler(clientId, { now }));
-      return res.status(result.ok ? 200 : 500).json({ client_id: clientId, ...result });
+    // Attention cycles can create durable decisions/tasks. Never infer tenant 1
+    // or broaden an omitted/malformed selector into all-client execution.
+    const selectors = [req.query.client_id, req.query.clientId, req.body?.client_id, req.body?.clientId]
+      .filter(value => value !== undefined);
+    const tenantIds = selectors.map(value => {
+      if (!['string', 'number'].includes(typeof value) || !/^[1-9][0-9]*$/.test(String(value))) return null;
+      const id = Number(value);
+      return Number.isSafeInteger(id) ? id : null;
+    });
+    if (!tenantIds.length || tenantIds.some(id => id === null) || new Set(tenantIds).size !== 1) {
+      return res.status(400).json({ ok: false, error: 'max_attention_explicit_tenant_required' });
     }
-    const results = (await runAttentionSchedulerAllClients({ now })).map(maxAttentionCronResult);
-    const ok = results.every(result => result.ok);
-    return res.status(ok ? 200 : 500).json({ ok, results });
+    const clientId = tenantIds[0];
+    const limits = [req.query.limit, req.body?.limit].filter(value => value !== undefined);
+    const parsedLimits = limits.map(value => {
+      if (!['string', 'number'].includes(typeof value) || !/^[1-9][0-9]*$/.test(String(value))) return null;
+      const limit = Number(value);
+      return Number.isInteger(limit) && limit <= 20 ? limit : null;
+    });
+    if (parsedLimits.some(limit => limit === null) || new Set(parsedLimits).size > 1) {
+      return res.status(400).json({ ok: false, error: 'max_attention_invalid_limit' });
+    }
+    const limit = parsedLimits[0] ?? 20;
+    const now = req.query.now || req.body?.now ? new Date(req.query.now || req.body.now) : new Date();
+    const { runAttentionScheduler } = require('../services/maxAttentionService');
+    const result = maxAttentionCronResult(await runAttentionScheduler(clientId, { now, limit }));
+    return res.status(result.ok ? 200 : 500).json({ client_id: clientId, ...result });
   } catch (err) {
     console.error('[cron] max-attention-cycle failed');
     return res.status(500).json({ ok: false, error: 'max_attention_cycle_failed' });

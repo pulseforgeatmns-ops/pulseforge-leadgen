@@ -5,23 +5,19 @@ const { ensureEmailVerificationColumns } = require('./utils/emailVerificationSch
 const { promoteRecord } = require('./scripts/promoteUnenriched');
 const { ENRICHABLE_SCOUT_VERTICALS } = require('./utils/replenishmentVertical');
 
-const { buildEnrichmentEligibilitySql, DAILY_RETRY_AFTER_ATTEMPT, LONG_HOLD_AFTER_ATTEMPT } = require('./utils/scoutEnrichmentEligibility');
+const { buildEnrichmentEligibilitySql, LONG_HOLD_AFTER_ATTEMPT } = require('./utils/scoutEnrichmentEligibility');
 
 const AGENT_NAME = 'scout_unenriched_enrichment';
 const ANCHOR_CLIENT_ID = 10;
 const DEFAULT_LIMIT = 5;
 const DEFAULT_RETRY_HOURS = 7 * 24;
 const DEFAULT_MAX_ATTEMPTS = LONG_HOLD_AFTER_ATTEMPT;
-const DAILY_RETRY_HOURS = 24;
-const LONG_HOLD_RETRY_HOURS = 7 * 24;
 const SCHEDULED_HOUR_ET = 17;
 const ANCHOR_PRIORITY_VERTICALS = ENRICHABLE_SCOUT_VERTICALS;
 
 const ENRICHMENT_ELIGIBILITY_SQL = buildEnrichmentEligibilitySql({
   unrestrictedVerticals: true,
   maxAttempts: '$2', retryInterval: "($3::numeric * INTERVAL '1 hour')",
-  dailyInterval: "($6::numeric * INTERVAL '1 hour')",
-  longInterval: "($7::numeric * INTERVAL '1 hour')",
 });
 
 function easternParts(now = new Date()) {
@@ -82,8 +78,7 @@ async function runScoped(params = {}) {
       AND (${ENRICHMENT_ELIGIBILITY_SQL}) = 'eligible_now'
     ORDER BY last_attempt_at ASC, id ASC
     LIMIT $4
-  `, [clientId, maxAttempts, retryHours, limit, verticals,
-    DAILY_RETRY_HOURS, LONG_HOLD_RETRY_HOURS]);
+  `, [clientId, maxAttempts, retryHours, limit, verticals]);
 
   const summary = {
     client_id: clientId,
@@ -97,10 +92,6 @@ async function runScoped(params = {}) {
     outcomes: [],
     limit,
     retry_hours: retryHours,
-    daily_retry_after_attempt: DAILY_RETRY_AFTER_ATTEMPT,
-    daily_retry_hours: DAILY_RETRY_HOURS,
-    long_hold_after_attempt: maxAttempts,
-    long_hold_retry_hours: LONG_HOLD_RETRY_HOURS,
     verticals,
   };
   const promotionIds = [];
@@ -172,7 +163,7 @@ module.exports = {
   run,
   startAnchorUnenrichedEnrichmentScheduler,
   _test: { ENRICHMENT_ELIGIBILITY_SQL, easternParts, scheduledWindowOpen, ANCHOR_PRIORITY_VERTICALS,
-    DEFAULT_MAX_ATTEMPTS, DAILY_RETRY_AFTER_ATTEMPT, DAILY_RETRY_HOURS, LONG_HOLD_RETRY_HOURS },
+    DEFAULT_MAX_ATTEMPTS },
 };
 
 if (require.main === module) {

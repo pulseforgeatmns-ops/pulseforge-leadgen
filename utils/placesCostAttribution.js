@@ -424,8 +424,8 @@ async function recordPlacesRequest(record = {}, deps = {}) {
 
   if (!persist) return row;
 
-  await ensurePlacesAttributionSchema(db);
-  await db.query(
+  if (deps.existingSchemaOnly !== true) await ensurePlacesAttributionSchema(db);
+  const inserted = await db.query(
     `
       INSERT INTO places_api_requests (
         caller, feature, mission_id, mission_stage, tenant_id, execution_id, operator_id,
@@ -481,6 +481,7 @@ async function recordPlacesRequest(record = {}, deps = {}) {
     ]
   );
 
+  if (deps.existingSchemaOnly === true && inserted.rowCount !== 1) throw Error('places_attribution_unconfirmed');
   return row;
 }
 

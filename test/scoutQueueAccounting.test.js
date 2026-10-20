@@ -11,17 +11,16 @@ const row = (attempts, age) => ({ vertical: 'painting', enrichment_attempts: att
 test('database evaluates exact selector boundaries without JavaScript timestamp conversion', () => {
   assert.match(ELIGIBILITY_SQL, /u.vertical = ANY\(\$5::text\[\]\)/);
   assert.match(ELIGIBILITY_SQL, /COALESCE\(u.enrichment_attempts, 0\) < 3/);
-  assert.match(ELIGIBILITY_SQL, /COALESCE\(u.enrichment_attempts, 0\) < 6/);
-  assert.match(ELIGIBILITY_SQL, /INTERVAL '24 hours'/);
+  assert.doesNotMatch(ELIGIBILITY_SQL, /INTERVAL '24 hours'/);
   assert.match(ELIGIBILITY_SQL, /INTERVAL '7 days'/);
   assert.match(ELIGIBILITY_SQL, /COALESCE\(u.last_attempt_at, NOW\(\) - INTERVAL '100 years'\)/);
   assert.match(ELIGIBILITY_SQL, /INTERVAL '1 hour'/);
-  assert.equal((ELIGIBILITY_SQL.match(/IS NOT TRUE/g) || []).length, 4);
+  assert.equal((ELIGIBILITY_SQL.match(/IS NOT TRUE/g) || []).length, 3);
 });
 
 test('UUID/multirow duplicates count distinct matched rows, not candidate hits or full stock', () => {
   const a = createQueueAccounting();
-  const one = { ...row(6, null), id: 'a1b2c3d4-1111-4222-8333-123456789abc', client_id: 13, eligibility_bucket: 'attempt_limit_hold' };
+  const one = { ...row(3, null), id: 'a1b2c3d4-1111-4222-8333-123456789abc', client_id: 13, eligibility_bucket: 'attempt_limit_hold' };
   const two = { ...row(2, HOUR), id: 'b2c3d4e5-2222-4333-8444-23456789abcd', client_id: 13, eligibility_bucket: 'eligible_now' };
   const options = { tenantId: '13', verticals: ['painting'] };
   a.observe([one, two, { ...two, id: 'other-tenant', client_id: 10 }], options);
@@ -55,7 +54,7 @@ test('real admission preserves fit and net-new while rediscovery reports duplica
     assert.ok(params[4].includes('painting'));
     assert.match(sql, /COALESCE\(u.enrichment_attempts, 0\) = 0/);
     assert.equal(params[0], 13);
-    return { rows: [{ ...row(6, null), id: 'a1b2c3d4-1111-4222-8333-123456789abc', client_id: 13, eligibility_bucket: 'attempt_limit_hold' }] };
+    return { rows: [{ ...row(3, null), id: 'a1b2c3d4-1111-4222-8333-123456789abc', client_id: 13, eligibility_bucket: 'attempt_limit_hold' }] };
   } };
   const company = { name: 'Fixture Painting', website: 'https://fixture.example', placeTypes: ['painter'],
     description: 'Founder-owned painting contractor', location: 'Denver, Colorado' };

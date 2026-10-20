@@ -138,16 +138,16 @@ test('real PostgreSQL governed ramp: sustained independent candidate flow, bound
   });
   await t.test('existing queue attempt and retry clocks are preserved and independently reconsiderable', async () => {
     await db.query(`INSERT INTO scout_unenriched(client_id,company,website_url,domain,vertical,source,enrichment_attempts,last_attempt_at)
-      VALUES(13,'Known Hold','https://knownhold.example','knownhold.example','painting','fixture',6,now());`);
+      VALUES(13,'Known Hold','https://knownhold.example','knownhold.example','painting','fixture',3,now());`);
     await stage('approved-q9', [raw('knownhold', 'Known Hold', { placeTypes: ['painter'], description: 'Painting contractor' })]);
     const result = await run({ backoff: true });
     assert.equal(result.candidateWork.byReason.queue_attempt_cooldown, 1);
     const work = (await db.query("SELECT next_attempt_at FROM scout_candidate_work WHERE reason='queue_attempt_cooldown'")).rows[0];
     assert.ok(work.next_attempt_at - Date.now() > 6 * 86400000);
     const row = (await db.query("SELECT enrichment_attempts,last_attempt_at FROM scout_unenriched WHERE company='Known Hold'")).rows[0];
-    assert.equal(row.enrichment_attempts, 6); assert.ok(row.last_attempt_at);
+    assert.equal(row.enrichment_attempts, 3); assert.ok(row.last_attempt_at);
   });
-  await t.test('mid-tier duplicate tickets retain attempts and wake after one day, not one week', async () => {
+  await t.test('duplicate tickets at attempts three and five retain the seven-day hold', async () => {
     await db.query(`INSERT INTO scout_unenriched(client_id,company,website_url,domain,vertical,source,enrichment_attempts,last_attempt_at)
       VALUES(13,'Daily First','https://dailyfirst.example','dailyfirst.example','painting','fixture',3,now()),
         (13,'Daily Last','https://dailylast.example','dailylast.example','painting','fixture',5,now());`);
@@ -155,12 +155,13 @@ test('real PostgreSQL governed ramp: sustained independent candidate flow, bound
       raw('dailylast', 'Daily Last', { placeTypes: ['painter'], description: 'Painting contractor' })]);
     const before = (await db.query("SELECT enrichment_attempts,last_attempt_at FROM scout_unenriched WHERE domain IN ('dailyfirst.example','dailylast.example') ORDER BY domain")).rows;
     const result = await run({ backoff: true });
-    assert.equal(result.candidateWork.byReason.queue_retry_cooldown, 2);
-    const work = (await db.query("SELECT next_attempt_at FROM scout_candidate_work WHERE reason='queue_retry_cooldown'")).rows;
+    // Snapshot includes the prior Known Hold ticket plus these two new tickets.
+    assert.equal(result.candidateWork.byReason.queue_attempt_cooldown, 3);
+    const work = (await db.query("SELECT next_attempt_at FROM scout_candidate_work WHERE reason='queue_attempt_cooldown' AND candidate_key IN (SELECT candidate_key FROM scout_candidate_memberships WHERE query_key='approved-q9-daily')")).rows;
     assert.equal(work.length, 2);
     for (const row of work) {
       const delay = row.next_attempt_at - Date.now();
-      assert.ok(delay > 23 * 3600000 && delay <= 24 * 3600000, `daily delay: ${delay}`);
+      assert.ok(delay > 6 * 86400000 && delay <= 7 * 86400000, `seven-day delay: ${delay}`);
     }
     assert.deepEqual((await db.query("SELECT enrichment_attempts,last_attempt_at FROM scout_unenriched WHERE domain IN ('dailyfirst.example','dailylast.example') ORDER BY domain")).rows, before);
   });
