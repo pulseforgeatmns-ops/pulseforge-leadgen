@@ -3,7 +3,8 @@
 const express = require('express');
 const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
-const { normalizeClientId } = require('../utils/clientContext');
+const pool = require('../db');
+const { resolveAttentionScope } = require('../utils/maxAttentionAuthorization');
 const {
   runAttentionScheduler,
   listOperatorAttention,
@@ -15,17 +16,9 @@ const requireAttentionWrite = [
   requireRole('admin', 'manager'),
 ];
 
-function resolveClientId(req) {
-  const fromBody = normalizeClientId(req.body?.client_id ?? req.body?.clientId);
-  if (fromBody != null) return fromBody;
-  const fromQuery = normalizeClientId(req.query?.client_id);
-  if (fromQuery != null) return fromQuery;
-  return normalizeClientId(req.session?.active_client_id);
-}
-
 router.post('/api/v1/max/attention/cycle', requireAttentionWrite, async (req, res) => {
   try {
-    const clientId = resolveClientId(req);
+    const clientId = await resolveAttentionScope(req, pool);
     if (clientId == null) {
       return res.status(400).json({ error: 'client_id_required' });
     }
@@ -35,6 +28,7 @@ router.post('/api/v1/max/attention/cycle', requireAttentionWrite, async (req, re
     });
     return res.json({ ok: true, ...result });
   } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ error: error.code });
     console.error('[max-attention-cycle]', error);
     return res.status(500).json({ error: 'attention_cycle_failed', message: error.message });
   }
@@ -42,7 +36,7 @@ router.post('/api/v1/max/attention/cycle', requireAttentionWrite, async (req, re
 
 router.get('/api/v1/max/attention/operator-queue', requireAttentionWrite, async (req, res) => {
   try {
-    const clientId = resolveClientId(req);
+    const clientId = await resolveAttentionScope(req, pool);
     if (clientId == null) {
       return res.status(400).json({ error: 'client_id_required' });
     }
@@ -51,6 +45,7 @@ router.get('/api/v1/max/attention/operator-queue', requireAttentionWrite, async 
     });
     return res.json({ ok: true, count: items.length, items });
   } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ error: error.code });
     return res.status(500).json({ error: 'operator_queue_failed', message: error.message });
   }
 });

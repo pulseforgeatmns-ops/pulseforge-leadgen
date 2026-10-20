@@ -50,17 +50,13 @@ async function withCronFixture(options, callback) {
   });
   service.runAttentionSchedulerAllClients = async () => {
     calls.allClients += 1;
-    // This override exists only for the explicitly synthetic fallback tests.
-    if (!options.syntheticAllClients) throw new Error('Unexpected all-client dispatch');
-    return options.results;
+    throw new Error('All-client dispatch is forbidden');
   };
   const router = loadFixtureModule('routes/cron.js', {
     express,
     '../utils/meteredAnthropic': { forAgent: () => class {} },
     '../db': db,
-    '../utils/clientContext': options.syntheticAllClients
-      ? { normalizeClientId: () => null }
-      : clientContext,
+    '../utils/clientContext': clientContext,
     '../utils/agentDispatchPolicy': {},
     '../scoutExpansion': {},
     '../utils/maxDecayCron': { createMaxDecayCronHandler: () => (_req, res) => res.sendStatus(404) },
@@ -210,55 +206,47 @@ test('body secret and body time keep the existing authentication/time behavior',
   });
 });
 
-test('missing, invalid, and body-only tenant selectors keep default tenant 1', async () => {
+test('missing, malformed, repeated and conflicting tenant selectors fail before store initialization', async () => {
   await withCronFixture({ result: successfulResult }, async ({ calls, request }) => {
-    for (const [query, body] of [['', undefined], ['client_id=invalid', undefined],
-      ['client_id=0', undefined], ['client_id=-3', undefined], ['', { client_id: 11 }]]) {
+    for (const [query, body] of [
+      ['', undefined], ['client_id=', undefined], ['client_id=invalid', undefined],
+      ['client_id=0', undefined], ['client_id=-3', undefined], ['client_id=11junk', undefined],
+      ['client_id=1.5', undefined], ['client_id=01', undefined], ['client_id=9007199254740992', undefined],
+      ['client_id=11&client_id=12', undefined], ['client_id=11&clientId=10', undefined],
+      ['client_id=11', { client_id: 10 }], ['', { client_id: null }],
+      ['', { client_id: true }], ['', { client_id: [11] }], ['', { client_id: {} }],
+      ['client_id=11', { clientId: '' }],
+    ]) {
       const response = await request(query, body);
-      assert.equal(response.status, 200);
-      assert.equal(response.body.client_id, 1);
+      assert.equal(response.status, 400, JSON.stringify([query, body]));
+      assert.equal(response.body.error, 'max_attention_explicit_tenant_required');
     }
-    assert.deepEqual(calls.cycles.map(call => call.clientId), [1, 1, 1, 1, 1]);
+    assert.equal(calls.init.length, 0);
+    assert.equal(calls.cycles.length, 0);
     assert.equal(calls.allClients, 0);
   });
 });
 
-test('an empty due-work cycle remains successful', async () => {
+test('body tenant and consistent aliases dispatch exactly one explicit tenant', async () => {
+  await withCronFixture({ result: successfulResult }, async ({ calls, request }) => {
+    for (const [query, body] of [['', { client_id: 11 }], ['', { clientId: '11' }],
+      ['client_id=11&clientId=11', { client_id: 11, clientId: '11' }]]) {
+      const response = await request(query, body);
+      assert.equal(response.status, 200);
+      assert.equal(response.body.client_id, 11);
+    }
+    assert.deepEqual(calls.cycles.map(call => call.clientId), [11, 11, 11]);
+    assert.equal(calls.allClients, 0);
+  });
+});
+
+test('an empty due-work cycle remains successful for an explicit tenant', async () => {
   const result = { ...successfulResult, claimed: 0, evaluated: 0, telemetry: { duplicate_evaluations: 0, wake_only: 0 } };
   await withCronFixture({ result }, async ({ calls, request }) => {
-    const response = await request();
+    const response = await request('client_id=11');
     assert.equal(response.status, 200);
-    assert.deepEqual(response.body, { ...result, client_id: 1, ok: true });
+    assert.deepEqual(response.body, { ...result, client_id: 11, ok: true });
     assert.equal(calls.cycles.length, 1);
     assert.equal(calls.allClients, 0);
   });
 });
-
-// normalizeClientId never returns null in production. These exercise only the
-// existing unreachable fallback's response, not normal-route all-client proof.
-test('synthetic all-client fallback reports aggregate item or initialization failures', async () => {
-  await withCronFixture({ syntheticAllClients: true, results: [
-    { client_id: 1, ...successfulResult },
-    { client_id: 11, ...successfulResult, failed: 1 },
-    { client_id: 12, error: failureMessage },
-  ] }, async ({ calls, request }) => {
-    const response = await request();
-    assert.equal(response.status, 500);
-    assert.equal(response.body.ok, false);
-    assert.deepEqual(response.body.results.map(result => result.ok), [true, false, false]);
-    assert.equal(response.body.results[2].client_id, 12);
-    assert.equal(response.body.results[2].error, 'max_attention_cycle_failed');
-    assert.doesNotMatch(JSON.stringify(response.body), /secret|private-token|postgres:\/\//);
-    assert.equal(calls.cycles.length, 0);
-    assert.equal(calls.allClients, 1);
-  });
-});
-
-test('synthetic all-client fallback keeps empty results successful', async () => {
-  await withCronFixture({ syntheticAllClients: true, results: [] }, async ({ request }) => {
-    const response = await request();
-    assert.equal(response.status, 200);
-    assert.deepEqual(response.body, { ok: true, results: [] });
-  });
-});
-
