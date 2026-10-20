@@ -163,7 +163,8 @@ function createPlacesProvider(deps = {}) {
           apiKey,
           fetchImpl,
           { requireWebsite, seenPlaceIds: querySeen, out: queryOut, knownHits: checkpoint ? knownHits : null,
-            singlePage: prior?.singlePage === true, pageToken: prior?.pageToken || null }
+            singlePage: prior?.singlePage === true, pageToken: prior?.pageToken || null,
+            apiDeps: deps.placesApiDeps, useCache: deps.useCache }
         );
         if (checkpoint) {
           const rows = !searchResult.error
@@ -241,7 +242,7 @@ function createPlacesProvider(deps = {}) {
         { industry: q, location: '', limit },
         apiKey,
         fetchImpl,
-        { requireWebsite: true, seenPlaceIds, out }
+        { requireWebsite: true, seenPlaceIds, out, apiDeps: deps.placesApiDeps, useCache: deps.useCache }
       );
       this.lastExecution = createProviderExecution({
         executed: true,
@@ -337,7 +338,7 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
   while (attempt <= MAX_RETRIES) {
     attempt += 1;
     let pageAccepted = 0;
-    const page = await fetchPlacesPage(querySpec, apiKey, fetchImpl, nextPageToken);
+    const page = await fetchPlacesPage(querySpec, apiKey, fetchImpl, nextPageToken, opts);
     attempts.push(page.attempt);
     latencyMs += page.attempt.latencyMs || 0;
     if (page.attempt.quota) quota = page.attempt.quota;
@@ -383,7 +384,7 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
       seenPlaceIds.add(hit.place_id);
       let detailResult;
       try {
-        detailResult = await fetchPlaceDetails(hit.place_id, apiKey, fetchImpl, { requireWebsite });
+        detailResult = await fetchPlaceDetails(hit.place_id, apiKey, fetchImpl, { requireWebsite, apiDeps: opts.apiDeps, useCache: opts.useCache });
       } catch (failure) {
         rethrowResearchProviderControl(failure);
         if (!opts.singlePage) throw failure;
@@ -440,7 +441,7 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
 const PLACE_DETAILS_FIELDS =
   'name,formatted_address,formatted_phone_number,website,place_id,types,address_component,business_status';
 
-async function fetchPlacesPage(querySpec, apiKey, fetchImpl, pageToken = null) {
+async function fetchPlacesPage(querySpec, apiKey, fetchImpl, pageToken = null, opts = {}) {
   const q = `${querySpec.industry || ''} ${querySpec.location || ''}`.trim();
   const started = Date.now();
   if (!q) {
@@ -467,13 +468,14 @@ async function fetchPlacesPage(querySpec, apiKey, fetchImpl, pageToken = null) {
       apiKey,
       pageToken,
       fetchImpl,
+      useCache: opts.useCache,
       deferRecord: true,
       record: {
         caller: 'PlacesProvider',
         feature: PLACES_FEATURES.DISCOVERY,
         providerId: 'google_places',
       },
-    });
+    }, opts.apiDeps);
     const latencyMs = Date.now() - started;
     const httpStatus = traced.httpStatus;
     if (!traced.ok) {
@@ -558,13 +560,14 @@ async function fetchPlaceDetails(placeId, apiKey, fetchImpl, opts = {}) {
     fields: PLACE_DETAILS_FIELDS,
     apiKey,
     fetchImpl,
+    useCache: opts.useCache,
     deferRecord: true,
     record: {
       caller: 'PlacesProvider',
       feature: PLACES_FEATURES.DISCOVERY,
       providerId: 'google_places',
     },
-  });
+  }, opts.apiDeps);
   if (!traced.ok) {
     if (typeof traced.commitRecord === 'function') {
       await traced.commitRecord({ businessesReturned: 0, businessesAccepted: 0 });
