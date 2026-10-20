@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { Pool } = require('pg');
+const { createTrackedPostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
 const { retryUnverifiedEmails } = require('./helpers/loadEmailVerificationRecovery')();
 const { governedContactReason } = require('../utils/governedContactEligibility');
@@ -20,8 +20,9 @@ const verification = (status = 'valid') => ({
 // PostgreSQL binary. No real verification module or API is loaded.
 test('verification retry persistence and concurrency on disposable PostgreSQL', { timeout: 90000 }, async t => {
   const server = await startDisposablePostgres('verification-retry-pg-');
-  const pool = new Pool({ connectionString: server.connectionString });
-  t.after(async () => { await pool.end(); await server.stop(); });
+  const pool = createTrackedPostgresPool({ connectionString: server.connectionString });
+  // pool.end() resolves before physical sockets close; stop only after their end events.
+  t.after(() => closePostgresFixture(pool, server));
   await pool.query(`CREATE TABLE prospects (
     id UUID PRIMARY KEY, client_id INTEGER NOT NULL, email TEXT,
     email_verified BOOLEAN, email_status TEXT, email_verification_method TEXT,

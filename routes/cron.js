@@ -691,9 +691,19 @@ async function handleMaxAttentionCycleCron(req, res) {
       return res.status(400).json({ ok: false, error: 'max_attention_explicit_tenant_required' });
     }
     const clientId = tenantIds[0];
+    const limits = [req.query.limit, req.body?.limit].filter(value => value !== undefined);
+    const parsedLimits = limits.map(value => {
+      if (!['string', 'number'].includes(typeof value) || !/^[1-9][0-9]*$/.test(String(value))) return null;
+      const limit = Number(value);
+      return Number.isInteger(limit) && limit <= 20 ? limit : null;
+    });
+    if (parsedLimits.some(limit => limit === null) || new Set(parsedLimits).size > 1) {
+      return res.status(400).json({ ok: false, error: 'max_attention_invalid_limit' });
+    }
+    const limit = parsedLimits[0] ?? 20;
     const now = req.query.now || req.body?.now ? new Date(req.query.now || req.body.now) : new Date();
     const { runAttentionScheduler } = require('../services/maxAttentionService');
-    const result = maxAttentionCronResult(await runAttentionScheduler(clientId, { now }));
+    const result = maxAttentionCronResult(await runAttentionScheduler(clientId, { now, limit }));
     return res.status(result.ok ? 200 : 500).json({ client_id: clientId, ...result });
   } catch (err) {
     console.error('[cron] max-attention-cycle failed');
