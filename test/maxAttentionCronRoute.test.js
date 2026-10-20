@@ -22,8 +22,13 @@ function loadFixtureModule(relativePath, dependencies, globals = {}) {
 }
 
 async function withCronFixture(options, callback) {
-  const calls = { init: [], cycles: [], allClients: 0, logs: [] };
-  const db = { query: async () => { throw new Error('Live database disabled'); } };
+  const calls = { init: [], cycles: [], allClients: 0, logs: [], readiness: [] };
+  const db = { query: async sql => {
+    calls.readiness.push(sql);
+    assert.match(sql, /^SELECT /);
+    if (options.readinessError) throw options.readinessError;
+    return { rows: sql.includes("WHERE id = 'global'") ? [{ id: 'global' }] : [] };
+  } };
   const clientContext = loadFixtureModule('utils/clientContext.js', {
     '../db': db,
     './canonicalVerticals': { ensureCanonicalVerticalConstraint() {} },
@@ -32,7 +37,7 @@ async function withCronFixture(options, callback) {
     constructor(_db, { clientId }) { this.clientId = clientId; }
     async init() {
       calls.init.push({ store: name, clientId: this.clientId });
-      if (options.initError) throw options.initError;
+      throw new Error('Scheduler must never initialize stores');
     }
   };
   const service = loadFixtureModule('services/maxAttentionService.js', {
@@ -107,7 +112,8 @@ test('POST successful cycle preserves result shape, explicit tenant, and time', 
     assert.equal(calls.cycles.length, 1);
     assert.equal(calls.cycles[0].clientId, 11);
     assert.equal(calls.cycles[0].now.toISOString(), '2026-10-14T00:00:00.000Z');
-    assert.deepEqual(calls.init.map(call => call.clientId), [11, 11, 11]);
+    assert.equal(calls.init.length, 0);
+    assert.ok(calls.readiness.length > 0);
     assert.equal(calls.allClients, 0);
   });
 });
@@ -143,7 +149,7 @@ test('GET returned item failure is HTTP 500 and ok:false, with sanitized diagnos
 });
 
 for (const [name, options, expectedCycleCalls] of [
-  ['store initialization', { initError: new Error(failureMessage) }, 0],
+  ['schema readiness', { readinessError: new Error(failureMessage) }, 0],
   ['scheduler', { cycleError: Object.assign(new Error(failureMessage), { code: failureMessage }) }, 1],
 ]) {
   test(`${name} exception stays HTTP 500 without exposing exception text`, async () => {
@@ -248,5 +254,33 @@ test('an empty due-work cycle remains successful for an explicit tenant', async 
     assert.deepEqual(response.body, { ...result, client_id: 11, ok: true });
     assert.equal(calls.cycles.length, 1);
     assert.equal(calls.allClients, 0);
+  });
+});
+
+
+test('cron limit accepts only consistent integer 1..20, preserving default 20', async () => {
+  await withCronFixture({ result: successfulResult }, async ({ calls, request }) => {
+    for (const [query, body, expected] of [
+      ['client_id=11', undefined, 20], ['client_id=11&limit=1', undefined, 1],
+      ['client_id=11', { limit: 2 }, 2], ['client_id=11&limit=20', { limit: 20 }, 20],
+    ]) {
+      assert.equal((await request(query, body)).status, 200);
+      assert.equal(calls.cycles.at(-1).limit, expected);
+    }
+  });
+});
+
+test('malformed and conflicting limits reject before readiness or scheduler dispatch', async () => {
+  await withCronFixture({ result: successfulResult }, async ({ calls, request }) => {
+    for (const value of [null, '', 0, -1, 21, 1.5, true, [], {}, '01', '1x', '9007199254740992']) {
+      const response = await request('client_id=11', { limit: value });
+      assert.equal(response.status, 400, JSON.stringify(value));
+      assert.equal(response.body.error, 'max_attention_invalid_limit');
+    }
+    assert.equal((await request('client_id=11&limit=1&limit=2')).status, 400);
+    assert.equal((await request('client_id=11&limit=1', { limit: 2 })).status, 400);
+    assert.equal(calls.cycles.length, 0);
+    assert.equal(calls.readiness.length, 0);
+    assert.equal(calls.init.length, 0);
   });
 });
