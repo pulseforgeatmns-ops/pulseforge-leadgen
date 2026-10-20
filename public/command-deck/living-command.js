@@ -6,7 +6,7 @@
   const number = value => Number.isFinite(Number(value)) ? Number(value).toLocaleString() : '—';
   const ask = prompt => document.dispatchEvent(new CustomEvent('pulseforge:living-ask', { detail: { prompt } }));
 
-  function row(title, detail, label, prompt, tone) {
+  function row(title, detail, label, prompt, tone, action) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `lc-brief-line lc-tone-${tone}`;
@@ -23,7 +23,7 @@
     const status = document.createElement('small');
     status.textContent = label;
     button.append(symbol, copy, status);
-    button.addEventListener('click', () => ask(prompt));
+    button.addEventListener('click', action || (() => ask(prompt)));
     return button;
   }
 
@@ -88,7 +88,7 @@
       ? approvals.pending ? `${number(approvals.pending)} content items are ready for your review.` : 'No content is waiting for approval.'
       : 'The content approval queue is temporarily unavailable.',
     approvals ? `${number(approvals.pending)} pending` : 'Unavailable',
-    'Show me the content waiting for my approval in the current workspace, explain the recommendations and help me review them.', 'gold'));
+    null, 'gold', () => document.dispatchEvent(new CustomEvent('pulseforge:content-review'))));
 
     const generated = brief.generatedAt || model.meta?.generatedAt;
     const timestamp = generated ? new Date(generated).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : null;

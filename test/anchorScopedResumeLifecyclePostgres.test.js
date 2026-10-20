@@ -79,6 +79,7 @@ test('native scoped lifecycle: tenant10 maintenance, approved batch, fresh days,
 test('native scoped scheduler approval bridge consumes authority and keeps canonical writer preinitialized',{timeout:120000},async t=>{
  const pg=await startDisposablePostgres('anchor-scoped-approval-'),pool=new Pool({connectionString:pg.connectionString,max:12});t.after(async()=>{await pool.end();await pg.stop();});
  const f=await seedScopedResume(pool,{preparation:true});f.manifest.scopes.email.approvalMode='delegated_existing_program';f.manifest.scopes.preparation.operations.push('approve_canonical_envelope');
+ t.mock.timers.enable({ apis: ['Date'], now: +f.now });
  await pool.query("UPDATE acquisition_outbound_envelopes SET status='frozen',approval_id=NULL WHERE id=$1",[f.envelope.id]);f.envelope.status='frozen';f.envelope.approval_id=null;
  const prev=process.env.ANCHOR_EMAIL_SCOPED_RESUME_ID;process.env.ANCHOR_EMAIL_SCOPED_RESUME_ID=f.manifest.id;t.after(()=>{if(prev===undefined)delete process.env.ANCHOR_EMAIL_SCOPED_RESUME_ID;else process.env.ANCHOR_EMAIL_SCOPED_RESUME_ID=prev;});
  await control.installScopedResume(pool,{manifest:f.manifest,approvalReference:f.manifest.approvalReference},f.actor,{now:f.now,env:f.env});

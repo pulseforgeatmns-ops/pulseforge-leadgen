@@ -128,7 +128,7 @@ async function assertLegacyPreparation(db, { tenantId, program, operation } = {}
   if (tenantId != null && programTenant != null && String(tenantId) !== String(programTenant)) fail('anchor_recovery_tenant_mismatch');
   if (tenant == null) fail('anchor_recovery_tenant_required');
   if (String(tenant) !== '10') return { mode: 'legacy' };
-  const state = await loadRecoveryState(db);
+  const state = await loadRecoveryState(db, options);
   if (state.mode === 'scoped_resume' && program && operation) {
     return require('./anchorScopedResume').assertScopedResumeCapability(db, { program, capability: 'preparation', operation }, options);
   }

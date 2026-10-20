@@ -62,6 +62,7 @@
     host: () => document.getElementById('mxSpreadsheetProposal'),
     scopeHost: () => document.getElementById('mxSpreadsheetScope'),
     onMessage: text => appendSystemMessage(text),
+    onReviewAccounts: owner => { closeWorkspace(); window.PulseforgeAccountReview?.open(owner); },
     getTenantId: () => window.PulseforgeTenantCoordinator?.getActiveClientId(),
   });
 
@@ -4758,6 +4759,11 @@
     const hasAttachments = mxPendingComposerFiles.length > 0;
     if (!q && !hasAttachments) return;
     if (workspaceAskInFlight) return;
+    if (!hasAttachments && spreadsheetReview.isAccountReviewRequest(q)) {
+      resetAskInput();
+      await spreadsheetReview.handleAccountReview(q);
+      return;
+    }
     workspaceAskInFlight = true;
     document.body.classList.add('lc-thinking');
     console.info('[mission-objective-len]', {
@@ -4849,6 +4855,12 @@
       if (result.contextSwitch && els.mxSwitch) {
         els.mxSwitch.hidden = false;
         els.mxSwitch.textContent = result.contextSwitch;
+      }
+      if (result.uiAction?.type === 'open_content_review' && window.PulseforgeContentReview) {
+        thinking.clear();
+        closeWorkspace();
+        window.PulseforgeContentReview.open();
+        return;
       }
       await appendMaxResponse(result, {
         startedAtMs,
@@ -5441,6 +5453,7 @@
     openWorkspaceFromAction({ page: 'command-deck', context: 'daily_brief', prompt: String(event.detail?.prompt || '') });
   });
   document.addEventListener('pulseforge:living-refresh', () => loadDeck({ force: true }));
+  document.addEventListener('pulseforge:content-reviewed', () => loadDeck({ force: true }));
   document.addEventListener('pulseforge:tenant-changed', applyClientCommandDeckPresentation);
   document.addEventListener('pulseforge:tenant-changed', onTenantChanged);
   if (window.PulseforgeShell) applyClientCommandDeckPresentation();
@@ -5458,12 +5471,7 @@
           prompt: null,
         }),
       onOpenMission: (missionId) => openMissionWorkspace(missionId),
-      onReviewRecommendation: (recommendationId) =>
-        openWorkspaceFromAction({
-          page: 'command-deck',
-          context: 'content_recommendation',
-          recommendationId,
-        }),
+      onReviewRecommendation: () => window.PulseforgeContentReview?.open(),
       onAskMax: (payload) => openWorkspaceFromAction(payload || {}),
     });
   }

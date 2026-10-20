@@ -1,9 +1,9 @@
 'use strict';
 
-const { describe, it, before, after, afterEach } = require('node:test');
+const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
-const { Pool } = require('pg');
+const { createTrackedPostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
 const { createPostgresSocialContentStore } = require('../packages/capabilities/contentGeneration/SocialContentStore');
 const { fixture } = require('./helpers/paigeSocialFixture');
 
@@ -11,7 +11,6 @@ const enabled = process.env.PAIGE_SOCIAL_TEST_POSTGRES === 'true';
 const dualWritePath = require.resolve('../utils/knowledgeDualWrite');
 
 (enabled ? describe : describe.skip)('Paige social PostgreSQL durability', () => {
-  const disposables = [];
   const inFlight = new Set();
 
   /** @param {Promise<unknown>} promise */
@@ -26,18 +25,10 @@ const dualWritePath = require.resolve('../utils/knowledgeDualWrite');
     return promise;
   }
 
-  async function runDisposables() {
-    const cleanup = disposables.splice(0);
-    const results = await Promise.allSettled(cleanup.map((fn) => fn()));
-    const failures = results.filter((r) => r.status === 'rejected');
-    if (failures.length) throw failures[0].reason;
-  }
-
   /** @type {import('pg').Pool | null} */
   let pool = null;
   /** @type {{ stop?: () => Promise<void> } | null} */
   let instance = null;
-  let poolEnded = false;
   /** @type {import('node:module').Module | undefined} */
   let originalDualWrite;
   /** @type {string | undefined} */
@@ -55,39 +46,30 @@ const dualWritePath = require.resolve('../utils/knowledgeDualWrite');
     process.env.KNOWLEDGE_DUAL_WRITE = '0';
   });
 
-  afterEach(async () => {
-    await runDisposables();
-  });
-
   after(async () => {
     await Promise.allSettled([...inFlight]);
 
-    if (pool && !poolEnded && !pool.ended) {
-      poolEnded = true;
-      await pool.end();
+    try {
+      // Pool.end() can resolve before physical sockets close. The shared test
+      // helper waits for client end events before stopping PostgreSQL and keeps
+      // query, pool, socket-close and server-stop failures visible.
+      if (pool) await closePostgresFixture(pool, instance);
+      else if (instance?.stop) await instance.stop();
+    } finally {
+      instance = null;
+      pool = null;
+      if (originalDualWrite) require.cache[dualWritePath] = originalDualWrite;
+      else delete require.cache[dualWritePath];
+      if (previousDualWriteFlag === undefined) delete process.env.KNOWLEDGE_DUAL_WRITE;
+      else process.env.KNOWLEDGE_DUAL_WRITE = previousDualWriteFlag;
     }
-    if (instance?.stop) {
-      await instance.stop();
-    }
-    instance = null;
-    pool = null;
-
-    if (originalDualWrite) require.cache[dualWritePath] = originalDualWrite;
-    else delete require.cache[dualWritePath];
-    if (previousDualWriteFlag === undefined) delete process.env.KNOWLEDGE_DUAL_WRITE;
-    else process.env.KNOWLEDGE_DUAL_WRITE = previousDualWriteFlag;
   });
 
   it('PostgreSQL locks, receipt recovery, tenant isolation, outcome bridge and generation mirror are durable', async () => {
     const { startDisposablePostgres } = require('./helpers/disposablePostgres');
     instance = await startDisposablePostgres('paige-social-pg-');
 
-    pool = new Pool({ connectionString: instance.connectionString });
-    const onPoolError = () => {};
-    pool.on('error', onPoolError);
-    disposables.push(async () => {
-      pool?.off('error', onPoolError);
-    });
+    pool = createTrackedPostgresPool({ connectionString: instance.connectionString });
 
     const store = createPostgresSocialContentStore(pool);
     await store.ensureSchema();

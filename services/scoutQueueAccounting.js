@@ -1,22 +1,9 @@
 'use strict';
 
 const BUCKETS = Object.freeze(['eligible_now', 'unsupported_vertical', 'attempt_limit_hold', 'retry_cooldown', 'unknown']);
-// Same predicates as the enrichment selector, evaluated by PostgreSQL at its
-// timestamp precision. A JS Date comparison would lose microseconds at boundaries.
-// First failure is vertical, attempts, then retry; predicates are not additive.
-const ELIGIBILITY_SQL = `CASE
-  WHEN (u.vertical = ANY($5::text[])) IS NOT TRUE THEN 'unsupported_vertical'
-  WHEN COALESCE(u.enrichment_attempts, 0) >= 6
-    AND (COALESCE(u.last_attempt_at, NOW() - INTERVAL '100 years')
-      <= NOW() - INTERVAL '7 days') IS NOT TRUE THEN 'attempt_limit_hold'
-  WHEN COALESCE(u.enrichment_attempts, 0) >= 3
-    AND COALESCE(u.enrichment_attempts, 0) < 6
-    AND (COALESCE(u.last_attempt_at, NOW() - INTERVAL '100 years')
-      <= NOW() - INTERVAL '24 hours') IS NOT TRUE THEN 'retry_cooldown'
-  WHEN COALESCE(u.enrichment_attempts, 0) < 3
-    AND (COALESCE(u.last_attempt_at, NOW() - INTERVAL '100 years')
-      <= NOW() - INTERVAL '1 hour') IS NOT TRUE THEN 'retry_cooldown'
-  ELSE 'eligible_now' END`;
+const { buildEnrichmentEligibilitySql, buildEnrichmentRetryAfterSql } = require('../utils/scoutEnrichmentEligibility');
+const ELIGIBILITY_SQL = buildEnrichmentEligibilitySql({ alias: 'u.', verticals: '$5::text[]' });
+const RETRY_AFTER_SQL = buildEnrichmentRetryAfterSql();
 function createQueueAccounting() {
   const matched = new Map();
   let duplicateCandidateMatches = 0;
@@ -44,4 +31,4 @@ function createQueueAccounting() {
     },
   };
 }
-module.exports = { ELIGIBILITY_SQL, createQueueAccounting, BUCKETS };
+module.exports = { ELIGIBILITY_SQL, RETRY_AFTER_SQL, createQueueAccounting, BUCKETS };

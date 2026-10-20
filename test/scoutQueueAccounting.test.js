@@ -16,7 +16,7 @@ test('database evaluates exact selector boundaries without JavaScript timestamp 
   assert.match(ELIGIBILITY_SQL, /INTERVAL '7 days'/);
   assert.match(ELIGIBILITY_SQL, /COALESCE\(u.last_attempt_at, NOW\(\) - INTERVAL '100 years'\)/);
   assert.match(ELIGIBILITY_SQL, /INTERVAL '1 hour'/);
-  assert.equal((ELIGIBILITY_SQL.match(/IS NOT TRUE/g) || []).length, 3);
+  assert.equal((ELIGIBILITY_SQL.match(/IS NOT TRUE/g) || []).length, 4);
 });
 
 test('UUID/multirow duplicates count distinct matched rows, not candidate hits or full stock', () => {

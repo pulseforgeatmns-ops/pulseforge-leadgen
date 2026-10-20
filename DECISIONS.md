@@ -1,3 +1,7 @@
+## Local proposal — explicit research-provider pause (SPEC-265 / ADR-107)
+
+Use immutable trusted tenant context and typed pre-handoff rejection for the reviewed research paths. Keep the default inactive, preserve other product operations, and disclose unknown-context diagnostic compatibility plus replica/in-flight limits. Publication/deployment/activation require separate approval. See [ADR-107](docs/adr/ADR-107_Explicit_Research_Provider_Pause.md).
+
 [ADR-106](docs/adr/ADR-106_Crm_Only_Canonical_Preparation.md): fixed no-fallback CRM-only canonical preparation under SPEC263.
 
 [ADR-105](docs/adr/ADR-105_Explicit_Scoped_Recovery_Resume.md): explicit scoped recovery resume under SPEC-262.
@@ -70,6 +74,10 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-089](docs/adr/ADR-089_Mission_Ownership_Shall_Not_Cross_Runtime_Boundaries.md) | Mission Ownership Shall Not Cross Runtime Boundaries | Accepted | Specialists execute only inside the runtime that owns the mission |
 | [ADR-090](docs/adr/ADR-090_Canonical_Execution_Routing.md) | Canonical Execution Routing | Accepted | Every executable intent is a Canonical Execution Request dispatched by one router |
 | [ADR-092](docs/adr/ADR-092_Identity_Before_Enrichment.md) | Identity Before Enrichment | Accepted | Business identity precedes enrichment; vertical keys are market hypotheses that expand into multi-source search strategies |
+
+## Local proposals pending release approval
+
+- [ADR-102](docs/adr/ADR-102_Explicit_Immutable_Legacy_Coverage_Epoch.md): exact same-fingerprint legacy coverage epoch with one immutable allocation/window receipt, preserved historical work and default-off activation.
 
 ## How to add a decision
 

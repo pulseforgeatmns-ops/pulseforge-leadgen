@@ -12,7 +12,22 @@ describe('CI plan PR selector (SPEC-CI-LEAN-001)', () => {
     assert.equal(pathMatchesPattern('routes/revenue.js', 'packages/signal-v1/'), false);
   });
 
+  it('runs Max and its browser acceptance for changes to Living Command and content review', () => {
+    for (const file of [
+      'public/command-deck/command-deck.js', 'public/command-deck.html',
+      'public/shared/content-review.js', 'public/shared/content-review.css', 'public/shared/shell.js',
+      'services/contentReview.js', 'services/livingCommandBrief.js', 'routes/contentReview.js',
+      'test/contentReview.test.js', 'test/livingCommandBrief.test.js', 'test/browser/livingCommandUi.test.js',
+    ]) assert.ok(buildPlan([file]).suites.includes('max'), `${file} must run review browser coverage`);
+  });
+
   const cases = [
+    {
+      name: 'Small-business website evidence safety',
+      files: ['utils/websiteSmallBusinessEvidence.js', 'services/scoutWebsiteBusinessEvidence.js', 'test/scoutSmallBusinessWebsiteEvidence.test.js'],
+      expect: ['global', 'anchor-outbound'],
+      forbid: ['signal-v1', 'paige-social'],
+    },
     {
       name: 'Signal-only (PR #899 shape)',
       files: [
@@ -198,6 +213,7 @@ describe('Substral preparation-only CI coverage', () => {
 
 describe('Babrun owner evidence and promotion safety CI coverage', () => {
   for (const file of ['utils/websiteOwnerEvidence.js', 'test/websiteOwnerEvidence.test.js',
+    'utils/websiteSmallBusinessEvidence.js', 'services/scoutWebsiteBusinessEvidence.js', 'test/scoutSmallBusinessWebsiteEvidence.test.js',
     'test/scoutPromotionEvidence.test.js', 'test/scoutPromotionRetention.test.js',
     'test/scoutPromotionCohort.test.js', 'test/helpers/denyWebsiteEvidenceNetwork.cjs']) {
     it(`selects governed outbound for ${file}`, () => {
@@ -206,7 +222,7 @@ describe('Babrun owner evidence and promotion safety CI coverage', () => {
   }
   it('executes both new suites through the network-denying preload', () => {
     const workflow = require('node:fs').readFileSync(require('node:path').join(__dirname, '../.github/workflows/pr-ci-lean.yml'), 'utf8');
-    assert.ok(workflow.includes('node --require ./test/helpers/denyWebsiteEvidenceNetwork.cjs --test test/websiteOwnerEvidence.test.js test/scoutPromotionEvidence.test.js test/scoutPromotionRetention.test.js test/scoutPromotionCohort.test.js'));
+    assert.ok(workflow.includes('node --require ./test/helpers/denyWebsiteEvidenceNetwork.cjs --test test/websiteOwnerEvidence.test.js test/scoutSmallBusinessWebsiteEvidence.test.js test/scoutPromotionEvidence.test.js test/scoutPromotionRetention.test.js test/scoutPromotionCohort.test.js'));
   });
 });
 
@@ -244,5 +260,82 @@ describe('SPEC262 scoped recovery CI coverage', () => {
       assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
     }
     assert.match(require('../package.json').scripts['test:anchor-outbound'], /test\/anchorScopedResume\*\.test\.js/);
+  });
+});
+
+// SPEC-265: the reviewed provider pause cannot change without its regressions.
+it('research provider pause leaves and callers select the Anchor suite', () => {
+  for (const file of [
+    "leadgen.js",
+    "lib/serpapi.js",
+    "packages/capabilities/acquisition/ProspectAcquisition.js",
+    "packages/capabilities/acquisition/providerContract.js",
+    "packages/capabilities/discovery/ProspectDiscovery.js",
+    "packages/capabilities/discovery/providers/PlacesProvider.js",
+    "packages/max/scoutAcquisition/DiscoveryAdapters.js",
+    "packages/max/scoutAcquisition/ScoutAdapter.js",
+    "packages/max/workspace/MissionBoundWebsiteDiscovery.js",
+    "packages/max/workspace/ScoutDiscoveryExecutor.js",
+    "packages/scout/DiscoveryPipeline.js",
+    "packages/scout/coverage/DiscoveryCoverageEngine.js",
+    "packages/scout/coverage/HypothesisDrivenDiscoveryEngine.js",
+    "packages/scout/investigation/CandidateInvestigation.js",
+    "phoneEnrich.js",
+    "routes/clientIntelligence.js",
+    "routes/cron.js",
+    "scoutUnenrichedEnrichmentAgent.js",
+    "scripts/backfill_email_verification.js",
+    "scripts/diagnoseScoutPlaces.js",
+    "scripts/importAnchorCallList.js",
+    "scripts/lib/anchorMissionBoundEnrichment.js",
+    "scripts/lib/babrunCohort002.js",
+    "scripts/lib/babrunContactResolution.js",
+    "scripts/lib/webCohort002.js",
+    "scripts/lib/webCohort003.js",
+    "scripts/promoteUnenriched.js",
+    "scripts/resolveBabrunFirstTenContacts.js",
+    "server.js",
+    "services/emailVerificationRecovery.js",
+    "services/governedOutboundAdapters.js",
+    "services/maxOutboundControlLoop.js",
+    "services/sameCompanyContactRecovery.js",
+    "services/scoutPlacesDiagnostic.js",
+    "services/scoutPublicSourcing.js",
+    "tieredEnrichmentAgent.js",
+    "utils/anchorResearchProviderPause.js",
+    "utils/emailVerifier.js",
+    "utils/placesApi.js",
+    "test/anchorResearchProviderPauseCore.test.js"
+]) {
+    assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
+  }
+  assert.match(require('../package.json').scripts['test:anchor-outbound'], /test\/anchorResearchProviderPause\*\.test\.js/);
+});
+
+describe('promotion schema lifecycle CI coverage', () => {
+  it('runs both Max CRM admission and native Anchor coverage for the shared schema helper', () => {
+    const suites = buildPlan(['utils/businessNameShort.js']).suites;
+    assert.ok(suites.includes('max'), 'shared CRM admission schema changes must select Max');
+    assert.ok(suites.includes('anchor-outbound'), 'shared promotion schema changes must select native Anchor');
+  });
+  it('runs native Anchor regressions for both runtime paths and the concurrency test', () => {
+    for (const file of ['utils/businessNameShort.js', 'scripts/promoteUnenriched.js',
+      'test/anchorDailyOutboundPromotionSchemaPostgres.test.js']) {
+      assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
+    }
+    assert.match(require('../package.json').scripts['test:anchor-outbound'], /test\/anchorDailyOutbound\*\.test\.js/);
+  });
+});
+
+describe('renewable Scout coverage grants CI coverage', () => {
+  it('selects the native Scout domain for every new grant boundary', () => {
+    for (const file of ['services/scoutCoverageGrant.js', 'services/scoutCoverageGrantStore.js',
+      'migrations/2026-10-20-scout-coverage-grants.sql', 'test/scoutCoverageGrant.test.js',
+      'test/scoutCoverageGrantPostgres.test.js']) {
+      assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
+    }
+    const fs = require('node:fs');
+    const workflow = fs.readFileSync(require('node:path').join(__dirname, '../.github/workflows/pr-ci-lean.yml'), 'utf8');
+    assert.match(workflow, /test\/scoutCoverageGrant\.test\.js test\/scoutCoverageGrantPostgres\.test\.js/);
   });
 });

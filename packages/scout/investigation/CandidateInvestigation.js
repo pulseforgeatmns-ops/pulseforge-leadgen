@@ -1,5 +1,7 @@
 'use strict';
 
+const { rethrowResearchProviderControl } = require('../../../utils/anchorResearchProviderPause');
+
 /**
  * SPEC-195 — Candidate-Scoped Investigative Continuation.
  *
@@ -639,6 +641,7 @@ async function runCandidateInvestigationLoop(input = {}) {
     try {
       result = await executeFn(task, searchDefinition, adapters, marketDefinition, opts);
     } catch (err) {
+      rethrowResearchProviderControl(err);
       result = {
         taskId: task.id,
         evidenceType: task.evidenceType,

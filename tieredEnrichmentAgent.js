@@ -1,6 +1,7 @@
 require('dotenv').config();
 
 const pool = require('./db');
+const { withResearchProviderScope } = require('./utils/anchorResearchProviderPause');
 const { normalizeClientId } = require('./utils/clientContext');
 const { verifyEmail } = require('./utils/emailVerifier');
 const { invalidOutreachEmailReason } = require('./utils/emailGuard');
@@ -794,6 +795,12 @@ async function logAgentAction(clientId, payload, status = 'success') {
 }
 
 async function processProspect(row, options = {}) {
+  return withResearchProviderScope(row.client_id, () => options.tenantId != null
+    ? withResearchProviderScope(options.tenantId, () => processProspectScoped(row, options))
+    : processProspectScoped(row, options));
+}
+
+async function processProspectScoped(row, options = {}) {
   const working = { ...row, enrichment_provenance: row.enrichment_provenance || {} };
   const beforePass = passesDataBar(working);
   const outcome = {
@@ -947,6 +954,13 @@ function summarize(outcomes) {
 }
 
 async function run(params = {}) {
+  const tenantId = params.client_id ?? params.clientId ?? process.env.ACTIVE_CLIENT_ID;
+  return withResearchProviderScope(tenantId, () => params.client_id != null && params.clientId != null
+    ? withResearchProviderScope(params.clientId, () => runScoped(params))
+    : runScoped(params));
+}
+
+async function runScoped(params = {}) {
   await ensureTieredEnrichmentSchema();
   const clientId = normalizeClientId(params.client_id || params.clientId || process.env.ACTIVE_CLIENT_ID || 1);
   const dryRun = Boolean(params.dryRun);

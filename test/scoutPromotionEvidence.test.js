@@ -63,7 +63,7 @@ test('first-party source for another company is not attribution for the selected
 for (const tenantId of [10, 13, 17]) test(`actual promotion persists classification only for Babrun (tenant ${tenantId})`, async () => {
   const vm = require('node:vm');
   const promoteBody = source.slice(source.indexOf('async function promoteRecord('), source.indexOf('\nasync function run()'));
-  const context = { babrunPromotionContactResolution: resolve, configuredServiceAreas: () => [],
+  const context = { ...require('../utils/anchorResearchProviderPause'), babrunPromotionContactResolution: resolve, configuredServiceAreas: () => [],
     promotionServiceAreaMatch: () => null, normalizeVertical: value => value,
     findOrCreateCompanyForClient: async () => 'company-fixture',
     console: { log() {} },

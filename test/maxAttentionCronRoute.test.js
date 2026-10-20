@@ -65,6 +65,7 @@ async function withCronFixture(options, callback) {
     '../scoutExpansion': {},
     '../utils/maxDecayCron': { createMaxDecayCronHandler: () => (_req, res) => res.sendStatus(404) },
     '../services/scoutPlacesDiagnostic': {},
+    '../utils/anchorResearchProviderPause': require('../utils/anchorResearchProviderPause'),
     '../services/maxAttentionService': service,
   }, {
     process: { env: { CRON_SECRET: Object.hasOwn(options, 'secret') ? options.secret : 'route-test-secret' } },

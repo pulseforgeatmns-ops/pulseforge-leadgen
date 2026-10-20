@@ -13,6 +13,7 @@ module.exports = function loadEmailVerificationRecovery({ console: testConsole =
     module,
     console: testConsole,
     require(name) {
+      if (name === '../utils/anchorResearchProviderPause') return require('../../utils/anchorResearchProviderPause');
       if (name === '../utils/emailGuard') return require('../../utils/emailGuard');
       if (name === '../leadgen') return {
         resolveEmailVerification: async () => { throw new Error('Live verifier disabled in recovery tests'); },

@@ -1,4 +1,5 @@
 'use strict';
+const { withResearchProviderScope, assertResearchProviderAllowed, rethrowResearchProviderControl } = require('../utils/anchorResearchProviderPause');
 
 const { loadRecoveryState } = require('./anchorEmailRecovery');
 const { assertLegacyPreparation } = require('./anchorEmailRecoveryIntegration');
@@ -580,6 +581,7 @@ async function persistDiscoveredCompanies(pool, store, {
 
   const scope = scoutContext.scope || {};
   const admissionContext = {
+    tenantId: tenant.tenantId,
     missionSegment: scope.segment || (searchDefinition?.segments || [])[0] || null,
     missionSegments: scope.eligibleSubsegments,
     missionCities: scope.cities,
@@ -595,6 +597,10 @@ async function persistDiscoveredCompanies(pool, store, {
 
   let websiteInvestigations = 0;
   let checkpointDeferred = false;
+  const ticketPass = scoutContext.ticketPass || null;
+  const finishTicket = async (company, outcome, write) => ticketPass
+    ? ticketPass.finish(company._scoutTicketRefs, outcome, write)
+    : { applied: true, result: write ? await write(pool) : null };
   const evidenceCursor = scoutContext.evidenceCursor || null;
   if (evidenceCursor) {
     require('./scoutBusinessEvidenceCursor').assertCursorTenantBindings({ tenantId: tenant.tenantId, store, scoutContext });
@@ -618,6 +624,12 @@ async function persistDiscoveredCompanies(pool, store, {
   }
   const decisions = [];
   for (let company of companies) {
+    // A claim is a durable reservation, not an in-memory seen set. Never spend
+    // or write for a stale/expired worker; leave the ticket independently due.
+    if (ticketPass && !(await ticketPass.renew(company._scoutTicketRefs))) {
+      checkpointDeferred = true;
+      continue;
+    }
     const reject = reason => {
       recordReplenishmentRejection(counters, reason);
       decisions.push({ name: company.name, domain: company.domain || company.website, location: company.location, reason });
@@ -628,6 +640,7 @@ async function persistDiscoveredCompanies(pool, store, {
     const domain = normalizeDomain(company.domain || website);
     if (!name || !domain) {
       reject('insufficient_business_fit');
+      await finishTicket(company, { state: 'blocked', reason: 'identity_incomplete' });
       continue;
     }
 
@@ -638,30 +651,41 @@ async function persistDiscoveredCompanies(pool, store, {
     });
     if (ownership.kind === OWNERSHIP_KINDS.ALREADY_USABLE_CANONICAL) {
       counters.alreadyUsable = (counters.alreadyUsable || 0) + 1;
+      await finishTicket(company, { state: 'deferred', reason: 'already_usable_observed', retryAfterMs: 24 * 60 * 60_000 });
       continue;
     }
     if (ownership.kind === OWNERSHIP_KINDS.CONTACT_POLICY_HOLD) {
       checkpointDeferred = true;
       counters.contactPolicyDeferred = (counters.contactPolicyDeferred || 0) + 1;
       reject('same_company_different_contact');
+      await finishTicket(company, { state: 'deferred', reason: 'contact_policy_hold', retryAfterMs: 24 * 60 * 60_000 });
       continue;
     }
     if (ownership.kind === OWNERSHIP_KINDS.VALID_COLLISION
       || ownership.kind === OWNERSHIP_KINDS.PRIOR_CONTACT
       || ownership.kind === OWNERSHIP_KINDS.AO_OWNED) {
       reject('owned_elsewhere');
+      await finishTicket(company, { state: 'deferred', reason: 'ownership_policy_observed', retryAfterMs: 24 * 60 * 60_000,
+        evidence: { ownershipKind: ownership.kind, reason: ownership.reason || 'governed_ownership', tenantId: tenant.tenantId } });
       continue;
     }
     if (ownership.kind === OWNERSHIP_KINDS.STALE) {
       reject('stale_ownership');
+      await finishTicket(company, { state: 'deferred', reason: 'ownership_unresolved', retryAfterMs: 24 * 60 * 60_000 });
       continue;
     }
     let businessEvidence = null;
+    let investigatedThisCandidate = false;
+    let evidenceOutcome = null;
     const initialAdmission = evaluateReplenishmentAdmission(company, admissionContext);
     if (initialAdmission.reason === 'unclassifiable_vertical' && scoutContext.investigateBusinessEvidence && websiteInvestigations < 20
       && (!evidenceCursor || (ownership.kind === OWNERSHIP_KINDS.CLEAR && evidenceCursor.take(company)))) {
       websiteInvestigations += 1;
-      const observed = await require('./scoutWebsiteBusinessEvidence').acquireBusinessEvidence(company, admissionContext);
+      investigatedThisCandidate = true;
+      const response = await require('./scoutWebsiteBusinessEvidence').acquireBusinessEvidence(company, admissionContext,
+        ticketPass ? { reportOutcome: true } : undefined);
+      evidenceOutcome = ticketPass ? response : null;
+      const observed = ticketPass ? response?.result : response;
       if (observed) { company = observed.candidate; businessEvidence = observed.evidence; }
     }
     const admission = evaluateReplenishmentAdmission(company, admissionContext);
@@ -670,6 +694,17 @@ async function persistDiscoveredCompanies(pool, store, {
       // a temporary fetch failure. Retain replay until this is resolved.
       if (admission.reason === 'unclassifiable_vertical') checkpointDeferred = true;
       reject(admission.reason);
+      await finishTicket(company, admission.reason === 'unclassifiable_vertical'
+        ? !investigatedThisCandidate ? { state: 'deferred', reason: 'evidence_budget_deferred', retryAfterMs: 0 }
+          : evidenceOutcome?.outcome === 'fetch_failed' && evidenceOutcome.retryable === true
+            ? { state: 'deferred', reason: 'transient_business_evidence_failure', retryAfterMs: 24 * 60 * 60_000 }
+            : { state: 'blocked', reason: evidenceOutcome?.outcome === 'no_evidence'
+              ? 'unresolved_business_evidence' : 'business_evidence_dependency',
+            evidence: { outcome: evidenceOutcome?.outcome || 'unknown', reason: evidenceOutcome?.reason || 'unreported_crawl_outcome' } }
+        : ['contradictory_business_type', 'segment_mismatch'].includes(admission.reason)
+          ? { state: 'handled', reason: 'policy_excluded', evidence: { admissionReason: admission.reason,
+            provenance: admission.provenance || null, tenantId: tenant.tenantId } }
+          : { state: 'blocked', reason: admission.reason === 'outside_geography' ? 'geography_unresolved' : 'identity_incomplete' });
       continue;
     }
     if (tenant.tenantId === '1') {
@@ -677,16 +712,26 @@ async function persistDiscoveredCompanies(pool, store, {
       const reason = scope.offerId !== offer.PULSEFORGE_CASHFLOW_OFFER_ID
         ? offer.SOURCE_REVIEW_BLOCKER
         : offer.pulseforgeTargetReason({ ...company, website, domain, industry: admission.vertical });
-      if (reason) { reject(reason); continue; }
+      if (reason) { reject(reason); await finishTicket(company, { state: 'deferred', reason: 'ownership_unresolved', retryAfterMs: 24 * 60 * 60_000 }); continue; }
     }
 
     if (ownership.kind === OWNERSHIP_KINDS.SAME_COMPANY_DIFFERENT_CONTACT) {
+      if (ticketPass) {
+        // The legacy helper spends and writes outside this ticket transaction.
+        // Do not activate it until business-scoped reservation + fenced writes
+        // are implemented; retain independent work without replaying queries.
+        checkpointDeferred = true; reject('same_company_different_contact');
+        await finishTicket(company, { state: 'blocked', reason: tenant.tenantId === '13'
+          ? 'recovery_tenant_unsupported' : 'recovery_reservation_required' });
+        continue;
+      }
       if (typeof store.one === 'function') {
         const recent = await store.one(`SELECT id FROM acquisition_outbound_events
           WHERE tenant_id=$1 AND event_type='scout_contact_recovery_attempt'
           AND payload->>'companyId'=$2 AND created_at>now()-interval '1 hour' LIMIT 1`,
         [tenant.tenantId, ownership.companyId]);
-        if (recent) { checkpointDeferred = true; counters.recoveryBackoff = (counters.recoveryBackoff || 0) + 1; continue; }
+        if (recent) { checkpointDeferred = true; counters.recoveryBackoff = (counters.recoveryBackoff || 0) + 1;
+          await finishTicket(company, { state: 'deferred', reason: 'recovery_backoff', retryAfterMs: 60 * 60_000 }); continue; }
       }
       const recovery = await attemptSameCompanyAlternateRecovery(store, pool, {
         tenantId: tenant.tenantId,
@@ -700,10 +745,14 @@ async function persistDiscoveredCompanies(pool, store, {
         { companyId: ownership.companyId, domain, reason: recovery.reason, telemetry: recovery.telemetry });
       if (recovery.ok) {
         counters.recovered += 1;
+        await finishTicket(company, { state: 'handled', reason: 'recovered' });
         continue;
       }
       checkpointDeferred = true;
       reject('same_company_different_contact');
+      await finishTicket(company, ['recovery_tenant_unsupported', 'provider_unavailable'].includes(recovery.reason)
+        ? { state: 'blocked', reason: recovery.reason }
+        : { state: 'deferred', reason: 'recovery_failed', retryAfterMs: 60 * 60_000 });
       continue;
     }
 
@@ -712,7 +761,15 @@ async function persistDiscoveredCompanies(pool, store, {
       'Discovered by Max-directed Scout inventory replenishment; no contact performed.',
       admission.provenance
     ) + (businessEvidence ? ` | business_evidence: ${JSON.stringify(businessEvidence)}` : '');
-    const result = await pool.query(`
+    const writeQueue = async db => {
+      if (ticketPass) {
+        // Different provider identities may resolve to the same canonical queue
+        // predicate. Serialize both OR keys before INSERT ... WHERE NOT EXISTS.
+        for (const key of [`${tenant.tenantId}:domain:${domain.toLowerCase()}`, `${tenant.tenantId}:name:${name.toLowerCase()}`].sort()) {
+          await db.query('SELECT pg_advisory_xact_lock(261023,hashtext($1))', [key]);
+        }
+      }
+      const insertedRow = await db.query(`
       INSERT INTO scout_unenriched (
         client_id, company, website_url, domain, vertical, location, source,
         enrichment_attempts, last_attempt_at, notes
@@ -740,6 +797,45 @@ async function persistDiscoveredCompanies(pool, store, {
       CANONICAL_ENRICHABLE_SCOUT_VERTICALS.map(v => v.toLowerCase()),
       tenant.clientId,
     ]);
+      if (ticketPass && !insertedRow.rowCount) {
+        const matched = await db.query(`SELECT u.id, u.client_id,
+          ${require('./scoutQueueAccounting').ELIGIBILITY_SQL} AS eligibility_bucket,
+          ${require('./scoutQueueAccounting').RETRY_AFTER_SQL} AS retry_after_ms,
+          u.enrichment_attempts,u.last_attempt_at
+          FROM scout_unenriched u
+          WHERE u.client_id=$1 AND (lower(u.domain)=lower($2) OR lower(trim(u.company))=lower(trim($3)))
+          AND NOT (u.source = 'max_buffer_replenishment'
+            AND COALESCE(u.enrichment_attempts, 0) = 0
+            AND NOT (lower(trim(u.vertical)) = ANY($4::text[])))`,
+        [tenant.clientId, domain, name, CANONICAL_ENRICHABLE_SCOUT_VERTICALS.map(v => v.toLowerCase()),
+          enrichmentVerticals(tenant, scoutContext)]);
+        if (!matched.rows.length) throw Error('Scout ticket queue handling was not confirmed');
+        queueAccounting.observe(matched.rows, { tenantId: tenant.tenantId });
+        if (!matched.rows.some(row => row.eligibility_bucket === 'eligible_now')) {
+          const retryable = matched.rows.filter(row => ['retry_cooldown', 'attempt_limit_hold'].includes(row.eligibility_bucket)
+            && !(row.eligibility_bucket === 'attempt_limit_hold' && row.last_attempt_at == null));
+          const earliest = retryable.sort((a,b) => Number(a.retry_after_ms)-Number(b.retry_after_ms))[0];
+          throw Object.assign(Error('Existing Scout queue work is held'), { scoutQueueHeld: true,
+            scoutQueueOutcome: earliest ? { state: 'deferred',
+              reason: earliest.eligibility_bucket === 'attempt_limit_hold' ? 'queue_attempt_cooldown' : 'queue_retry_cooldown',
+              retryAfterMs: Math.max(60*60_000, Math.ceil(Number(earliest.retry_after_ms))) }
+              : { state: 'blocked', reason: matched.rows.every(row => row.eligibility_bucket === 'unsupported_vertical')
+                ? 'queue_unsupported_vertical' : 'queue_attempt_limit' } });
+        }
+      }
+      return insertedRow;
+    };
+    let handled;
+    try { handled = await finishTicket(company, { state: 'handled', reason: 'queued' }, writeQueue); }
+    catch (error) {
+      if (!ticketPass || !error.scoutQueueHeld) throw error;
+      counters.alreadyQueued += 1;
+      checkpointDeferred = true;
+      await finishTicket(company, error.scoutQueueOutcome);
+      continue;
+    }
+    if (!handled.applied) { checkpointDeferred = true; continue; }
+    const result = handled.result || { rowCount: 0, rows: [] };
     inserted += result.rowCount;
     if (result.rowCount) counters.admittedToEnrichment += 1;
     else {
@@ -747,6 +843,7 @@ async function persistDiscoveredCompanies(pool, store, {
       // Read-only observation of the same tenant-scoped duplicate predicate.
       // Failure cannot change admission or reset retry/attempt controls.
       try {
+        if (ticketPass) continue; // Already measured within the handling transaction.
         const matched = await pool.query(`SELECT u.id, u.client_id,
           ${require('./scoutQueueAccounting').ELIGIBILITY_SQL} AS eligibility_bucket
           FROM scout_unenriched u
@@ -869,7 +966,14 @@ async function consumeResearch(pool, authority, now) {
   }, { now });
 }
 
-async function defaultScoutRamp({
+async function defaultScoutRamp(input = {}) {
+  const governed = input.governedContext || createGovernedOutboundContext({ program: input.program });
+  const tenant = resolveReplenishmentTenantContext({ governedContext: governed, program: input.program });
+  return withResearchProviderScope(tenant.tenantId,
+    () => defaultScoutRampResearchScoped({ ...input, governedContext: governed }));
+}
+
+async function defaultScoutRampResearchScoped({
   cycleId = null,
   pool,
   store,
@@ -886,6 +990,8 @@ async function defaultScoutRamp({
   recoverExistingInventory = null,
   createQueryCheckpointSession = null,
   createBusinessEvidenceCursorStore = null,
+  createCandidateTicketStore = null,
+  createPageCheckpointStore = null,
   now = new Date(),
 } = {}) {
   const governed = governedContext || createGovernedOutboundContext({ program });
@@ -906,6 +1012,7 @@ async function defaultScoutRamp({
       tenantId: tenant.tenantId,
     });
   } catch (err) {
+    rethrowResearchProviderControl(err);
     logger.warn?.('[max-outbound-control] existing inventory recovery failed', err.message || err);
   }
   const first = await runEnrichmentBatches(enricher, pool, plan.deficit, tenantBinding);
@@ -918,10 +1025,65 @@ async function defaultScoutRamp({
   let admissionMeasured = false;
   let queryProgression = null;
   let evidenceProgression = evidenceProgressionDiagnostic(null);
+  let candidateWork = null;
 
   const recoveredExistingCount = Number(existingRecovery?.payload?.qualifiedCount || 0);
   if (promoted < plan.deficit && recoveredExistingCount <= 0) {
     const fingerprint = searchFingerprint || scoutSearchFingerprint(program, source);
+    const scope = sourceScope(source);
+    const allowedCities = resolveScoutRampAllowedCities(scope);
+    const persistPass = async (input, ticketPass = null) => {
+      const persist = evidenceCursor => persistDiscoveredCompanies(pool, store, {
+        ...input, tenantId: tenant.tenantId,
+        scoutContext: { scope, source, allowedCities, serviceAreas: allowedCities,
+          clientId: tenant.clientId, authorizedTenantId: tenant.tenantId, governedContext: governed,
+          program, investigateBusinessEvidence: true, evidenceCursor, ticketPass },
+      });
+      if (input.companies?.length) {
+        const createCursor = createBusinessEvidenceCursorStore
+          || require('./scoutBusinessEvidenceCursor').createBusinessEvidenceCursorStore;
+        try {
+          const cursorRun = await createCursor({ pool, tenantId: tenant.tenantId, fingerprint }).withPass(persist);
+          evidenceProgression = evidenceProgressionDiagnostic(cursorRun.progression);
+          persisted = cursorRun.result;
+        } catch (error) {
+          evidenceProgression = evidenceProgressionDiagnostic(error.evidenceProgression || { status: 'failed' });
+          throw error;
+        }
+      } else persisted = await persist(null);
+      admissionMeasured = true;
+      return persisted;
+    };
+    const ticketDispatch = require('./scoutCandidateTicketDispatch');
+    const durableEnabled = ticketDispatch.ENABLED_TENANTS.has(tenant.tenantId)
+      && (createCandidateTicketStore || process.env.SCOUT_DURABLE_CANDIDATES_ENABLED === 'true');
+    let tickets = null;
+    let dispatcher = null;
+    let pages = null;
+    let coverageEpochBlocked = false;
+    if (durableEnabled) {
+      tickets = (createCandidateTicketStore || require('./scoutCandidateTickets').createCandidateTicketStore)({
+        pool, tenantId: tenant.tenantId, fingerprint,
+      });
+      await tickets.assertReady(); // Fail closed before any new discovery/provider work.
+      let coverageEpoch = null;
+      try {
+        coverageEpoch = require('./scoutCoverageEpoch').loadCoverageEpochConfig({ tenantId: tenant.tenantId, fingerprint });
+      } catch (error) {
+        if (error.code !== 'SCOUT_COVERAGE_EPOCH_CONFIG_INVALID') throw error;
+        // Invalid permission blocks acquisition, never the already-owned ticket
+        // backlog. Do not expose the manifest or an arbitrary parser message.
+        coverageEpochBlocked = true;
+      }
+      pages = (createPageCheckpointStore || require('./scoutQueryContinuation').createPageCheckpointStore)({
+        db: pool, tenantId: tenant.tenantId, fingerprint, coverageEpoch,
+      });
+      if (typeof pages.assertReady === 'function') await pages.assertReady();
+      const dependencyKey = ticketDispatch.candidateTicketDependencyKey({ tenantId: tenant.tenantId, program, source });
+      dispatcher = ticketDispatch.createCandidateTicketDispatcher({ ticketStore: tickets,
+        tenantId: tenant.tenantId, dependencyKey, persist: persistPass });
+      candidateWork = await dispatcher.snapshot();
+    }
     discoveryBackoff = await loadDiscoveryBackoff(pool, tenant.tenantId, fingerprint, now);
     if (discoveryBackoff?.diversify) {
       searchGeneration = Number(discoveryBackoff.searchGeneration || 1);
@@ -941,72 +1103,55 @@ async function defaultScoutRamp({
         });
       }
     }
-    if (!discoveryBackoff || discoveryBackoff.diversify) {
-      const scope = sourceScope(source);
-      const allowedCities = resolveScoutRampAllowedCities(scope);
+    if (coverageEpochBlocked) {
+      discovery = { kind: 'blocked', reason: 'coverage_epoch_config_invalid' };
+      queryProgression = ticketDispatch.queryProgressionDiagnostic({ status: 'not_observed',
+        coverageEpochStatus: 'configuration_invalid' });
+      emitDiagnostic(logger, '[max-outbound-control] Scout query progression', {
+        tenantId: tenant.tenantId, cycleId, ...queryProgression,
+      });
+      if (typeof store.event === 'function') await store.event('tick_blocked',
+        [tenant.tenantId, fingerprint, 'coverage_epoch_config_invalid'], { programId: program.id,
+          reason: 'coverage_epoch_config_invalid', action: 'review_exact_coverage_epoch_permission' });
+    }
+    if (!coverageEpochBlocked && (!discoveryBackoff || discoveryBackoff.diversify)) {
       const discover = runDiscovery
         || ((input, opts) => require('./scoutAcquisitionIntelligence').runAcquisitionIntelligenceLoop(input, opts));
       const checkpoints = require('./scoutQueryCheckpoints');
       const checkpointSession = createQueryCheckpointSession
-        ? createQueryCheckpointSession({ pool, tenantId: tenant.tenantId, fingerprint })
+        ? createQueryCheckpointSession({ pool, tenantId: tenant.tenantId, fingerprint, ticketStore: tickets, pageStore: pages })
         : checkpoints.createCheckpointSession({ store: checkpoints.createCheckpointStore({
           db: pool, tenantId: tenant.tenantId, fingerprint,
-        }) });
+        }), ticketStore: tickets, pageStore: pages });
       const placesProvider = require('../packages/capabilities/discovery/providers/PlacesProvider')
         .createPlacesProvider({ queryCheckpointSession: checkpointSession });
       discoveryAttempted = true;
-      discovery = await discover(
+      try { discovery = await discover(
         scoutInput({ ...program, tenant_id: tenant.tenantId }, source, plan, tenant, searchGeneration),
         {
           loadCompanies: async () => loadReuseCompanies(pool, tenant.tenantId),
-          persistCompanies: async input => {
-            const persist = (persistencePool, persistenceStore, evidenceCursor = null) => persistDiscoveredCompanies(persistencePool, persistenceStore, {
-              ...input,
-              tenantId: tenant.tenantId,
-              scoutContext: {
-                scope,
-                source,
-                allowedCities,
-                serviceAreas: allowedCities,
-                clientId: tenant.clientId,
-                authorizedTenantId: tenant.tenantId,
-                governedContext: governed,
-                program,
-                investigateBusinessEvidence: true,
-                evidenceCursor,
-              },
-            });
-            if (input.companies?.length) {
-              const createCursor = createBusinessEvidenceCursorStore
-                || require('./scoutBusinessEvidenceCursor').createBusinessEvidenceCursorStore;
-              try {
-                const cursorStore = createCursor({ pool, tenantId: tenant.tenantId, fingerprint });
-                const cursorRun = await cursorStore.withPass(evidenceCursor => persist(pool, store, evidenceCursor));
-                evidenceProgression = evidenceProgressionDiagnostic(cursorRun.progression);
-                persisted = cursorRun.result;
-              } catch (error) {
-                evidenceProgression = evidenceProgressionDiagnostic(error.evidenceProgression || { status: 'failed' });
-                throw error;
-              }
-            } else persisted = await persist(pool, store);
-            admissionMeasured = true;
-            return persisted;
-          },
+          persistCompanies: input => dispatcher ? dispatcher.drain(input) : persistPass(input),
           enablePlaces: true,
           placesProvider,
           acknowledgeDiscovery: () => checkpointSession.acknowledge(),
         }
-      );
+      ); } catch (error) {
+        rethrowResearchProviderControl(error);
+        if (!dispatcher) throw error;
+        discovery = { kind: 'blocked', reason: 'discovery_execution_failed' };
+      }
 
       const checkpointSnapshot = checkpointSession.snapshot();
-      queryProgression = {
-        status: ['observed_query_set_handled', 'pending_query_work', 'not_observed']
-          .includes(checkpointSnapshot.status) ? checkpointSnapshot.status : 'not_observed',
-        ...Object.fromEntries(['observedQueries', 'handledQueries', 'fetchedQueries',
-          'replayedQueries', 'pendingAcknowledgements', 'unresolvedQueries'].map(key => [key,
-          Number.isSafeInteger(checkpointSnapshot[key]) && checkpointSnapshot[key] >= 0
-            ? checkpointSnapshot[key] : null])),
-      };
+      queryProgression = ticketDispatch.queryProgressionDiagnostic(checkpointSnapshot);
+      const queryDependency = dispatcher ? ticketDispatch.observedQueryDependency(queryProgression) : null;
+      if (queryDependency) {
+        // Per-query page checkpoints are durable provider backoff: no automatic
+        // refetch/refresh of exhausted or uncertain units. Alert only on a new
+        // fingerprint/status combination, never claim whole-market exhaustion.
+        discovery = { kind: 'blocked', reason: queryDependency.reason };
+        if (typeof store.event === 'function') await store.event('tick_blocked',
+          [tenant.tenantId, fingerprint, JSON.stringify(queryDependency.statuses)], { programId: program.id, ...queryDependency });
+      }
       emitDiagnostic(logger, '[max-outbound-control] Scout query progression', {
         tenantId: tenant.tenantId, cycleId, ...queryProgression, evidenceProgression,
       });
@@ -1018,16 +1163,33 @@ async function defaultScoutRamp({
         });
       }
 
-      if (persisted.inserted > 0 && promoted < plan.deficit) {
-        const second = await runEnrichmentBatches(enricher, pool, plan.deficit - promoted, tenantBinding);
-        promoted += second.promoted + second.recovered;
-        first.promoted += second.promoted;
-        first.recovered += second.recovered;
-        first.emailResolved += second.emailResolved;
-        first.emailVerified += second.emailVerified;
-        first.considered += second.considered;
-        first.summaries.push(...second.summaries);
+    }
+    // This is independent of query generation, observed-query completion and
+    // zero-yield discovery backoff. A durable deferral never relies on replaying
+    // its old Places query to become runnable again.
+    if (dispatcher) {
+      if (!dispatcher.attempted) {
+        try { await dispatcher.drain({ companies: [] }); }
+        catch (error) {
+          rethrowResearchProviderControl(error);
+          discovery = { kind: 'blocked', reason: 'candidate_processing_failed' };
+        }
       }
+      candidateWork = await dispatcher.snapshot();
+      emitDiagnostic(logger, '[max-outbound-control] Scout candidate work',
+        { tenantId: tenant.tenantId, cycleId, ...candidateWork });
+      if (typeof store.event === 'function') await store.event('scout_candidate_work_progression', [tenant.tenantId, cycleId || fingerprint],
+        { programId: program.id, ...candidateWork });
+    }
+    if (persisted.inserted > 0 && promoted < plan.deficit) {
+      const second = await runEnrichmentBatches(enricher, pool, plan.deficit - promoted, tenantBinding);
+      promoted += second.promoted + second.recovered;
+      first.promoted += second.promoted;
+      first.recovered += second.recovered;
+      first.emailResolved += second.emailResolved;
+      first.emailVerified += second.emailVerified;
+      first.considered += second.considered;
+      first.summaries.push(...second.summaries);
     }
   }
 
@@ -1067,6 +1229,7 @@ async function defaultScoutRamp({
     discoveryBackoff,
     queryProgression,
     evidenceProgression,
+    candidateWork,
     searchFingerprint: searchFingerprint || scoutSearchFingerprint(program, source),
     searchGeneration,
     verificationRetry,
@@ -1318,6 +1481,7 @@ async function runMaxOutboundControlLoop(options = {}) {
         preserveGovernedEmailInventory: true,
       });
     } catch (err) {
+      rethrowResearchProviderControl(err);
       logger.warn?.('[max-outbound-control] AO refill failed', err.message || err);
       aoRefill = { error: err.message || String(err), assigned: [] };
     }
@@ -1478,6 +1642,8 @@ async function runMaxOutboundControlLoop(options = {}) {
     scoutProviderReceipt: providerReceiptDiagnostic(store.tenantId, cycleId, scout?.discovery),
     scoutAdmissionReceipt: admissionReceiptDiagnostic(store.tenantId, cycleId, scout?.admission, scout?.admissionMeasured),
     scoutEvidenceProgression: evidenceProgressionDiagnostic(scout?.evidenceProgression),
+    scoutCandidateWork: require('./scoutCandidateTicketDispatch').candidateTicketDiagnostic(scout?.candidateWork),
+    scoutQueryProgression: require('./scoutCandidateTicketDispatch').queryProgressionDiagnostic(scout?.queryProgression),
     scoutBackoff: scout?.discoveryBackoff || null,
     aoRefill: aoRefill ? {
       assigned: Number(aoRefill.assigned?.length || 0),

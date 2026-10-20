@@ -156,6 +156,7 @@ function providerWith(placesApi) {
   const mod = { exports: {} };
   vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { module: mod, exports: mod.exports, URL, process: { env: {} },
     require(specifier) {
+      if (specifier === '../../../../utils/anchorResearchProviderPause') return require('../utils/anchorResearchProviderPause');
       if (specifier.endsWith('MarketHypothesisRegistry')) return { resolveMarketHypothesisBySegmentKey: () => null, expandSearchStrategies: () => [], SEARCH_SOURCES: {} };
       if (specifier.endsWith('EvidenceRequirements')) return { INVESTIGATIVE_EVIDENCE: { IDENTITY: 'identity' } };
       if (specifier.endsWith('placesCostAttribution')) return { PLACES_FEATURES: { DISCOVERY: 'discovery' } };

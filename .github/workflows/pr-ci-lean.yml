@@ -154,7 +154,7 @@ jobs:
           npm run test:babrun-scout-intake
           node --test test/babrunGovernedEnrichmentEvidence.test.js test/babrunGovernedEnrichmentEvidencePostgres.test.js
       - name: Babrun owner evidence and promotion safety (network denied)
-        run: node --require ./test/helpers/denyWebsiteEvidenceNetwork.cjs --test test/websiteOwnerEvidence.test.js test/scoutPromotionEvidence.test.js test/scoutPromotionRetention.test.js test/scoutPromotionCohort.test.js
+        run: node --require ./test/helpers/denyWebsiteEvidenceNetwork.cjs --test test/websiteOwnerEvidence.test.js test/scoutSmallBusinessWebsiteEvidence.test.js test/scoutPromotionEvidence.test.js test/scoutPromotionRetention.test.js test/scoutPromotionCohort.test.js
       - name: Scout queued admission accounting and PostgreSQL boundaries (no providers)
         env:
           DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
@@ -165,7 +165,15 @@ jobs:
           DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
           DATABASE_SSL: 'false'
           SCOUT_CHECKPOINT_REQUIRE_POSTGRES: 'true'
-        run: node --test test/scoutQueryCheckpoints.test.js test/scoutQueryCheckpointRamp.test.js test/scoutQueryCheckpointsPostgres.test.js
+        run: node --test test/scoutQueryCheckpoints.test.js test/scoutQueryCheckpointRamp.test.js test/scoutQueryCheckpointsPostgres.test.js test/scoutQueryContinuation.test.js test/scoutQueryContinuationPostgres.test.js test/scoutCoverageEpoch.test.js test/scoutCoverageEpochPostgres.test.js test/scoutCoverageEpochRamp.test.js test/scoutCoverageGrant.test.js test/scoutCoverageGrantPostgres.test.js
+      - name: Scout durable candidate protocol (network denied)
+        run: node --require ./test/helpers/denyWebsiteEvidenceNetwork.cjs --test test/scoutCandidateTickets.test.js test/scoutCandidateTicketDispatch.test.js
+      - name: Scout durable candidate and complete pipeline required PostgreSQL contracts (synthetic providers)
+        env:
+          DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
+          DATABASE_SSL: 'false'
+          SCOUT_CANDIDATE_REQUIRE_POSTGRES: 'true'
+        run: node --test test/scoutCandidateTicketsPostgres.test.js test/scoutCandidateTicketDispatchPostgres.test.js test/scoutDurablePipelinePostgres.test.js test/scoutDurableCleanInventory.test.js test/scoutDurableEpochPipelinePostgres.test.js
       - name: Scout evidence cursor progression and crash regressions (network denied)
         env:
           DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
@@ -374,7 +382,7 @@ jobs:
           exit "$test_status"
       - name: Living Command brief and browser acceptance
         run: |
-          node --test test/livingCommandBrief.test.js
+          node --test test/livingCommandBrief.test.js test/contentReview.test.js test/maxAccountReview.test.js test/maxSpreadsheetReviewUi.test.js
           CHROMIUM_PATH="$(command -v google-chrome)" LIVING_COMMAND_QA_DIR="$RUNNER_TEMP" node --test test/browser/livingCommandUi.test.js
       - name: Retain Living Command previews
         if: always()
