@@ -5,13 +5,20 @@ const { ensureEmailVerificationColumns } = require('./utils/emailVerificationSch
 const { promoteRecord } = require('./scripts/promoteUnenriched');
 const { ENRICHABLE_SCOUT_VERTICALS } = require('./utils/replenishmentVertical');
 
+const { buildEnrichmentEligibilitySql, LONG_HOLD_AFTER_ATTEMPT } = require('./utils/scoutEnrichmentEligibility');
+
 const AGENT_NAME = 'scout_unenriched_enrichment';
 const ANCHOR_CLIENT_ID = 10;
 const DEFAULT_LIMIT = 5;
 const DEFAULT_RETRY_HOURS = 7 * 24;
-const DEFAULT_MAX_ATTEMPTS = 3;
+const DEFAULT_MAX_ATTEMPTS = LONG_HOLD_AFTER_ATTEMPT;
 const SCHEDULED_HOUR_ET = 17;
 const ANCHOR_PRIORITY_VERTICALS = ENRICHABLE_SCOUT_VERTICALS;
+
+const ENRICHMENT_ELIGIBILITY_SQL = buildEnrichmentEligibilitySql({
+  unrestrictedVerticals: true,
+  maxAttempts: '$2', retryInterval: "($3::numeric * INTERVAL '1 hour')",
+});
 
 function easternParts(now = new Date()) {
   const values = new Intl.DateTimeFormat('en-CA', {
@@ -68,10 +75,7 @@ async function runScoped(params = {}) {
     SELECT *
     FROM scout_unenriched
     WHERE client_id = $1
-      AND (COALESCE(enrichment_attempts, 0) < $2
-        OR last_attempt_at <= NOW() - INTERVAL '7 days')
-      AND COALESCE(last_attempt_at, NOW() - INTERVAL '100 years') <= NOW() - ($3::numeric * INTERVAL '1 hour')
-      AND ($5::text[] IS NULL OR vertical = ANY($5::text[]))
+      AND (${ENRICHMENT_ELIGIBILITY_SQL}) = 'eligible_now'
     ORDER BY last_attempt_at ASC, id ASC
     LIMIT $4
   `, [clientId, maxAttempts, retryHours, limit, verticals]);
@@ -158,7 +162,8 @@ function startAnchorUnenrichedEnrichmentScheduler() {
 module.exports = {
   run,
   startAnchorUnenrichedEnrichmentScheduler,
-  _test: { easternParts, scheduledWindowOpen, ANCHOR_PRIORITY_VERTICALS },
+  _test: { ENRICHMENT_ELIGIBILITY_SQL, easternParts, scheduledWindowOpen, ANCHOR_PRIORITY_VERTICALS,
+    DEFAULT_MAX_ATTEMPTS },
 };
 
 if (require.main === module) {

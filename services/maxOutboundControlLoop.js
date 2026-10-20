@@ -800,11 +800,7 @@ async function persistDiscoveredCompanies(pool, store, {
       if (ticketPass && !insertedRow.rowCount) {
         const matched = await db.query(`SELECT u.id, u.client_id,
           ${require('./scoutQueueAccounting').ELIGIBILITY_SQL} AS eligibility_bucket,
-          CASE WHEN u.vertical = ANY($5::text[]) THEN
-            GREATEST(0, EXTRACT(EPOCH FROM (GREATEST(
-              CASE WHEN COALESCE(u.enrichment_attempts,0)>=3 THEN u.last_attempt_at+interval '7 days' ELSE now() END,
-              COALESCE(u.last_attempt_at+interval '1 hour',now()))-now()))*1000)::bigint
-            ELSE NULL END AS retry_after_ms,
+          ${require('./scoutQueueAccounting').RETRY_AFTER_SQL} AS retry_after_ms,
           u.enrichment_attempts,u.last_attempt_at
           FROM scout_unenriched u
           WHERE u.client_id=$1 AND (lower(u.domain)=lower($2) OR lower(trim(u.company))=lower(trim($3)))

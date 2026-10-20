@@ -147,6 +147,24 @@ test('real PostgreSQL governed ramp: sustained independent candidate flow, bound
     const row = (await db.query("SELECT enrichment_attempts,last_attempt_at FROM scout_unenriched WHERE company='Known Hold'")).rows[0];
     assert.equal(row.enrichment_attempts, 3); assert.ok(row.last_attempt_at);
   });
+  await t.test('duplicate tickets at attempts three and five retain the seven-day hold', async () => {
+    await db.query(`INSERT INTO scout_unenriched(client_id,company,website_url,domain,vertical,source,enrichment_attempts,last_attempt_at)
+      VALUES(13,'Daily First','https://dailyfirst.example','dailyfirst.example','painting','fixture',3,now()),
+        (13,'Daily Last','https://dailylast.example','dailylast.example','painting','fixture',5,now());`);
+    await stage('approved-q9-daily', [raw('dailyfirst', 'Daily First', { placeTypes: ['painter'], description: 'Painting contractor' }),
+      raw('dailylast', 'Daily Last', { placeTypes: ['painter'], description: 'Painting contractor' })]);
+    const before = (await db.query("SELECT enrichment_attempts,last_attempt_at FROM scout_unenriched WHERE domain IN ('dailyfirst.example','dailylast.example') ORDER BY domain")).rows;
+    const result = await run({ backoff: true });
+    // Snapshot includes the prior Known Hold ticket plus these two new tickets.
+    assert.equal(result.candidateWork.byReason.queue_attempt_cooldown, 3);
+    const work = (await db.query("SELECT next_attempt_at FROM scout_candidate_work WHERE reason='queue_attempt_cooldown' AND candidate_key IN (SELECT candidate_key FROM scout_candidate_memberships WHERE query_key='approved-q9-daily')")).rows;
+    assert.equal(work.length, 2);
+    for (const row of work) {
+      const delay = row.next_attempt_at - Date.now();
+      assert.ok(delay > 6 * 86400000 && delay <= 7 * 86400000, `seven-day delay: ${delay}`);
+    }
+    assert.deepEqual((await db.query("SELECT enrichment_attempts,last_attempt_at FROM scout_unenriched WHERE domain IN ('dailyfirst.example','dailylast.example') ORDER BY domain")).rows, before);
+  });
   await t.test('new exact-provider identity evidence repairs a hold without erasing incomplete original observation', async () => {
     await stage('repair1',[{placeId:'repair',website:'https://repair.example'}]);
     await run({backoff:true}); const before=calls.website.length;
