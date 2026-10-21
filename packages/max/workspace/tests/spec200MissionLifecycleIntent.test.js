@@ -19,7 +19,7 @@ const {
   isMissionExecutionCommand,
 } = require('../ExecutionLanguageDetection');
 const { analyzeOperatorIntent } = require('../OperatorIntent');
-const { maybeHandleAcquisitionOwnershipTurn } = require('../AcquisitionOwnership');
+const { maybeHandleAcquisitionOwnershipTurn: rawCieHandler } = require('../AcquisitionOwnership');
 const { classifyOperatorCognition, THINKING_MODES } = require('../../operatorCognition');
 
 const STR_OBJECTIVE =
@@ -185,3 +185,6 @@ describe('SPEC-200 — Explicit Mission Lifecycle Intent', () => {
     });
   });
 });
+
+const { createHermeticRetrievalHandler } = require('./workspaceTestHarness');
+const maybeHandleAcquisitionOwnershipTurn = createHermeticRetrievalHandler(rawCieHandler);

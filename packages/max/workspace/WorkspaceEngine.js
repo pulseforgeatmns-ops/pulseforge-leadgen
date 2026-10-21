@@ -10,7 +10,7 @@ const {
 const { SessionStore } = require('./SessionStore');
 const { composeResponse } = require('./ResponseComposer');
 const { buildStructuredResponse } = require('./WorkspaceTypes');
-const { isContentReviewRequest, contentReviewNavigation } = require('./ContentReviewIntent');
+const { parseReviewNavigation, resolveReviewNavigation } = require('./ReviewNavigation');
 const {
   buildMarketIntelligenceContext,
 } = require('./MarketIntelligenceContext');
@@ -503,18 +503,19 @@ class WorkspaceEngine {
 
     // Reviewing existing content is a workspace navigation request, not mission
     // inspection, delegation, approval, or execution. Resolve before mission locks.
-    if (isContentReviewRequest(question)) {
-      const uiAction = contentReviewNavigation();
-      const prose = 'Opening Content review for this workspace. You can inspect the draft, its visuals and destination before making an approval decision.';
-      const metadata = { route: 'content_review', strictOutputShape: true, readOnly: true, mutatesMissionState: false };
-      const structured = buildStructuredResponse({ answer: prose, recommendedActions: [uiAction], metadata });
+    const reviewIntent = parseReviewNavigation(question, input.reviewNavigation);
+    if (reviewIntent) {
+      // Scope here is an internal dependency, never taken from conversational context.
+      // HTTP requests resolve against current authenticated principals in the route.
+      const suppliedScope = input.reviewNavigationScope || {};
+      const scopeMatches = suppliedScope.tenantId == null || String(suppliedScope.tenantId) === String(session.context?.tenantId);
+      const navigation = resolveReviewNavigation(reviewIntent, scopeMatches ? { ...suppliedScope, tenantId: session.context?.tenantId } : {});
+      const { prose, metadata, uiAction } = navigation;
+      const structured = buildStructuredResponse({ answer: prose, recommendedActions: navigation.recommendedActions, metadata });
       this._sessions.appendMessage(session.id, { role: 'max', text: prose, structured });
-      askPathTrace.traceEarlyReturn('WorkspaceEngine.ask', 'content_review_navigation', { responseOwner: 'content_review', route: ROUTE_KINDS.INTELLIGENCE });
-      return { sessionId: session.id, prose, structured, metadata, uiAction,
-        context: session.context, suggestions: [], recommendedActions: [uiAction],
-        route: ROUTE_KINDS.INTELLIGENCE, mission: null, resolution: null,
-        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
-        workspaceOwnership: { owner: 'content_review', reason: 'explicit_content_review_request', confidence: 1, specialist: null } };
+      return { ...navigation, sessionId: session.id, structured, context: session.context,
+        route: ROUTE_KINDS.INTELLIGENCE, executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+        workspaceOwnership: { owner: reviewIntent.kind, reason: 'explicit_review_request', confidence: 1, specialist: null } };
     }
 
     // SPEC-167 — Operator Objective Resolution precedes routing (ADR-087).

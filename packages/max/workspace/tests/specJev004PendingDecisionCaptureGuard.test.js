@@ -26,7 +26,7 @@ const {
   listPendingDecisionCaptureGuardLog,
   clearPendingDecisionCaptureGuardLog,
 } = require('../pendingDecisionCaptureGuard');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { createTestAmoRuntime } = require('./amoTestRuntime');
 
 const ANCHOR_OBJECTIVE =

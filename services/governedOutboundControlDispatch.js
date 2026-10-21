@@ -149,6 +149,8 @@ function launchControlCycle({
 }
 
 async function dispatchGovernedOutboundControl(options = {}) {
+  const durable = require('./governedOutboundStageScheduler');
+  if (durable.durableSchedulingEnabled() && options.execute !== false) return durable.dispatchStages({ ...options, tenantIds: resolveTenantIds(options), stages: ['control'] });
   const pool = options.pool || require('../db');
   const logger = options.logger || console;
   const execute = options.execute !== false;

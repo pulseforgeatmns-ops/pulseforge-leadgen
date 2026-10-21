@@ -50,7 +50,7 @@ async function resolveSpreadsheetScope(req, db, { approverId, allowMissingAo = f
     if (!ao.rows.length) throw rejected('ao_scope_not_authorized');
   }
   return Object.freeze({ clientId, tenantId: clientId, aoId, actorId: positiveId(actor.id),
-    authenticatedUserId: positiveId(auth.id), canApprove: canApproveSpreadsheet(auth, approverId) });
+    authenticatedUserId: positiveId(auth.id), actorRole: actor.role, canApprove: canApproveSpreadsheet(auth, approverId) });
 }
 
 function deniesSave(text = '') {

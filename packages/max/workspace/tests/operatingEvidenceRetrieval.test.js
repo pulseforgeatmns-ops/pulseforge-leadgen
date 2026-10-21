@@ -7,9 +7,9 @@
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const {
-  maybeHandleRetrievalBeforeDelegationTurn,
+  maybeHandleRetrievalBeforeDelegationTurn: rawRetrievalHandler,
   isHardRetrievalQuestion,
 } = require('../RetrievalBeforeDelegationContext');
 const {
@@ -82,6 +82,7 @@ function anchorOperatingOpts() {
   return {
     scoutLaunched: () => scoutLaunched,
     opts: {
+      capability: { available: false, reason: 'unit_fixture_not_recorded' },
       loadCampaignAo: async ({ clientId }) => {
         assert.equal(Number(clientId), ANCHOR_ID);
         return {
@@ -489,6 +490,7 @@ describe('SPEC-105 tenant isolation', () => {
     const bundle = await loadOperatingEvidence({
       context: { tenantId: '10', clientId: 10 },
       operatingEvidenceOpts: {
+        capability: { available: false, reason: 'unit_fixture_not_recorded' },
         loadCampaignAo: async ({ clientId }) => {
           seen.push(clientId);
           return {
@@ -525,6 +527,7 @@ describe('SPEC-105 tenant isolation', () => {
     const bundle = await loadOperatingEvidence({
       context: { tenantId: '10', clientId: 10 },
       operatingEvidenceOpts: {
+        capability: { available: false, reason: 'unit_fixture_not_recorded' },
         loadCampaignAo: async () => ({
           available: true,
           progress: { campaign_name: 'Other', seeded_in_ao: 9 },
@@ -552,6 +555,7 @@ describe('SPEC-105 tenant isolation', () => {
     const bundle = await loadOperatingEvidence({
       context: { tenantId: '10', clientId: 10 },
       operatingEvidenceOpts: {
+        capability: { available: false, reason: 'unit_fixture_not_recorded' },
         loadCampaignAo: async () => ({
           available: true,
           progress: { campaign_name: 'AS', seeded_in_ao: 4 },
@@ -665,3 +669,7 @@ describe('SPEC-105 regression', () => {
     assert.doesNotMatch(result.prose, /I'd recommend a focused first campaign/i);
   });
 });
+
+// The same explicit CIE fixture contract applies to direct retrieval entry points.
+const { createHermeticRetrievalHandler } = require('./workspaceTestHarness');
+const maybeHandleRetrievalBeforeDelegationTurn = createHermeticRetrievalHandler(rawRetrievalHandler);

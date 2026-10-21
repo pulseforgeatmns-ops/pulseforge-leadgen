@@ -12,7 +12,9 @@ function anchorCron(method) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     try {
-      const result = await require('../anchorDailyOutboundCron')[method]();
+      const result = method === 'poll'
+        ? await require('../services/governedOutboundExecutionClock').runGovernedOutboundPollCycle()
+        : await require('../anchorDailyOutboundCron')[method]();
       return res.set('Cache-Control', 'no-store').json(result);
     } catch (e) { return res.status(500).json({ error: e.code || 'anchor_daily_outbound_failed' }); }
   };

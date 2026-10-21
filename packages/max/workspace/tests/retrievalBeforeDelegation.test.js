@@ -4,7 +4,7 @@ const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
-  maybeHandleRetrievalBeforeDelegationTurn,
+  maybeHandleRetrievalBeforeDelegationTurn: rawCieHandler,
 } = require('../RetrievalBeforeDelegationContext');
 const {
   maybeHandleScoutAcquisitionTurn,
@@ -132,6 +132,7 @@ describe('SPEC-102 retrieval before delegation — workspace hook', () => {
   it('does not claim explicit investigation questions', async () => {
     const turn = await maybeHandleRetrievalBeforeDelegationTurn({
       question: 'Find commercial cleaning opportunities.',
+      operatingEvidenceOpts: require('./workspaceTestHarness').unavailableOperatingEvidence(),
       session,
       context: session.context,
     });
@@ -218,7 +219,7 @@ describe('SPEC-102 Scout workspace entry', () => {
 describe('SPEC-102 WorkspaceEngine wiring', () => {
   it('retrieves approved service-area memory without rerunning a previous Scout investigation', async () => {
     let scoutCalls = 0;
-    const engine = require('../WorkspaceEngine').createWorkspaceEngine({
+    const engine = require('./workspaceTestHarness').createHermeticWorkspaceEngine({
       disableLlm: true,
       missionsEnabled: false,
       clientIntelligenceOpts: await approvedAnchorFixture(),
@@ -236,3 +237,9 @@ describe('SPEC-102 WorkspaceEngine wiring', () => {
     assert.ok(result.clientIntelligence && result.clientIntelligence.approved);
   });
 });
+
+const { createHermeticRetrievalHandler } = require('./workspaceTestHarness');
+const maybeHandleRetrievalBeforeDelegationTurn = createHermeticRetrievalHandler(input => rawCieHandler({
+  operatingEvidenceOpts: require('./workspaceTestHarness').unavailableOperatingEvidence(),
+  ...input,
+}));

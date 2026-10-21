@@ -457,6 +457,11 @@ function buildNextRecommendation(outcome, blockReason, strategy) {
  * @returns {string}
  */
 function formatDiscoveryOperatorResponse(report) {
+  if (report.existingIntelligence?.available === false) {
+    return 'Scout Discovery blocked: existing tenant intelligence is unavailable. '
+      + 'Prospect count and market coverage are unverified. The mission was not advanced. '
+      + (report.nextRecommendation || 'Retry retrieval before investigating.');
+  }
   const stage = 'Discovery';
   const outcomeLabel = report.outcome.replace(/^DISCOVERY_/, '');
   const lines = [

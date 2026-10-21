@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createAccountReviewRouter } = require('../routes/accountReview');
 const { publicError, errorStatus } = require('../services/maxSpreadsheetService');
-const { create, accountReviewName } = require('../public/shared/spreadsheetReview');
+const { create } = require('../public/shared/spreadsheetReview');
 
 function request(router, session, { aoId = 24, tenantId, id } = {}) {
   return new Promise((resolve, reject) => {
@@ -70,16 +70,15 @@ test('database diagnostics are sanitized while unknown-save recovery remains exp
   assert.deepEqual(publicError({ commitOutcomeUnknown: true }), { ok: false, error: 'spreadsheet_save_unconfirmed', message: 'The save result has not been confirmed. Retry the same approval to recover its result.', outcome: 'unknown', retry_same_request: true });
 });
 
-test('typed account review selects one verified roster owner and never executes generic mission work', async () => {
-  const opened = [], messages = [], reads = [];
-  const review = create({ host: null, scopeHost: null, onMessage: message => messages.push(message), onReviewAccounts: owner => opened.push(owner), fetch: async url => { reads.push(url); return { ok: true, json: async () => ({ tenant_id: 10, actor_id: 1, can_approve: false, aos: [{ id: 24, name: 'Tony' }, { id: 20, name: 'Mike' }] }) }; } });
+test('account review compatibility entry point delegates text without frontend owner parsing', async t => {
+  const requests = [], directOpens = [];
+  const previous = globalThis.PulseforgeReviewNavigation;
+  globalThis.PulseforgeReviewNavigation = { open: async (intent, question) => { requests.push({ intent, question }); return true; } };
+  t.after(() => { globalThis.PulseforgeReviewNavigation = previous; });
+  const review = create({ host: null, scopeHost: null, onReviewAccounts: owner => directOpens.push(owner), fetch: async () => { throw new Error('Frontend must not resolve a name from a roster'); } });
   for (const text of ["Review Tony's accounts", 'Show me Tony’s accounts', 'Open accounts assigned to Tony']) {
-    assert.equal(accountReviewName(text), 'Tony'); assert.equal(await review.handleAccountReview(text), true);
+    assert.equal(await review.handleAccountReview(text), true);
   }
-  assert.deepEqual(opened, Array(3).fill({ aoId: 24, aoName: 'Tony' }));
-  assert.ok(reads.every(url => url.endsWith('/scope')));
-  assert.equal(await review.handleAccountReview('Review content'), false);
-  assert.equal(await review.handleAccountReview('Publish the accounts'), false);
-  assert.equal(await review.handleAccountReview('Review Unknown’s accounts'), true);
-  assert.equal(opened.length, 3); assert.match(messages.at(-1), /Choose the acquisition operator/);
+  assert.equal(requests.length, 3); assert.ok(requests.every(item => item.intent === null));
+  assert.equal(directOpens.length, 0);
 });

@@ -202,6 +202,7 @@ test('Max invokes Scout for a deficit and records the post-replenishment state w
     },
   };
   const result = await runMaxOutboundControlLoop({
+    funnel: { available: true, discovered: 0, fit: 0, admittedToEnrichment: 0, enrichmentPending: 0, unresolved: 0, promotedVerified: 0, permanentlyRejected: 0 },
     pool: { query: async sql => { assert.match(sql, /to_regclass/); return { rows: [{ control_table: null }] }; } },
     cycleId: 'moc_10_test',
     program,
@@ -287,6 +288,7 @@ test('Max keeps replenishing on later cycles until the target is met', async () 
   };
 
   const first = await runMaxOutboundControlLoop({
+    funnel: { available: true, discovered: 0, fit: 0, admittedToEnrichment: 0, enrichmentPending: 0, unresolved: 0, promotedVerified: 0, permanentlyRejected: 0 },
     pool: { query: async sql => { assert.match(sql, /to_regclass/); return { rows: [{ control_table: null }] }; } },
     program,
     source,
@@ -313,6 +315,7 @@ test('Max keeps replenishing on later cycles until the target is met', async () 
   assert.equal(calls[0], 26);
 
   const second = await runMaxOutboundControlLoop({
+    funnel: { available: true, discovered: 0, fit: 0, admittedToEnrichment: 0, enrichmentPending: 0, unresolved: 0, promotedVerified: 0, permanentlyRejected: 0 },
     pool: { query: async sql => { assert.match(sql, /to_regclass/); return { rows: [{ control_table: null }] }; } },
     program,
     source,
@@ -352,6 +355,7 @@ test('Max persists bounded retry failure counts in the existing control event, i
       };
       const inventory = { clean: [], excluded: [], scope: {}, exclusionCounts: {} };
       await runMaxOutboundControlLoop({
+    funnel: { available: true, discovered: 0, fit: 0, admittedToEnrichment: 0, enrichmentPending: 0, unresolved: 0, promotedVerified: 0, permanentlyRejected: 0 },
         pool: { query: async sql => { assert.match(sql, /to_regclass/); return { rows: [{ control_table: null }] }; } },
         tenantId: '13',
         now: new Date('2026-09-29T15:00:00.000Z'),
@@ -387,6 +391,7 @@ test('Max persists bounded retry failure counts in the existing control event, i
 test('Max observation can be disabled without invoking Scout', async () => {
   let called = false;
   const result = await runMaxOutboundControlLoop({
+    funnel: { available: true, discovered: 0, fit: 0, admittedToEnrichment: 0, enrichmentPending: 0, unresolved: 0, promotedVerified: 0, permanentlyRejected: 0 },
     pool: { query: async sql => { assert.match(sql, /to_regclass/); return { rows: [{ control_table: null }] }; } },
     execute: false,
     program: {

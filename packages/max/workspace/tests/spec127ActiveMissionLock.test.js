@@ -22,7 +22,7 @@ const {
   createWorkspaceOwnershipAudit,
   clearWorkspaceOwnershipAuditLog,
 } = require('../audit/WorkspaceOwnershipAudit');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { createMissionEngine } = require('../../../mission-engine');
 const { createBuiltinRegistry } = require('../../../capabilities');
 

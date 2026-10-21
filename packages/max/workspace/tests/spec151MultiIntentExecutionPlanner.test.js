@@ -11,7 +11,7 @@ const { EXECUTION_POLICIES, REASONING_MODES, getSessionState } = require('../Ses
 const { extractIntents, splitMessageSegments, isCompoundMessage } = require('../IntentExtractor');
 const { buildExecutionPlan } = require('../ExecutionPlanner');
 const { INTENT_TYPES, STEP_KINDS } = require('../MultiIntentTypes');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { createTestAmoRuntime } = require('./amoTestRuntime');
 
 const OBJECTIVE =

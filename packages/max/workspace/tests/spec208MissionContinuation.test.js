@@ -36,7 +36,7 @@ const {
   advancePrioritizationAfterApproval,
   advanceMaxPrioritization,
 } = require('../AmoOperatorApproval');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { createTestAmoRuntime, installTestAmoRuntime } = require('./amoTestRuntime');
 const { MISSION_RUNTIMES } = require('../MissionActions');
 const { specialistContext } = require('../../../acquisition-mission/Lifecycle');

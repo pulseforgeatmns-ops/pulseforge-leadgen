@@ -5,7 +5,7 @@ const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const amo = require('../../../acquisition-mission');
 const {
-  resolveWorkspaceOwner,
+  resolveWorkspaceOwner: rawResolveWorkspaceOwner,
   WORKSPACE_OWNERS,
   claimsBlueprintOwnership,
   claimsSpecialistOwnership,
@@ -15,7 +15,7 @@ const {
   clearWorkspaceOwnershipAuditLog,
   listWorkspaceOwnershipAuditLog,
 } = require('../audit/WorkspaceOwnershipAudit');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 
 const ANCHOR_OBJECTIVE =
   'I want to acquire one recurring commercial cleaning client in Greater Manchester.';
@@ -408,3 +408,5 @@ describe('SPEC-125 — Workspace Ownership-First Runtime', () => {
     });
   });
 });
+
+const resolveWorkspaceOwner = input => rawResolveWorkspaceOwner({ acquisitionMissionRuntime: createTestAmoRuntime(), ...input });
