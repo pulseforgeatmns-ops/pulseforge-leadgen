@@ -2803,6 +2803,8 @@ class WorkspaceEngine {
         context: rawContext || session.context,
         cognitive: retrievalCognitive,
         responseContract: retrievalContract,
+        objectiveService: this._operatorObjectiveService || undefined,
+        objectiveOpts: this._operatorObjectiveOpts || undefined,
         cieService: this._clientIntelligenceService || undefined,
         cieOpts: this._clientIntelligenceOpts || undefined,
         operatingEvidenceOpts: {

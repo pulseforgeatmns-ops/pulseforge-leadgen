@@ -5,6 +5,7 @@
 require('../../../../test/helpers/denyWebsiteEvidenceNetwork.cjs');
 const { createWorkspaceEngine } = require('../WorkspaceEngine');
 const { createMemoryStore } = require('../../../../services/clientIntelligenceInterview');
+const { createMemoryStore: createObjectiveMemoryStore } = require('../../../../services/operatorObjectives');
 const { createTestAmoRuntime } = require('./amoTestRuntime');
 
 function hermeticWorkspaceOptions(options = {}) {
@@ -21,6 +22,12 @@ function hermeticWorkspaceOptions(options = {}) {
       store: createMemoryStore(),
     };
   }
+  if (!supplied.operatorObjectiveService && !supplied.operatorObjectiveOpts?.store && !supplied.operatorObjectiveOpts?.pool) {
+    supplied.operatorObjectiveOpts = {
+      ...supplied.operatorObjectiveOpts,
+      store: createObjectiveMemoryStore(),
+    };
+  }
   return supplied;
 }
 
@@ -30,8 +37,14 @@ function createHermeticWorkspaceEngine(options = {}) {
 
 // Direct retrieval unit tests have the same explicit memory-backed CIE default.
 function hermeticRetrievalInput(input = {}) {
-  if (input.cieService || input.cieOpts?.store) return { ...input };
-  return { ...input, cieOpts: { ...input.cieOpts, store: createMemoryStore() } };
+  const supplied = { ...input };
+  if (!supplied.cieService && !supplied.cieOpts?.store) {
+    supplied.cieOpts = { ...supplied.cieOpts, store: createMemoryStore() };
+  }
+  if (!supplied.objectiveService && !supplied.objectiveOpts?.store && !supplied.objectiveOpts?.pool) {
+    supplied.objectiveOpts = { ...supplied.objectiveOpts, store: createObjectiveMemoryStore() };
+  }
+  return supplied;
 }
 
 function createHermeticRetrievalHandler(handler) {

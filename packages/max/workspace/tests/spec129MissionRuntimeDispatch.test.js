@@ -37,6 +37,7 @@ function stubLegacyMissionEngine() {
 
 function realLegacyEngine() {
   return createMissionEngine({
+    scoutDiscoveryOpts: { companies: [], people: [], acquisitionMissionRuntime: createTestAmoRuntime() },
     registry: createBuiltinRegistry({ discovery: { useFixture: true } }),
     resolverEnabled: true,
   });

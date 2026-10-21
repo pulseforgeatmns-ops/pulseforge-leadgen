@@ -118,6 +118,8 @@ describe('SPEC-131 — Mission Runtime Unification', () => {
     };
 
     await advanceDiscoveryAfterApproval({
+      scoutCompanies: [],
+      scoutPeople: [],
       engine,
       mission,
       tenantId: '10',

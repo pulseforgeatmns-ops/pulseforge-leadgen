@@ -237,6 +237,7 @@ describe('SPEC-104 startup loader and workspace open', () => {
       trigger: REBUILD_TRIGGERS.INITIAL,
       store: contextStore,
       cieOpts: { store: cieStore },
+      objectiveOpts: { store: createObjectiveStore() },
       listMissions: async () => [],
       loadOutcomes: async () => [],
     });
@@ -265,6 +266,7 @@ describe('SPEC-104 startup loader and workspace open', () => {
       trigger: REBUILD_TRIGGERS.INITIAL,
       store: contextStore,
       cieOpts: { store: cieStore },
+      objectiveOpts: { store: createObjectiveStore() },
       listMissions: async () => [],
       loadOutcomes: async () => [],
     });

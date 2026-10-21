@@ -56,6 +56,8 @@ async function seedUnderstandMaxComplete(engine, mission) {
     mission: engine.get(mission.id, '10'),
     tenantId: '10',
     question: 'Approved. Begin Discovery.',
+    scoutCompanies: [],
+    scoutPeople: [],
     allowFixtureFallback: true,
   });
   await advancePrioritizationAfterApproval({

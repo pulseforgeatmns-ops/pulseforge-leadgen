@@ -61,6 +61,7 @@ async function openPendingDiscoveryWorkspace(opts = {}) {
   });
   const runtime = createTestAmoRuntime({ engine });
   const workspace = createWorkspaceEngine({
+    scoutAcquisitionOpts: { scoutCompanies: [], scoutPeople: [] },
     acquisitionMissionRuntime: runtime,
     missionsEnabled: true,
     resolverEnabled: true,
