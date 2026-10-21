@@ -169,3 +169,27 @@ test('navigation ownership excludes informational and mission artifact requests 
 test('owned review cannot discard generation, assignment or explicit cancellation',()=>{
  for(const question of ['Review content and generate posts','Open content review then create new posts','Show Tony’s accounts and assign them to Mike','Show drafts awaiting approval and generate new posts','Open Content Review. Do not open the review.']) assert.equal(parse(question).kind,'blocked',question);
 });
+
+test('content read started for the old tenant cannot render after a workspace transition', async () => {
+ const fs = require('node:fs'), vm = require('node:vm');
+ const source = fs.readFileSync('public/shared/content-review.js', 'utf8');
+ const load = source.slice(source.indexOf('  async function load()'), source.indexOf('  function open(', source.indexOf('  async function load()')));
+ for (const dismiss of [false, true]) {
+  let finish, activeTenant = 10, rendered = 0;
+  const reads = [], notices = [];
+  const context = { generation: 0, preview: null, model: null, expectedTenant: '10', dialog: { hidden: false }, activeClient: () => activeTenant,
+   $: () => ({ replaceChildren() {} }), node: () => ({}), notice: value => notices.push(value),
+   renderList: () => rendered++, button: () => { throw new Error('stale response must not offer a retry'); },
+   request: path => { reads.push(path); return new Promise(resolve => { finish = resolve; }); } };
+  vm.createContext(context); vm.runInContext(load, context);
+  const pending = context.load();
+  assert.deepEqual(reads, ['/api/content-review?client_id=10']);
+  assert.equal(typeof finish, 'function', 'the old-tenant read must be in flight before transition');
+  context.generation++; context.dialog.hidden = dismiss; context.expectedTenant = '11'; activeTenant = 11;
+  finish({ clientId: 10, pendingCount: 1, items: [{ id: 'old-tenant-draft', channel: 'facebook_page' }] });
+  await pending;
+  assert.equal(context.model, null);
+  assert.equal(rendered, 0);
+  assert.deepEqual(notices, ['']);
+ }
+});
