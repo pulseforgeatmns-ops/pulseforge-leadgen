@@ -33,6 +33,8 @@
 
   /** @type {object|null} */
   let currentModel = null;
+  // Invalidate pending deck/live responses when a newer load or tenant wins.
+  let deckLoadGeneration = 0;
   /** @type {string|null} */
   let askContext = 'command_deck';
   /** @type {string|null} */
@@ -1658,11 +1660,34 @@
     return CARD_TYPE_LABELS[type] || String(type || 'Intelligence');
   }
 
+  function activeDeckTenantId() {
+    const value = window.PulseforgeTenantCoordinator?.getActiveClientId?.()
+      ?? window.PulseforgeShell?.activeClientId ?? window.PulseforgeShell?.context?.active_client_id;
+    return /^[1-9]\d*$/.test(String(value)) ? String(value) : null;
+  }
+
+  function deckMatchesActiveTenant(model) {
+    const active = activeDeckTenantId();
+    return active == null || String(tenantIdFromModel(model)) === active;
+  }
+
+  function withoutCachedClarity(model) {
+    if (!model?.livingBrief) return model;
+    const livingBrief = { ...model.livingBrief };
+    delete livingBrief.clarity;
+    return { ...model, livingBrief };
+  }
+
   function readCache() {
     try {
       const raw = sessionStorage.getItem(CACHE_KEY);
       if (!raw) return null;
-      return JSON.parse(raw);
+      const cached = JSON.parse(raw);
+      // Scrub older cache entries too. Source evidence is never offline fallback.
+      cached.model = withoutCachedClarity(cached.model);
+      sessionStorage.setItem(CACHE_KEY, JSON.stringify(cached));
+      if (!activeDeckTenantId() || !deckMatchesActiveTenant(cached.model)) return null;
+      return cached;
     } catch (_err) {
       return null;
     }
@@ -1674,7 +1699,7 @@
         CACHE_KEY,
         JSON.stringify({
           savedAt: new Date().toISOString(),
-          model,
+          model: withoutCachedClarity(model),
         })
       );
     } catch (_err) {
@@ -4973,6 +4998,7 @@
   }
 
   function renderModel(model, options = {}) {
+    if (!deckMatchesActiveTenant(model)) return;
     currentModel = model;
     if (model && model.live && model.live.cursor) {
       liveCursor = model.live.cursor;
@@ -5145,6 +5171,8 @@
     if (livePollInFlight) return;
     if (document.hidden) return;
     livePollInFlight = true;
+    const generation = deckLoadGeneration;
+    const requestTenant = activeDeckTenantId();
     try {
       const qs = new URLSearchParams();
       if (liveCursor) qs.set('since', liveCursor);
@@ -5152,6 +5180,8 @@
       const payload = await apiRequest(
         `/api/v1/intelligence/live?${qs.toString()}`
       );
+      if (generation !== deckLoadGeneration || requestTenant !== activeDeckTenantId()
+        || (payload.deck && !deckMatchesActiveTenant(payload.deck))) return;
       if (payload.cursor) liveCursor = payload.cursor;
 
       if (payload.notifications && payload.notifications.length) {
@@ -5211,6 +5241,7 @@
   }
 
   function evolveRender(model) {
+    if (!deckMatchesActiveTenant(model)) return;
     currentModel = model;
     const wasHla = els.hla ? els.hla.innerHTML : '';
     clearSections();
@@ -5251,15 +5282,18 @@
   }
 
   async function loadDeck(options = {}) {
+    const generation = ++deckLoadGeneration;
     currentModel = null;
     setStatus(options.force ? 'Retrying…' : 'Assembling today’s briefing…');
     hideError();
     clearSections();
     try {
       const model = await fetchCommandDeck();
+      if (generation !== deckLoadGeneration || !deckMatchesActiveTenant(model)) return;
       writeCache(model);
       renderModel(model);
     } catch (err) {
+      if (generation !== deckLoadGeneration) return;
       console.error('[command-deck]', err);
       setStatus('');
       showError();
@@ -5427,6 +5461,9 @@
   }
 
   function invalidateWorkspaceForTenantChange() {
+    deckLoadGeneration += 1;
+    liveCursor = '';
+    clearSections();
     currentModel = null;
     workspaceSessionId = null;
     workspaceContext = null;
@@ -5436,10 +5473,10 @@
   }
 
   async function onTenantChanged() {
+    invalidateWorkspaceForTenantChange();
     spreadsheetReview.clear(); mxComposerMemory = null; mxComposerConversationId = null;
     mxPendingComposerFiles = []; renderMxComposerChips();
     spreadsheetReview.loadScope().catch(err => appendSystemMessage(err.message));
-    invalidateWorkspaceForTenantChange();
     try {
       await loadDeck();
     } catch (err) {
