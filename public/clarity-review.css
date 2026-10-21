@@ -1,7 +1,7 @@
 * { box-sizing: border-box; }
 body { margin: 0; color: var(--pf-text); background: var(--pf-bg); font: 15px/1.6 var(--pf-font-body); }
 [hidden] { display: none !important; }
-.clarity-main { width: min(100% - 40px, 1000px); margin: 0 auto; padding: 28px 0 70px; }
+.clarity-main { width: min(100% - 40px, 1000px); margin: 0 auto; padding: 28px 0 70px; overflow-wrap: anywhere; }
 .clarity-top { display: flex; justify-content: space-between; gap: 16px; color: var(--pf-text-dim); font-size: 13px; margin-bottom: 44px; }
 a { color: var(--pf-teal); text-underline-offset: 4px; }
 .clarity-kicker { color: var(--pf-gold-strong); text-transform: uppercase; letter-spacing: .13em; font-size: 11px; font-weight: 700; }
@@ -32,6 +32,6 @@ button.primary { background: var(--pf-navy); color: var(--pf-bg-card); }
 button:disabled { opacity: .5; cursor: not-allowed; }
 button:focus-visible, a:focus-visible { outline: 3px solid var(--pf-violet); outline-offset: 4px; }
 .clarity-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
-dialog { width: min(520px, calc(100% - 32px)); border: 1px solid var(--pf-border-strong); border-radius: 18px; padding: 28px; background: var(--pf-bg-card); color: var(--pf-text); box-shadow: var(--pf-shadow); }
+dialog { width: min(520px, calc(100% - 32px)); border: 1px solid var(--pf-border-strong); border-radius: 18px; padding: 28px; background: var(--pf-bg-card); color: var(--pf-text); box-shadow: var(--pf-shadow); overflow-wrap: anywhere; }
 dialog::backdrop { background: #10203c88; }
-@media (max-width: 450px) { .clarity-main { width: calc(100% - 28px); padding-top: 20px; } .clarity-card { padding: 18px; } .clarity-top { margin-bottom: 28px; } .clarity-actions button { flex: 1 0 100%; } .clarity-grid { grid-template-columns: 1fr 1fr; } .clarity-metric { padding: 12px; } }
+@media (max-width: 450px) { .clarity-main { width: calc(100% - 28px); padding-top: 20px; } .clarity-card { padding: 18px; } .clarity-top { margin-bottom: 28px; } .clarity-actions button { flex: 1 0 100%; } .clarity-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .clarity-metric { padding: 12px; } }

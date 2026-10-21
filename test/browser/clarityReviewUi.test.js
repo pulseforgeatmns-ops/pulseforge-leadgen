@@ -125,7 +125,17 @@ test('daily brief links three server-ordered recommendations; escaped visual rev
 test('mobile rejection is review-only, has no overflow, and remains persisted on reload', async t => {
   const { page, writes, errors } = await setup(t, { width: 390, decisionDelay: 100 });
   await ready(page);
-  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  // The title includes a long UUID and hostile source text. It must wrap,
+  // not be clipped or expand the viewport, at each supported narrow width.
+  for (const width of [320, 390, 450]) {
+    await page.setViewport({ width, height: 950 });
+    const layout = await page.evaluate(() => ({
+      viewport: innerWidth, scroll: document.documentElement.scrollWidth,
+      overflow: [...document.querySelectorAll('main *')].filter(node => node.getBoundingClientRect().right > innerWidth).map(node => node.id || node.className),
+    }));
+    assert.ok(layout.scroll <= layout.viewport, JSON.stringify(layout));
+  }
+  await page.setViewport({ width: 390, height: 950 });
   await choose(page, 'reject');
   await page.$eval('#clarityConfirmSubmit', n => { n.click(); n.click(); });
   await page.keyboard.press('Escape');
