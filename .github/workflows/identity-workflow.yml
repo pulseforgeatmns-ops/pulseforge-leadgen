@@ -1,0 +1,71 @@
+name: Identity workflow safety
+
+on:
+  pull_request:
+    paths:
+      - 'server.js'
+      - 'middleware/auth.js'
+      - 'routes/identityTenantSelection.js'
+      - 'services/identityTenantSelection.js'
+      - 'routes/api.js'
+      - 'utils/requestIdentity.js'
+      - 'utils/maxAttentionAuthorization.js'
+      - 'test/identityTenantSelection.test.js'
+      - 'test/browser/identityTenantSelectionBrowser.test.js'
+      - 'test/browser/loginIdentityWorkflowBrowser.test.js'
+      - 'test/loginIdentityWorkflow.test.js'
+      - 'test/helpers/loginIdentityHarness.js'
+      - 'test/helpers/disposablePostgres.js'
+      - 'package*.json'
+      - '.github/workflows/identity-workflow.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'server.js'
+      - 'middleware/auth.js'
+      - 'routes/identityTenantSelection.js'
+      - 'services/identityTenantSelection.js'
+      - 'routes/api.js'
+      - 'utils/requestIdentity.js'
+      - 'utils/maxAttentionAuthorization.js'
+      - 'test/identityTenantSelection.test.js'
+      - 'test/browser/identityTenantSelectionBrowser.test.js'
+      - 'test/browser/loginIdentityWorkflowBrowser.test.js'
+      - 'test/loginIdentityWorkflow.test.js'
+      - 'test/helpers/loginIdentityHarness.js'
+      - 'test/helpers/disposablePostgres.js'
+      - 'package*.json'
+      - '.github/workflows/identity-workflow.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  identity-workflow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
+      DATABASE_SSL: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: ./.github/actions/setup-postgres-environment
+      - run: npm ci --ignore-scripts
+      - name: Existing login, tenant selection and fresh authorization regressions
+        run: >-
+          node --test test/identityTenantSelection.test.js test/loginIdentityWorkflow.test.js
+          test/tenantSelectorSync.test.js test/tenantWorkspace.test.js
+          test/maxAttentionAuthorization.test.js test/maxAoHelpReviewGuards.test.js
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
+      - name: Native identity login and tenant-selection forms
+        env:
+          CHROMIUM_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: node --test test/browser/loginIdentityWorkflowBrowser.test.js test/browser/identityTenantSelectionBrowser.test.js
