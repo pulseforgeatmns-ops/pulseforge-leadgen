@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { Pool } = require('pg');
+const { createTrackedPostgresPool, closePostgresFixture } = require('../helpers/closePostgresPool');
 const express = require('express');
 const session = require('express-session');
 const PgStore = require('connect-pg-simple')(session);
@@ -13,8 +13,8 @@ const { createIdentityTenantSelectionRouter, FORM_PATH } = require('../../routes
 
 async function setup(t) {
   const postgres = await startDisposablePostgres('identity-browser-');
-  const pool = new Pool({ connectionString: postgres.connectionString });
-  t.after(async () => { await pool.end(); await postgres.stop(); });
+  const pool = createTrackedPostgresPool({ connectionString: postgres.connectionString });
+  t.after(() => closePostgresFixture(pool, postgres));
   await pool.query(`CREATE TABLE "session" (sid varchar PRIMARY KEY, sess json NOT NULL, expire timestamp NOT NULL);
     CREATE TABLE users (id integer PRIMARY KEY, role text, active boolean, client_id integer,
       email_verified boolean, password_change_required boolean);

@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const fs = require('node:fs');
 const path = require('node:path');
-const { Pool } = require('pg');
+const { createTrackedPostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
 const express = require('express');
 const http = require('node:http');
 const session = require('express-session');
@@ -40,8 +40,8 @@ function fixtureFetch(url, options = {}) {
 // loopback fixtures. Never imports db.js, the app server, providers or startup.
 test('identity-only tenant selection: real session-store and transaction boundaries', { timeout: 90000 }, async t => {
   const instance = await startDisposablePostgres('identity-tenant-');
-  const pool = new Pool({ connectionString: instance.connectionString });
-  t.after(async () => { await pool.end(); await instance.stop(); });
+  const pool = createTrackedPostgresPool({ connectionString: instance.connectionString });
+  t.after(() => closePostgresFixture(pool, instance));
   await pool.query(`CREATE TABLE "session" (sid varchar PRIMARY KEY, sess json NOT NULL, expire timestamp NOT NULL);
     CREATE TABLE users (id integer PRIMARY KEY, role text, active boolean, client_id integer,
       email_verified boolean, password_change_required boolean);
