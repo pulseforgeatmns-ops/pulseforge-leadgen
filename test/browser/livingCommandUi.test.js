@@ -38,7 +38,7 @@ function reviewModel() {
   ] };
 }
 
-async function setup(t, { role = 'admin', width = 1440, motion = 'no-preference', askReview = false, previewError = 0, decisionError = 0, reviewDelay = 0, reviewResponseGate = null, accountDelay = 0, accountError = 0 } = {}) {
+async function setup(t, { role = 'admin', width = 1440, motion = 'no-preference', askReview = false, previewError = 0, decisionError = 0, reviewDelay = 0, reviewResponseGate = null, onReviewRequest = () => {}, accountDelay = 0, accountError = 0 } = {}) {
   const browser = await puppeteer.launch({ executablePath: process.env.CHROMIUM_PATH || undefined, headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
   t.after(() => browser.close());
   const page = await browser.newPage();
@@ -74,7 +74,7 @@ async function setup(t, { role = 'admin', width = 1440, motion = 'no-preference'
         const intent = parseReviewNavigation(body.question, body.reviewNavigation);
         data = intent ? resolveReviewNavigation(intent, { tenantId: 10, aos: [{ id: 24, name: 'Tony' }, { id: 20, name: 'Mike' }] }) : { sessionId: 'fixture-session', prose: 'Test answer', suggestions: [], ...(askReview ? { uiAction: { type: 'open_content_review', tenantId: '10' } } : {}) };
       }
-      else if (url.pathname === '/api/content-review') { if (reviewResponseGate) await reviewResponseGate; if (reviewDelay) await new Promise(resolve => setTimeout(resolve, reviewDelay)); data = { ...review, pendingCount: review.items.length }; }
+      else if (url.pathname === '/api/content-review') { onReviewRequest(request); if (reviewResponseGate) await reviewResponseGate; if (reviewDelay) await new Promise(resolve => setTimeout(resolve, reviewDelay)); data = { ...review, pendingCount: review.items.length }; }
       else if (url.pathname === '/api/paige/social/post-a/preview') {
         status = previewError || 200;
         data = previewError ? { error: 'social_account_invalid' } : { artifact: { body: review.items[0].body, mediaRefs: ['/fixture-content.svg'] }, account: { id: 'account-10', platform: 'facebook_page', displayName: 'Test business page' }, approvalHash: 'exact-preview-hash' };
@@ -232,17 +232,25 @@ test('mobile review fits the viewport and tenant changes discard late draft resp
   await page.evaluate(() => document.dispatchEvent(new CustomEvent('pulseforge:tenant-changed')));
   assert.equal(await page.$eval('#contentReview', el => el.hidden), true);
   assert.equal(await page.$eval('#crDetail', el => el.textContent), '');
-  let releaseReview;
+  let releaseReview, markReviewStarted;
+  const started = new Promise(resolve => { markReviewStarted = resolve; });
   const reviewResponseGate = new Promise(resolve => { releaseReview = resolve; });
   t.after(() => releaseReview());
-  const delayed = await setup(t, { reviewResponseGate });
+  const delayed = await setup(t, { reviewResponseGate, onReviewRequest: markReviewStarted });
   // Navigation is now authorized asynchronously before the draft read starts.
   // Switch only after that read is in flight, otherwise cancellation correctly
   // prevents the request and there is no late response for this test to inspect.
-  const started = delayed.page.waitForRequest(req => req.method() === 'GET' && new URL(req.url()).pathname === '/api/content-review');
+  // Puppeteer request observers queue behind the async interception handler.
+  // Signal start inside that handler before its gate, never via waitForRequest.
   const response = delayed.page.waitForResponse(res => new URL(res.url()).pathname === '/api/content-review');
   await delayed.page.click('.lc-brief-line:nth-child(3)');
-  const draftRequest = await started;
+  let startTimeout, draftRequest;
+  try {
+    draftRequest = await Promise.race([started, new Promise((_, reject) => {
+      startTimeout = setTimeout(() => reject(new Error('Content review request did not enter the fixture interceptor within 30000ms')), 30000);
+    })]);
+  } finally { clearTimeout(startTimeout); }
+  assert.equal(draftRequest.method(), 'GET');
   assert.equal(new URL(draftRequest.url()).searchParams.get('client_id'), '10');
   await delayed.page.evaluate(() => document.dispatchEvent(new CustomEvent('pulseforge:tenant-changed')));
   releaseReview();

@@ -193,3 +193,52 @@ test('content read started for the old tenant cannot render after a workspace tr
   assert.deepEqual(notices, ['']);
  }
 });
+
+test('Puppeteer request observers wait behind an intercepted response gate', async () => {
+ const { Page, HTTPRequest } = require('puppeteer');
+ const page = new Page(), request = new HTTPRequest();
+ request.url = () => 'http://localhost/api/content-review?client_id=10';
+ request.method = () => 'GET';
+ let release, entered = false, observed = false;
+ const gate = new Promise(resolve => { release = resolve; });
+ page.on('request', async () => { entered = true; await gate; });
+ const observer = page.waitForRequest(() => true).then(() => { observed = true; });
+ page.emit('request', request);
+ const dispatch = request.finalizeInterceptions();
+ try {
+  await new Promise(setImmediate);
+  assert.equal(entered, true);
+  assert.equal(observed, false, 'a later waitForRequest cannot signal start while the handler is gated');
+ } finally { release(); await dispatch; await observer; page.emit('close'); }
+ assert.equal(observed, true);
+});
+
+test('browser fixture signals the actual scoped request before awaiting its response gate', async () => {
+ const fs = require('node:fs'), vm = require('node:vm');
+ const { Page, HTTPRequest } = require('puppeteer');
+ const source = fs.readFileSync('test/browser/livingCommandUi.test.js', 'utf8');
+ const start = source.indexOf("else if (url.pathname === '/api/content-review') {");
+ const end = source.indexOf("else if (url.pathname === '/api/paige/social/post-a/preview')", start);
+ assert.ok(start >= 0 && end > start);
+ const handler = source.slice(start, end).replace(/^else if/, 'if');
+ const page = new Page(), request = new HTTPRequest();
+ request.url = () => 'http://localhost/api/content-review?client_id=10';
+ request.method = () => 'GET';
+ let release, startedRequest = null, completed = false;
+ const context = { URL, reviewDelay: 0, review: { items: [] },
+  reviewResponseGate: new Promise(resolve => { release = resolve; }),
+  onReviewRequest: actual => { startedRequest = actual; } };
+ vm.createContext(context);
+ const intercept = vm.runInContext(`(async function(request) { const url = new URL(request.url()); let data; ${handler}; return data; })`, context);
+ page.on('request', async actual => { await intercept(actual); completed = true; });
+ page.emit('request', request);
+ const dispatch = request.finalizeInterceptions();
+ try {
+  await new Promise(setImmediate);
+  assert.equal(startedRequest, request);
+  assert.equal(startedRequest.method(), 'GET');
+  assert.equal(new URL(startedRequest.url()).searchParams.get('client_id'), '10');
+  assert.equal(completed, false, 'response remains gated after the start signal');
+ } finally { release(); await dispatch; page.emit('close'); }
+ assert.equal(completed, true);
+});
