@@ -67,3 +67,40 @@ Use only synthetic records and original illustrative images. The fixture has thr
 - Existing `npm run test:anchor-portal:browser` exercises desktop/mobile portal workflows.
 
 Tests always create their own disposable local PostgreSQL; random test passwords remain in memory and are never printed. Browser requests are restricted to the test loopback origin plus data/blob images. Local API/auth/regression verification passed. Browser verification is currently blocked by the execution sandbox's Chromium socket restriction; this is not a browser pass. Dedicated Docker build and browser login/report-photo/logout passed CI on the original PR925 head; each correction must pass those gates again. Actual hosted ingress/database TLS and phone testing remain unverified deployment gates.
+
+## Explicit public access for the existing Exeter demo
+
+`PORTAL_PUBLIC_DEMO=enabled` removes password entry only for the existing isolated
+Exeter deployment. It requires hosted mode, the exact reviewed origin and the three
+`PORTAL_PUBLIC_DEMO_PROJECT_ID`, `PORTAL_PUBLIC_DEMO_ENVIRONMENT_ID`, and
+`PORTAL_PUBLIC_DEMO_SERVICE_ID` pins in public-demo.js. The guarded launch wrapper
+must derive these values only after checking the actual Railway project,
+environment and service IDs. Do not forward caller-supplied assertions unchecked.
+The runtime additionally checks the dedicated database, synthetic marker, exact
+client/operator IDs, emails, roles, tenant and approved 2026-10-22 17:36 UTC deadline.
+No expiry extension, account creation, credential change or production auth change
+is performed. Public access must be explicitly approved before enabling it.
+
+Browser entry creates a normal expiring DB session for the existing demo client;
+the header's Demo operator / Demo client button switches only between the two
+existing fixture accounts using an origin/CSRF-checked POST that rotates session
+and CSRF. The real portal routes, persistence, assets and tenant checks are retained.
+Password login is disabled only in public mode. Existing non-public sessions are
+not adopted, and public sessions are rejected when this mode is disabled. API and
+CSRF requests do not create public sessions. Session issuance is bounded per source
+(20/minute) and process-wide (120/minute), including role switches; ordinary view
+reloads reuse valid sessions. Writes are bounded at 60/minute/source, 120/minute process-wide and 200 total
+per process lifetime (including rejected application attempts). These limits reset
+on process restart; they are an abuse backstop, not a persistent spending limit.
+At the ceiling, reads remain available and writes return HTTP 429; do not restart
+automatically to evade the bound. Maps expire
+entries and are capped. Existing 30-minute session TTL remains bounded by the
+original demo deadline. This assumes the existing single trusted ingress proxy.
+
+### Persisted visit requests (explicit migration)
+
+Apply `migrations/2026-10-16-anchor-portal-service-requests.sql` only after deployment-specific approval and verification of the isolated database/marker. This file is never loaded by web startup. Existing private setups without the migration retain their table allowlist; the Requests API requires the explicit migration. The Docker image includes the request service module.
+
+The existing authenticated shared router exposes `GET/POST /api/anchor-portal/service-requests` and `PATCH /api/anchor-portal/service-requests/:id`. Client reads are scoped to their own requests at an assigned location; operators can review that location's requests. Tenant and requester are server-owned. Reusing a request key with identical details returns the same record; changed details return 409. Acknowledgement and decline are operator-only, and cancellation is requester-only. Requests never create visits, calendar entries, notifications, or booking confirmations. Acknowledged means reviewed, not scheduled.
+
+Minimum additional runtime permissions, after separate approval: SELECT and INSERT on the new table; UPDATE only on `status`, `updated_by`, and `updated_at`; USAGE on its ID sequence. The migration contains reviewed SQL templates using an explicit placeholder role, with no automatic grants. No DELETE, role changes, schema CREATE, ownership, credentials, or expiry updates are part of this migration.
