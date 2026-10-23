@@ -68,6 +68,55 @@ test('operator timers run independently every second',async()=>{
   await Promise.all(timers.map(t=>t.fn()));assert.equal(calls,2);stop();
 });
 
+test('dedicated service entrypoint fails closed without feed auth but module import does not',()=>{
+  const {spawnSync}=require('node:child_process');
+  const path=require('node:path');
+  const entry=path.join(__dirname,'../../../services/telegramCallerFeed/server.js');
+  assert.doesNotThrow(()=>require('../../../services/telegramCallerFeed/server'));
+  const result=spawnSync(process.execPath,[entry],{
+    env:{...process.env,TELEGRAM_API_ID:'1',TELEGRAM_API_HASH:'hash',TELEGRAM_SESSION_STRING:'session',
+      SIGNAL_OPERATOR_FEED_TOKEN:'',TELEGRAM_CALLER_SOURCES_JSON:'[]'},
+    timeout:8000,encoding:'utf8'});
+  assert.notEqual(result.status,0);
+  assert.match(result.stderr,/feed_auth_not_configured/);
+});
+
+test('protected /feed rejects missing and incorrect token and accepts bearer auth',async()=>{
+  process.env.TELEGRAM_API_ID='1';
+  process.env.TELEGRAM_API_HASH='hash';
+  process.env.TELEGRAM_SESSION_STRING='session';
+  const {createApp}=require('../../../services/telegramCallerFeed/server');
+  const engine={getHealth:()=>({connected:true,sources:[]}),getRecentCalls:()=>[],pollOnce:async()=>({connected:true,errors:[]})};
+  const app=createApp(engine,{env:{SIGNAL_OPERATOR_FEED_TOKEN:fixtureAuth,...process.env}});
+  const server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));});
+  try {
+    const port=server.address().port;
+    assert.equal((await fetch(`http://127.0.0.1:${port}/feed`)).status,401);
+    assert.equal((await fetch(`http://127.0.0.1:${port}/feed`,{headers:{authorization:'Bearer wrong'}})).status,401);
+    const ok=await fetch(`http://127.0.0.1:${port}/feed`,{headers:{authorization:`Bearer ${fixtureAuth}`}});
+    assert.equal(ok.status,200);
+    const body=await ok.json();assert.ok(Array.isArray(body.calls));
+  }finally{await new Promise(resolve=>server.close(resolve));}
+});
+
+test('health never exposes feed token or session material',async()=>{
+  const {createApp}=require('../../../services/telegramCallerFeed/server');
+  const secret='SUPER-SECRET-SESSION-AND-TOKEN-VALUE-000000000001';
+  const engine={
+    credentialsStatus:()=>({ok:true}),
+    pollOnce:async()=>({connected:true,errors:[]}),
+    getHealth:(meta)=>({connected:Boolean(meta.connected),sources:[]}),
+  };
+  const app=createApp(engine,{env:{SIGNAL_OPERATOR_FEED_TOKEN:secret}});
+  const server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));});
+  try {
+    const response=await fetch(`http://127.0.0.1:${server.address().port}/health`);
+    const text=await response.text();
+    assert.equal(text.includes(secret),false);
+    assert.equal(text.includes('feedAuthConfigured'),true);
+  }finally{await new Promise(resolve=>server.close(resolve));}
+});
+
 test('private route requires auth and genuine health and returns no raw text',async()=>{
   const {createApp}=require('../../../services/telegramCallerFeed/server');
   const now=new Date();const call={...event(),occurredAt:now.toISOString(),ingestedAt:now.toISOString(),text:`private ${token}`};
@@ -128,6 +177,16 @@ test('durable operational enqueue/retry/restart has no research writes and marke
     assert.equal((await pool.query('SELECT delivery_state FROM signal_operator_alert_outbox WHERE id=$1',[claimed.id])).rows[0].delivery_state,'UNKNOWN');
     await assert.rejects(store.enqueue({...event(),provenance:{...event().provenance,testOnly:true}}));
   }finally{await pool.end();await instance.stop();}
+});
+
+test('front runners CA alert does not require independent convergence',()=>{
+  const {buildOperatorAlert}=require('../operator/alertOutbox');
+  const evidence={id:'e',sourceId:'telegram-front-runners',externalMessageId:'telegram:123:45',
+    extractedCa:token,occurredAt:t(0).toISOString(),ingestedAt:t(2).toISOString(),
+    provenance:{dataClass:'EMPIRICAL',telegramChannelId:'123'}};
+  const alert=buildOperatorAlert({evidence,approvedChannelId:'123',researchState:'FIRST_CALLER',independentConvergence:'none'});
+  assert.equal(alert.independentConvergence,'none');
+  assert.match(alert.experimentalLabel,/EXPERIMENTAL/);
 });
 
 test('operational transport tests are explicitly labeled, contain no CA and need separate approval',async()=>{
