@@ -6,7 +6,7 @@ function bounded(task,ms) {
   return Promise.race([Promise.resolve().then(task),new Promise(resolve=>{timer=setTimeout(()=>resolve(null),ms);})])
     .finally(()=>clearTimeout(timer));
 }
-function createOperatorWorker({store,feedUrl,token,channelId,marketProvider,relay,gate,sendEnabled=()=>true,fetchImpl=globalThis.fetch,now=()=>new Date(),marketTimeoutMs=2000,onEvent=async()=>{}}) {
+function createOperatorWorker({store,feedUrl,token,channelId,marketProvider,relay,gate,sendEnabled=()=>true,fetchImpl=globalThis.fetch,now=()=>new Date(),marketTimeoutMs=2000,onEvent=async()=>{},onInitialEvent=async()=>{}}) {
   const url=new URL(feedUrl);
   if(url.protocol!=='http:' || !url.hostname.endsWith('.railway.internal') || url.pathname!=='/operator-events'
     || url.username || url.password || url.search || url.hash || typeof token!=='string' || token.length<32) throw new Error('invalid_private_operator_feed');
@@ -26,6 +26,9 @@ function createOperatorWorker({store,feedUrl,token,channelId,marketProvider,rela
           if(Date.parse(event.occurredAt)<Date.parse(readiness.startAt))continue;
           if(!gate().ok)break;
           await store.enqueue(event);
+          // Independent durable SMS enqueue. Never await market enrichment here.
+          try { await onInitialEvent(event); }
+          catch { console.error('[signal-initial-sms] enqueue deferred; source event retained for retry'); }
           try {
             const monitored=await onEvent(event);
             if(monitored?.skipped)distributionDeferred++;

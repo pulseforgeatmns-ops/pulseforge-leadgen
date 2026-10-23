@@ -24,7 +24,7 @@ const text=value=>value===null||value===undefined||value===''?'UNKNOWN':String(v
 function node(tag,value,cls){const n=document.createElement(tag);if(value!==undefined)n.textContent=text(value);if(cls)n.className=cls;return n;}
 function stamp(value){const d=new Date(value);return value&&Number.isFinite(+d)?d.toISOString():'UNKNOWN';}
 function age(value){const n=Date.parse(value);return Number.isFinite(n)?Math.max(0,Math.floor((Date.now()-n)/1000))+'s ago':'UNKNOWN';}
-function field(list,label,value){list.append(node('dt',label),node('dd',value));}
+function field(list,label,value){list.append(node('dt',label),node('dd',text(value)));}
 function card(parent,title){const c=node('article',undefined,'card');if(title)c.append(node('h3',title));parent.append(c);return c;}
 async function api(path,options={}){const response=await fetch(path,{credentials:'same-origin',cache:'no-store',...options});if(response.redirected)throw Error('Sign in again to view this workspace.');let data;try{data=await response.json();}catch{throw Error('Unable to load the authenticated view. Sign in and refresh.');}if(!response.ok){const errors={distribution_disabled:'Distribution monitoring is disabled.',reference_missing_monitor_or_already_set:'This reference is already saved, or the monitor is unavailable.',invalid_manual_reference:'The reference must use a positive price and a valid, non-future time.',reference_scope_or_origin_denied:'This change requires the authenticated app origin and workspace.',distribution_scope_denied:'This workspace requires an authorized admin or manager session.'};throw Error(errors[data.error]||'Request blocked or unavailable. Refresh to check the current saved state.');}return data;}
 function query(){return '?namespace='+encodeURIComponent(namespace);}
@@ -52,11 +52,52 @@ if(s.lastPollError)c.append(node('p','Polling error: '+text(s.lastPollError)+' a
 const grid=node('dl',undefined,'grid');for(const [label,value]of [['Pair',s.pairId],['Observed at',stamp(s.lastObservedAt)],['Provider timestamp',stamp(s.latestSnapshot?.providerTimestamp)],['Monitoring status',m.monitoring_status],['Activation ID',m.activation_id],['Bounded monitoring window ends',stamp(m.expires_at)],['Price USD',metrics.priceUsd],['Market cap USD',metrics.marketCapUsd],['Pool reserves USD',metrics.liquidityUsd],['Volume, rolling 5m USD',metrics.volume5mUsd],['Buys / sells, rolling 5m',text(metrics.buys5m)+' / '+text(metrics.sells5m)],['Buy / sell volume, rolling 5m USD',text(metrics.buyVolume5mUsd)+' / '+text(metrics.sellVolume5mUsd)],['Reference multiple',metrics.referenceMultiple],['Observed MFE multiple',metrics.observedMfeMultiple],['Drawdown from observed peak (fraction)',metrics.drawdownFromObservedPeak]]){const item=node('div');field(item,label,value);grid.append(item);}c.append(grid);
 c.append(node('h3','Reasons'));const reasons=node('ul');for(const r of s.reasons||[])reasons.append(node('li',r));if(!reasons.children.length)reasons.append(node('li','UNKNOWN'));c.append(reasons,node('h3','Coverage'));
 const cover=node('dl');for(const name of ['price','marketCap','liquidity','volume5m','buySellActivity','walletDistribution','developerIdentity','sourceFreshness','observationFreshness','pair'])field(cover,name,coverage[name]);c.append(cover);
+renderRiskCard(target,m);
 renderReference(target,m);
 const samples=card(target,'Recent saved samples');for(const o of data.observations||[]){const p=o.payload||{};samples.append(node('p',stamp(o.observed_at||p.observedAt)+' · price USD '+text(p.priceUsd)+' · reserves USD '+text(p.liquidityUsd)+' · source time '+stamp(p.providerTimestamp)));}if(!(data.observations||[]).length)samples.append(node('p','No saved sample history.'));
 const transitions=card(target,'State changes');for(const t of data.transitions||[]){const p=t.payload||{};transitions.append(node('p',stamp(p.observedAt)+' · '+text(p.kind)+' · '+text(p.previousState)+' → '+text(p.state)),node('p',(p.reasons||[]).join(', '),'muted'));}if(!(data.transitions||[]).length)transitions.append(node('p','No saved state changes.'));
 const deliveries=card(target,'Delivery attempts');deliveries.append(node('p','ACCEPTED means the provider accepted the request. Receipt and display on your device are unverified.','muted'));for(const d of data.deliveries||[])deliveries.append(node('p',text(d.channel)+' · '+text(d.status)+' · '+stamp(d.created_at)+' · attempts '+text(d.attempts)+(d.suppression_reason?' · '+d.suppression_reason:'')));if(!(data.deliveries||[]).length)deliveries.append(node('p','No saved delivery attempts.'));
 }catch(e){if(v===detailVersion)target.replaceChildren(node('p',e.message,'danger'));}}
+// This card reads only the operational monitor contract. Research features and
+// labels are not joined or inferred from caller admission, token age or holdings.
+function measurement(value){return typeof value==='number'&&Number.isFinite(value)?String(value):'UNKNOWN';}
+function renderRiskCard(target,m){
+const s=m.state||{},metrics=s.metrics||{},snapshot=s.latestSnapshot||{},provenance=snapshot.provenance||{},event=s.event||{},baseline=s.baseline||{};
+const c=card(target,'Risk card · saved evidence only'),grid=node('dl',undefined,'grid');
+for(const [label,value]of [
+ ['Distribution risk',s.riskState],
+ ['Bundle risk','UNKNOWN'],
+ ['Top-holder concentration','UNKNOWN'],
+ ['Developer holdings','UNKNOWN'],
+ ['Liquidity (pool reserves USD)',measurement(metrics.liquidityUsd)],
+ ['Token age','UNKNOWN'],
+ ['Buy/sell balance','Sell-volume share: '+measurement(metrics.sellShare)+'; sell-count share: '+measurement(metrics.sellCountShare)+' (fractions, rolling 5m)'],
+ ['Buyer/seller trend','UNKNOWN'],
+ ['Buyers / sellers, rolling 5m (latest saved sample)',measurement(snapshot.buyers5m)+' / '+measurement(snapshot.sellers5m)],
+ ['Large-holder behavior','UNKNOWN'],
+ ['Liquidity trend','Reserve-value decline from baseline (fraction): '+measurement(metrics.liquidityValueDeclineFromBaseline)],
+ ['FIRST_CALLER','UNKNOWN']
+]){const item=node('div');field(item,label,value);grid.append(item);}c.append(grid);
+c.append(node('h3','Evidence'));const evidence=node('dl');
+for(const [label,value]of [
+ ['Risk version',s.version],['Risk evaluated at',stamp(s.lastEvaluatedAt)],
+ ['Sample observed at',stamp(snapshot.observedAt)],['Sample provider',snapshot.provider],
+ ['Sample pair',snapshot.pairId],['Provider timestamp',stamp(snapshot.providerTimestamp)],
+ ['Timestamp basis',provenance.timestampBasis],['Source freshness',s.coverage?.sourceFreshness],
+ ['Sample data class',provenance.dataClass],['Reserve baseline observed at',stamp(baseline.observedAt)],
+ ['Reserve baseline pair',baseline.pairId],['Reserve baseline USD',measurement(baseline.liquidityUsd)],
+ ['Caller admission source',event.sourceId],['Caller admission message',event.externalMessageId],
+ ['Caller occurred at',stamp(event.occurredAt)],['Caller ingested at',stamp(event.ingestedAt)]
+])field(evidence,label,value);c.append(evidence,node('h3','Blind spots'));
+const blind=node('ul');for(const note of [
+ 'UNKNOWN means missing evidence, not low risk or safety. Distribution risk is the saved heuristic state, not a validated trading signal.',
+ 'Bundle risk, top-holder concentration, developer holdings, token age, buyer/seller trend and large-holder behavior are not persisted in this operational view.',
+ 'FIRST_CALLER research status is UNKNOWN here. Caller admission evidence does not establish that research state, eligibility or an outcome. Monitor age is not token age.',
+ 'Buy/sell balance uses saved rolling 5m shares. The risk engine uses sell-volume share when available and sell-count share as a fallback; counts are not dollar-weighted flow. Buyer/seller counts alone do not establish a trend or large-holder behavior.',
+ 'Liquidity trend is only the saved USD pool-reserve decline relative to the baseline, not proof of LP withdrawal. A negative decline means reserve value above baseline, not proof of an LP deposit.',
+ 'Receipt time is not a provider timestamp. Missing source time, stale samples and polling failures remain evidence gaps; a retained prior risk state is not a fresh assessment.'
+])blind.append(node('li',note));c.append(blind);
+}
 function renderReference(target,m){const c=card(target,'Optional manual price reference'),reference=m.state?.reference;
 c.append(node('p','A price reference only. This is not a purchase, position, execution record, or trade instruction. MFE and milestone detection use samples collected after this reference was saved; earlier samples are not recomputed.','muted'));
 if(reference){c.append(node('p','Saved once: USD '+text(reference.priceUsd)),node('p','Entered reference time: '+stamp(reference.recordedAt)),node('p','Saved at / forward observation boundary: '+stamp(reference.savedAt)),node('p','Source: '+text(reference.provenance)));return;}
