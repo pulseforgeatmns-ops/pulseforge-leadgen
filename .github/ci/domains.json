@@ -68,6 +68,7 @@
       "public/signal-distribution.html",
       "migrations/*signal-distribution*",
       "test/signalDistribution",
+      "test/signalInitialSms.test.js",
       "services/telegramCallerFeed/",
       "services/signalV1ShadowScheduler.js",
       "routes/signalV1.js",
