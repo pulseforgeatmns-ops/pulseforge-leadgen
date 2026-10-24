@@ -126,6 +126,12 @@ Future controls: per-market exposure, correlated-position exposure, stale-data t
   `kalshi-research diagnose-data`, read-only and local-only**
 - Deterministic feature extraction + win/lose distribution report over train/test splits —
   **implemented as `kalshi-research feature-report` (`kalshi_research/features.py`); no ML training**
+- Immutable hypothesis/rule candidates with fee-aware train selection, untouched test scoring,
+  walk-forward folds, sensitivity, and promote / probably_noise verdict —
+  **implemented as `kalshi-research evaluate-hypothesis` (`kalshi_research/hypotheses/`);
+  first entry-time candidate is H-005 BuyWhenEntryMidpointAbove (midpoint > train-selected
+  threshold in 50–65c; entry at first_yes_ask). Path features (`ask_move_cents`, `btc_move_usd`)
+  are forbidden in entry rules. Retired H-001 (midpoint < 40) must not be retuned.**
 - Compare strategies against holdout periods and baseline/no-trade controls
 - Add calibration and regime breakdowns once sufficient resolved data exists
 
@@ -150,15 +156,20 @@ Future controls: per-market exposure, correlated-position exposure, stale-data t
 
 ## Current next implementation task
 
-Dataset readiness cleared: `diagnose-data` now reports ready coverage (289 markets observed,
-288 resolved / 1 unresolved; 144/144 train/test at 50% split; 0 missing bid/ask; mean ~71.9
-snapshots/market; 16 markets with >60s gaps, under the gap threshold). The fee-aware threshold
-baseline (`replay-split`) was **not durable** on the fee-adjusted test window, so the research
-path moved to deterministic feature research rather than further threshold tuning.
+Dataset readiness cleared for feature research. `feature-report` showed consistent entry-time
+midpoint separation (train YES mean ≈52.60 vs NO ≈46.60, Δ≈+6.00c; test YES ≈52.24 vs NO ≈45.96,
+Δ≈+6.28c) on the chronological split, with similar gaps for first_yes_ask / first_yes_bid.
 
-`feature-report` is implemented (`kalshi_research/features.py`, wired through `kalshi_research/cli.py`).
-It extracts first ask/bid, spread, midpoint, time-to-close, snapshot count, ask move, and BTC
-spot move from stored data only, then prints train/test × YES/NO distributions. Next step: use
-`feature-report` output to shortlist 1–2 features with the clearest YES−NO separation that
-survives the test window, then encode those as explicit deterministic strategy rules and
-replay them fee-aware — still paper/replay-only, still no ML training and no live trading.
+**H-005 / BuyWhenEntryMidpointAbove** is implemented as an immutable candidate:
+buy YES at `first_yes_ask` when entry midpoint > threshold; sweep 50–65c on train fee-adjusted
+P/L only; score the selected cutoff on untouched test, walk-forward folds, and sensitivity.
+Verdict is `promoted` or `probably_noise`. Entry rules must not use `ask_move_cents` or
+`btc_move_usd`. **H-001** (midpoint < 40) remains retired and must not be retuned.
+
+A distributional reconstruction from the published midpoint means (256/257, fee rate 7%)
+selected threshold **50c** and returned **promoted** (test net +$22.17; 4/4 walk-forward folds
+positive; sensitivity sign-stable). That reconstruction is **not** a substitute for the operator
+local `kalshi_research.db`. Next step: run `evaluate-hypothesis --hypothesis-id H-005` on the
+real resolved DB and treat that printout as authoritative. If the real run is `probably_noise`,
+shortlist a different entry-time feature under a new hypothesis ID. Still paper/replay-only —
+no ML training and no live trading.
