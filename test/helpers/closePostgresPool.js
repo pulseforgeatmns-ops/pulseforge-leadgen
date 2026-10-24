@@ -4,10 +4,15 @@ const { Pool, Client } = require('pg');
 const tracked = new WeakMap();
 const closing = new WeakMap();
 
-/** Test-only pool: track physical client closure before any connection is opened. */
-function createTrackedPostgresPool(options = {}) {
+// Call immediately on a newly constructed pool, before its first connection.
+// Supports exercising a production pool factory unchanged in isolated tests.
+function trackUnopenedPostgresPool(pool) {
+  if (tracked.has(pool)) return pool;
+  if (!(pool instanceof Pool) || pool.totalCount !== 0 || pool.waitingCount !== 0 || pool.ending || pool.ended) {
+    throw new Error('Tracking requires a newly constructed, unopened PostgreSQL pool');
+  }
   const clients = new Map();
-  const BaseClient = options.Client || Client;
+  const BaseClient = pool.Client || Client;
   class TrackedClient extends BaseClient {
     constructor(config) {
       super(config);
@@ -17,9 +22,14 @@ function createTrackedPostgresPool(options = {}) {
       this.once('end', () => { clients.delete(this); resolveClosed(); });
     }
   }
-  const pool = new Pool({ ...options, Client: TrackedClient });
+  pool.Client = TrackedClient;
   tracked.set(pool, clients);
   return pool;
+}
+
+/** Test-only pool: track physical client closure before any connection is opened. */
+function createTrackedPostgresPool(options = {}) {
+  return trackUnopenedPostgresPool(new Pool(options));
 }
 
 /**
@@ -82,4 +92,4 @@ async function closePostgresFixture(pool, postgres, options) {
   if (shutdownError) throw shutdownError;
 }
 
-module.exports = { createTrackedPostgresPool, closePostgresPool, closePostgresFixture };
+module.exports = { createTrackedPostgresPool, trackUnopenedPostgresPool, closePostgresPool, closePostgresFixture };

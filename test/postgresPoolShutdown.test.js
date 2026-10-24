@@ -5,7 +5,7 @@ const test = require('node:test');
 const { EventEmitter, once } = require('node:events');
 const { setImmediate: nextTurn } = require('node:timers/promises');
 const { Pool } = require('pg');
-const { createTrackedPostgresPool, closePostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
+const { createTrackedPostgresPool, trackUnopenedPostgresPool, closePostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
 
 class DeferredClient extends EventEmitter {
   constructor() { super(); this._queryable = true; this._ending = false; }
@@ -172,4 +172,26 @@ test('pool and server cleanup errors are both preserved', async () => {
     return true;
   });
   noListeners(pool);
+});
+
+
+test('fresh factory-created pool is tracked in place without changing its options or TLS identity checks', async () => {
+  const ssl = { rejectUnauthorized: true, checkServerIdentity() {} };
+  const pool = new Pool({ Client: DeferredClient, idleTimeoutMillis: 0, max: 5, ssl });
+  assert.equal(trackUnopenedPostgresPool(pool), pool);
+  assert.equal(trackUnopenedPostgresPool(pool), pool);
+  assert.equal(pool.options.ssl, ssl); assert.equal(pool.options.max, 5);
+  const client = await pool.connect(); client.release();
+  let closed = false; const pending = closePostgresPool(pool).then(() => { closed = true; });
+  await nextTurn(); assert.equal(closed, false);
+  client.finishClose(); await pending; noListeners(pool);
+});
+
+test('late tracking rejects an already connected or ending pool', async () => {
+  const pool = new Pool({ Client: DeferredClient, idleTimeoutMillis: 0 });
+  const client = await pool.connect();
+  assert.throws(() => trackUnopenedPostgresPool(pool), /unopened/);
+  client.release(); const ending = pool.end();
+  assert.throws(() => trackUnopenedPostgresPool(pool), /unopened/);
+  client.finishClose(); await ending;
 });
