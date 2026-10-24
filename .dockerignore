@@ -1,0 +1,17 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+.env
+.env.*
+*.log
+mockups
+exports
+screenshots
+gmail_token.json
+gmail_credentials.json
+facebook_session.json
+linkedin_session.json
+instagram_session.json
+DOCKERFILE_MIGRATION_PLAN.md
+HEALTH_STRIP_DISCOVERY.md

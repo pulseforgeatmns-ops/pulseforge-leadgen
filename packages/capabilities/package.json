@@ -1,0 +1,14 @@
+{
+  "name": "@pulseforge/capabilities",
+  "version": "1.0.0",
+  "description": "Capability Framework — registry, runner, and built-in stubs (SPEC-023 / ADR-011)",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "license": "ISC",
+  "engines": {
+    "node": ">=18"
+  }
+}

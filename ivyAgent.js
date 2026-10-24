@@ -2,7 +2,7 @@ require('dotenv').config();
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
-const Anthropic = require('@anthropic-ai/sdk');
+const Anthropic = require('./utils/meteredAnthropic').forAgent('ivy');
 const db = require('./dbClient');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 
@@ -13,7 +13,7 @@ const CLIENT_ID = getRuntimeClientId();
 const SESSION_FILE = './instagram_session.json';
 const MAX_DRAFTS = 8;
 
-const client = new Anthropic();
+const client = new Anthropic(undefined, { tenantId: () => CLIENT_ID });
 
 // Business-signal keywords — used to filter captions to actual business content
 const BUSINESS_KEYWORDS = [
@@ -170,7 +170,7 @@ async function run() {
     return;
   }
   const browser = await puppeteer.launch({
-    headless: false,
+    headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox']
   });
 
@@ -200,6 +200,11 @@ async function run() {
   let drafted = 0;
 
   for (const hashtag of TARGET_HASHTAGS) {
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Ivy] Client ${CLIENT_ID} deactivated mid-run — aborting`);
+    }
+
     if (drafted >= MAX_DRAFTS) break;
 
     console.log(`\nScanning #${hashtag}...`);
@@ -258,3 +263,4 @@ if (require.main === module) {
     process.exit(1);
   });
 }
+

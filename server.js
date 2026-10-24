@@ -29,16 +29,90 @@ const pool     = require('./db');
 const { createObjectCsvWriter } = require('csv-writer');
 const { bcrypt, getUserCount, initAuth, requireAuth, requireRole } = require('./middleware/auth');
 const { ensureClientArchitecture } = require('./utils/clientContext');
+const { resolveCieClientId } = require('./utils/cieAuth');
+const { armed, withResearchProviderScope, assertResearchProviderAllowed,
+  rethrowResearchProviderControl } = require('./utils/anchorResearchProviderPause');
+const { enforceMiraClientState } = require('./utils/miraClientState');
 const { ensureCloserSchema } = require('./utils/closerSchema');
 const { ensureScoutExpansionTables } = require('./scoutExpansion');
+const { ensureIcpScoreHistoryTable } = require('./utils/icpScoring');
+const { ensureEmailPerformanceTable } = require('./utils/emailPerformance');
+const { ensureEmailVerificationColumns } = require('./utils/emailVerificationSchema');
+const { ensureScoutUnenrichedTable } = require('./utils/scoutUnenrichedSchema');
+const { ensureScoutLockTable } = require('./utils/scoutLock');
+const { ensureCallDispositionSchema } = require('./calBatchAgent');
+const { ensureMiraSchema } = require('./utils/miraSchema');
+const { ensureLifecycleSchema } = require('./utils/lifecycleSchema');
+const { ensureAoFieldSchema } = require('./utils/aoFieldSchema');
+const { ensureAoProspectRoutingSchema } = require('./utils/aoProspectRoutingSchema');
+const { ensureAoCrmSchema } = require('./utils/aoCrmSchema');
+const { startMiraTranscriptionWorker } = require('./miraTranscriptionAgent');
+const { startMiraClassifierWorker } = require('./miraClassifierAgent');
+const { startMiraRouterWorker } = require('./miraRouterAgent');
+const { startMiraDigestScheduler } = require('./miraDigestAgent');
+const { startWarmRoutingScheduler } = require('./warmRoutingAgent');
+const { startAnchorUnenrichedEnrichmentScheduler } = require('./scoutUnenrichedEnrichmentAgent');
+const { ensureEmmettAutosendSchema } = require('./utils/emmettAutosend');
+const { ensurePlacesAttributionSchema } = require('./utils/placesCostAttribution');
+const { ensureAnchorPortalSchema } = require('./utils/anchorPortalSchema');
+const stripeWebhookRouter = require('./routes/stripeWebhook');
+const { ensureSignalSchema } = require('./packages/signal-v1');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
-initAuth().catch(err => console.error('[auth] init error:', err.message));
-ensureClientArchitecture().catch(err => console.error('[clients] init error:', err.message));
+const { createAnchorPortalReadiness } = require('./utils/anchorPortalReadiness');
+const anchorPortalReadiness = createAnchorPortalReadiness({
+  initAuth,
+  ensureSchema: () => ensureAnchorPortalSchema(),
+  onError: err => console.error('[anchorPortal] startup blocked:', err.message),
+});
+// Mount before session, body parsing, static assets and all portal route handlers.
+app.use(anchorPortalReadiness.middleware);
+const { runClientsStartup } = require('./utils/clientsStartup');
+runClientsStartup({
+  ensureClientArchitecture,
+  ensureEmmettAutosendSchema,
+  enforceMiraClientState,
+  ensureAoFieldSchema,
+  ensureAoProspectRoutingSchema,
+  ensureAoCrmSchema,
+});
 ensureCloserSchema().catch(err => console.error('[closer] init error:', err.message));
 ensureScoutExpansionTables().catch(err => console.error('[scoutExpansion] init error:', err.message));
+ensureIcpScoreHistoryTable().catch(err => console.error('[icpScoring] init error:', err.message));
+ensureEmailPerformanceTable().catch(err => console.error('[emailPerformance] init error:', err.message));
+ensureEmailVerificationColumns().catch(err => console.error('[emailVerification] init error:', err.message));
+ensureScoutUnenrichedTable().catch(err => console.error('[scoutUnenriched] init error:', err.message));
+ensureScoutLockTable().catch(err => console.error('[scoutLock] init error:', err.message));
+ensureCallDispositionSchema().catch(err => console.error('[callDisposition] init error:', err.message));
+ensureMiraSchema().catch(err => console.error('[mira] init error:', err.message));
+ensureLifecycleSchema(pool).catch(err => console.error('[lifecycle] init error:', err.message));
+ensurePlacesAttributionSchema().catch(err => console.error('[placesAttribution] init error:', err.message));
+require('./utils/apiSpendControl').ensureApiUsageSchema().catch(() => console.warn('[api-usage] Ledger initialization unavailable; paid calls require a working ledger.'));
+ensureSignalSchema(pool).catch(err => console.error('[signal-v1] schema init error:', err.message));
+require('./services/signalV1ShadowScheduler').startSignalV1ShadowScheduler();
+require('./services/signalOperator/optionalController').startOptionalPilotController();
+require('./services/signalOperator').startSignalOperator();
+startMiraTranscriptionWorker();
+startMiraClassifierWorker();
+startMiraRouterWorker();
+startMiraDigestScheduler();
+startWarmRoutingScheduler();
+startAnchorUnenrichedEnrichmentScheduler();
+require('./services/anchorGovernedScheduler').startAnchorGovernedScheduler({ pool });
+// Anchor keeps its legacy poll -> tick -> Max owner. Configured mailbox tenants
+// need an independent execution clock; their Max control runs separately.
+const mailboxGovernedTenantIds = require('./services/governedOutboundTenant')
+  .parseGovernedOutboundTenantIds().filter(tenantId => tenantId !== '10');
+if (mailboxGovernedTenantIds.length) {
+  require('./services/governedOutboundExecutionClock').startGovernedOutboundExecutionClock({
+    pool,
+    tenantIds: mailboxGovernedTenantIds,
+    maxControlEnabled: false,
+    mailboxOnly: false,
+  });
+}
 
 app.use(session({
   store: new pgSession({ pool, tableName: 'session' }),
@@ -48,8 +122,27 @@ app.use(session({
   cookie: { maxAge: 24 * 60 * 60 * 1000 }
 }));
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Own the bounded form parser before global parsers and legacy session normalization.
+app.use('/', require('./routes/identityTenantSelection').createIdentityTenantSelectionRouter({ Router: express.Router, pool }));
+
+// Stripe signature verification needs the untouched request Buffer. This is
+// deliberately mounted before express.json() (raw-body Pattern A).
+app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }), stripeWebhookRouter);
+
+function captureBrevoRawBody(req, _res, buf) {
+  const requestPath = String(req.originalUrl || '').split('?')[0];
+  if (requestPath === '/api/webhooks/brevo' || requestPath === '/webhooks/brevo') {
+    req.rawBody = Buffer.from(buf);
+  }
+}
+
+// This public form owns its body limit, CORS, and native-form responses.
+app.use('/', require('./routes/substralAssessment'));
+app.use('/', require('./routes/studioSubstralOperator'));
+// Portal photos use bounded raster data URLs. Keep this limit scoped to portal APIs.
+app.use('/api/anchor-portal', express.json({ limit: '8mb' }));
+app.use(express.json({ verify: captureBrevoRawBody }));
+app.use(express.urlencoded({ extended: true, verify: captureBrevoRawBody }));
 app.use(cors());
 app.use((req, _res, next) => {
   if (req.session && req.session.authenticated && !req.session.active_client_id) {
@@ -61,7 +154,7 @@ app.use((req, res, next) => {
   if (req.path === '/public/dashboard.html' || req.path === '/dashboard.html') {
     return requireAuth(req, res, err => {
       if (err) return next(err);
-      return requireRole('admin', 'manager')(req, res, next);
+      return requireRole('admin', 'manager', 'viewer', 'client')(req, res, next);
     });
   }
   if (req.path === '/public/setter-dashboard.html' || req.path === '/setter-dashboard.html') {
@@ -82,7 +175,38 @@ app.use((req, res, next) => {
       return requireRole('sales')(req, res, next);
     });
   }
+  if (req.path === '/public/ao-dashboard.html' || req.path === '/ao-dashboard.html') {
+    return requireAuth(req, res, err => {
+      if (err) return next(err);
+      return requireRole('admin', 'manager', 'ao')(req, res, next);
+    });
+  }
+  if (req.path === '/public/admin-field-visits.html' || req.path === '/admin-field-visits.html') {
+    return requireAuth(req, res, err => {
+      if (err) return next(err);
+      return requireRole('admin', 'manager')(req, res, next);
+    });
+  }
+  if (req.path === '/public/pricing-calculator.html' || req.path === '/pricing-calculator.html') {
+    return requireAuth(req, res, err => {
+      if (err) return next(err);
+      return requireRole('admin', 'manager', 'sales', 'closer')(req, res, next);
+    });
+  }
+  if (req.path === '/public/anchor-portal.html' || req.path === '/anchor-portal.html') {
+    return requireAuth(req, res, err => {
+      if (err) return next(err);
+      return requireRole('admin', 'manager', 'cleaner', 'facility_client')(req, res, next);
+    });
+  }
   return next();
+});
+// Phase A2 shared frontend foundation (tokens, shell, workspace modules)
+// loaded by both dashboard.html and setter-dashboard.html.
+app.use('/shared', express.static(path.join(__dirname, 'public', 'shared')));
+// Browser tab icon — served unauthenticated so login/redirect pages get it too.
+app.get('/favicon.ico', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'favicon.ico'), { maxAge: '7d' });
 });
 app.use(express.static(__dirname));
 
@@ -129,15 +253,72 @@ const SKIP_DOMAINS = [
 app.use('/', require('./routes/webhooks'));
 app.use('/', require('./routes/cron'));
 app.use('/', require('./routes/api'));
+app.use('/', require('./routes/commandDeck'));
+app.use('/', require('./routes/maxAoBriefing'));
+app.use('/', require('./routes/intelligence'));
+app.use('/', require('./routes/liveIntelligence'));
+app.use('/', require('./routes/operatorIntelligence'));
+app.use('/', require('./routes/outcomeIntelligence'));
+app.use('/', require('./routes/contentOutcomeIntelligence'));
+app.use('/', require('./routes/contentLearning'));
+app.use('/', require('./routes/knowledgeAdmin'));
+app.use('/', require('./routes/acquisitionKnowledge'));
+app.use('/', require('./routes/marketIntelligence'));
+app.use('/', require('./routes/relationshipIntelligence'));
+app.use('/', require('./routes/clientIntelligence'));
+app.use('/', require('./routes/prospectOperatingBrief'));
+app.use('/', require('./routes/serviceModeOperatorLoop'));
+app.use('/', require('./routes/intelligenceSeedLibraries'));
+app.use('/', require('./routes/acquisitionIntelligenceModel'));
+app.use('/', require('./routes/acquisitionIntelligenceCompiler'));
+app.use('/', require('./routes/operatorScorecard'));
+app.use('/', require('./routes/emmettOutbound'));
+app.use('/', require('./routes/tenantOutreach'));
+app.use('/', require('./routes/acquisitionMissions'));
+app.use('/', require('./routes/operatorJudgments'));
+app.use('/', require('./routes/tenantWorkspace'));
+app.use('/', require('./routes/registration'));
+app.use('/', require('./routes/pilotOnboarding'));
+app.use('/', require('./routes/workspace'));
+app.use('/', require('./routes/apiUsage'));
 app.use('/', require('./routes/maxChat'));
+app.use('/', require('./routes/maxWorkspace'));
+app.use('/', require('./routes/maxStateIngestion'));
+app.use('/', require('./routes/maxDecisionExecution'));
+app.use('/', require('./routes/maxAttention'));
+app.use('/', require('./routes/operatorContext'));
+app.use('/', require('./routes/missions'));
 app.use('/', require('./routes/approvals'));
 app.use('/', require('./routes/users'));
+app.use('/', require('./routes/pricingCalculator'));
+app.use('/clients', require('./routes/revenue'));
 app.use('/client', require('./routes/client'));
 app.use('/setter', require('./routes/setter'));
 app.use('/api/setter', require('./routes/setter'));
 app.use('/closer', require('./routes/closer'));
 app.use('/api/closer', require('./routes/closer'));
 app.use('/sales', require('./routes/sales'));
+app.use('/', require('./routes/aoImpersonation'));
+app.use('/ao', require('./routes/ao'));
+app.use('/', require('./routes/aoProspectRouting'));
+app.use('/admin/field-visits', require('./routes/aoAdmin'));
+// Public marketing funnel — no session auth (see routes/scorecard.js)
+app.use('/', require('./routes/scorecard'));
+app.use('/', require('./routes/walkthrough'));
+app.use('/', require('./routes/anchorPortal'));
+app.use('/', require('./routes/leadQualificationReviews'));
+app.use('/', require('./routes/signalV1'));
+app.use('/', require('./routes/signalDistributionReference').createDistributionReferenceRouter({
+  Router:express.Router,requireAuth,requireRole,
+  getStore:()=>require('./services/signalDistribution').getStore(),
+  enabled:()=>process.env.SIGNAL_DISTRIBUTION_ENABLED==='1',
+}));
+app.use('/', require('./routes/signalDistribution').createDistributionRouter({
+  Router:express.Router,requireAuth,requireRole,
+  getStore:()=>require('./services/signalDistribution').getStore(),
+  getDeliveryStore:()=>require('./services/signalDistribution').getDeliveryStore(),
+  enabled:()=>process.env.SIGNAL_DISTRIBUTION_ENABLED==='1',
+}));
 
 // TEMP: one-shot GBP account/location lookup. CRON_SECRET-gated so it can be
 // curled without a session cookie. REMOVE AFTER MSHI IDs ARE CAPTURED.
@@ -187,13 +368,19 @@ app.get('/admin/_gbp-lookup', async (req, res) => {
   }
 });
 
+app.get('/', (req, res) => res.redirect('/login'));
+
 // Login page
 app.get('/login', (req, res) => {
+  // Explicit, fixed identity-only landing. Never accept an arbitrary return URL.
+  const identityCheck = req.query.workflow === 'identity-check';
+  if (identityCheck) res.set('Cache-Control', 'no-store');
   res.send(`<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
 <title>Pulseforge — Login</title>
+<link rel="icon" href="/favicon.ico">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@400;500&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
@@ -215,14 +402,24 @@ input:focus { border-color:#8b5cf6; background:rgba(139,92,246,0.05); }
 button { width:100%; background:#8b5cf6; border:none; border-radius:6px; padding:0.85rem; color:#040810; font-family:'JetBrains Mono',monospace; font-size:0.75rem; font-weight:500; letter-spacing:2px; text-transform:uppercase; cursor:pointer; transition:all 0.2s; }
 button:hover { background:#7c3aed; box-shadow:0 0 20px rgba(139,92,246,0.4); }
 .version { font-family:'JetBrains Mono',monospace; font-size:0.55rem; color:#3a4a6a; text-align:center; margin-top:1.5rem; letter-spacing:1px; }
+.ok { background:rgba(0,230,118,0.08); border:1px solid rgba(0,230,118,0.25); color:#00e676; font-family:'JetBrains Mono',monospace; font-size:0.7rem; padding:0.6rem 0.75rem; border-radius:6px; margin-bottom:1rem; letter-spacing:1px; }
+.signup-link { display:block; text-align:center; margin-top:1.1rem; color:#8b5cf6; font-family:'JetBrains Mono',monospace; font-size:0.62rem; letter-spacing:1px; text-decoration:none; text-transform:uppercase; }
+.signup-link:hover { color:#c4b5fd; }
 </style>
 </head>
 <body>
 <div class="login-box">
   <div class="logo"><div class="logo-dot"></div>PULSEFORGE</div>
   <div class="subtitle">Command Center · Restricted Access</div>
-  ${req.query.error ? '<div class="error">Invalid credentials — try again</div>' : ''}
+  ${req.query.verified ? '<div class="ok">Email verified — sign in to open your workspace</div>' : ''}
+  ${req.query.error === 'unverified' ? '<div class="error">Verify your email before signing in</div>' : ''}
+  ${req.query.error === 'no_workspace' ? '<div class="error">No workspace provisioned</div>' : ''}
+  ${req.query.error === 'verify' ? '<div class="error">Verification link is invalid or expired</div>' : ''}
+  ${req.query.error === 'password' ? '<div class="error">Password must be updated before continuing</div>' : ''}
+  ${req.query.error && !['unverified','no_workspace','verify','password'].includes(String(req.query.error)) ? '<div class="error">Invalid credentials — try again</div>' : ''}
+  ${identityCheck ? '<div class="ok">Identity check only — the dashboard will not open</div>' : ''}
   <form method="POST" action="/login">
+    ${identityCheck ? '<input type="hidden" name="workflow" value="identity-check">' : ''}
     <label>Email</label>
     <input type="email" name="email" placeholder="you@pulseforge.com" autofocus>
     <label>Password</label>
@@ -252,19 +449,26 @@ document.addEventListener('click', function(e) {
 
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
+  const identityCheck = req.body.workflow === 'identity-check';
+  if (identityCheck) res.set('Cache-Control', 'no-store');
+  const failedLogin = error => res.redirect(
+    `/login?error=${error}${identityCheck ? '&workflow=identity-check' : ''}`
+  );
   await initAuth();
   const userCount = await getUserCount();
 
   if (userCount > 0) {
     const { rows } = await pool.query(`
-      SELECT id, name, email, password_hash, role, active, client_id
+      SELECT id, name, email, password_hash, role, active, client_id, email_verified, password_change_required
       FROM users
       WHERE LOWER(email) = LOWER($1)
       LIMIT 1
     `, [email || '']);
     const user = rows[0];
     const ok = user && user.active && await bcrypt.compare(password || '', user.password_hash);
-    if (!ok) return res.redirect('/login?error=1');
+    if (!ok) return failedLogin('1');
+    if (user.email_verified === false) return failedLogin('unverified');
+    if (user.role === 'client' && !user.client_id) return failedLogin('no_workspace');
 
     req.session.user = {
       id: user.id,
@@ -272,21 +476,33 @@ app.post('/login', async (req, res) => {
       email: user.email,
       role: user.role,
       client_id: user.client_id || null,
+      email_verified: user.email_verified !== false,
+      password_change_required: Boolean(user.password_change_required),
     };
     req.session.authenticated = true;
-    req.session.active_client_id = user.client_id || 1;
+    // Client-role users are locked to their workspace. Never default them to Pulseforge.
+    req.session.active_client_id = user.role === 'client'
+      ? Number(user.client_id)
+      : (user.client_id || 1);
     await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
+    if (user.password_change_required) return res.redirect('/change-password');
+    if (identityCheck) return res.redirect('/api/me');
     if (user.role === 'setter') return res.redirect('/setter');
     if (user.role === 'closer') return res.redirect('/closer');
     if (user.role === 'sales') return res.redirect('/sales');
-    return res.redirect('/dashboard');
+    if (user.role === 'ao') return res.redirect('/ao');
+    if (user.role === 'cleaner' || user.role === 'facility_client') return res.redirect('/portal/anchor');
+    return res.redirect('/command-deck');
   }
+
+  // The identity check requires an existing account, never the legacy fallback.
+  if (identityCheck) return failedLogin('1');
 
   if (password === process.env.DASHBOARD_PASSWORD) {
     req.session.user = { id: null, name: 'Legacy Admin', email: email || 'legacy@pulseforge.local', role: 'admin' };
     req.session.authenticated = true;
     req.session.active_client_id = 1;
-    return res.redirect('/dashboard');
+    return res.redirect('/command-deck');
   }
 
   res.redirect('/login?error=1');
@@ -321,56 +537,66 @@ app.get('/api/search', requireAuth, requireRole('admin', 'manager'), async (req,
   const log = (level, msg) => send('log', { level, msg });
 
   try {
-    log('info', `Starting search: "${industry}" in ${location}`);
+    const actor = req.user || req.session?.user;
+    const selectedTenant = actor?.client_id != null && String(actor.client_id).trim() !== ''
+      ? actor.client_id : req.session?.active_client_id;
+    // Keep raw identity as well as resolver validation: legacy ID normalization
+    // accepts malformed strings, which are not valid research authority.
+    const tenants = [selectedTenant, ...[req.query.client_id, req.query.clientId]
+      .filter(value => value != null)];
+    const run = tenants.reduceRight((next, tenant) => () => withResearchProviderScope(tenant, next), async () => {
+      if (armed()) resolveCieClientId(req, req.query.client_id ?? req.query.clientId);
+      log('info', `Starting search: "${industry}" in ${location}`);
 
-    log('info', 'Querying SerpAPI...');
-    let leads = await searchSerpAPI(`"${industry}" business "${location}" "${title}"`, parseInt(max), log);
-    log('ok', `Found ${leads.length} raw results`);
+      log('info', 'Querying SerpAPI...');
+      let leads = await searchSerpAPI(`"${industry}" business "${location}" "${title}"`, parseInt(max), log);
+      log('ok', `Found ${leads.length} raw results`);
 
-    leads = leads.filter(l => !SKIP_DOMAINS.some(s => l.url.includes(s)));
-    log('ok', `${leads.length} results after filtering directories/social`);
+      leads = leads.filter(l => !SKIP_DOMAINS.some(s => l.url.includes(s)));
+      log('ok', `${leads.length} results after filtering directories/social`);
 
-    leads = deduplicate(leads);
-    log('ok', `${leads.length} unique domains`);
+      leads = deduplicate(leads);
+      log('ok', `${leads.length} unique domains`);
 
-    send('progress', { pct: 30, label: 'Enriching with Hunter...' });
+      send('progress', { pct: 30, label: 'Enriching with Hunter...' });
 
-    for (let i = 0; i < leads.length; i++) {
-      const lead = leads[i];
-      log('info', `[${i+1}/${leads.length}] Enriching ${lead.url}...`);
-      const enriched = await enrichWithHunter(lead.url, title);
-      if (enriched) {
-        Object.assign(lead, enriched);
-        lead.source = [...(lead.source || []), 'hunter'];
-        log('ok', `✓ ${lead.url} → ${enriched.email}`);
+      for (let i = 0; i < leads.length; i++) {
+        const lead = leads[i];
+        log('info', `[${i+1}/${leads.length}] Enriching ${lead.url}...`);
+        const enriched = await enrichWithHunter(lead.url, title);
+        if (enriched) {
+          Object.assign(lead, enriched);
+          lead.source = [...(lead.source || []), 'hunter'];
+          log('ok', `✓ ${lead.url} → ${enriched.email}`);
+        }
+        send('progress', { pct: 30 + Math.round((i+1)/leads.length * 50), label: `Enriching ${i+1}/${leads.length}...` });
+        await delay(1200);
       }
-      send('progress', { pct: 30 + Math.round((i+1)/leads.length * 50), label: `Enriching ${i+1}/${leads.length}...` });
-      await delay(1200);
-    }
 
-    send('progress', { pct: 85, label: 'Scoring & deduplicating...' });
+      send('progress', { pct: 85, label: 'Scoring & deduplicating...' });
 
-    leads = leads.map(l => ({
-      id:      Math.random().toString(36).slice(2,8),
-      company: l.company || 'Unknown',
-      url:     l.url || '',
-      contact: l.contact || '—',
-      email:   l.email || '—',
-      title:   l.title || '—',
-      type:    detectType(l),
-      source:  l.source || ['google'],
-      score:   scoreLead(l),
-    }));
+      leads = leads.map(l => ({
+        id:      Math.random().toString(36).slice(2,8),
+        company: l.company || 'Unknown',
+        url:     l.url || '',
+        contact: l.contact || '—',
+        email:   l.email || '—',
+        title:   l.title || '—',
+        type:    detectType(l),
+        source:  l.source || ['google'],
+        score:   scoreLead(l),
+      }));
 
-    const before = leads.length;
-    leads = leads.filter(l => l.score >= parseInt(minscore));
-    leads.sort((a, b) => b.score - a.score);
+      const before = leads.length;
+      leads = leads.filter(l => l.score >= parseInt(minscore));
+      leads.sort((a, b) => b.score - a.score);
 
-    send('progress', { pct: 100, label: 'Done' });
-    log('ok', `Complete — ${leads.length} leads loaded, ${before - leads.length} filtered below ${minscore}% threshold`);
+      send('progress', { pct: 100, label: 'Done' });
+      log('ok', `Complete — ${leads.length} leads loaded, ${before - leads.length} filtered below ${minscore}% threshold`);
 
-    send('results', { leads });
-
+      send('results', { leads });
+    });
+    await run();
   } catch (err) {
     log('err', `Fatal error: ${err.message}`);
   }
@@ -556,7 +782,7 @@ app.post('/api/post-comment', requireAuth, requireRole('admin', 'manager'), asyn
   }
 });
 
-app.get('/dashboard', requireAuth, requireRole('admin', 'manager'), (req, res) => {
+app.get(['/dashboard', '/dashboard/warm'], requireAuth, requireRole('admin', 'manager', 'viewer', 'client'), (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
 });
 
@@ -642,6 +868,7 @@ async function searchSerpAPI(query, numResults, log) {
 
   for (let page = 0; page < pages; page++) {
     try {
+      assertResearchProviderAllowed('serpapi');
       const res = await axios.get('https://serpapi.com/search', {
         params: { api_key: SERPAPI_KEY, q: query, num: 10, start: page * 10, engine: 'google' }
       });
@@ -655,6 +882,7 @@ async function searchSerpAPI(query, numResults, log) {
         });
       }
     } catch (err) {
+      rethrowResearchProviderControl(err);
       log('err', `SerpAPI error: ${err.response?.data?.error || err.message}`);
       break;
     }
@@ -668,6 +896,7 @@ async function enrichWithHunter(domain, titleFilter) {
   if (!HUNTER_KEY) return null;
 
   try {
+    assertResearchProviderAllowed('hunter');
     const res = await axios.get('https://api.hunter.io/v2/domain-search', {
       params: { domain, api_key: HUNTER_KEY, limit: 5, type: 'personal' }
     });
@@ -684,6 +913,7 @@ async function enrichWithHunter(domain, titleFilter) {
       title:   match.position || null,
     };
   } catch (err) {
+    rethrowResearchProviderControl(err);
     return null;
   }
 }
@@ -753,3 +983,4 @@ try {
   console.error('LISTEN FAILED:', err);
   throw err;
 }
+

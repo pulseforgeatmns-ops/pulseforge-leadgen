@@ -2,11 +2,11 @@ require('dotenv').config();
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
-const Anthropic = require('@anthropic-ai/sdk');
+const Anthropic = require('./utils/meteredAnthropic').forAgent('faye');
 const db = require('./dbClient');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 
-const client = new Anthropic();
+const client = new Anthropic(undefined, { tenantId: () => CLIENT_ID });
 
 puppeteer.use(StealthPlugin());
 
@@ -30,19 +30,6 @@ const TARGET_GROUPS = [
   'https://www.facebook.com/groups/1538960372868075',
   'https://www.facebook.com/groups/301392468019063',
 ];
-
-function isRailwayRuntime() {
-  return Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_SERVICE_ID);
-}
-
-function assertCanRunFaye() {
-  if (isRailwayRuntime()) {
-    throw new Error('Faye uses local Puppeteer browser automation and cannot run on Railway. Run facebookAgent.js locally with a valid Facebook session.');
-  }
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error('ANTHROPIC_API_KEY is missing; Faye cannot generate comments.');
-  }
-}
 
 function randomDelay(min, max) {
   return new Promise(resolve =>
@@ -154,11 +141,11 @@ Return only the comment text.`
 
 async function run() {
   const clientConfig = await getClientConfig(CLIENT_ID);
+  if (!clientConfig) throw new Error(`Active client not found: ${CLIENT_ID}`);
   if (CLIENT_ID === 2 && !clientConfig?.facebook_url) {
     console.log('Faye disabled for MSHI until Facebook page exists.');
     return { skipped: true, reason: 'facebook_page_missing', client_id: CLIENT_ID };
   }
-  assertCanRunFaye();
   let browser;
   let drafted = 0;
   try {
@@ -191,10 +178,22 @@ async function run() {
 
     console.log('\nFacebook agent running...\n');
 
-    for (const groupUrl of TARGET_GROUPS) {
+    for (let i = 0; i < TARGET_GROUPS.length; i++) {
+      const groupUrl = TARGET_GROUPS[i];
+      const stillActive = await getClientConfig(CLIENT_ID);
+      if (!stillActive) {
+        throw new Error(`[Faye] Client ${CLIENT_ID} deactivated mid-run — aborting at group ${i + 1}/${TARGET_GROUPS.length} after ${drafted} drafts`);
+      }
+
       const posts = await findPosts(page, groupUrl, 3);
 
-      for (const post of posts) {
+      for (let j = 0; j < posts.length; j++) {
+        const post = posts[j];
+        const stillActiveInner = await getClientConfig(CLIENT_ID);
+        if (!stillActiveInner) {
+          throw new Error(`[Faye] Client ${CLIENT_ID} deactivated mid-run — aborting at group ${i + 1}/${TARGET_GROUPS.length}, post ${j + 1}/${posts.length} after ${drafted} drafts`);
+        }
+
         if (!isEnglish(post.content)) {
           console.log(`Skipping non-English post by: ${post.authorName}`);
           continue;
@@ -248,3 +247,4 @@ if (require.main === module) {
     process.exit(1);
   });
 }
+

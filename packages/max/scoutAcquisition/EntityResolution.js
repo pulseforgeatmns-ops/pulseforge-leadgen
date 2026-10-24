@@ -1,0 +1,199 @@
+'use strict';
+
+/**
+ * SPEC-100A — resolve discovered businesses against existing PF companies
+ * and deduplicate aliases (LLC / Mgmt / punctuation) to one entity.
+ */
+
+const { asText, clone, nowIso } = require('./Types');
+const {
+  normalizeName,
+  normalizeWebsite,
+} = require('../../capabilities/discovery/dedupe');
+
+function normalizeAddress(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\b(suite|ste|unit|floor|fl|#)\b/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .slice(0, 56);
+}
+
+function entityKeys(record) {
+  const name = normalizeName(record.name || record.companyName || record.company);
+  const domain = normalizeWebsite(record.website || record.url || record.domain);
+  const address = normalizeAddress(record.address || record.location);
+  const id = asText(record.id || record.companyId || record.placeId);
+  return { name, domain, address, id, nameAddr: name && address ? `${name}|${address}` : name };
+}
+
+function recordsMatch(a, b) {
+  const left = entityKeys(a);
+  const right = entityKeys(b);
+  if (left.id && right.id && left.id === right.id) return true;
+  if (left.domain && right.domain && left.domain === right.domain) return true;
+  if (left.name && right.name && left.name === right.name) {
+    if (!left.address || !right.address) return true;
+    if (left.address === right.address) return true;
+    if (left.address.includes(right.address) || right.address.includes(left.address)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Keep each observation's business labels paired with its own query provenance.
+// Flattening duplicate hits can hide contrary descriptions or turn one hit's
+// query label into another hit's apparent observed industry.
+function classificationObservations(record = {}) {
+  if (Array.isArray(record.classificationObservations) && record.classificationObservations.length) {
+    return clone(record.classificationObservations);
+  }
+  const fields = ['name', 'company', 'description', 'businessType', 'snippet',
+    'industry', 'vertical', 'segment', 'category', 'placeTypes', 'signals',
+    'discoveryQuery', 'discoveryConcept', 'discoveryCity', 'discoverySource',
+    'source', 'location', 'website'];
+  return [clone(Object.fromEntries(fields.filter(key => record[key] != null)
+    .map(key => [key, record[key]])))];
+}
+
+function mergeResolved(existing, incoming) {
+  const out = { ...existing };
+  for (const key of Object.keys(incoming || {})) {
+    if (out[key] == null && incoming[key] != null) out[key] = incoming[key];
+  }
+  Object.assign(out, require('../../../utils/scoutTicketMembership').ticketFields(existing, incoming));
+  const observations = [...classificationObservations(existing), ...classificationObservations(incoming)];
+  out.classificationObservations = [...new Map(observations.map(row => [JSON.stringify(row), row])).values()];
+  if (!out.aliases) out.aliases = [];
+  const alias = incoming.name || incoming.companyName;
+  if (alias && alias !== out.name && !out.aliases.includes(alias)) {
+    out.aliases.push(alias);
+  }
+  if (Array.isArray(incoming.placeTypes) && incoming.placeTypes.length) {
+    out.placeTypes = Array.from(new Set([...(out.placeTypes || []), ...incoming.placeTypes]));
+  }
+  if (Array.isArray(incoming.signals) && incoming.signals.length) {
+    out.signals = [...(out.signals || []), ...incoming.signals];
+  }
+  if (Array.isArray(incoming.people) && incoming.people.length) {
+    out.people = [...(out.people || []), ...incoming.people];
+  }
+  if (Array.isArray(incoming.evidence) && incoming.evidence.length) {
+    out.evidence = [...(out.evidence || []), ...incoming.evidence];
+  }
+  out.resolvedFrom = Array.from(
+    new Set([...(out.resolvedFrom || []), incoming.source || incoming.discoverySource].filter(Boolean))
+  );
+  return out;
+}
+
+/**
+ * Resolve a discovered candidate against existing PF companies.
+ * @returns {{ company: object, match: 'existing'|'new', existingId: string|null }}
+ */
+function resolveCandidate(candidate, existingCompanies = []) {
+  for (const existing of existingCompanies) {
+    if (recordsMatch(existing, candidate)) {
+      return {
+        company: mergeResolved(clone(existing), candidate),
+        match: 'existing',
+        existingId: existing.id,
+      };
+    }
+  }
+  const name = asText(candidate.name || candidate.companyName) || 'unknown';
+  const id =
+    asText(candidate.id || candidate.companyId) ||
+    `disc-${normalizeName(name).replace(/\s+/g, '-') || 'company'}`;
+  return {
+    company: {
+      ...require('../../../utils/scoutTicketMembership').ticketFields(candidate),
+      id,
+      tenantId: candidate.tenantId || null,
+      name,
+      industry: asText(candidate.industry || candidate.vertical || candidate.segment),
+      location: asText(candidate.location || candidate.address || candidate.geography),
+      website: asText(candidate.website || candidate.url),
+      address: asText(candidate.address),
+      // Preserve observed business facts across identity resolution. Admission
+      // must see the same evidence as discovery, including contrary evidence.
+      classificationObservations: classificationObservations(candidate),
+      placeTypes: Array.isArray(candidate.placeTypes) ? candidate.placeTypes.slice() : [],
+      businessType: asText(candidate.businessType),
+      description: asText(candidate.description),
+      snippet: asText(candidate.snippet),
+      // Keep search provenance separate so query-derived industry labels cannot
+      // become business evidence merely because the candidate was resolved.
+      discoveryQuery: asText(candidate.discoveryQuery),
+      discoveryConcept: asText(candidate.discoveryConcept),
+      discoveryCity: asText(candidate.discoveryCity),
+      discoverySource: asText(candidate.discoverySource),
+      icpScore: candidate.icpScore != null ? Number(candidate.icpScore) : candidate.icp_score,
+      people: Array.isArray(candidate.people) ? candidate.people : [],
+      signals: Array.isArray(candidate.signals) ? candidate.signals : [],
+      evidence: Array.isArray(candidate.evidence) ? candidate.evidence : [],
+      discoveredAt: candidate.discoveredAt || nowIso(),
+      lastEvaluatedAt: candidate.lastEvaluatedAt || null,
+      source: candidate.source || candidate.discoverySource || 'discovery',
+      aliases: [],
+      resolvedFrom: [candidate.source || candidate.discoverySource].filter(Boolean),
+    },
+    match: 'new',
+    existingId: null,
+  };
+}
+
+/**
+ * Deduplicate a mixed list of existing + discovered companies.
+ */
+function resolveCandidateUniverse(existingCompanies, discoveredCandidates) {
+  const resolved = [];
+  const seen = [];
+  let duplicatesRemoved = 0;
+  let resolvedToExisting = 0;
+
+  function ingest(record, fromDiscovery) {
+    for (let i = 0; i < seen.length; i += 1) {
+      if (recordsMatch(seen[i], record)) {
+        resolved[i] = mergeResolved(resolved[i], record);
+        seen[i] = resolved[i];
+        duplicatesRemoved += 1;
+        if (fromDiscovery && resolved[i].id && !String(record.id || '').startsWith('disc-')) {
+          resolvedToExisting += 1;
+        } else if (fromDiscovery) {
+          resolvedToExisting += 1;
+        }
+        return;
+      }
+    }
+    const step = fromDiscovery
+      ? resolveCandidate(record, existingCompanies)
+      : { company: clone(record), match: 'existing', existingId: record.id };
+    resolved.push(step.company);
+    seen.push(step.company);
+    if (fromDiscovery && step.match === 'existing') resolvedToExisting += 1;
+  }
+
+  for (const company of existingCompanies || []) ingest(company, false);
+  for (const candidate of discoveredCandidates || []) ingest(candidate, true);
+
+  return {
+    companies: resolved,
+    duplicatesRemoved,
+    resolvedToExisting,
+    candidatesResolved: resolved.length,
+  };
+}
+
+module.exports = {
+  normalizeName,
+  normalizeWebsite,
+  normalizeAddress,
+  entityKeys,
+  recordsMatch,
+  resolveCandidate,
+  resolveCandidateUniverse,
+  mergeResolved,
+};

@@ -1,0 +1,56 @@
+{
+  "artifactVersion": "1",
+  "generatedAt": "2026-07-18T12:04:51Z",
+  "environment": "disposable_postgresql",
+  "productionWrites": false,
+  "status": "passed",
+  "executionCorrelationId": "8a5aec7e-6a5d-401c-a69f-2e2ff1920445",
+  "migrationHashes": {
+    "phase1": "c703c88095df81098c8405b18f008a4b88a65c267622ffbb7eb48457012a4203",
+    "phase15": "9c8e1ed7b44e5fd4be9944193b1cfd1a9c1d54113795b7accd2d7d8d36fe23ed",
+    "operationalRollback": "2ae6e4a87638722bbb2ad40d6c218a7593cfd369920b2c67dbafa233955c3045"
+  },
+  "reconciliation": {
+    "clientId": 10,
+    "ledgerEventCount": 14,
+    "projectedOutcomeCount": 1,
+    "mismatchedRecords": 0,
+    "unexplainedEvents": 0,
+    "ledgerTotals": {
+      "bookedRevenueCents": 30000,
+      "deliveredRevenueCents": 30000,
+      "collectedRevenueCents": 30000,
+      "refundedRevenueCents": 5000,
+      "netCollectedRevenueCents": 25000,
+      "jobCount": 1,
+      "paymentCount": 1,
+      "refundCount": 1,
+      "unattributedOutcomeCount": 0,
+      "disputedOutcomeCount": 0
+    },
+    "projectionMatchesLedger": true,
+    "sourceMatchesLedger": true
+  },
+  "assertions": {
+    "createdFromScratch": true,
+    "allRevenueMigrationsApplied": true,
+    "fullLifecyclePassed": true,
+    "concurrentIdempotencyPassed": true,
+    "transactionRollbackAtomic": true,
+    "tenantIsolationPassed": true,
+    "ordinaryRoleUpdateRejected": true,
+    "ordinaryRoleDeleteRejected": true,
+    "ownerTriggerMutationRejected": true,
+    "projectionRebuildExact": true,
+    "projectionRebuiltFromEmpty": true,
+    "repeatedRebuildDeterministic": true,
+    "mismatchApplyRolledBack": true,
+    "dateRangeModePassed": true,
+    "databaseDestroyedAfterward": true,
+    "providerActivity": 0,
+    "customerCommunications": 0,
+    "followupRecommendationsCreated": 0
+  },
+  "productionCanaryStatus": "not_run_not_authorized",
+  "phase15ProductionComplete": false
+}

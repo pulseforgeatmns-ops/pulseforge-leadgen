@@ -1,0 +1,16 @@
+◇ injected env (23) from .env // tip: ⌘ custom filepath { path: '/custom/path/.env' }
+◇ injected env (0) from .env // tip: ⌘ override existing { override: true }
+[phase-a2-preview] http://127.0.0.1:4620/setter  (Calls, after)
+[phase-a2-preview] http://127.0.0.1:4620/dashboard  (Command Center, after)
+[phase-a2-preview] http://127.0.0.1:4620/before/setter  (before)
+[phase-a2-preview] http://127.0.0.1:4620/before/dashboard  (before)
+[setter] leads error: duplicate key value violates unique constraint "pg_type_typname_nsp_index"
+[phase-a2-preview] seeded 5 prospects — ready
+[phase-b-capture] failed: Error: Could not find Chrome (ver. 147.0.7727.57). This can occur if either
+ 1. you did not perform an installation before running the script (e.g. `npx puppeteer browsers install chrome`) or
+ 2. your cache path is incorrectly configured (which is: /var/folders/bl/c3qw1l11711b540cq8qzw04c0000gn/T/cursor-sandbox-cache/9cf18952002a14869079d738710363a7/puppeteer).
+For (2), check out our guide on configuring puppeteer at https://pptr.dev/guides/configuration.
+    at ChromeLauncher.resolveExecutablePath (/Users/jake/Desktop/Pulseforge/Lead Gen/Lead Gen App/node_modules/puppeteer-core/lib/cjs/puppeteer/node/BrowserLauncher.js:337:27)
+    at ChromeLauncher.computeLaunchArguments (/Users/jake/Desktop/Pulseforge/Lead Gen/Lead Gen App/node_modules/puppeteer-core/lib/cjs/puppeteer/node/ChromeLauncher.js:94:24)
+    at async ChromeLauncher.launch (/Users/jake/Desktop/Pulseforge/Lead Gen/Lead Gen App/node_modules/puppeteer-core/lib/cjs/puppeteer/node/BrowserLauncher.js:85:28)
+    at async main (/Users/jake/Desktop/Pulseforge/Lead Gen/Lead Gen App/scripts/phaseBCaptureScreenshots.js:67:21)

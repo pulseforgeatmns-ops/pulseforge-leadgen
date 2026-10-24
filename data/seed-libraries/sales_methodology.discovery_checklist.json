@@ -1,0 +1,23 @@
+{
+  "library_id": "sales_methodology.discovery_checklist",
+  "title": "Discovery Call Checklist",
+  "category": "sales_methodology",
+  "source_type": "curated_operator",
+  "trust_level": "high",
+  "scope": {
+    "audience": "global",
+    "verticals": []
+  },
+  "summary": "Operator-curated discovery checklist for first serious conversations. Reference guidance only — not observed evidence.",
+  "content_text": "Confirm decision-maker presence, current process, pain cost, timing, budget authority, and next-step agreement. Capture objections verbatim. Do not invent facts about the prospect.",
+  "content_ref": null,
+  "tags": ["discovery", "sales", "calls", "checklist"],
+  "provenance": {
+    "curated_by": "pulseforge-ops",
+    "curated_at": "2026-08-03T00:00:00.000Z",
+    "notes": "Internal operator summary for Max bootstrap; not a copyrighted methodology reprint.",
+    "permission": "internal"
+  },
+  "enabled": true,
+  "version": 1
+}

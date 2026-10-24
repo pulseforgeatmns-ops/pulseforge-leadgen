@@ -1,6 +1,7 @@
 require('dotenv').config();
 const pool = require('./db');
 const db = require('./dbClient');
+const { withSmsAuthorization } = require('./utils/callEligibility');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 
 const AGENT_NAME = 'sam';
@@ -12,7 +13,7 @@ const AUTH_TOKEN     = process.env.TWILIO_AUTH_TOKEN;
 const FROM_NUMBER    = process.env.TWILIO_FROM || process.env.TWILIO_PHONE_NUMBER;
 const NOTIFY_PHONE   = process.env.NOTIFY_PHONE || process.env.JACOB_PHONE;
 const MARKET_LABELS = {
-  1: 'Manchester NH',
+  1: 'Providence RI',
   2: 'Charleston WV',
   5: 'Nashville TN',
 };
@@ -76,8 +77,9 @@ async function sendSMS(prospectId, messageOverride = null) {
   const prospect = res.rows[0];
 
   if (!prospect) return { sent: false, reason: 'prospect_not_found' };
+  if (prospect.ao_outreach_review_required) return { sent: false, reason: 'outreach_review_required' };
   if (!prospect.phone) return { sent: false, reason: 'no_phone' };
-  if (prospect.do_not_contact) return { sent: false, reason: 'do_not_contact' };
+  if (prospect.do_not_contact || prospect.is_synthetic) return { sent: false, reason: prospect.is_synthetic ? 'synthetic_prospect' : 'do_not_contact' };
 
   const alreadySent = await alreadyContactedBySMS(prospectId);
   if (alreadySent) {
@@ -88,7 +90,8 @@ async function sendSMS(prospectId, messageOverride = null) {
   const body = messageOverride || MESSAGES.warm_signal(prospect);
 
   try {
-    await twilioClient.messages.create({ body, from: FROM_NUMBER, to: prospect.phone });
+    await withSmsAuthorization(pool, [{ prospectId: prospect.id, clientId: CLIENT_ID }],
+      () => twilioClient.messages.create({ body, from: FROM_NUMBER, to: prospect.phone }));
 
     await db.logTouchpoint(prospectId, 'sms', 'outbound', body, 'sent', 'neutral', AGENT_NAME);
     await db.logAgentAction(AGENT_NAME, 'send_sms', prospectId, null, { phone: prospect.phone, trigger: 'direct' }, 'success');
@@ -99,6 +102,21 @@ async function sendSMS(prospectId, messageOverride = null) {
     await db.logAgentAction(AGENT_NAME, 'send_sms', prospectId, null, { phone: prospect.phone }, 'failed', err.message);
     console.error(`  ✗ SMS failed for ${prospect.first_name} ${prospect.last_name}: ${err.message}`);
     return { sent: false, reason: err.message };
+  }
+}
+
+async function sendOpsAlertSMS(message, options = {}) {
+  const twilioClient = getTwilioClient();
+  if (!twilioClient) return { sent: false, reason: 'twilio_not_configured' };
+
+  const to = options.to || process.env.OPS_ALERT_PHONE;
+  if (!to) return { sent: false, reason: 'OPS_ALERT_PHONE not configured' };
+
+  try {
+    const result = await twilioClient.messages.create({ body: message, from: FROM_NUMBER, to });
+    return { sent: true, messageSid: result.sid || null, to };
+  } catch (err) {
+    return { sent: false, reason: err.message, to };
   }
 }
 
@@ -265,10 +283,18 @@ async function hasWarmSignalSmsQueuedToday(prospectId, clientId = CLIENT_ID) {
   return res.rows.length > 0;
 }
 
+const WARM_SMS_LOG_ACTION = {
+  skipped_dnc:  'sms_skipped_dnc',
+  skipped_gate: 'sms_skipped_gate',
+  queued:       'sms_queued',
+  sent:         'sms_sent',
+  failed:       'sms_sent',
+};
+
 async function logWarmSignalSms(action, prospect, message, status, extra = {}, errorMsg = null) {
   await db.logAgentAction(
     AGENT_NAME,
-    status === 'skipped_dnc' ? 'sms_skipped_dnc' : status === 'queued' ? 'sms_queued' : 'sms_sent',
+    WARM_SMS_LOG_ACTION[status] || 'sms_sent',
     prospect.id,
     null,
     {
@@ -286,8 +312,10 @@ async function logWarmSignalSms(action, prospect, message, status, extra = {}, e
   );
 }
 
+const OPEN_TRIGGER_LABELS = new Set(['qualifying_opens', '2+ opens']);
+
 async function processWarmSignalActions(twilioClient, dailyLimit, sentCount) {
-  const { logSignalDroppedNoProspect } = require('./rileyAgent');
+  const { logSignalDroppedNoProspect, qualifyingOpenSignal } = require('./rileyAgent');
   const res = await pool.query(`
     SELECT id, payload, client_id
     FROM agent_actions
@@ -305,7 +333,13 @@ async function processWarmSignalActions(twilioClient, dailyLimit, sentCount) {
   let queued = 0;
   let skippedDnc = 0;
 
-  for (const row of res.rows) {
+  for (let i = 0; i < res.rows.length; i++) {
+    const row = res.rows[i];
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Sam] Client ${CLIENT_ID} deactivated mid-run — aborting at warm signal action ${i + 1}/${res.rows.length} after ${sent} sent`);
+    }
+
     if (sentCount + sent >= dailyLimit) break;
     const payload = { ...parseLogPayload(row.payload), action_id: row.id };
     const prospectId = payload.prospect_id;
@@ -370,6 +404,23 @@ async function processWarmSignalActions(twilioClient, dailyLimit, sentCount) {
       continue;
     }
 
+    // Re-verify the open gate for opens-triggered actions. Pending rows deposited
+    // before the gate tightened may no longer qualify; skip them rather than send.
+    if (OPEN_TRIGGER_LABELS.has(payload.trigger)) {
+      const gate = await qualifyingOpenSignal(prospect.id, prospect.client_id);
+      if (!gate.qualifies) {
+        const spreadFmt = Number(gate.spread_minutes).toFixed(1);
+        const reason = `open_gate_unmet: ${gate.total_opens} opens, spread ${spreadFmt}m`;
+        await logWarmSignalSms(payload, prospect, message, 'skipped_gate', {
+          reason,
+          total_opens: gate.total_opens,
+          spread_minutes: gate.spread_minutes,
+        });
+        await completeWarmSignalAction(row.id, `Skipped: ${reason}`);
+        continue;
+      }
+    }
+
     if (await hasWarmSignalSmsSentToday(prospect.id, prospect.client_id)) {
       await completeWarmSignalAction(row.id, 'Skipped: sms already sent today');
       continue;
@@ -430,7 +481,13 @@ async function processReengagementTriggers(sendFn, dailyLimit, sentCount) {
   console.log(`Max re-engagement triggers: ${res.rows.length} pending`);
   let sent = 0;
 
-  for (const row of res.rows) {
+  for (let i = 0; i < res.rows.length; i++) {
+    const row = res.rows[i];
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Sam] Client ${CLIENT_ID} deactivated mid-run — aborting at reengagement trigger ${i + 1}/${res.rows.length} after ${sent} sent`);
+    }
+
     if (sentCount + sent >= dailyLimit) break;
 
     const payload = parseLogPayload(row.payload);
@@ -497,7 +554,13 @@ async function run() {
   // Trigger 1: sequence, no reply
   const noReply = await getSequenceNoReply();
   console.log(`Trigger 1 (3+ emails, no reply): ${noReply.length} prospects`);
-  for (const p of noReply) {
+  for (let i = 0; i < noReply.length; i++) {
+    const p = noReply[i];
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Sam] Client ${CLIENT_ID} deactivated mid-run — aborting at noReply prospect ${i + 1}/${noReply.length} after ${sent} sent`);
+    }
+
     if (sent >= dailyLimit) break;
     const result = await sendSMS(p.id, MESSAGES.sequence_no_reply(p));
     if (result.sent) sent++;
@@ -507,7 +570,13 @@ async function run() {
   // Trigger 2: warm prospects
   const warm = await getWarmProspects();
   console.log(`\nTrigger 2 (warm status): ${warm.length} prospects`);
-  for (const p of warm) {
+  for (let i = 0; i < warm.length; i++) {
+    const p = warm[i];
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Sam] Client ${CLIENT_ID} deactivated mid-run — aborting at warm prospect ${i + 1}/${warm.length} after ${sent} sent`);
+    }
+
     if (sent >= dailyLimit) break;
     const result = await sendSMS(p.id, MESSAGES.warm_signal(p));
     if (result.sent) sent++;
@@ -517,7 +586,13 @@ async function run() {
   // Trigger 3: re-engagement
   const reEngage = await getReEngagement();
   console.log(`\nTrigger 3 (14+ days, re-engagement): ${reEngage.length} prospects`);
-  for (const p of reEngage) {
+  for (let i = 0; i < reEngage.length; i++) {
+    const p = reEngage[i];
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Sam] Client ${CLIENT_ID} deactivated mid-run — aborting at reEngage prospect ${i + 1}/${reEngage.length} after ${sent} sent`);
+    }
+
     if (sent >= dailyLimit) break;
     const result = await sendSMS(p.id, MESSAGES.re_engagement(p));
     if (result.sent) sent++;
@@ -542,7 +617,7 @@ async function run() {
   console.log(`\nSam complete — ${sent} SMS sent.`);
 }
 
-module.exports = { sendSMS, run };
+module.exports = { sendSMS, sendOpsAlertSMS, run };
 
 if (require.main === module) {
   run().catch(err => {

@@ -1,0 +1,1126 @@
+'use strict';
+
+/**
+ * Scout sourcing quality gates — NH/US geo, cleaning competitors,
+ * institutional firms, confidence, and source-specific fit rationale.
+ */
+
+const { describe, it } = require('node:test');
+const assert = require('node:assert/strict');
+
+const {
+  CANDIDATE_STATUS,
+  CONFIDENCE,
+  PRIORITY_TOWNS_NH,
+  REJECTION_REASON,
+  interpretAnchorMarket,
+  buildNhScopedSearchQueries,
+  evaluateScoutCandidate,
+  isGenericCriteriaCopy,
+  formatSuggestedContactRole,
+  batchMeetsQualityThreshold,
+  gateScoutCandidateRows,
+  selectBatchWithManchesterFill,
+  detectOutsideMarketRegion,
+  extractUsStateCode,
+  isNhLocation,
+  mergePreservedNhCandidatesFromPriorBatch,
+} = require('../services/scoutQualityGate');
+const {
+  buildSearchQueries,
+  mapPublicHitToScoutCandidate,
+  sourceScoutCandidatesFromPublicSources,
+} = require('../services/scoutPublicSourcing');
+const {
+  COMPLETED_RESULT_GUARDRAILS,
+  SCOUT_HANDOFF_STATUSES,
+  buildScoutHandoff,
+  handBriefToScout,
+  handBriefToScoutAsync,
+} = require('../services/scoutHandoff');
+const {
+  applyScoutExecutionResult,
+} = require('../services/clientIntelligenceCampaignPlanning');
+const {
+  createMemoryScoutWorkRequestStore,
+} = require('../services/scoutWorkRequestStore');
+
+const PM_WORK_REQUEST = Object.freeze({
+  targetSegment: 'Property managers',
+  targetSubtype: 'multi-family',
+  marketBounds:
+    'Start with Bedford, Hooksett, Londonderry, Auburn, and Goffstown. Keep Greater Manchester in scope.',
+  inclusionCriteria: [
+    'Manage offices, mixed-use buildings, small commercial properties, or multi-tenant spaces',
+    'Are located in Bedford, Hooksett, Londonderry, Auburn, Goffstown, or nearby Greater Manchester markets',
+  ],
+  exclusionCriteria: [
+    'Large institutional property managers',
+    'Cleaning companies, maid services, housekeeping, janitorial, carpet cleaning, and cleaning competitors',
+  ],
+  clientId: 10,
+});
+
+describe('scoutQualityGate — market interpretation', () => {
+  it('interprets Anchor / Greater Manchester as New Hampshire, USA', () => {
+    const market = interpretAnchorMarket('Greater Manchester', {
+      clientId: 10,
+    });
+    assert.equal(market.marketLabel, 'New Hampshire, USA');
+    assert.equal(market.state, 'NH');
+    assert.equal(market.interpretedAsNewHampshire, true);
+    assert.deepEqual(market.priorityTowns, [...PRIORITY_TOWNS_NH]);
+    assert.ok(market.nearbyFillTowns.includes('Manchester'));
+  });
+
+  it('builds every search query with town + NH or New Hampshire', () => {
+    const { queries } = buildNhScopedSearchQueries(PM_WORK_REQUEST);
+    assert.ok(queries.length >= 5);
+    for (const q of queries) {
+      assert.match(q, /\bNH\b|New Hampshire/);
+      assert.doesNotMatch(q, /Greater Manchester(?!\s+NH)/);
+    }
+    assert.ok(queries.some((q) => /Bedford NH/.test(q)));
+    assert.ok(queries.some((q) => /Hooksett NH/.test(q)));
+    assert.ok(queries.some((q) => /Londonderry NH/.test(q)));
+    assert.ok(queries.some((q) => /Auburn NH/.test(q)));
+    assert.ok(queries.some((q) => /Goffstown NH/.test(q)));
+  });
+
+  it('buildSearchQueries prioritizes NH towns over ambiguous Greater Manchester', () => {
+    const queries = buildSearchQueries(PM_WORK_REQUEST);
+    assert.ok(queries.every((q) => /\bNH\b|New Hampshire/.test(q)));
+    assert.ok(queries.some((q) => /Bedford NH/.test(q)));
+  });
+});
+
+describe('scoutQualityGate — candidate-only geography evidence', () => {
+  it('does not reject Elm Grove Companies (Hooksett NH) as UK', () => {
+    const gate = evaluateScoutCandidate(
+      {
+        companyName: 'Elm Grove Companies',
+        address: '1 Industrial Park Dr, Hooksett, NH 03106, USA',
+        location: 'Hooksett, NH',
+        formatted_address: '1 Industrial Park Dr, Hooksett, NH 03106, USA',
+        website: 'https://elmgrovecompanies.example',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+        phone: '603-555-0100',
+        // Brief/plan pollution must be ignored for geography.
+        fitRationale:
+          'Are located in Bedford, Hooksett, Londonderry, Auburn, Goffstown, or nearby Greater Manchester markets',
+        snippet:
+          'Campaign objective: Keep Greater Manchester in scope for property managers',
+      },
+      PM_WORK_REQUEST
+    );
+    assert.notEqual(gate.status, CANDIDATE_STATUS.REJECTED);
+    assert.notEqual(gate.rejectionReason, REJECTION_REASON.OUTSIDE_MARKET_COUNTRY);
+    assert.doesNotMatch(String(gate.statusReason || ''), /outside_market_country|UK/i);
+    assert.equal(gate.geo && gate.geo.town, 'Hooksett');
+    assert.equal(gate.geo && gate.geo.tier, 'priority');
+    assert.equal(gate.status, CANDIDATE_STATUS.ACCEPTED);
+  });
+
+  it('does not reject Keyrenter New England (Bedford NH) as UK', () => {
+    const gate = evaluateScoutCandidate(
+      {
+        companyName: 'Keyrenter New England',
+        address: '10 Bedford Center Rd, Bedford, NH 03110, USA',
+        location: 'Bedford, NH',
+        formatted_address: '10 Bedford Center Rd, Bedford, NH 03110, USA',
+        website: 'https://keyrenter.example',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+        phone: '603-555-0200',
+      },
+      PM_WORK_REQUEST
+    );
+    assert.notEqual(gate.status, CANDIDATE_STATUS.REJECTED);
+    assert.notEqual(gate.rejectionReason, REJECTION_REASON.OUTSIDE_MARKET_COUNTRY);
+    assert.doesNotMatch(String(gate.statusReason || ''), /england|outside_market_country/i);
+    assert.equal(gate.geo && gate.geo.town, 'Bedford');
+    assert.equal(gate.status, CANDIDATE_STATUS.ACCEPTED);
+  });
+
+  it('rejects a UK Manchester M-postcode candidate', () => {
+    const gate = evaluateScoutCandidate(
+      {
+        companyName: 'Deansgate Property Management',
+        address: '12 Deansgate, Manchester M3 5EQ, UK',
+        location: 'Manchester M3 5EQ',
+        formatted_address: '12 Deansgate, Manchester M3 5EQ, United Kingdom',
+        website: 'https://deansgate-pm.example',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+      },
+      PM_WORK_REQUEST
+    );
+    assert.equal(gate.status, CANDIDATE_STATUS.REJECTED);
+    assert.equal(gate.rejectionReason, REJECTION_REASON.OUTSIDE_MARKET_COUNTRY);
+    assert.match(gate.statusReason, /M-postcode|UK|outside_market_country/i);
+  });
+
+  it('ignores Greater Manchester when it appears only in brief/criteria text', () => {
+    const gate = evaluateScoutCandidate(
+      {
+        companyName: 'Londonderry Property Partners',
+        address: '55 Mammoth Rd, Londonderry, NH 03053',
+        location: 'Londonderry NH',
+        website: 'https://londonderrypp.example',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+        phone: '603-555-0333',
+        // Pollute non-geo fields with plan prose.
+        snippet: PM_WORK_REQUEST.marketBounds,
+        fitRationale: PM_WORK_REQUEST.inclusionCriteria[1],
+        campaignObjective: 'Keep Greater Manchester in scope',
+        marketBounds: PM_WORK_REQUEST.marketBounds,
+        targetSegment: 'Property managers near Greater Manchester',
+      },
+      PM_WORK_REQUEST
+    );
+    assert.notEqual(gate.rejectionReason, REJECTION_REASON.OUTSIDE_MARKET_COUNTRY);
+    assert.notEqual(gate.status, CANDIDATE_STATUS.REJECTED);
+    assert.equal(gate.status, CANDIDATE_STATUS.ACCEPTED);
+    assert.match(gate.fitRationale, /Londonderry Property Partners|address\/location on source/i);
+    assert.doesNotMatch(gate.fitRationale, /Keep Greater Manchester in scope/i);
+  });
+
+  it('rejected count matches rejected audit rows', () => {
+    const gated = gateScoutCandidateRows(
+      [
+        {
+          companyName: 'Elm Grove Companies',
+          sourceUrl: 'https://elmgrove.example',
+          address: 'Hooksett, NH 03106, USA',
+          location: 'Hooksett NH',
+          placeTypes: ['real_estate_agency'],
+          industry: 'property management',
+          phone: '603-555-0100',
+        },
+        {
+          companyName: 'Keyrenter New England',
+          sourceUrl: 'https://keyrenter.example',
+          address: 'Bedford, NH 03110, USA',
+          location: 'Bedford NH',
+          placeTypes: ['real_estate_agency'],
+          industry: 'property management',
+          phone: '603-555-0200',
+        },
+        {
+          companyName: 'UK Manchester M-postcode PM',
+          sourceUrl: 'https://ukpm.example',
+          address: 'Manchester M1 1AE, England',
+          location: 'Manchester M1 1AE',
+        },
+        {
+          companyName: 'Sparkle Cleaning Company',
+          sourceUrl: 'https://sparkle.example',
+          address: 'Bedford NH',
+          location: 'Bedford NH',
+          placeTypes: ['cleaning_service'],
+        },
+        {
+          companyName: 'Manchester NH Property Co',
+          sourceUrl: 'https://manchesternhpm.example',
+          address: '100 Elm St, Manchester, NH',
+          location: 'Manchester NH',
+          placeTypes: ['real_estate_agency'],
+          industry: 'property management',
+          phone: '603-555-0188',
+        },
+      ],
+      { ...PM_WORK_REQUEST, targetCountMin: 1, targetCountMax: 10 }
+    );
+
+    assert.equal(gated.acceptedCount, gated.groups.accepted.length);
+    assert.equal(gated.reviewRequiredCount, gated.groups.review_required.length);
+    assert.equal(gated.rejectedCount, gated.groups.rejected.length);
+    assert.equal(gated.rejected.length, gated.groups.rejected.length);
+    assert.ok(gated.rejectedCount >= 2);
+    assert.ok(
+      gated.rejected.some(
+        (r) => r.rejectionReason === REJECTION_REASON.OUTSIDE_MARKET_COUNTRY
+      )
+    );
+    assert.ok(
+      gated.rejected.some(
+        (r) =>
+          r.rejectionReason === REJECTION_REASON.WRONG_SEGMENT_CLEANING_COMPETITOR
+      )
+    );
+    assert.ok(
+      gated.candidates.every((c) => c.status !== CANDIDATE_STATUS.REJECTED)
+    );
+    assert.ok(
+      gated.candidates.some((c) => c.companyName === 'Elm Grove Companies')
+    );
+    assert.ok(
+      gated.candidates.some((c) => c.companyName === 'Keyrenter New England')
+    );
+  });
+});
+
+describe('scoutQualityGate — hard rejects', () => {
+  it('rejects UK candidates with rejectionReason outside_market_country', () => {
+    const gate = evaluateScoutCandidate(
+      {
+        companyName: 'Salford Estates Management',
+        address: 'Salford, Greater Manchester M3 5EQ, UK',
+        location: 'Salford, Greater Manchester, England',
+        website: 'https://salford-estates.co.uk',
+        placeTypes: ['real_estate_agency'],
+      },
+      PM_WORK_REQUEST
+    );
+    assert.equal(gate.status, CANDIDATE_STATUS.REJECTED);
+    assert.equal(gate.rejectionReason, REJECTION_REASON.OUTSIDE_MARKET_COUNTRY);
+    assert.match(gate.statusReason, /outside_market_country|UK|non-US/i);
+
+    const bareManchester = evaluateScoutCandidate(
+      {
+        companyName: 'Deansgate Property Management',
+        address: '1 Deansgate, Manchester',
+        location: 'Manchester',
+        website: 'https://deansgate-pm.example',
+        placeTypes: ['real_estate_agency'],
+      },
+      PM_WORK_REQUEST
+    );
+    assert.equal(bareManchester.status, CANDIDATE_STATUS.REJECTED);
+    assert.equal(
+      bareManchester.rejectionReason,
+      REJECTION_REASON.OUTSIDE_MARKET_COUNTRY
+    );
+
+    const mapped = mapPublicHitToScoutCandidate(
+      {
+        companyName: 'Stockport Property Group',
+        address: 'Stockport, Greater Manchester, United Kingdom',
+        location: 'Stockport, UK',
+        website: 'https://stockport-pm.example.co.uk',
+        placeTypes: ['real_estate_agency'],
+      },
+      PM_WORK_REQUEST,
+      0
+    );
+    assert.ok(mapped);
+    assert.equal(mapped.status, CANDIDATE_STATUS.REJECTED);
+    assert.equal(mapped.rejectionReason, REJECTION_REASON.OUTSIDE_MARKET_COUNTRY);
+  });
+
+  it('rejects cleaning companies with rejectionReason wrong_segment_cleaning_competitor', () => {
+    const cases = [
+      {
+        companyName: 'Sparkle Cleaning Company',
+        address: 'Bedford NH',
+        placeTypes: ['cleaning_service'],
+      },
+      {
+        companyName: 'Bedford Maid Service',
+        address: 'Bedford, NH 03110',
+        industry: 'maid service',
+      },
+      {
+        companyName: 'Hooksett Housekeeping LLC',
+        address: 'Hooksett NH',
+        placeTypes: ['home_goods_store'],
+      },
+      {
+        companyName: 'Granite Janitorial Services',
+        address: 'Londonderry NH',
+        industry: 'janitorial',
+      },
+      {
+        companyName: 'Auburn Carpet Cleaning',
+        address: 'Auburn NH',
+      },
+    ];
+    for (const hit of cases) {
+      const gate = evaluateScoutCandidate(
+        { ...hit, website: 'https://example.com/clean' },
+        PM_WORK_REQUEST
+      );
+      assert.equal(
+        gate.status,
+        CANDIDATE_STATUS.REJECTED,
+        `expected reject for ${hit.companyName}`
+      );
+      assert.equal(
+        gate.rejectionReason,
+        REJECTION_REASON.WRONG_SEGMENT_CLEANING_COMPETITOR,
+        `expected cleaning code for ${hit.companyName}`
+      );
+      assert.match(gate.statusReason, /wrong_segment_cleaning_competitor|cleaning|maid|housekeeping|janitorial|carpet/i);
+    }
+  });
+
+  it('rejects large institutional / national firms unless operator approves', () => {
+    const hit = {
+      companyName: 'CBRE National Property Management',
+      address: 'Bedford NH',
+      location: 'Bedford, NH',
+      website: 'https://www.cbre.com/bedford',
+      placeTypes: ['real_estate_agency'],
+      phone: '603-555-0100',
+    };
+    const rejected = evaluateScoutCandidate(hit, PM_WORK_REQUEST);
+    assert.equal(rejected.status, CANDIDATE_STATUS.REJECTED);
+    assert.match(rejected.statusReason, /institutional|national/i);
+
+    const approved = evaluateScoutCandidate(hit, {
+      ...PM_WORK_REQUEST,
+      allowInstitutional: true,
+    });
+    assert.notEqual(approved.status, CANDIDATE_STATUS.REJECTED);
+    assert.equal(approved.exclusionRisk, true);
+    assert.notEqual(approved.confidence, CONFIDENCE.HIGH);
+  });
+});
+
+describe('scoutQualityGate — confidence and rationale', () => {
+  it('blocks high confidence when exclusion risk exists', () => {
+    const gate = evaluateScoutCandidate(
+      {
+        companyName: 'Greystar Multifamily NH',
+        address: 'Bedford, NH 03110',
+        location: 'Bedford NH',
+        website: 'https://greystar.example/bedford',
+        placeTypes: ['real_estate_agency', 'property_management'],
+        phone: '603-555-0199',
+        industry: 'property management',
+      },
+      {
+        ...PM_WORK_REQUEST,
+        allowInstitutional: true,
+      }
+    );
+    assert.equal(gate.exclusionRisk, true);
+    assert.notEqual(gate.confidence, CONFIDENCE.HIGH);
+  });
+
+  it('allows high confidence only with source URL, NH location, PM fit, and contact signal', () => {
+    const gate = evaluateScoutCandidate(
+      {
+        companyName: 'Bedford Property Management LLC',
+        address: '12 Main St, Bedford, NH 03110',
+        location: 'Bedford NH',
+        website: 'https://bedfordpm.example',
+        sourceUrl: 'https://bedfordpm.example',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+        phone: '603-555-0111',
+      },
+      PM_WORK_REQUEST
+    );
+    assert.equal(gate.status, CANDIDATE_STATUS.ACCEPTED);
+    assert.equal(gate.confidence, CONFIDENCE.HIGH);
+    assert.equal(gate.signals.sourceUrl, true);
+    assert.equal(gate.signals.nhLocation, true);
+    assert.equal(gate.signals.propertyManagementFit, true);
+    assert.equal(gate.signals.reachableContactSignal, true);
+  });
+
+  it('requires source-specific fit rationale — not copied criteria', () => {
+    const criteriaLine = PM_WORK_REQUEST.inclusionCriteria[0];
+    assert.equal(isGenericCriteriaCopy(criteriaLine, PM_WORK_REQUEST), true);
+    assert.equal(
+      isGenericCriteriaCopy(
+        'Public listing matches property managers — Market bounds: Greater Manchester',
+        PM_WORK_REQUEST
+      ),
+      true
+    );
+
+    const gate = evaluateScoutCandidate(
+      {
+        companyName: 'Hooksett Facilities Partners',
+        address: '88 Alice Ave, Hooksett, NH',
+        location: 'Hooksett NH',
+        website: 'https://hooksettfp.example',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+        phone: '603-555-0144',
+        fitRationale: criteriaLine,
+      },
+      PM_WORK_REQUEST
+    );
+    assert.ok(gate.fitRationale);
+    assert.notEqual(gate.fitRationale, criteriaLine);
+    assert.doesNotMatch(gate.fitRationale, /Manage offices, mixed-use/i);
+    assert.match(
+      gate.fitRationale,
+      /Hooksett Facilities Partners|address\/location on source|listing category\/type|website\/source signal|property-management relevance/i
+    );
+    assert.equal(isGenericCriteriaCopy(gate.fitRationale, PM_WORK_REQUEST), false);
+  });
+
+  it('labels suggested contact role unless verified named+title contact exists', () => {
+    const suggested = formatSuggestedContactRole(PM_WORK_REQUEST, {
+      companyName: 'x',
+    });
+    assert.match(suggested, /^Suggested contact role:/i);
+
+    const verified = formatSuggestedContactRole(PM_WORK_REQUEST, {
+      contactName: 'Jamie Lee',
+      contactTitle: 'Property Manager',
+    });
+    assert.equal(verified, 'Jamie Lee — Property Manager');
+    assert.doesNotMatch(verified, /^Suggested contact role:/i);
+  });
+
+  it('marks Manchester/Derry/Concord NH as review_required with outside_primary_town_cluster', () => {
+    for (const town of ['Manchester', 'Derry', 'Concord']) {
+      const gate = evaluateScoutCandidate(
+        {
+          companyName: `${town} NH Property Co`,
+          address: `100 Main St, ${town}, NH`,
+          location: `${town} NH`,
+          website: `https://${town.toLowerCase()}pm.example`,
+          placeTypes: ['real_estate_agency'],
+          industry: 'property management',
+          phone: '603-555-0188',
+        },
+        PM_WORK_REQUEST
+      );
+      assert.equal(gate.status, CANDIDATE_STATUS.REVIEW_REQUIRED);
+      assert.notEqual(gate.status, CANDIDATE_STATUS.ACCEPTED);
+      assert.notEqual(gate.confidence, CONFIDENCE.HIGH);
+      assert.match(
+        `${gate.statusReason} ${gate.risks} ${gate.reasonCode || ''}`,
+        /outside_primary_town_cluster/
+      );
+    }
+  });
+
+  it('accepts only primary NH town cluster with property-management evidence', () => {
+    const accepted = evaluateScoutCandidate(
+      {
+        companyName: 'Bedford Property Management LLC',
+        address: '12 Main St, Bedford, NH 03110',
+        location: 'Bedford NH',
+        website: 'https://bedfordpm.example',
+        sourceUrl: 'https://bedfordpm.example',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+        phone: '603-555-0111',
+      },
+      PM_WORK_REQUEST
+    );
+    assert.equal(accepted.status, CANDIDATE_STATUS.ACCEPTED);
+    assert.equal(accepted.geo.tier, 'priority');
+    assert.equal(accepted.signals.propertyManagementFit, true);
+
+    const noPm = evaluateScoutCandidate(
+      {
+        companyName: 'Bedford Widget Shop',
+        address: '12 Main St, Bedford, NH 03110',
+        location: 'Bedford NH',
+        website: 'https://bedfordwidgets.example',
+        placeTypes: ['store'],
+        phone: '603-555-0111',
+      },
+      PM_WORK_REQUEST
+    );
+    assert.notEqual(noPm.status, CANDIDATE_STATUS.ACCEPTED);
+  });
+});
+
+describe('scoutQualityGate — sourcing integration', () => {
+  it('filters UK and cleaning hits out of the usable batch', async () => {
+    const result = await sourceScoutCandidatesFromPublicSources({
+      workRequest: {
+        ...PM_WORK_REQUEST,
+        targetCountMin: 2,
+        targetCountMax: 10,
+      },
+      opts: {
+        publicSearchFn: async () => [
+          {
+            companyName: 'Salford PM UK',
+            website: 'https://salford.example.co.uk',
+            address: 'Salford, Greater Manchester, UK',
+            location: 'Salford, UK',
+            placeTypes: ['real_estate_agency'],
+          },
+          {
+            companyName: 'Sparkle Maid Service NH',
+            website: 'https://sparklemaid.example',
+            address: 'Bedford NH',
+            location: 'Bedford NH',
+            placeTypes: ['cleaning_service'],
+          },
+          {
+            companyName: 'Bedford Property Management LLC',
+            website: 'https://bedfordpm.example',
+            address: 'Bedford, NH 03110',
+            location: 'Bedford NH',
+            placeTypes: ['real_estate_agency'],
+            industry: 'property management',
+            phone: '603-555-0101',
+          },
+          {
+            companyName: 'Hooksett Asset Managers',
+            website: 'https://hooksettam.example',
+            address: 'Hooksett NH',
+            location: 'Hooksett NH',
+            placeTypes: ['real_estate_agency'],
+            industry: 'property management',
+            phone: '603-555-0102',
+          },
+        ],
+      },
+    });
+    assert.equal(result.ok, true);
+    assert.ok(result.rejected.length >= 2);
+    assert.ok(
+      result.rejected.some(
+        (r) => r.rejectionReason === REJECTION_REASON.OUTSIDE_MARKET_COUNTRY
+      )
+    );
+    assert.ok(
+      result.rejected.some(
+        (r) =>
+          r.rejectionReason === REJECTION_REASON.WRONG_SEGMENT_CLEANING_COMPETITOR
+      )
+    );
+    assert.ok(result.candidates.every((c) => c.status !== CANDIDATE_STATUS.REJECTED));
+    assert.ok(
+      result.candidates.every((c) => /NH|New Hampshire/i.test(String(c.location || '')))
+    );
+    for (const c of result.candidates) {
+      assert.ok(c.status === 'accepted' || c.status === 'review_required');
+      assert.ok(c.statusReason);
+      assert.match(c.suggestedContactRole, /Suggested contact role:|^.+\s—\s.+/);
+    }
+    assert.ok(result.groups);
+    assert.ok(Array.isArray(result.groups.rejected));
+    assert.ok(
+      !result.groups.review_required.some((r) =>
+        /Salford|Maid|cleaning/i.test(r.companyName)
+      )
+    );
+  });
+
+  it('fails quality gate when accepted/reviewable count is below threshold', () => {
+    const gated = gateScoutCandidateRows(
+      [
+        {
+          companyName: 'Bedford Property Management LLC',
+          sourceUrl: 'https://bedfordpm.example',
+          location: 'Bedford NH',
+          address: 'Bedford, NH',
+          placeTypes: ['real_estate_agency'],
+          industry: 'property management',
+          phone: '603-555-0111',
+        },
+        {
+          companyName: 'UK Manchester Cleaners',
+          sourceUrl: 'https://cleaners.example.co.uk',
+          location: 'Manchester',
+        },
+      ],
+      { ...PM_WORK_REQUEST, targetCountMin: 5, targetCountMax: 10 }
+    );
+    assert.equal(gated.meetsQualityThreshold, false);
+    assert.ok(gated.usableCount < 5);
+    const threshold = batchMeetsQualityThreshold(gated.candidates, {
+      ...PM_WORK_REQUEST,
+      targetCountMin: 5,
+    });
+    assert.equal(threshold.ok, false);
+
+    const draft = buildScoutHandoff({
+      campaignObjective: 'Validate walkthrough demand',
+      targetSegment: 'Property managers',
+      marketBounds: 'Bedford NH',
+    });
+    const result = handBriefToScout(draft, {
+      targetCountMin: 5,
+      scoutSourcingFn: () => [
+        {
+          companyName: 'Bedford Property Management LLC',
+          sourceUrl: 'https://bedfordpm.example',
+          location: 'Bedford NH',
+          address: 'Bedford, NH',
+          placeTypes: ['real_estate_agency'],
+          industry: 'property management',
+          phone: '603-555-0111',
+        },
+        {
+          companyName: 'Salford Estates UK',
+          sourceUrl: 'https://salford.example.co.uk',
+          location: 'Salford, UK',
+        },
+        {
+          companyName: 'Sparkle Cleaning Company',
+          sourceUrl: 'https://sparkle.example',
+          location: 'Bedford NH',
+          placeTypes: ['cleaning_service'],
+        },
+      ],
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.handoff.status, SCOUT_HANDOFF_STATUSES.FAILED_QUALITY_GATE);
+    assert.equal(result.workRequest.status, SCOUT_HANDOFF_STATUSES.FAILED_QUALITY_GATE);
+    assert.ok(result.candidateBatch);
+    assert.ok(
+      (result.candidateBatch.groups.rejected || []).some(
+        (r) => r.rejectionReason === REJECTION_REASON.OUTSIDE_MARKET_COUNTRY
+      )
+    );
+    assert.ok(
+      (result.candidateBatch.groups.rejected || []).some(
+        (r) =>
+          r.rejectionReason === REJECTION_REASON.WRONG_SEGMENT_CLEANING_COMPETITOR
+      )
+    );
+    assert.ok(
+      !(result.candidateBatch.groups.review_required || []).some((r) =>
+        /Salford|Sparkle|UK|Cleaning/i.test(r.companyName)
+      )
+    );
+    assert.match(result.message, /Accepted candidates|Review required|Rejected candidates/i);
+    assert.doesNotMatch(result.message, /Creating this brief does not hand/i);
+  });
+
+  it('executed work request output does not include draft handoff instructions', async () => {
+    const store = createMemoryScoutWorkRequestStore();
+    const draft = buildScoutHandoff({
+      campaignObjective: 'Validate walkthrough demand',
+      targetSegment: 'Property managers',
+      marketBounds: 'Bedford NH, Hooksett NH',
+      guardrails: [
+        'Max does not build or fabricate the prospect list in this step',
+        'Creating this brief does not hand it to Scout — say “Hand this brief to Scout” to approve and queue',
+        'Scout inspects public sources only when sourcing execution is wired',
+      ],
+    });
+    const result = await handBriefToScoutAsync(draft, {
+      workRequestStore: store,
+      targetCountMin: 1,
+      publicSearchFn: async () => [
+        {
+          companyName: 'Bedford Property Management LLC',
+          website: 'https://bedfordpm.example',
+          address: 'Bedford, NH',
+          location: 'Bedford NH',
+          placeTypes: ['real_estate_agency'],
+          industry: 'property management',
+          phone: '603-555-0101',
+        },
+      ],
+    });
+    // One evidenced PM with min=1 completes; draft text must still be gone.
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.handoff.guardrails, [...COMPLETED_RESULT_GUARDRAILS]);
+    assert.doesNotMatch(
+      JSON.stringify(result.handoff.guardrails),
+      /creating this brief|when sourcing execution is wired|in this step/i
+    );
+    assert.doesNotMatch(result.message, /Creating this brief does not hand/i);
+    for (const g of COMPLETED_RESULT_GUARDRAILS) {
+      assert.ok(result.candidateBatch.guardrails.includes(g));
+    }
+
+    const applied = applyScoutExecutionResult(
+      {
+        message: 'Approving the Scout Handoff Brief…',
+        scoutHandoffBrief: {
+          guardrails: [
+            'Creating this brief does not hand it to Scout — say “Hand this brief to Scout” to approve and queue',
+            'Scout inspects public sources only when sourcing execution is wired',
+          ],
+          reviewGate:
+            'Creating this brief does not hand it to Scout.',
+          disclaimer:
+            'Scout Handoff Brief only. Creating this brief does not hand it to Scout.',
+          recommendedNextStep: 'Say Hand this brief to Scout',
+        },
+      },
+      result
+    );
+    assert.deepEqual(applied.scoutHandoffBrief.guardrails, [
+      ...COMPLETED_RESULT_GUARDRAILS,
+    ]);
+    assert.doesNotMatch(
+      JSON.stringify(applied.scoutHandoffBrief),
+      /Creating this brief does not hand|when sourcing execution is wired|in this step/i
+    );
+
+    // Failed quality-gate path also strips draft section-11 language.
+    const failed = handBriefToScout(draft, {
+      targetCountMin: 10,
+      scoutSourcingFn: () => [
+        {
+          companyName: 'Salford UK PM',
+          sourceUrl: 'https://salford.example.co.uk',
+          location: 'Salford, UK',
+        },
+      ],
+    });
+    assert.equal(failed.handoff.status, SCOUT_HANDOFF_STATUSES.FAILED_QUALITY_GATE);
+    assert.deepEqual(failed.handoff.guardrails, [...COMPLETED_RESULT_GUARDRAILS]);
+    const appliedFailed = applyScoutExecutionResult(
+      {
+        scoutHandoffBrief: {
+          guardrails: [
+            'Creating this brief does not hand it to Scout — say “Hand this brief to Scout” to approve and queue',
+          ],
+        },
+      },
+      failed
+    );
+    assert.doesNotMatch(
+      JSON.stringify(appliedFailed.scoutHandoffBrief.guardrails),
+      /Creating this brief does not hand/i
+    );
+  });
+
+  it('injected scoutSourcingFn path cannot bypass quality gates', () => {
+    const draft = buildScoutHandoff({
+      campaignObjective: 'Validate walkthrough demand',
+      targetSegment: 'Property managers',
+      marketBounds: 'Bedford NH',
+      inclusionCriteria: PM_WORK_REQUEST.inclusionCriteria,
+      exclusionCriteria: PM_WORK_REQUEST.exclusionCriteria,
+    });
+    const result = handBriefToScout(draft, {
+      targetCountMin: 1,
+      scoutSourcingFn: () => [
+        {
+          companyName: 'UK Manchester Cleaners',
+          sourceUrl: 'https://cleaners.example.co.uk',
+          location: 'Manchester',
+          fitRationale: PM_WORK_REQUEST.inclusionCriteria[0],
+          suggestedContactRole: 'Owner / decision-maker',
+          confidence: 'high',
+        },
+        {
+          companyName: 'Bedford Property Management LLC',
+          sourceUrl: 'https://bedfordpm.example',
+          location: 'Bedford NH',
+          address: 'Bedford, NH',
+          placeTypes: ['real_estate_agency'],
+          industry: 'property management',
+          phone: '603-555-0111',
+          fitRationale: PM_WORK_REQUEST.inclusionCriteria[0],
+          suggestedContactRole: 'Owner / decision-maker',
+          confidence: 'high',
+        },
+      ],
+    });
+    assert.equal(result.ok, true);
+    assert.ok(
+      (result.candidateBatch.rejected || []).some(
+        (r) =>
+          r.rejectionReason === REJECTION_REASON.OUTSIDE_MARKET_COUNTRY ||
+          r.rejectionReason === REJECTION_REASON.WRONG_SEGMENT_CLEANING_COMPETITOR
+      )
+    );
+    const kept = result.candidateBatch.candidates;
+    assert.ok(kept.length >= 1);
+    assert.ok(kept.every((r) => r.status !== 'rejected'));
+    for (const row of kept) {
+      assert.doesNotMatch(row.fitRationale || '', /Manage offices, mixed-use/i);
+      assert.match(
+        row.fitRationale || '',
+        /sourced from public listing|address\/location on source|listing category\/type|website\/source signal|property-management relevance/i
+      );
+      assert.match(row.suggestedContactRole || '', /Suggested contact role:/i);
+      assert.doesNotMatch(row.suggestedContactRole || '', /decision-maker/i);
+    }
+    assert.ok(result.candidateBatch.groups);
+    assert.ok(Array.isArray(result.candidateBatch.groups.rejected));
+  });
+});
+
+describe('scoutQualityGate — NH state/region hard gate', () => {
+  it('rejects Washington DC / Arlington VA as outside_market_region (never review_required)', () => {
+    for (const hit of [
+      {
+        companyName: 'Capitol Property Partners',
+        address: '1600 Pennsylvania Ave NW, Washington, DC 20500, USA',
+        location: 'Washington, DC, USA',
+        website: 'https://capitolpp.example',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+        phone: '202-555-0100',
+      },
+      {
+        companyName: 'Arlington Asset Managers',
+        address: '1100 Wilson Blvd, Arlington, VA 22209, USA',
+        location: 'Arlington, VA, USA',
+        website: 'https://arlingtonam.example',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+        phone: '703-555-0100',
+      },
+      {
+        companyName: 'Boston Harbor PM',
+        address: '1 Harbor St, Boston, MA 02110, USA',
+        location: 'Boston, MA, USA',
+        website: 'https://bostonhpm.example',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+      },
+    ]) {
+      const region = detectOutsideMarketRegion(hit);
+      assert.equal(region.rejected, true);
+      assert.equal(region.reasonCode, REJECTION_REASON.OUTSIDE_MARKET_REGION);
+      assert.notEqual(region.state, 'NH');
+
+      const gate = evaluateScoutCandidate(hit, PM_WORK_REQUEST);
+      assert.equal(gate.status, CANDIDATE_STATUS.REJECTED);
+      assert.equal(gate.rejectionReason, REJECTION_REASON.OUTSIDE_MARKET_REGION);
+      assert.match(String(gate.statusReason || ''), /outside_market_region/i);
+      assert.notEqual(gate.status, CANDIDATE_STATUS.REVIEW_REQUIRED);
+      assert.notEqual(gate.status, CANDIDATE_STATUS.ACCEPTED);
+    }
+
+    assert.equal(extractUsStateCode('Washington, DC, USA'), 'DC');
+    assert.equal(extractUsStateCode('Arlington, VA 22209'), 'VA');
+    const dcGeo = isNhLocation({
+      address: 'Washington, DC, USA',
+      location: 'Washington, DC',
+    });
+    assert.equal(dcGeo.inNh, false);
+    assert.equal(dcGeo.state, 'DC');
+  });
+
+  it('accepts NH primary towns (Bedford / Hooksett / Londonderry / Auburn / Goffstown)', () => {
+    for (const town of PRIORITY_TOWNS_NH) {
+      const gate = evaluateScoutCandidate(
+        {
+          companyName: `${town} Property Management LLC`,
+          address: `12 Main St, ${town}, NH 03110`,
+          location: `${town} NH`,
+          website: `https://${town.toLowerCase()}pm.example`,
+          sourceUrl: `https://${town.toLowerCase()}pm.example`,
+          placeTypes: ['real_estate_agency'],
+          industry: 'property management',
+          phone: '603-555-0111',
+        },
+        PM_WORK_REQUEST
+      );
+      assert.equal(gate.status, CANDIDATE_STATUS.ACCEPTED, town);
+      assert.equal(gate.geo.inNh, true);
+      assert.equal(gate.geo.state, 'NH');
+      assert.equal(gate.geo.tier, 'priority');
+    }
+  });
+
+  it('keeps Manchester NH / Derry NH as review_required expansion when accepted < target', () => {
+    const rows = [
+      {
+        companyName: 'Bedford Property Management LLC',
+        sourceUrl: 'https://bedfordpm.example',
+        address: 'Bedford, NH 03110',
+        location: 'Bedford NH',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+        phone: '603-555-0101',
+      },
+      {
+        companyName: 'Mill City Property Management',
+        sourceUrl: 'https://millcitypm.example',
+        address: '100 Elm St, Manchester, NH',
+        location: 'Manchester NH',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+        phone: '603-555-0188',
+      },
+      {
+        companyName: 'Derry Commercial Properties',
+        sourceUrl: 'https://derrycp.example',
+        address: '10 Broadway, Derry, NH',
+        location: 'Derry NH',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+        phone: '603-555-0199',
+      },
+      {
+        companyName: 'Capitol Property Partners DC',
+        sourceUrl: 'https://capitolpp.example',
+        address: 'Washington, DC 20001, USA',
+        location: 'Washington, DC, USA',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+      },
+      {
+        companyName: 'Arlington Asset Managers',
+        sourceUrl: 'https://arlingtonam.example',
+        address: 'Arlington, VA 22209, USA',
+        location: 'Arlington, VA, USA',
+        placeTypes: ['real_estate_agency'],
+        industry: 'property management',
+      },
+    ];
+
+    const gated = gateScoutCandidateRows(rows, {
+      ...PM_WORK_REQUEST,
+      targetCountMin: 15,
+      targetCountMax: 25,
+    });
+
+    assert.equal(gated.acceptedCount, 1);
+    assert.ok(
+      gated.groups.review_required.some((r) =>
+        /Mill City|Manchester/i.test(r.companyName + r.location)
+      )
+    );
+    assert.ok(
+      gated.groups.review_required.some((r) =>
+        /Derry/i.test(r.companyName + r.location)
+      )
+    );
+    assert.ok(
+      gated.groups.rejected.every(
+        (r) =>
+          !/priority towns filled the batch/i.test(String(r.statusReason || ''))
+      )
+    );
+    assert.ok(
+      gated.groups.rejected.some(
+        (r) =>
+          /Capitol|Arlington/i.test(r.companyName) &&
+          r.rejectionReason === REJECTION_REASON.OUTSIDE_MARKET_REGION
+      )
+    );
+    assert.ok(
+      !gated.groups.review_required.some((r) =>
+        /Washington|Arlington|DC|VA/i.test(String(r.location || ''))
+      )
+    );
+  });
+
+  it('does not reject Manchester with priority-filled message when accepted count is below target', () => {
+    const evaluated = [
+      {
+        companyName: 'Bedford PM',
+        location: 'Bedford NH',
+        status: CANDIDATE_STATUS.ACCEPTED,
+        geo: { tier: 'priority', inNh: true, state: 'NH', town: 'Bedford' },
+      },
+      {
+        companyName: 'Hooksett Review PM',
+        location: 'Hooksett NH',
+        status: CANDIDATE_STATUS.REVIEW_REQUIRED,
+        geo: { tier: 'priority', inNh: true, state: 'NH', town: 'Hooksett' },
+      },
+      // Many review_required rows that previously filled batch.length >= targetMin
+      ...Array.from({ length: 20 }, (_, i) => ({
+        companyName: `Priority Review ${i}`,
+        location: 'Londonderry NH',
+        status: CANDIDATE_STATUS.REVIEW_REQUIRED,
+        geo: { tier: 'priority', inNh: true, state: 'NH', town: 'Londonderry' },
+      })),
+      {
+        companyName: 'Mill City Property Management',
+        location: 'Manchester NH',
+        status: CANDIDATE_STATUS.REVIEW_REQUIRED,
+        geo: { tier: 'nearby_fill', inNh: true, state: 'NH', town: 'Manchester' },
+      },
+      {
+        companyName: 'Derry Commercial Properties',
+        location: 'Derry NH',
+        status: CANDIDATE_STATUS.REVIEW_REQUIRED,
+        geo: { tier: 'extended_review', inNh: true, state: 'NH', town: 'Derry' },
+      },
+    ];
+
+    const selected = selectBatchWithManchesterFill(evaluated, 25, 15);
+    assert.equal(selected.acceptedCount, 1);
+    assert.ok(
+      selected.candidates.some((r) => /Mill City|Manchester/i.test(r.companyName))
+    );
+    assert.ok(
+      !selected.rejected.some((r) =>
+        /priority towns filled the batch/i.test(String(r.statusReason || ''))
+      )
+    );
+  });
+
+  it('latest completed result does not discard prior valid NH candidates accidentally', () => {
+    const prior = {
+      workRequestId: 'f0ac74ac-16a6-4dba-b024-d3727b285a86',
+      candidates: [
+        {
+          companyName: 'Keyrenter New England',
+          location: 'Bedford NH',
+          sourceUrl: 'https://keyrenter.example',
+          status: CANDIDATE_STATUS.ACCEPTED,
+          geo: { inNh: true, state: 'NH', town: 'Bedford', tier: 'priority' },
+        },
+        {
+          companyName: 'Elm Grove Companies',
+          location: 'Hooksett NH',
+          sourceUrl: 'https://elmgrove.example',
+          status: CANDIDATE_STATUS.ACCEPTED,
+          geo: { inNh: true, state: 'NH', town: 'Hooksett', tier: 'priority' },
+        },
+        {
+          companyName: 'Mill City Property Management',
+          location: 'Manchester NH',
+          sourceUrl: 'https://millcity.example',
+          status: CANDIDATE_STATUS.REVIEW_REQUIRED,
+          geo: { inNh: true, state: 'NH', town: 'Manchester', tier: 'nearby_fill' },
+        },
+      ],
+      rejected: [],
+    };
+    const latest = {
+      workRequestId: 'f0ac74ac-16a6-4dba-b024-d3727b285a86',
+      candidates: [
+        {
+          companyName: 'Keyrenter New England',
+          location: 'Bedford NH',
+          sourceUrl: 'https://keyrenter.example',
+          status: CANDIDATE_STATUS.ACCEPTED,
+          geo: { inNh: true, state: 'NH', town: 'Bedford', tier: 'priority' },
+        },
+        {
+          companyName: 'Capitol Property Partners',
+          location: 'Washington, DC, USA',
+          sourceUrl: 'https://capitolpp.example',
+          status: CANDIDATE_STATUS.REVIEW_REQUIRED,
+          geo: { inNh: false, state: 'DC', town: null, tier: 'out_of_market' },
+        },
+      ],
+      rejected: [
+        {
+          companyName: 'Mill City Property Management',
+          location: 'Manchester NH',
+          sourceUrl: 'https://millcity.example',
+          status: CANDIDATE_STATUS.REJECTED,
+          statusReason:
+            'Manchester NH deferred — outside_primary_town_cluster (priority towns filled the batch)',
+          rejectionReason: REJECTION_REASON.OUTSIDE_PRIMARY_TOWN_CLUSTER,
+        },
+      ],
+    };
+
+    const merged = mergePreservedNhCandidatesFromPriorBatch(latest, prior);
+    assert.ok(
+      merged.candidates.some((r) => r.companyName === 'Elm Grove Companies')
+    );
+    assert.ok(
+      merged.candidates.some((r) => r.companyName === 'Mill City Property Management')
+    );
+    assert.ok(
+      !merged.candidates.some((r) => /Washington|DC/i.test(String(r.location || '')))
+    );
+    assert.ok(
+      merged.rejected.some(
+        (r) =>
+          r.companyName === 'Capitol Property Partners' &&
+          (r.rejectionReason === REJECTION_REASON.OUTSIDE_MARKET_REGION ||
+            /outside_market_region/i.test(String(r.statusReason || '')))
+      )
+    );
+    assert.ok(
+      !merged.rejected.some((r) => r.companyName === 'Mill City Property Management')
+    );
+  });
+});

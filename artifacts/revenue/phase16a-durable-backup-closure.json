@@ -1,0 +1,46 @@
+{
+  "phase": "revenue-phase-1.6a-backup-readonly",
+  "action": "durable_backup_closure",
+  "status": "durable_backup_verified",
+  "verdict": "COMPLETE",
+  "verifiedAt": "2026-07-20T23:46:46Z",
+  "backup_identifier": "pulseforge-production-revenue-phase16a-20260720T224210Z",
+  "persistent_local_copy": {
+    "path": "/Users/jake/Documents/Pulseforge Production Backups/Revenue Phase 1.6A/pulseforge-production-revenue-phase16a-20260720T224210Z.dump.enc",
+    "size_bytes": 7615481,
+    "sha256": "b307a2ecc4d1cc1132f3d82a60de6c3e51431fa9488beeecf1797b83fdddc1a6",
+    "verified": true
+  },
+  "drive": {
+    "account": "jacob@gopulseforge.com",
+    "folder": "Pulseforge Production Backups/Revenue Phase 1.6A",
+    "final_path": "Pulseforge Production Backups/Revenue Phase 1.6A/pulseforge-production-revenue-phase16a-20260720T224210Z.dump.enc",
+    "cloud_path": "/Users/jake/Library/CloudStorage/GoogleDrive-jacob@gopulseforge.com/My Drive/Pulseforge Production Backups/Revenue Phase 1.6A/pulseforge-production-revenue-phase16a-20260720T224210Z.dump.enc",
+    "folderId": "1pHiHFHQjTNVijXilJyrhLX-MAYxyGnXS",
+    "backupFileId": "16AEDdxs1wYoxDBhMbM6u4i5yLThOJbVu",
+    "metadataFileId": "1bVLUDkZAJPzYc084aTtBsYrOuKB1HopI",
+    "hashFileId": "1NpP03YWrBNJDnjyoeH_1YiOG0P_EJri7",
+    "uploaded_at": "2026-07-20T23:44:10Z",
+    "file_size_bytes": 7615481,
+    "uploadStatus": "durable_backup_verified",
+    "sharingState": "private_non_shared",
+    "retention": "90 days after Phase 1.6 completion or explicit operator disposition; no early deletion",
+    "immutability": "encrypted artifact + independent SHA-256; passphrase never written to disk artifacts"
+  },
+  "independent_download": {
+    "performed": true,
+    "method": "fileproviderctl evict + materialize + copy re-downloaded encrypted object",
+    "downloadDirectory": "/private/tmp/pulseforge-phase16a-durable-download-20260720T234410Z",
+    "encryptedSha256": "b307a2ecc4d1cc1132f3d82a60de6c3e51431fa9488beeecf1797b83fdddc1a6",
+    "encryptedSizeBytes": 7615481,
+    "encryptedHashMatchesUpload": true
+  },
+  "keychain": {
+    "service": "Pulseforge Revenue Phase16A Backup pulseforge-production-revenue-phase16a-20260720T224210Z",
+    "account": "jacob@gopulseforge.com",
+    "passphrase_present": true,
+    "passphrase_exposed": false
+  },
+  "productionExecutionPermitted": false,
+  "continues_to_phase16b": false
+}

@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Flight Recorder — Pulseforge Admin</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --line: #30363d;
+      --ok: #3fb950;
+      --pending: #484f58;
+      --fail: #f85149;
+      --accent: #58a6ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      background:
+        linear-gradient(180deg, #121820 0%, var(--bg) 40%),
+        var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    header {
+      padding: 1.5rem 2rem 0.75rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+    h1 {
+      font-family: "IBM Plex Serif", Georgia, serif;
+      font-weight: 500;
+      font-size: 1.55rem;
+      margin: 0;
+    }
+    .sub { color: var(--muted); font-size: 0.88rem; margin-top: 0.25rem; }
+    a { color: var(--accent); text-decoration: none; }
+    main {
+      display: grid;
+      grid-template-columns: minmax(240px, 320px) 1fr;
+      gap: 1.25rem;
+      padding: 0.5rem 2rem 3rem;
+      max-width: 1200px;
+    }
+    @media (max-width: 800px) {
+      main { grid-template-columns: 1fr; }
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 1rem;
+    }
+    .panel h2 {
+      margin: 0 0 0.85rem;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .flight-list { list-style: none; margin: 0; padding: 0; }
+    .flight-list li {
+      padding: 0.65rem 0.5rem;
+      border-bottom: 1px solid var(--line);
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    .flight-list li:hover,
+    .flight-list li.active { background: #21262d; }
+    .flight-list .id {
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: 0.78rem;
+      word-break: break-all;
+    }
+    .flight-list .meta { color: var(--muted); font-size: 0.75rem; margin-top: 0.2rem; }
+    .journey { padding: 0.5rem 0.25rem; }
+    .stage {
+      display: grid;
+      grid-template-columns: 28px 1fr;
+      gap: 0.75rem;
+      position: relative;
+      padding-bottom: 1.35rem;
+    }
+    .stage:not(:last-child)::before {
+      content: "";
+      position: absolute;
+      left: 13px;
+      top: 28px;
+      bottom: 0;
+      width: 2px;
+      background: var(--line);
+    }
+    .dot {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      border: 2px solid var(--pending);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg);
+      font-size: 0.75rem;
+      z-index: 1;
+    }
+    .stage.complete .dot {
+      border-color: var(--ok);
+      color: var(--ok);
+    }
+    .stage.failed .dot {
+      border-color: var(--fail);
+      color: var(--fail);
+    }
+    .stage.pending .dot { color: var(--pending); }
+    .label { font-weight: 560; font-size: 1rem; }
+    .when { color: var(--muted); font-size: 0.8rem; margin-top: 0.2rem; }
+    .empty { color: var(--muted); padding: 2rem 0.5rem; }
+    input[type="text"] {
+      width: 100%;
+      background: #0d1117;
+      border: 1px solid var(--line);
+      color: var(--text);
+      border-radius: 4px;
+      padding: 0.55rem 0.65rem;
+      margin-bottom: 0.75rem;
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: 0.8rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Flight Recorder</h1>
+      <div class="sub">Hidden admin journey · Prospect → Knowledge → Reasoning → Brief → Deck → Operator → Outcome</div>
+    </div>
+    <div>
+      <a href="/admin/knowledge-health">Knowledge Health</a>
+      &nbsp;·&nbsp;
+      <a href="/command-deck">Command Deck</a>
+    </div>
+  </header>
+  <main>
+    <aside class="panel">
+      <h2>Recent flights</h2>
+      <input id="flightInput" type="text" placeholder="flight:10:prospect:123" />
+      <ul class="flight-list" id="list"></ul>
+    </aside>
+    <section class="panel">
+      <h2>Event journey</h2>
+      <div id="journey" class="empty">Select a flight or paste an id and press Enter.</div>
+    </section>
+  </main>
+  <script>
+    const listEl = document.getElementById('list');
+    const journeyEl = document.getElementById('journey');
+    const inputEl = document.getElementById('flightInput');
+    let activeId = null;
+
+    async function loadList() {
+      const res = await fetch('/api/v1/admin/knowledge/flights?limit=40', { credentials: 'same-origin' });
+      const data = await res.json();
+      const flights = data.flights || [];
+      if (!flights.length) {
+        listEl.innerHTML = '<li class="meta">No flights recorded yet</li>';
+        return;
+      }
+      listEl.innerHTML = flights.map((f) => `
+        <li data-id="${f.flight_id}" class="${f.flight_id === activeId ? 'active' : ''}">
+          <div class="id">${f.flight_id}</div>
+          <div class="meta">${f.entity_type || '—'} ${f.entity_id || ''} · ${f.occurred_at || ''}</div>
+        </li>`).join('');
+      listEl.querySelectorAll('li[data-id]').forEach((li) => {
+        li.addEventListener('click', () => openFlight(li.getAttribute('data-id')));
+      });
+    }
+
+    async function openFlight(flightId) {
+      activeId = flightId;
+      inputEl.value = flightId;
+      [...listEl.querySelectorAll('li')].forEach((li) => {
+        li.classList.toggle('active', li.getAttribute('data-id') === flightId);
+      });
+      journeyEl.className = '';
+      journeyEl.innerHTML = 'Loading…';
+      const res = await fetch(`/api/v1/admin/knowledge/flights/${encodeURIComponent(flightId)}`, {
+        credentials: 'same-origin',
+      });
+      const data = await res.json();
+      const stages = data.stages || [];
+      journeyEl.innerHTML = `
+        <div class="meta" style="margin-bottom:1rem">
+          ${data.completeCount || 0}/${data.totalStages || stages.length} stages ·
+          tenant ${data.tenantId || '—'} ·
+          ${data.entityType || ''} ${data.entityId || ''}
+        </div>
+        <div class="journey">
+          ${stages.map((s) => `
+            <div class="stage ${s.status}">
+              <div class="dot">${s.complete ? '✓' : s.status === 'failed' ? '!' : '·'}</div>
+              <div>
+                <div class="label">${s.label}</div>
+                <div class="when">${s.occurredAt || 'pending'}</div>
+              </div>
+            </div>`).join('')}
+        </div>`;
+    }
+
+    inputEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && inputEl.value.trim()) {
+        openFlight(inputEl.value.trim());
+      }
+    });
+
+    loadList().catch((err) => {
+      listEl.innerHTML = `<li>${err.message}</li>`;
+    });
+  </script>
+</body>
+</html>

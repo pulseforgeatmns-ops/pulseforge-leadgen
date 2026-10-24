@@ -1,4 +1,5 @@
 const pool = require('../db');
+const { ensureCanonicalVerticalConstraint } = require('./canonicalVerticals');
 
 const DEFAULT_CLIENT_ID = 1;
 
@@ -21,19 +22,47 @@ const CLIENT_COLUMNS = [
   ['avg_job_value', 'text'],
   ['service_area', 'text[]'],
   ['verticals', 'text[]'],
+  // Canonical ICP configuration. target_verticals is a JSON array of search
+  // definitions; vertical_tiers is the per-client vertical -> A/B/C/W map.
+  ['target_verticals', "jsonb default '[]'::jsonb"],
+  ['vertical_tiers', "jsonb default '{}'::jsonb"],
+  ['enabled_agents', 'text[]'],
   ['target_clients', 'text'],
   ['brand_voice', 'text'],
   ['differentiators', 'text'],
   ['lead_with', 'text'],
   ['never_say', 'text'],
   ['sender_name', 'text'],
+  ['sender_email', 'text'],
+  ['smtp_host', 'text'],
+  ['smtp_port', 'integer default 587'],
+  ['smtp_user', 'text'],
+  ['smtp_pass', 'text'],
+  ['sending_domain', 'text'],
   ['email_sequence', 'text'],
   ['vera_signoff', 'text'],
   ['vera_negative', 'text'],
   ['paige_themes', 'text'],
   ['max_email', 'text'],
   ['max_time', 'text'],
+  // Selects which ICP rubric Scout applies for this client. NULL/absent =
+  // the default Pulseforge lead-gen rubric in leadgen.js scoreLead(). The
+  // cleaning company uses 'cleaning_buyer', a commercial-cleaning BUYER
+  // rubric (professional-services offices), NOT the lead-gen-target rubric.
+  ['scoring_profile', 'text'],
+  // SPEC-114 — operator-facing tenant identity collected at create time.
+  ['primary_contact', 'text'],
+  ['industry', 'text'],
+  ['country', 'text'],
+  ['timezone', 'text'],
+  ['logo_url', 'text'],
+  ['notes', 'text'],
+  ['warmup_start_date', 'date'],
+  ['autosend_enabled', 'boolean default false'],
   ['active', 'boolean default true'],
+  // When false, tenant may remain active for agents/scripts but must not appear
+  // in operator tenant switchers (/api/clients, session activate).
+  ['operator_switchable', 'boolean default true'],
   ['created_at', 'timestamptz default now()'],
 ];
 
@@ -64,6 +93,10 @@ function getRuntimeClientId(params = {}) {
 }
 
 function getRequestClientId(req) {
+  if (req?.user?.role === 'client') {
+    const id = parseInt(req.user.client_id, 10);
+    return Number.isFinite(id) && id > 0 ? id : null;
+  }
   return normalizeClientId(
     req?.query?.client_id ||
     req?.body?.client_id ||
@@ -72,7 +105,18 @@ function getRequestClientId(req) {
   );
 }
 
-async function ensureClientArchitecture() {
+// Share concurrent work only; later calls retain the legacy recheck behavior.
+let clientArchitectureInFlight;
+function ensureClientArchitecture() {
+  if (!clientArchitectureInFlight) {
+    clientArchitectureInFlight = Promise.resolve()
+      .then(ensureClientArchitectureOnce)
+      .finally(() => { clientArchitectureInFlight = undefined; });
+  }
+  return clientArchitectureInFlight;
+}
+
+async function ensureClientArchitectureOnce() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS clients (
       id serial primary key
@@ -82,6 +126,8 @@ async function ensureClientArchitecture() {
   for (const [column, type] of CLIENT_COLUMNS) {
     await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS ${column} ${type}`);
   }
+
+  await ensureCanonicalVerticalConstraint(pool);
 
   await pool.query(`
     UPDATE clients
@@ -111,17 +157,25 @@ async function ensureClientArchitecture() {
   `);
 
   await pool.query(`
-    INSERT INTO clients (id, name, slug, business_name, vertical, email, city, state, active)
-    VALUES (1, 'Pulseforge', 'pulseforge', 'Pulseforge', 'marketing automation', 'jacob@gopulseforge.com', 'Manchester', 'NH', true)
-    ON CONFLICT (id) DO UPDATE SET
-      name = EXCLUDED.name,
-      slug = EXCLUDED.slug,
-      business_name = EXCLUDED.business_name,
-      vertical = EXCLUDED.vertical,
-      email = EXCLUDED.email,
-      city = COALESCE(clients.city, EXCLUDED.city),
-      state = COALESCE(clients.state, EXCLUDED.state),
-      active = true
+    INSERT INTO clients (
+      id, name, slug, business_name, vertical, email, city, state,
+      service_area, verticals, target_clients, active
+    )
+    VALUES (
+      1,
+      'Pulseforge',
+      'pulseforge',
+      'Pulseforge',
+      'marketing_automation',
+      'jacob@gopulseforge.com',
+      'Providence',
+      'RI',
+      ARRAY['Providence','Cranston','Warwick','Pawtucket','East Providence','Boston'],
+      ARRAY['cleaning','restaurant','salon','fitness','home_services','auto','landscaping','med_spa'],
+      'Local service businesses in the Providence RI metro, with restaurant, salon, fitness, and cleaning prioritized while the broader vertical set proves itself',
+      true
+    )
+    ON CONFLICT (id) DO NOTHING
   `);
 
   await pool.query(`
@@ -148,12 +202,15 @@ async function ensureClientArchitecture() {
       'https://share.google/KeVYcU4QxVwfur0cN',
       'WV065578',
       '$10,000-$25,000',
-      ARRAY['Charleston','Dunbar','St Albans','Scott Depot','Teays Valley',
+      ARRAY['Charleston','South Charleston','St Albans','St. Albans','Dunbar',
+            'Nitro','Cross Lanes','Scott Depot','Teays Valley',
             'Hurricane','Huntington','Barboursville',
-            'Kanawha County','Putnam County','Cabell County'],
-      ARRAY['home_renovation','exterior_remodeling','decks','siding',
-            'windows','interior_renovation','emergency_repair'],
-      'Landlord associations, HOAs, banks for foreclosure property fix-ups',
+            'Logan','Madison','Hamlin','Fayetteville','Beckley',
+            'Kanawha County','Putnam County','Cabell County',
+            'Logan County','Boone County','Lincoln County','Fayette County'],
+      ARRAY['property_management','probate_attorney','renovation_lender',
+            'insurance_restoration','home_inspector','listing_agent'],
+      'Property managers, probate attorneys, estate professionals, renovation lenders, insurance restoration partners, home inspectors, and listing agents in MSHI service areas',
       'Energetic, professional but personable to suit the scenario',
       'Locally owned and operated, all work done by owners, personal customer interaction throughout entire process, communication is the most important part of a project, competitively priced, free estimates, licensed and insured WV065578, 15+ years combined experience, previously subcontracted for Tri-State Exterior Solutions, St Albans Windows and Secure Construction, handles emergency calls',
       'Customer satisfaction focus with communication being key',
@@ -165,41 +222,196 @@ async function ensureClientArchitecture() {
       'Seasonal exterior tips for home safety and upkeep, landscaping, types of work performed through each season, project spotlights, before/after project features, technical tips (e.g. no concrete pours under certain temperatures in winter)',
       'mshomeinnovations@gmail.com',
       '8:00 AM EST',
+      false
+    )
+    ON CONFLICT (id) DO NOTHING
+  `);
+
+  await pool.query(`
+    UPDATE clients
+    SET enabled_agents = CASE
+      WHEN enabled_agents IS NULL OR CARDINALITY(enabled_agents) = 0
+        THEN ARRAY['scout','emmett','paige','faye','vera','max','rex']
+      ELSE enabled_agents
+    END
+    WHERE id = 2
+  `);
+  await pool.query(`
+    UPDATE clients
+    SET enabled_agents = CASE
+      WHEN enabled_agents IS NULL OR CARDINALITY(enabled_agents) = 0
+        THEN ARRAY['scout','emmett','paige','faye','vera','max','rex','cal','link','ivy','sam','riley','sketch','penny']
+      ELSE enabled_agents
+    END
+    WHERE id = 1
+  `);
+
+  // ── Cleaning company (commercial-cleaning BUYER) ──────────────────────
+  // Separate LLC from Pulseforge (client_id=1). Fully partitioned: its own
+  // prospect pool, its own ICP rubric (scoring_profile='cleaning_buyer'),
+  // and its approved immediate-cash Scout plan in the Manchester NH area.
+  // Explicit id=10 (well above the 1/2/5/McLeod range) so it never collides
+  // with the serial-assigned McLeod row below. enabled_agents is scout-only
+  // for now: no cold-email/social until the entity, domain, and sender are
+  // set, which keeps it from ever sending under Pulseforge's identity.
+  // service_area drives Scout's out-of-area culling (leadgen.js). Tightened to
+  // the Manchester pilot cluster (Manchester/Bedford/Goffstown/Hooksett/
+  // Londonderry/Auburn); the wider ring (Nashua, Concord, Derry, Merrimack,
+  // Litchfield, Hudson) is held for post-pilot. Keep in sync with
+  // CLEANING_AREA_CITIES in leadgen.js.
+  await pool.query(`
+    INSERT INTO clients (
+      id, name, slug, business_name, vertical, city, state,
+      service_area, verticals, target_clients, scoring_profile,
+      sender_email, sender_name, sending_domain, active
+    ) VALUES (
+      10,
+      'Anchor Cleaning',
+      'cleaning-co',
+      'Anchor Cleaning',
+      'commercial_cleaning',
+      'Manchester',
+      'NH',
+      ARRAY['Manchester','Bedford','Goffstown','Hooksett','Londonderry','Auburn'],
+      ARRAY['cleaning_company_overflow','str_manager','property_manager','realtor','restoration_remodeling_partner','commercial_office'],
+      'Immediate-cash cleaning buyers and referral partners in the Greater Manchester NH area',
+      'cleaning_buyer',
+      'jacob@goanchorcleaning.com',
+      'Jacob Maynard',
+      'goanchorcleaning.com',
       true
     )
-    ON CONFLICT (id) DO UPDATE SET
-      name = EXCLUDED.name,
-      slug = EXCLUDED.slug,
-      business_name = EXCLUDED.business_name,
-      vertical = EXCLUDED.vertical,
-      email = EXCLUDED.email,
-      phone = EXCLUDED.phone,
-      address = EXCLUDED.address,
-      city = EXCLUDED.city,
-      state = EXCLUDED.state,
-      zip = EXCLUDED.zip,
-      website = EXCLUDED.website,
-      gbp_url = EXCLUDED.gbp_url,
-      license_number = EXCLUDED.license_number,
-      avg_job_value = EXCLUDED.avg_job_value,
-      service_area = EXCLUDED.service_area,
-      verticals = EXCLUDED.verticals,
-      target_clients = EXCLUDED.target_clients,
-      brand_voice = EXCLUDED.brand_voice,
-      differentiators = EXCLUDED.differentiators,
-      lead_with = EXCLUDED.lead_with,
-      never_say = EXCLUDED.never_say,
-      sender_name = EXCLUDED.sender_name,
-      email_sequence = EXCLUDED.email_sequence,
-      vera_signoff = EXCLUDED.vera_signoff,
-      vera_negative = EXCLUDED.vera_negative,
-      paige_themes = EXCLUDED.paige_themes,
-      max_email = EXCLUDED.max_email,
-      max_time = EXCLUDED.max_time,
-      active = true
+    ON CONFLICT (id) DO NOTHING
+  `);
+  await pool.query(`
+    UPDATE clients
+    SET enabled_agents = CASE
+      WHEN enabled_agents IS NULL OR CARDINALITY(enabled_agents) = 0
+        THEN ARRAY['scout']
+      ELSE enabled_agents
+    END
+    WHERE id = 10
+  `);
+
+  // ── AS Cleaning Co. (Aji pilot client — SPEC-096) ──────────────────────
+  // Distinct from Anchor Cleaning (client_id=10). Never reuse Anchor's id,
+  // scoring_profile, or prospect pool. CIE onboarding + Max continuity only
+  // until broader agent enablement is intentional.
+  await pool.query(`
+    INSERT INTO clients (
+      id, name, slug, business_name, vertical, city, state,
+      service_area, verticals, target_clients,
+      sender_name, active
+    ) VALUES (
+      11,
+      'AS Cleaning Co.',
+      'as-cleaning',
+      'AS Cleaning Co.',
+      'cleaning',
+      'Manchester',
+      'NH',
+      ARRAY['Manchester'],
+      ARRAY['cleaning'],
+      'Residential and light commercial cleaning customers in the Greater Manchester NH area',
+      'Aji',
+      true
+    )
+    ON CONFLICT (id) DO NOTHING
+  `);
+  await pool.query(`
+    UPDATE clients
+    SET
+      name = 'AS Cleaning Co.',
+      slug = 'as-cleaning',
+      business_name = COALESCE(NULLIF(business_name, ''), 'AS Cleaning Co.'),
+      active = true,
+      enabled_agents = CASE
+        WHEN enabled_agents IS NULL OR CARDINALITY(enabled_agents) = 0
+          THEN ARRAY['max']
+        ELSE enabled_agents
+      END
+    WHERE id = 11
   `);
 
   await pool.query(`SELECT setval(pg_get_serial_sequence('clients', 'id'), GREATEST((SELECT MAX(id) FROM clients), 1))`);
+
+  // SPEC-WEB-001 — Maynard Web tenant (slug-resolved; no fixed id)
+  await pool.query(`
+    INSERT INTO clients (
+      name, slug, business_name, vertical, email, primary_contact,
+      country, timezone, industry, service_area, verticals, target_clients,
+      scoring_profile, enabled_agents, active, operator_switchable, notes
+    ) VALUES (
+      'Maynard Web',
+      'maynard-web',
+      'Maynard Web',
+      'web_design',
+      'jacob@gopulseforge.com',
+      'Jacob Maynard',
+      'United States',
+      'America/New_York',
+      'Website design and development',
+      ARRAY['United States'],
+      ARRAY['professional_services','legal','accounting','home_services','dental','fitness','restaurant','salon','hvac','roofing','landscaping','med_spa'],
+      'Established SMBs in the United States where website credibility and customer acquisition plausibly depend on web presence',
+      'web_design',
+      ARRAY['scout','max'],
+      true,
+      false,
+      'SPEC-WEB-001 — neutral working identity; NO outbound until explicitly authorized.'
+    )
+    ON CONFLICT (slug) DO UPDATE SET
+      scoring_profile = EXCLUDED.scoring_profile,
+      enabled_agents = EXCLUDED.enabled_agents,
+      notes = EXCLUDED.notes,
+      operator_switchable = false
+  `);
+  await pool.query(`
+    UPDATE clients SET operator_switchable = false WHERE slug = 'maynard-web'
+  `);
+
+  // SPEC-SUBSTRAL-PF-001 — Studio Substral first-class tenant (slug-resolved)
+  await pool.query(`
+    INSERT INTO clients (
+      name, slug, business_name, vertical, email, primary_contact,
+      country, timezone, industry, website, service_area, verticals, target_clients,
+      scoring_profile, enabled_agents, active, notes,
+      brand_voice, never_say, lead_with, sender_name, sender_email, sending_domain
+    ) VALUES (
+      'Studio Substral',
+      'studio-substral',
+      'Studio Substral',
+      'web_design',
+      'hello@studiosubstral.com',
+      'Jacob Maynard',
+      'United States',
+      'America/New_York',
+      'Website diagnosis, targeted remediation, redesign and build',
+      'https://studiosubstral.com',
+      ARRAY['United States'],
+      ARRAY['professional_services','legal','accounting','home_services','dental','fitness','restaurant','salon','hvac','roofing','landscaping','med_spa'],
+      'Established businesses with a live website and a real decision about what to fix, rebuild, or leave alone.',
+      'studio_substral',
+      ARRAY['scout','max','paige'],
+      true,
+      'SPEC-SUBSTRAL-PF-001 — diagnosis-before-design tenant. NO Emmett/outbound until governed mailbox readiness passes.',
+      'Diagnosis before design. Plain language, evidence-specific openings, no manufactured urgency, no redesign assumption. Primary CTA: paid website assessment.',
+      'free strategy call; website makeover; redesign consultation; your site is broken; you are losing customers',
+      'Evidence-first website assessment',
+      'Studio Substral',
+      'hello@studiosubstral.com',
+      'studiosubstral.com'
+    )
+    ON CONFLICT (slug) DO UPDATE SET
+      scoring_profile = EXCLUDED.scoring_profile,
+      enabled_agents = EXCLUDED.enabled_agents,
+      website = EXCLUDED.website,
+      brand_voice = EXCLUDED.brand_voice,
+      never_say = EXCLUDED.never_say,
+      sender_email = EXCLUDED.sender_email,
+      sending_domain = EXCLUDED.sending_domain,
+      notes = EXCLUDED.notes
+  `);
 
   await pool.query(`
     INSERT INTO clients (name, slug, email, city, state, active)
@@ -208,10 +420,53 @@ async function ensureClientArchitecture() {
     ON CONFLICT (slug) DO NOTHING
   `);
 
+  // This module seeds missing rows only. It must never become a deploy-time
+  // config-management surface; sender settings are managed in the database.
+
   for (const table of CLIENT_SCOPED_TABLES) {
     await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS client_id integer REFERENCES clients(id) DEFAULT 1`);
     await pool.query(`UPDATE ${table} SET client_id = 1 WHERE client_id IS NULL`);
   }
+
+  await ensureProspectStatusConstraint();
+}
+
+// Canonical prospect.status domain. 'hot' is no longer a status (use is_hot);
+// 'booked' lives in setter_status/closer pipeline, not prospects.status.
+const PROSPECT_STATUSES = ['cold', 'contacted', 'warm', 'dead', 'disqualified', 'closed'];
+
+async function ensureProspectStatusConstraint() {
+  // Normalize any legacy/out-of-domain values before tightening the constraint
+  // so the ADD CONSTRAINT cannot fail on existing rows.
+  await pool.query(`UPDATE prospects SET status = 'warm' WHERE status = 'hot'`);
+  await pool.query(`UPDATE prospects SET status = 'closed' WHERE status = 'booked'`);
+  await pool.query(
+    `UPDATE prospects SET status = 'cold' WHERE status IS NOT NULL AND NOT (status = ANY ($1))`,
+    [PROSPECT_STATUSES]
+  );
+
+  // Idempotent constraint creation. The previous DROP-then-ADD pattern crashed
+  // on Railway when multiple instances booted in parallel: instance B could
+  // recreate the constraint between instance A's DROP and ADD, and A's ADD
+  // would then fail with "constraint prospects_status_check already exists".
+  // Check pg_constraint and skip the ADD when the constraint is already in
+  // place. If the allowed-values list ever needs to change, drop the
+  // constraint manually first; the next startup will recreate it.
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'prospects_status_check'
+          AND conrelid = 'prospects'::regclass
+      ) THEN
+        ALTER TABLE prospects
+          ADD CONSTRAINT prospects_status_check
+          CHECK (status = ANY (ARRAY['cold','contacted','warm','dead','disqualified','closed']));
+      END IF;
+    END$$;
+  `);
 }
 
 async function getClientConfig(clientId = DEFAULT_CLIENT_ID) {
@@ -223,18 +478,53 @@ async function getClientConfig(clientId = DEFAULT_CLIENT_ID) {
   return result.rows[0];
 }
 
+const OPERATOR_SWITCHABLE_WHERE = 'active = true AND COALESCE(operator_switchable, true) = true';
+
+async function queryActiveClientRows(whereClause = 'active = true') {
+  try {
+    const result = await pool.query(`
+      SELECT id, name, slug, email, city, state,
+        COALESCE(setter_pipeline_v2_enabled, false) AS setter_pipeline_v2_enabled
+      FROM clients
+      WHERE ${whereClause}
+      ORDER BY id
+    `);
+    return result.rows.map(row => ({
+      ...row,
+      setter_pipeline_v2_enabled: row.setter_pipeline_v2_enabled === true,
+    }));
+  } catch (err) {
+    // Pre-Phase-3D schemas lack the pilot column; fail closed to legacy.
+    if (!/setter_pipeline_v2_enabled/i.test(err.message || '')) throw err;
+    const result = await pool.query(
+      `SELECT id, name, slug, email, city, state FROM clients WHERE ${whereClause} ORDER BY id`
+    );
+    return result.rows.map(row => ({ ...row, setter_pipeline_v2_enabled: false }));
+  }
+}
+
 async function getActiveClients() {
-  const result = await pool.query(
-    'SELECT id, name, slug, email, city, state FROM clients WHERE active = true ORDER BY id'
-  );
-  return result.rows;
+  return queryActiveClientRows('active = true');
+}
+
+/** Tenants operators may select in session switchers (excludes hidden pilots like maynard-web). */
+async function getOperatorSwitchableClients() {
+  try {
+    return await queryActiveClientRows(OPERATOR_SWITCHABLE_WHERE);
+  } catch (err) {
+    if (!/operator_switchable/i.test(err.message || '')) throw err;
+    return queryActiveClientRows('active = true');
+  }
 }
 
 module.exports = {
   DEFAULT_CLIENT_ID,
   CLIENT_SCOPED_TABLES,
+  PROSPECT_STATUSES,
   ensureClientArchitecture,
+  ensureProspectStatusConstraint,
   getActiveClients,
+  getOperatorSwitchableClients,
   getClientConfig,
   getRequestClientId,
   getRuntimeClientId,

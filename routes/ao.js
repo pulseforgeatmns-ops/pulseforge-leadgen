@@ -1,0 +1,1056 @@
+const express = require('express');
+const path = require('path');
+const pool = require('../db');
+const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
+const { normalizeClientId } = require('../utils/clientContext');
+const {
+  bindRequestIdentity,
+  getEffectiveActor,
+  getAuthenticatedActor,
+  isImpersonating,
+  impersonationProvenance,
+} = require('../utils/requestIdentity');
+const {
+  effectiveAoOwnerId: sharedEffectiveAoOwnerId,
+  aoClientIdForRequest,
+  effectiveRoleIsAo,
+} = require('../utils/aoRequestHelpers');
+const { logImpersonationAction } = require('../services/aoImpersonationService');
+const { ensureAoFieldSchema } = require('../utils/aoFieldSchema');
+const { TEMPLATES } = require('../utils/aoMessageTemplates');
+const aoField = require('../services/aoFieldService');
+const aoMax = require('../services/aoMaxFlow');
+const { observeOperatorHttp } = require('../packages/decision-service/httpObserver');
+const aoMaxConversation = require('../services/aoMaxConversation');
+const aoRoutingIssueFlags = require('../services/aoRoutingIssueFlags');
+const { AO_ROUTING_ISSUE_TYPES } = require('../utils/aoRoutingIssueTypes');
+const aoRoute = require('../services/aoRouteService');
+const { buildTelUrl } = require('../utils/aoRoutePlanner');
+const aoCommandCenter = require('../services/aoCommandCenterService');
+const aoProspectUpdate = require('../services/aoProspectUpdateService');
+const aoCrm = require('../services/aoCrmService');
+const aoRosterReassignment = require('../services/aoRosterReassignmentService');
+const aoFollowup = require('../services/aoFollowupService');
+const aoAccountFlags = require('../services/aoAccountFlagService');
+const aoCrmLinkRecovery = require('../services/aoCrmLinkRecoveryService');
+const { ensureAoCrmSchema } = require('../utils/aoCrmSchema');
+const { AO_CRM_NEXT_ACTIONS } = require('../utils/aoCrmTypes');
+const { AO_OUTCOME_TYPES } = require('../utils/aoProspectUpdateTypes');
+const { aoResultHttpStatus, sendAoServiceResult } = require('../utils/aoHttpResult');
+const {
+  loadAoCommunicationIdentity,
+  toPublicIdentity,
+  listAoCommunicationIdentities,
+} = require('../utils/aoCommunicationIdentity');
+const { ensureAoCommunicationIdentitySchema } = require('../utils/aoCommunicationIdentitySchema');
+
+const router = express.Router();
+
+function aoClientId(req) {
+  return aoClientIdForRequest(req);
+}
+
+function requireAoRead(req, res, next) {
+  return sessionAuth(req, res, err => {
+    if (err) return next(err);
+    return requireRole('admin', 'manager', 'ao')(req, res, next);
+  });
+}
+
+function requireAoWrite(req, res, next) {
+  return sessionAuth(req, res, err => {
+    if (err) return next(err);
+    return requireRole('admin', 'manager', 'ao')(req, res, next);
+  });
+}
+
+function requireJakeRead(req, res, next) {
+  return sessionAuth(req, res, err => {
+    if (err) return next(err);
+    return requireRole('admin', 'manager')(req, res, next);
+  });
+}
+
+function effectiveAoOwnerId(req) {
+  const id = sharedEffectiveAoOwnerId(req);
+  if (id != null) return id;
+  return req.user?.id;
+}
+
+async function refreshAoSession(req, _res, next) {
+  const aoActor = getEffectiveActor(req);
+  if (aoActor?.role !== 'ao' || !aoActor?.id) return next();
+  try {
+    const profile = await aoField.getAoProfile(aoActor.id);
+    if (profile?.client_id && profile.client_id !== aoActor.client_id) {
+      aoActor.client_id = profile.client_id;
+      if (isImpersonating(req) && req.session?.impersonation?.effectiveUser) {
+        req.session.impersonation.effectiveUser.client_id = profile.client_id;
+        bindRequestIdentity(req);
+      } else if (req.user?.role === 'ao' && req.session?.user) {
+        req.user.client_id = profile.client_id;
+        req.session.user.client_id = profile.client_id;
+      }
+    }
+  } catch (err) {
+    console.error('[ao] session refresh failed:', err.message);
+  }
+  return next();
+}
+
+function sessionProfile(req) {
+  const actor = getEffectiveActor(req) || req.user;
+  return {
+    id: actor.id,
+    name: actor.name,
+    email: actor.email,
+    role: actor.role,
+    client_id: actor.client_id || aoClientId(req),
+    active: true,
+  };
+}
+
+function wrapAoHandler(handler) {
+  return async (req, res, next) => {
+    try {
+      await ensureAoFieldSchema();
+      await handler(req, res, next);
+    } catch (err) {
+      console.error('[ao] route error:', req.method, req.originalUrl, err.message);
+      if (!res.headersSent) {
+        res.status(500).json({ error: err.message || 'AO request failed' });
+      }
+    }
+  };
+}
+
+function requireAoClient(req, res) {
+  const clientId = aoClientId(req);
+  if (!clientId) {
+    res.status(400).json({
+      error: 'AO client not configured — assign client_id (e.g. 10 for Anchor Cleaning) in /admin/users',
+    });
+    return null;
+  }
+  return clientId;
+}
+
+router.get('/', requireAoRead, (_req, res) => {
+  res.redirect('/ao/crm');
+});
+
+router.get('/command-center', requireAoRead, (_req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'ao-command-center.html'));
+});
+
+router.get('/crm', requireAoRead, (_req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'ao-crm.html'));
+});
+
+router.get('/crm/manager', requireJakeRead, (_req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'ao-crm-manager.html'));
+});
+
+router.get('/field', requireAoRead, (_req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'ao-dashboard.html'));
+});
+
+router.get('/api/crm/dashboard', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  await ensureAoCrmSchema();
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  if (!effectiveRoleIsAo(req)) {
+    const override = Number(req.query.ao_user_id || req.query.ao_owner_id);
+    if (!Number.isInteger(override) || override <= 0) {
+      return res.status(400).json({ error: 'ao_user_id required for admin/operator CRM view' });
+    }
+  }
+  const profile = await aoField.getAoProfile(aoOwnerId);
+  const payload = await aoCrm.getAoCrmDashboard({
+    clientId,
+    aoUserId: aoOwnerId,
+    aoUserName: profile?.name || req.user.name,
+    date: req.query.date ? String(req.query.date) : null,
+  });
+  res.json(payload);
+}));
+
+router.get('/api/crm/accounts/:prospectId', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  await ensureAoCrmSchema();
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveRoleIsAo(req) ? effectiveAoOwnerId(req) : null;
+  const detail = await aoCrm.getAccountDetail({
+    clientId,
+    prospectId: req.params.prospectId,
+    aoUserId: aoOwnerId,
+  });
+  if (!detail) return res.status(404).json({ error: 'Account not found' });
+  res.json(detail);
+}));
+
+router.post('/api/crm/accounts/:prospectId/followup/draft', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  await ensureAoCrmSchema();
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const profile = await aoField.getAoProfile(aoOwnerId);
+  const result = await aoFollowup.generateFollowUpDraft({
+    clientId,
+    aoUserId: aoOwnerId,
+    prospectId: req.params.prospectId,
+    body: req.body || {},
+    profile: profile || sessionProfile(req),
+  });
+  return sendAoServiceResult(res, result, {
+    successBody: r => ({ draft: r.draft, input_snapshot: r.input_snapshot }),
+  });
+}));
+
+router.post('/api/crm/accounts/:prospectId/followup/save', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  await ensureAoCrmSchema();
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { draft, input_snapshot: inputSnapshot, flag_jake_review: flagJakeReview } = req.body || {};
+  const result = await aoFollowup.saveFollowUpDraft({
+    clientId,
+    aoUserId: aoOwnerId,
+    prospectId: req.params.prospectId,
+    draft,
+    inputSnapshot,
+    flagJakeReview: flagJakeReview === true || flagJakeReview === 'true',
+  });
+  return sendAoServiceResult(res, result);
+}));
+
+router.get('/api/crm/accounts/:prospectId/followup/drafts', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  await ensureAoCrmSchema();
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveRoleIsAo(req) ? effectiveAoOwnerId(req) : null;
+  const result = await aoFollowup.listFollowUpDrafts({
+    clientId,
+    prospectId: req.params.prospectId,
+    aoUserId: aoOwnerId,
+  });
+  res.json(result);
+}));
+
+router.get('/api/crm/accounts/:prospectId/flags', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  await ensureAoCrmSchema();
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveRoleIsAo(req) ? effectiveAoOwnerId(req) : null;
+  let flags;
+  if (aoOwnerId) {
+    flags = await aoAccountFlags.listFlagsForCreator({
+      clientId,
+      aoUserId: aoOwnerId,
+      prospectId: req.params.prospectId,
+    });
+  } else {
+    const assignee = await require('../utils/aoFlagAssignee').resolveFlagAssigneeUserId(clientId);
+    const inbox = assignee
+      ? await aoAccountFlags.listFlagsForAssignee({
+        clientId,
+        assigneeUserId: assignee.id,
+        status: 'all',
+      })
+      : [];
+    flags = inbox.filter(f => String(f.account_id) === String(req.params.prospectId));
+  }
+  res.json({ flags });
+}));
+
+router.post('/api/crm/accounts/:prospectId/flag-for-jake', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  await ensureAoCrmSchema();
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { reason, note } = req.body || {};
+  if (!reason) {
+    return res.status(400).json({
+      error: 'reason required',
+      reasons: aoAccountFlags.AO_ACCOUNT_FLAG_REASONS,
+    });
+  }
+  const effective = getEffectiveActor(req);
+  const auth = getAuthenticatedActor(req);
+  const provenance = impersonationProvenance(req);
+  const assignee = await require('../utils/aoFlagAssignee').resolveFlagAssigneeUserId(clientId);
+  // While impersonating, Jake is the flag assignee — suppress self-notification but keep AO-origin flag + audit.
+  const skipNotification = Boolean(
+    provenance
+    && assignee
+    && Number(assignee.id) === Number(auth?.id),
+  );
+  const result = await aoAccountFlags.createAccountFlag({
+    clientId,
+    aoUserId: aoOwnerId,
+    prospectId: req.params.prospectId,
+    reason: String(reason),
+    note: note != null ? String(note) : null,
+    creatorRole: effective?.role === 'ao' ? 'ao' : req.user.role,
+    sourceContext: provenance ? { impersonation: provenance } : {},
+    skipNotification,
+  });
+  if (provenance) {
+    await logImpersonationAction(req, { action: 'flag_for_jake', route: req.originalUrl });
+  }
+  return sendAoServiceResult(res, result, {
+    errorBody: r => ({ error: r.error, reasons: r.reasons }),
+  });
+}));
+
+router.post('/api/crm/accounts/:prospectId/outcome', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  await ensureAoCrmSchema();
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const {
+    outcome,
+    notes,
+    next_action: nextAction,
+    next_action_date: nextActionDate,
+    help_needed: helpNeeded,
+    help_reason: helpReason,
+    status: statusOverride,
+    task_id: taskId,
+    follow_up_task_id: followUpTaskId,
+    contact_name: contactName,
+    contact_role: contactRole,
+    phone,
+    email,
+  } = req.body || {};
+
+  const result = await aoCrm.submitOutcome({
+    clientId,
+    aoUserId: aoOwnerId,
+    prospectId: req.params.prospectId,
+    outcome,
+    notes,
+    nextAction,
+    nextActionDate,
+    helpNeeded: helpNeeded === true || helpNeeded === 'true',
+    helpReason,
+    statusOverride,
+    taskId,
+    followUpTaskId,
+    contactPatch: { contact_name: contactName, contact_role: contactRole, phone, email },
+    source: 'ao_crm_outcome_form',
+  });
+  return sendAoServiceResult(res, result);
+}));
+
+router.get('/api/crm/manager/accounts', requireJakeRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  await ensureAoCrmSchema();
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = Number(req.query.ao_owner_id);
+  const payload = await aoCrm.listManagerAccounts({
+    clientId,
+    filters: {
+      ao_owner_id: Number.isInteger(aoOwnerId) && aoOwnerId > 0 ? aoOwnerId : null,
+      status: req.query.status ? String(req.query.status) : null,
+      priority: req.query.priority ? String(req.query.priority) : null,
+      help_requested: req.query.help_requested ? String(req.query.help_requested) : null,
+      overdue: req.query.overdue ? String(req.query.overdue) : null,
+      warm: req.query.warm ? String(req.query.warm) : null,
+      no_next_action: req.query.no_next_action ? String(req.query.no_next_action) : null,
+      next_action_due: req.query.next_action_due ? String(req.query.next_action_due) : null,
+      recently_updated: req.query.recently_updated ? String(req.query.recently_updated) : null,
+      date: req.query.date ? String(req.query.date) : null,
+    },
+  });
+  res.json({ ...payload, next_actions: AO_CRM_NEXT_ACTIONS });
+}));
+
+router.post('/api/crm/accounts/:prospectId/transfer-review', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  await ensureAoCrmSchema();
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const { decision, note } = req.body || {};
+  const result = await aoRosterReassignment.submitTransferredAccountReview({
+    clientId,
+    prospectId: req.params.prospectId,
+    reviewerUserId: effectiveAoOwnerId(req),
+    decision,
+    note,
+  });
+  return sendAoServiceResult(res, result, { successBody: r => r });
+}));
+
+router.post('/api/crm/roster/inactive-transfer', requireJakeRead, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const dryRun = req.body?.dry_run !== false && req.query.dry_run !== '0';
+  const payload = await aoRosterReassignment.runZachToJakeTransfer({ clientId, dryRun });
+  res.json(payload);
+}));
+
+router.post('/api/crm/accounts/:prospectId/resolve-help', requireJakeRead, wrapAoHandler(async (req, res) => {
+  await ensureAoCrmSchema();
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const { manager_note: managerNote } = req.body || {};
+  const result = await aoCrm.resolveHelp({
+    clientId,
+    prospectId: req.params.prospectId,
+    managerNote,
+  });
+  res.json(result);
+}));
+
+router.get('/api/command-center', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const date = req.query.date ? String(req.query.date) : null;
+
+  if (!effectiveRoleIsAo(req)) {
+    const override = Number(req.query.ao_user_id || req.query.ao_owner_id);
+    if (!Number.isInteger(override) || override <= 0) {
+      return res.status(400).json({ error: 'ao_user_id required for admin/operator command center view' });
+    }
+  }
+
+  const profile = await aoField.getAoProfile(aoOwnerId);
+  const payload = await aoCommandCenter.getCommandCenter({
+    clientId,
+    aoUserId: aoOwnerId,
+    aoUserName: profile?.name || req.user.name,
+    date,
+    source: 'command_center',
+  });
+  res.json(payload);
+}));
+
+router.post('/api/prospects/:prospectId/log-update', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const {
+    outcome_type: outcomeType,
+    notes,
+    next_action: nextAction,
+    next_action_due_at: nextActionDueAt,
+    advisory_stage: advisoryStage,
+    source = 'command_center',
+  } = req.body || {};
+
+  if (!outcomeType) {
+    return res.status(400).json({ error: 'outcome_type required', outcome_types: AO_OUTCOME_TYPES });
+  }
+
+  const result = await aoProspectUpdate.logProspectUpdate({
+    clientId,
+    aoUserId: aoOwnerId,
+    prospectId: req.params.prospectId,
+    outcomeType,
+    notes,
+    nextAction,
+    nextActionDueAt,
+    advisoryStage,
+    source,
+  });
+  return sendAoServiceResult(res, result, {
+    errorBody: r => ({ error: r.error }),
+  });
+}));
+
+router.post('/api/max/conversations/continue', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const {
+    prospect_id: prospectId,
+    lead_id: leadId,
+    source = 'command_center',
+    reopen_if_done: reopenIfDone = true,
+  } = req.body || {};
+
+  const result = await aoMaxConversation.continueConversationForProspect({
+    aoOwnerId,
+    clientId,
+    prospectId: prospectId || null,
+    leadId: leadId || null,
+    source,
+    reopenIfDone: reopenIfDone !== false,
+  });
+  return sendAoServiceResult(res, result, {
+    errorBody: r => ({ error: r.error }),
+  });
+}));
+
+router.get('/api/profile', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const aoActor = getEffectiveActor(req);
+  const profile = await aoField.getAoProfile(aoActor.id);
+  const clientId = aoClientId(req) || profile?.client_id;
+  let communication_identity = null;
+  if (profile && clientId) {
+    await ensureAoCommunicationIdentitySchema(pool);
+    const identity = await loadAoCommunicationIdentity(pool, { aoId: aoActor.id, tenantId: clientId });
+    communication_identity = toPublicIdentity(identity);
+  }
+  if (profile) {
+    return res.json({
+      ...profile,
+      role_label: communication_identity?.role || 'Acquisition Operator',
+      communication_identity,
+    });
+  }
+  res.json({ ...sessionProfile(req), communication_identity });
+}));
+
+router.get('/api/roster/communication-identities', requireJakeRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  await ensureAoCommunicationIdentitySchema(pool);
+  const identities = await listAoCommunicationIdentities(pool, clientId);
+  res.json({ client_id: clientId, identities });
+}));
+
+router.get('/api/queue', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const filter = String(req.query.filter || 'today');
+  const tasks = await aoField.listQueue({ aoOwnerId, clientId, filter });
+  res.json({ filter, tasks });
+}));
+
+router.get('/api/leads/:id', requireAoRead, wrapAoHandler(async (req, res) => {
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const lead = await aoField.getLeadDetail(req.params.id, aoOwnerId);
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+  res.json(lead);
+}));
+
+router.patch('/api/leads/:id/address', requireAoWrite, wrapAoHandler(async (req, res) => {
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { address } = req.body || {};
+  const updated = await aoRoute.updateLeadAddress({ leadId: req.params.id, aoOwnerId, address });
+  const httpStatus = updated && aoResultHttpStatus(updated);
+  if (httpStatus != null) {
+    return res.status(httpStatus).json({ error: updated.error });
+  }
+  if (!updated) return res.status(404).json({ error: 'Lead not found' });
+  res.json(updated);
+}));
+
+router.patch('/api/tasks/:id', requireAoWrite, wrapAoHandler(async (req, res) => {
+  if (req.user.role !== 'ao' && req.user.role !== 'admin' && req.user.role !== 'manager') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const task = await aoField.updateTask(req.params.id, aoOwnerId, req.body || {});
+  const taskHttpStatus = task && aoResultHttpStatus(task);
+  if (taskHttpStatus != null) return res.status(taskHttpStatus).json(task);
+  if (!task) return res.status(404).json({ error: 'Task not found' });
+  res.json(task);
+}));
+
+router.get('/api/tasks/:id/crm-context', requireAoRead, wrapAoHandler(async (req, res) => {
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const ctx = await aoField.getTaskCrmContext(req.params.id, aoOwnerId);
+  if (!ctx) return res.status(404).json({ error: 'Task not found' });
+  res.json(ctx);
+}));
+
+router.get('/api/crm/accounts/search', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const payload = await aoCrmLinkRecovery.searchCrmAccounts({
+    clientId,
+    q: req.query.q,
+    businessName: req.query.business_name,
+    address: req.query.address,
+    city: req.query.city,
+    domain: req.query.domain,
+    phone: req.query.phone,
+    limit: req.query.limit,
+  });
+  res.json(payload);
+}));
+
+router.get('/api/leads/:leadId/crm-linkage', requireAoRead, wrapAoHandler(async (req, res) => {
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const ctx = await aoCrmLinkRecovery.getLeadLinkageContext({
+    leadId: req.params.leadId,
+    aoOwnerId,
+  });
+  if (!ctx) return res.status(404).json({ error: 'Lead not found' });
+  res.json(ctx);
+}));
+
+router.post('/api/leads/:leadId/crm-link', requireAoWrite, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { prospect_id: prospectId, task_id: taskId } = req.body || {};
+  if (!prospectId) return res.status(400).json({ error: 'prospect_id required' });
+  const result = await aoCrmLinkRecovery.linkLeadToExistingAccount({
+    clientId,
+    aoOwnerId,
+    leadId: req.params.leadId,
+    prospectId,
+    taskId,
+  });
+  return sendAoServiceResult(res, result);
+}));
+
+router.post('/api/leads/:leadId/crm-account', requireAoWrite, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { task_id: taskId, force_create: forceCreate } = req.body || {};
+  const result = await aoCrmLinkRecovery.createCrmAccountForLead({
+    clientId,
+    aoOwnerId,
+    leadId: req.params.leadId,
+    taskId,
+    forceCreate: forceCreate === true || forceCreate === 'true',
+  });
+  return sendAoServiceResult(res, result, {
+    errorBody: r => ({
+      error: r.error,
+      code: r.code,
+      duplicate_candidates: r.duplicate_candidates,
+      crm_prospect_id: r.crm_prospect_id,
+    }),
+  });
+}));
+
+router.patch('/api/leads/:leadId/prospect', requireAoWrite, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const result = await aoCrmLinkRecovery.editQueueProspect({
+    clientId,
+    aoOwnerId,
+    leadId: req.params.leadId,
+    patch: req.body || {},
+  });
+  return sendAoServiceResult(res, result);
+}));
+
+router.get('/api/routes/active', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const route = await aoRoute.getActiveRoute({ aoOwnerId, clientId, aoName: req.user.name });
+  res.json({ route });
+}));
+
+router.post('/api/routes/start', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const {
+    filter = 'today',
+    sort_mode: sortMode = 'closest_first',
+    start_point_type: startPointType = 'current_location',
+    start_lat: startLat,
+    start_lng: startLng,
+    start_address: startAddress,
+    manual_task_order: manualTaskOrder,
+  } = req.body || {};
+
+  const result = await aoRoute.createRoute({
+    aoOwnerId,
+    clientId,
+    aoName: req.user.name,
+    filter,
+    sortMode,
+    startPointType,
+    startLat,
+    startLng,
+    startAddress,
+    manualTaskOrder,
+  });
+  return sendAoServiceResult(res, result);
+}));
+
+router.get('/api/routes/:id', requireAoRead, wrapAoHandler(async (req, res) => {
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const route = await aoRoute.getRouteById(req.params.id, aoOwnerId, req.user.name);
+  if (!route) return res.status(404).json({ error: 'Route not found' });
+  res.json(route);
+}));
+
+router.patch('/api/routes/stops/:id', requireAoWrite, wrapAoHandler(async (req, res) => {
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { status } = req.body || {};
+  const result = await aoRoute.updateStopStatus({
+    stopId: req.params.id,
+    aoOwnerId,
+    status,
+    aoName: req.user.name,
+  });
+  const stopHttpStatus = result && aoResultHttpStatus(result);
+  if (stopHttpStatus != null) return res.status(stopHttpStatus).json({ error: result.error });
+  if (!result) return res.status(404).json({ error: 'Stop not found' });
+  res.json(result);
+}));
+
+router.post('/api/routes/:id/cancel', requireAoWrite, wrapAoHandler(async (req, res) => {
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const route = await aoRoute.cancelRoute(req.params.id, aoOwnerId, req.user.name);
+  if (!route) return res.status(404).json({ error: 'Route not found' });
+  res.json(route);
+}));
+
+router.post('/api/tasks/:id/call-instead', requireAoWrite, wrapAoHandler(async (req, res) => {
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { phone } = req.body || {};
+  const result = await aoField.convertToPhoneFollowUp(req.params.id, aoOwnerId, { phone });
+  if (!result) return res.status(404).json({ error: 'Task not found' });
+
+  const route = await aoRoute.getActiveRoute({
+    aoOwnerId,
+    clientId: aoClientId(req),
+    aoName: req.user.name,
+  });
+
+  res.json({
+    ...result,
+    tel_url: buildTelUrl(result.contact_phone),
+    route,
+    message: result.has_phone
+      ? null
+      : 'No phone number saved. Add one or escalate to Jake?',
+  });
+}));
+
+router.post('/api/tasks/:id/escalate', requireAoWrite, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { reason = 'high_interest', summary } = req.body || {};
+  const result = await aoField.escalateTask(req.params.id, aoOwnerId, {
+    reason,
+    summary: summary || 'AO requested Jake follow-up',
+  });
+  if (!result) return res.status(404).json({ error: 'Task not found' });
+
+  await aoField.depositEscalationAction(
+    result.escalation,
+    { id: result.task.lead_id, business_name: result.task.business_name },
+    clientId,
+  );
+  await aoField.notifyJakeEscalation(
+    result.escalation,
+    { business_name: result.task.business_name },
+    req.user.name,
+  ).catch(err => console.error('[ao] Jake notification failed:', err.message));
+
+  res.json(result);
+}));
+
+router.get('/api/templates', requireAoRead, (_req, res) => {
+  res.json({ templates: Object.values(TEMPLATES) });
+});
+
+router.post('/api/max/start', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const {
+    mode,
+    task_id: taskId,
+    conversation_session_id: conversationSessionId,
+  } = req.body || {};
+  if (!mode) return res.status(400).json({ error: 'mode required' });
+
+  const result = await aoMax.startMode({
+    aoOwnerId,
+    clientId,
+    mode,
+    aoName: req.user.name,
+    taskId,
+    conversationSessionId: conversationSessionId || null,
+  });
+  return sendAoServiceResult(res, result, {
+    errorBody: r => ({ error: r.error }),
+  });
+}));
+
+router.post('/api/max/respond', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { session_id: sessionId, message } = req.body || {};
+  if (!sessionId || !message) return res.status(400).json({ error: 'session_id and message required' });
+  observeOperatorHttp(req, res, { clientId, sessionId, source: 'ao_respond' });
+
+  const result = await aoMax.respondToSession({
+    sessionId,
+    aoOwnerId,
+    clientId,
+    aoName: req.user.name,
+    message,
+  });
+  return sendAoServiceResult(res, result, {
+    errorBody: r => ({ error: r.error }),
+  });
+}));
+
+router.post('/api/max/ask', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { message, session_id: sessionId } = req.body || {};
+  if (!message || !String(message).trim()) {
+    return res.status(400).json({ error: 'message required' });
+  }
+
+  observeOperatorHttp(req, res, { clientId, sessionId, source: 'ao_ask' });
+  const result = await aoMax.askMax({
+    aoOwnerId,
+    clientId,
+    message: String(message).trim(),
+    sessionId: sessionId || null,
+  });
+  res.json(result);
+}));
+
+router.post('/api/max/prospect-brief', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const {
+    prospect_id: prospectId,
+    lead_id: leadId,
+    session_id: sessionId,
+    source = 'prospect_card_brief_button',
+  } = req.body || {};
+
+  if (!prospectId && !leadId) {
+    return res.status(400).json({ error: 'prospect_id or lead_id required' });
+  }
+
+  observeOperatorHttp(req, res, {
+    clientId,
+    sessionId,
+    source: 'ao_prospect_brief',
+    routeHint: 'prospect_brief',
+  });
+
+  const result = await aoMaxConversation.handleProspectBriefAction({
+    sessionId: sessionId || null,
+    aoOwnerId,
+    clientId,
+    prospectId: prospectId || null,
+    leadId: leadId || null,
+    source,
+  });
+  return sendAoServiceResult(res, result, {
+    errorBody: r => ({ error: r.error }),
+  });
+}));
+
+router.post('/api/max/flag-routing', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const {
+    session_id: sessionId,
+    conversation_id: conversationId,
+    message_id: messageId,
+    prospect_id: prospectId,
+    mission_id: missionId,
+    route_observed: routeObserved,
+    route_expected: routeExpected,
+    issue_type: issueType,
+    notes,
+    decision_id: decisionId,
+  } = req.body || {};
+
+  if (!issueType) {
+    return res.status(400).json({ error: 'issue_type required', issue_types: AO_ROUTING_ISSUE_TYPES });
+  }
+
+  const result = await aoRoutingIssueFlags.createRoutingIssueFlag({
+    tenantId: clientId,
+    aoUserId: aoOwnerId,
+    sessionId: sessionId || conversationId || null,
+    conversationId: conversationId || sessionId || null,
+    messageId: messageId || null,
+    prospectId: prospectId || null,
+    missionId: missionId || null,
+    routeObserved: routeObserved || null,
+    routeExpected: routeExpected || null,
+    issueType,
+    notes,
+    decisionId: decisionId || null,
+  });
+  return sendAoServiceResult(res, result, {
+    errorBody: r => ({ error: r.error }),
+  });
+}));
+
+router.get('/api/max/conversations/active', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const conversation = await aoMaxConversation.getActiveOrRestorableConversation({ aoOwnerId, clientId });
+  res.json({ conversation });
+}));
+
+router.get('/api/max/conversations', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const status = req.query.status ? String(req.query.status) : null;
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
+  const conversations = await aoMaxConversation.listConversations({
+    aoOwnerId,
+    clientId,
+    status,
+    limit,
+  });
+  res.json({ conversations });
+}));
+
+router.get('/api/max/conversations/:id', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const conversation = await aoMaxConversation.getConversationDetail({
+    sessionId: req.params.id,
+    aoOwnerId,
+    clientId,
+  });
+  if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+  res.json({ conversation });
+}));
+
+router.post('/api/max/conversations/:id/reopen', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const result = await aoMaxConversation.reopenConversation({
+    sessionId: req.params.id,
+    aoOwnerId,
+    clientId,
+    reopenedBy: aoOwnerId,
+  });
+  return sendAoServiceResult(res, result, {
+    errorBody: r => ({ error: r.error }),
+  });
+}));
+
+router.post('/api/max/conversations/:id/done', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const result = await aoMaxConversation.markConversationDone({
+    sessionId: req.params.id,
+    aoOwnerId,
+    clientId,
+    closedBy: aoOwnerId,
+  });
+  return sendAoServiceResult(res, result, {
+    errorBody: r => ({ error: r.error }),
+  });
+}));
+
+router.post('/api/max/new-conversation', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { previous_session_id: previousSessionId } = req.body || {};
+
+  const result = await aoMaxConversation.startNewConversation({
+    aoOwnerId,
+    clientId,
+    previousSessionId: previousSessionId || null,
+  });
+  res.json(result);
+}));
+
+router.post('/api/max/report', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { session_id: sessionId, note, category } = req.body || {};
+  if (!sessionId) return res.status(400).json({ error: 'session_id required' });
+
+  const result = await aoMaxConversation.reportConversation({
+    sessionId,
+    aoOwnerId,
+    clientId,
+    note,
+    category,
+    creatorRole: getEffectiveActor(req)?.role === 'ao' ? 'ao' : req.user.role,
+  });
+  return sendAoServiceResult(res, result, {
+    errorBody: r => ({ error: r.error }),
+  });
+}));
+
+router.get('/api/max/reports', requireJakeRead, wrapAoHandler(async (req, res) => {
+  const clientId = aoClientId(req);
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
+  const reports = await aoMaxConversation.listConversationReports({ clientId, limit });
+  res.json({ reports });
+}));
+
+router.get('/api/max/reports/:id', requireJakeRead, wrapAoHandler(async (req, res) => {
+  const clientId = aoClientId(req);
+  const report = await aoMaxConversation.getConversationReport(req.params.id, { clientId });
+  if (!report) return res.status(404).json({ error: 'Report not found' });
+  res.json(report);
+}));
+
+router.get('/api/escalations', requireJakeRead, wrapAoHandler(async (req, res) => {
+  const clientId = aoClientId(req);
+  const status = req.query.status ? String(req.query.status) : null;
+  const escalations = await aoField.listEscalations({ clientId, status });
+  res.json({ escalations });
+}));
+
+router.patch('/api/escalations/:id', requireJakeRead, wrapAoHandler(async (req, res) => {
+  const updated = await aoField.updateEscalation(req.params.id, req.body || {});
+  if (!updated) return res.status(404).json({ error: 'Escalation not found' });
+  res.json(updated);
+}));
+
+router.get('/api/metrics/today', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const clientId = aoClientId(req);
+  const today = new Date().toISOString().slice(0, 10);
+
+  if (!clientId) {
+    const profile = await aoField.getAoProfile(req.user.id);
+    return res.json({
+      visits_logged: 0,
+      due_today: 0,
+      overdue: 0,
+      pending_escalations: 0,
+      daily_goal: profile?.daily_goal || null,
+      weekly_goal: profile?.weekly_goal || null,
+      client_missing: true,
+    });
+  }
+
+  const { rows } = await pool.query(`
+    SELECT
+      (SELECT COUNT(*)::int FROM ao_leads WHERE ao_owner_id = $1 AND client_id = $2 AND DATE(created_at) = $3) AS visits_logged,
+      (SELECT COUNT(*)::int FROM ao_follow_up_tasks WHERE ao_owner_id = $1 AND status = 'open' AND due_date = $3) AS due_today,
+      (SELECT COUNT(*)::int FROM ao_follow_up_tasks WHERE ao_owner_id = $1 AND status = 'open' AND due_date < $3) AS overdue,
+      (SELECT COUNT(*)::int FROM ao_escalations WHERE ao_owner_id = $1 AND status = 'new') AS pending_escalations
+  `, [aoOwnerId, clientId, today]);
+
+  const aoActor = getEffectiveActor(req);
+  const profile = aoActor?.role === 'ao' ? await aoField.getAoProfile(aoActor.id) : null;
+  res.json({
+    ...rows[0],
+    daily_goal: profile?.daily_goal || null,
+    weekly_goal: profile?.weekly_goal || null,
+  });
+}));
+
+module.exports = router;

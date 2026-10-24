@@ -1,0 +1,46 @@
+{
+  "authorizationVersion": "1",
+  "status": "draft_not_authorized",
+  "phase": "Revenue Phase 1.5",
+  "reviewer": {
+    "name": null,
+    "role": null,
+    "identity": null
+  },
+  "approvalTimestamp": null,
+  "changeWindow": {
+    "startsAt": null,
+    "endsAt": null,
+    "freezeOwner": null
+  },
+  "approvedRevision": null,
+  "approvedDeployment": null,
+  "backup": {
+    "identifier": null,
+    "encryptedSha256": null,
+    "plaintextSha256": null,
+    "independentRestorePassed": false
+  },
+  "migrations": {
+    "phase1Sha256": "c703c88095df81098c8405b18f008a4b88a65c267622ffbb7eb48457012a4203",
+    "phase15Sha256": "9c8e1ed7b44e5fd4be9944193b1cfd1a9c1d54113795b7accd2d7d8d36fe23ed",
+    "operationalRollbackSha256": "2ae6e4a87638722bbb2ad40d6c218a7593cfd369920b2c67dbafa233955c3045"
+  },
+  "canary": {
+    "clientId": 10,
+    "clientName": "Anchor Cleaning",
+    "exactActions": [],
+    "expectedLedgerEvents": null,
+    "expectedFinancialDelta": null
+  },
+  "requiredPreflight": [
+    "required CI check passed",
+    "backup independently restored and reconciled",
+    "deployment revision matches",
+    "all five revenue flags initially false",
+    "append-only trigger and ordinary-role privileges verified",
+    "pre-canary comparison has zero mismatches and unexplained events"
+  ],
+  "approved": false,
+  "productionExecutionPermitted": false
+}

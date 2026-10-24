@@ -1,14 +1,39 @@
 const pool = require('./db');
 const { getRuntimeClientId } = require('./utils/clientContext');
+const { deriveBusinessNameShort, ensureBusinessNameShortColumns } = require('./utils/businessNameShort');
+const { isPhase3dSetterSchemaPresent, notSyntheticSql } = require('./utils/callDispositions');
+
+let pendingCommentPublishSchemaPromise;
+
+function ensurePendingCommentPublishSchema() {
+  if (!pendingCommentPublishSchemaPromise) {
+    pendingCommentPublishSchemaPromise = pool.query(`
+      ALTER TABLE pending_comments
+        ADD COLUMN IF NOT EXISTS posted_at TIMESTAMPTZ
+    `).catch(err => {
+      pendingCommentPublishSchemaPromise = null;
+      throw err;
+    });
+  }
+  return pendingCommentPublishSchemaPromise;
+}
 
 // Check do not contact before any agent acts
-async function checkDNC(prospectId) {
-  const clientId = getRuntimeClientId();
-  const res = await pool.query(
-    'SELECT do_not_contact FROM prospects WHERE id = $1 AND client_id = $2',
+async function checkDNC(prospectId, options = {}) {
+  const clientId = options.clientId || getRuntimeClientId();
+  const db = options.pool || pool;
+  if (await isPhase3dSetterSchemaPresent(db)) {
+    const res = await db.query(
+      `SELECT do_not_contact, is_synthetic, COALESCE((to_jsonb(prospects)->>'ao_outreach_review_required')::boolean,false) AS ao_outreach_review_required FROM prospects WHERE id = $1 AND client_id = $2`,
+      [prospectId, clientId]
+    );
+    return res.rows[0] ? Boolean(res.rows[0].do_not_contact || res.rows[0].is_synthetic || res.rows[0].ao_outreach_review_required) : true;
+  }
+  const res = await db.query(
+    `SELECT do_not_contact, COALESCE((to_jsonb(prospects)->>'ao_outreach_review_required')::boolean,false) AS ao_outreach_review_required FROM prospects WHERE id = $1 AND client_id = $2`,
     [prospectId, clientId]
   );
-  return res.rows[0]?.do_not_contact ?? true;
+  return res.rows[0] ? Boolean(res.rows[0].do_not_contact || res.rows[0].ao_outreach_review_required) : true;
 }
 
 // Get full prospect record
@@ -42,10 +67,11 @@ async function updateProspectStatus(prospectId, status) {
 // Log a touchpoint after any agent action
 async function logTouchpoint(prospectId, channel, actionType, contentSummary, outcome, sentiment, agentId, externalRef = null) {
   const clientId = getRuntimeClientId();
-  await pool.query(
+  const res = await pool.query(
     `INSERT INTO touchpoints 
       (prospect_id, channel, action_type, content_summary, outcome, sentiment, agent_id, external_ref, client_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING id, prospect_id, channel, action_type, content_summary, outcome, sentiment, agent_id, external_ref, client_id, created_at`,
     [prospectId, channel, actionType, contentSummary, outcome, sentiment, agentId, externalRef, clientId]
   );
   // Update last contacted timestamp
@@ -53,6 +79,13 @@ async function logTouchpoint(prospectId, channel, actionType, contentSummary, ou
     'UPDATE prospects SET last_contacted_at = NOW() WHERE id = $1 AND client_id = $2',
     [prospectId, clientId]
   );
+  const row = res.rows[0];
+  if (row) {
+    // SPEC-014: dual-write — never blocks primary CRM write
+    const { safeWriteTouchpoint } = require('./utils/knowledgeDualWrite');
+    safeWriteTouchpoint(row, { source: agentId || 'crm' });
+  }
+  return row?.id;
 }
 
 // Log every agent action to audit trail
@@ -69,40 +102,76 @@ async function logAgentAction(agentName, action, prospectId, targetUrl, payload,
 // Add a new prospect
 async function addProspect(data) {
   const clientId = getRuntimeClientId(data);
-  const res = await pool.query(
-    `INSERT INTO prospects 
-      (company_id, first_name, last_name, email, phone, job_title, decision_maker, linkedin_url, facebook_url, source, icp_score, client_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-     ON CONFLICT (email) DO NOTHING
-     RETURNING id`,
-    [
-      data.company_id || null,
-      data.first_name,
-      data.last_name,
-      data.email,
-      data.phone || null,
-      data.job_title || null,
-      data.decision_maker || false,
-      data.linkedin_url || null,
-      data.facebook_url || null,
-      data.source || 'manual',
-      data.icp_score || 0,
-      clientId
-    ]
-  );
-  return res.rows[0]?.id;
+  const doNotContact = Boolean(data.do_not_contact || data.is_synthetic);
+  const baseValues = [
+    data.company_id || null,
+    data.first_name,
+    data.last_name,
+    data.email,
+    data.phone || null,
+    data.job_title || null,
+    data.decision_maker || false,
+    data.linkedin_url || null,
+    data.facebook_url || null,
+    data.source || 'manual',
+    data.icp_score || 0,
+    clientId,
+    data.service_area_match || null,
+  ];
+  // Only reference the Phase 3D suppression columns once the controlled
+  // migration has created them. A genuine pre-Phase-3D production schema has
+  // neither is_synthetic nor synthetic_label, so the legacy insert is used.
+  let prospectId;
+  if (await isPhase3dSetterSchemaPresent(pool)) {
+    const res = await pool.query(
+      `INSERT INTO prospects
+        (company_id, first_name, last_name, email, phone, job_title, decision_maker,
+         linkedin_url, facebook_url, source, icp_score, client_id, service_area_match,
+         is_synthetic, synthetic_label, do_not_contact)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+       ON CONFLICT (email) DO NOTHING
+       RETURNING id`,
+      [...baseValues, Boolean(data.is_synthetic), data.synthetic_label || null, doNotContact]
+    );
+    prospectId = res.rows[0]?.id;
+  } else {
+    const res = await pool.query(
+      `INSERT INTO prospects
+        (company_id, first_name, last_name, email, phone, job_title, decision_maker,
+         linkedin_url, facebook_url, source, icp_score, client_id, service_area_match,
+         do_not_contact)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+       ON CONFLICT (email) DO NOTHING
+       RETURNING id`,
+      [...baseValues, doNotContact]
+    );
+    prospectId = res.rows[0]?.id;
+  }
+  if (prospectId) {
+    const { safeWriteProspect } = require('./utils/knowledgeDualWrite');
+    safeWriteProspect(
+      { ...data, id: prospectId, client_id: clientId },
+      { source: data.source || 'crm' }
+    );
+  }
+  return prospectId;
 }
 
 // Add a company
 async function addCompany(data) {
   const clientId = getRuntimeClientId(data);
+  await ensureBusinessNameShortColumns(pool);
+  const shortName = deriveBusinessNameShort(data.name);
   const res = await pool.query(
     `INSERT INTO companies 
-      (name, industry, size, location, website, icp_score, tech_stack, client_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      (name, business_name_short, business_name_short_confidence, business_name_short_flags, industry, size, location, website, icp_score, tech_stack, client_id)
+     VALUES ($1, $2, $3, $4::text[], $5, $6, $7, $8, $9, $10, $11)
      RETURNING id`,
     [
       data.name,
+      shortName.business_name_short,
+      shortName.confidence,
+      shortName.flags,
       data.industry || null,
       data.size || null,
       data.location || null,
@@ -112,14 +181,23 @@ async function addCompany(data) {
       clientId
     ]
   );
-  return res.rows[0]?.id;
+  const companyId = res.rows[0]?.id;
+  if (companyId) {
+    const { safeWriteCompany } = require('./utils/knowledgeDualWrite');
+    safeWriteCompany(
+      { ...data, id: companyId, client_id: clientId },
+      { source: 'crm' }
+    );
+  }
+  return companyId;
 }
 
 // Get all active prospects for a given status
 async function getProspectsByStatus(status) {
   const clientId = getRuntimeClientId();
+  const syntheticGuard = await notSyntheticSql(pool, 'is_synthetic');
   const res = await pool.query(
-    'SELECT * FROM prospects WHERE status = $1 AND do_not_contact = false AND client_id = $2 ORDER BY icp_score DESC',
+    `SELECT * FROM prospects WHERE status = $1 AND do_not_contact = false AND ${syntheticGuard} AND client_id = $2 ORDER BY icp_score DESC`,
     [status, clientId]
   );
   return res.rows;
@@ -131,6 +209,7 @@ async function savePendingComment(data) {
     `INSERT INTO pending_comments 
       (author_name, author_title, post_content, comment, post_url, channel, client_id)
      VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (client_id, post_url) WHERE post_url IS NOT NULL AND status = 'pending' DO NOTHING
      RETURNING id`,
     [data.authorName, data.authorTitle, data.postContent, data.comment, data.postUrl, data.channel || 'linkedin', clientId]
   );
@@ -148,8 +227,15 @@ async function getPendingComments() {
 
 async function updateCommentStatus(id, status) {
   const clientId = getRuntimeClientId();
+  await ensurePendingCommentPublishSchema();
   await pool.query(
-    `UPDATE pending_comments SET status = $1 WHERE id = $2 AND client_id = $3`,
+    `UPDATE pending_comments
+     SET status = $1,
+         posted_at = CASE
+           WHEN $1 = 'posted' THEN COALESCE(posted_at, NOW())
+           ELSE posted_at
+         END
+     WHERE id = $2 AND client_id = $3`,
     [status, id, clientId]
   );
 }

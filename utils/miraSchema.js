@@ -1,0 +1,233 @@
+const pool = require('../db');
+
+async function ensureMiraSchema() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS capture_inbox (
+      id              BIGSERIAL PRIMARY KEY,
+      received_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      telegram_msg_id BIGINT,
+      content_type    TEXT NOT NULL CHECK (content_type IN ('text', 'voice', 'photo', 'document', 'link')),
+      raw_text        TEXT,
+      voice_file_id   TEXT,
+      voice_url       TEXT,
+      transcript      TEXT,
+      photo_file_id   TEXT,
+      photo_url       TEXT,
+      link_url        TEXT,
+      classification  TEXT,
+      confidence      NUMERIC(3,2),
+      client_id       INT,
+      routed_to_table TEXT,
+      routed_to_id    TEXT,
+      status          TEXT NOT NULL DEFAULT 'new'
+                      CHECK (status IN ('new', 'transcribed', 'classified', 'routed', 'review_needed', 'failed')),
+      raw_metadata    JSONB,
+      classifier_notes TEXT,
+      processed_at    TIMESTAMPTZ
+    )
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'capture_inbox'
+          AND column_name = 'routed_to_id'
+          AND data_type <> 'text'
+      ) THEN
+        ALTER TABLE capture_inbox
+        ALTER COLUMN routed_to_id TYPE TEXT USING routed_to_id::TEXT;
+      END IF;
+    END $$;
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_capture_inbox_status ON capture_inbox(status)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_capture_inbox_received_at ON capture_inbox(received_at DESC)
+  `);
+
+  await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS capture_type TEXT`);
+  await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS source TEXT`);
+  await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS linked_entity_type TEXT`);
+  await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS linked_entity_id TEXT`);
+  await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS linked_capture_id BIGINT`);
+  await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS captured_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE capture_inbox ADD COLUMN IF NOT EXISTS archive_reason TEXT`);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'capture_inbox_linked_capture_id_fkey'
+          AND conrelid = 'capture_inbox'::regclass
+      ) THEN
+        ALTER TABLE capture_inbox
+          ADD CONSTRAINT capture_inbox_linked_capture_id_fkey
+          FOREIGN KEY (linked_capture_id) REFERENCES capture_inbox(id);
+      END IF;
+    END $$;
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS client_notes (
+      id             BIGSERIAL PRIMARY KEY,
+      client_id      INT,
+      capture_id     BIGINT REFERENCES capture_inbox(id),
+      content        TEXT NOT NULL,
+      note_type      TEXT,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      source         TEXT NOT NULL DEFAULT 'mira'
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_client_notes_client_id ON client_notes(client_id)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_client_notes_created_at ON client_notes(created_at DESC)
+  `);
+  await pool.query(`ALTER TABLE client_notes ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE client_notes ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE client_notes ADD COLUMN IF NOT EXISTS archive_reason TEXT`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ideas (
+      id          BIGSERIAL PRIMARY KEY,
+      capture_id  BIGINT REFERENCES capture_inbox(id),
+      content     TEXT NOT NULL,
+      tags        TEXT[],
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      archived    BOOLEAN NOT NULL DEFAULT FALSE
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS content_seeds (
+      id          BIGSERIAL PRIMARY KEY,
+      capture_id  BIGINT REFERENCES capture_inbox(id),
+      content     TEXT NOT NULL,
+      brand       TEXT,
+      channel     TEXT,
+      used        BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS blockers (
+      id          BIGSERIAL PRIMARY KEY,
+      capture_id  BIGINT REFERENCES capture_inbox(id),
+      client_id   INT,
+      content     TEXT NOT NULL,
+      blocking    TEXT,
+      resolved    BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      resolved_at TIMESTAMPTZ
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS refs (
+      id          BIGSERIAL PRIMARY KEY,
+      capture_id  BIGINT REFERENCES capture_inbox(id),
+      content     TEXT NOT NULL,
+      ref_type    TEXT,
+      tags        TEXT[],
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS reminders (
+      id           BIGSERIAL PRIMARY KEY,
+      capture_id   BIGINT REFERENCES capture_inbox(id),
+      content      TEXT NOT NULL,
+      remind_at    TIMESTAMPTZ NOT NULL,
+      sent         BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS daily_anchors (
+      id                BIGSERIAL PRIMARY KEY,
+      client_id         INT NOT NULL DEFAULT 1,
+      anchor_date       DATE NOT NULL,
+      primary_anchor    TEXT,
+      secondary_anchors TEXT[],
+      set_at            TIMESTAMPTZ,
+      completed_at      TIMESTAMPTZ,
+      completion_notes  TEXT,
+      source_capture_id BIGINT REFERENCES capture_inbox(id)
+    )
+  `);
+  await pool.query(`ALTER TABLE daily_anchors ADD COLUMN IF NOT EXISTS client_id INT`);
+  await pool.query(`UPDATE daily_anchors SET client_id = 1 WHERE client_id IS NULL`);
+  await pool.query(`ALTER TABLE daily_anchors ALTER COLUMN client_id SET DEFAULT 1`);
+  await pool.query(`ALTER TABLE daily_anchors ALTER COLUMN client_id SET NOT NULL`);
+  await pool.query(`ALTER TABLE daily_anchors DROP CONSTRAINT IF EXISTS daily_anchors_anchor_date_key`);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'daily_anchors_client_date_key'
+          AND conrelid = 'daily_anchors'::regclass
+      ) THEN
+        ALTER TABLE daily_anchors
+          ADD CONSTRAINT daily_anchors_client_date_key UNIQUE (client_id, anchor_date);
+      END IF;
+    END $$;
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mira_corrections (
+      id                  BIGSERIAL PRIMARY KEY,
+      capture_id          BIGINT REFERENCES capture_inbox(id),
+      original_class      TEXT NOT NULL,
+      corrected_class     TEXT NOT NULL,
+      original_routed_to  TEXT,
+      corrected_routed_to TEXT,
+      note                TEXT,
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`ALTER TABLE mira_corrections ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE mira_corrections ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE mira_corrections ADD COLUMN IF NOT EXISTS archive_reason TEXT`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS mira_warm_capture_log (
+      id BIGSERIAL PRIMARY KEY,
+      warm_trigger_fire_id BIGINT UNIQUE,
+      prospect_id UUID,
+      company TEXT,
+      trigger_reason TEXT,
+      icp_score INTEGER,
+      fired_at TIMESTAMPTZ,
+      resolved_action TEXT,
+      resolved_at TIMESTAMPTZ,
+      time_to_resolution_minutes INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`ALTER TABLE mira_warm_capture_log ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE mira_warm_capture_log ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE mira_warm_capture_log ADD COLUMN IF NOT EXISTS archive_reason TEXT`);
+
+  // Prospect history remains available to the CRM, but Mira can exclude rows
+  // that belong to a retired market from active context and warm routing.
+  await pool.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS mira_archived BOOLEAN NOT NULL DEFAULT FALSE`);
+  await pool.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS mira_archived_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE prospects ADD COLUMN IF NOT EXISTS mira_archive_reason TEXT`);
+}
+
+module.exports = { ensureMiraSchema };

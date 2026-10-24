@@ -1,0 +1,24 @@
+{
+  "library_id": "market_reference.manchester_nh_service_ring",
+  "title": "Manchester NH Service Ring Reference",
+  "category": "market_reference",
+  "source_type": "market_background",
+  "trust_level": "medium",
+  "scope": {
+    "audience": "global",
+    "verticals": ["cleaning"],
+    "geos": ["Manchester NH"]
+  },
+  "summary": "Background geography for Manchester pilot cluster. Background reference — not a live observation about any company.",
+  "content_text": "Pilot cluster cities commonly include Manchester, Bedford, Goffstown, Hooksett, Londonderry, and Auburn. Treat radius expansions as provisional until operator-confirmed. Do not invent company locations from this reference.",
+  "content_ref": null,
+  "tags": ["geography", "manchester", "nh", "service-area"],
+  "provenance": {
+    "curated_by": "pulseforge-ops",
+    "curated_at": "2026-08-03T00:00:00.000Z",
+    "notes": "Background summary from client service_area operating notes; not market email evidence.",
+    "permission": "internal"
+  },
+  "enabled": true,
+  "version": 1
+}

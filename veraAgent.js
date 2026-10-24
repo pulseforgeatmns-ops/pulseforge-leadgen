@@ -1,11 +1,13 @@
 require('dotenv').config();
 const axios = require('axios');
-const Anthropic = require('@anthropic-ai/sdk');
+const Anthropic = require('./utils/meteredAnthropic').forAgent('vera');
 const pool = require('./db');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 
 const AGENT_NAME = 'vera';
-const GBP_BASE   = 'https://mybusiness.googleapis.com/v4';
+const GBP_ACCOUNT_MGMT_BASE = 'https://mybusinessaccountmanagement.googleapis.com/v1';
+const GBP_BUSINESS_INFO_BASE = 'https://mybusinessbusinessinformation.googleapis.com/v1';
+const GBP_REVIEWS_BASE = 'https://mybusiness.googleapis.com/v4';
 const DASHBOARD  = process.env.DASHBOARD_URL || 'https://openclaw-main-production-945e.up.railway.app';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -13,6 +15,11 @@ const CLIENT_ID = getRuntimeClientId();
 let CLIENT_CONFIG = null;
 
 const STAR_NUM = { ONE: 1, TWO: 2, THREE: 3, FOUR: 4, FIVE: 5 };
+const GBP_THROTTLE_MS = 6500;
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 // ── CREDENTIALS ────────────────────────────────────────────────────────
 function credentialsConfigured() {
@@ -42,32 +49,70 @@ async function ensureSchema() {
 }
 
 // ── GBP API HELPERS ────────────────────────────────────────────────────
-async function gbpGet(token, path, params = {}) {
-  const res = await axios.get(`${GBP_BASE}/${path}`, {
-    headers: { Authorization: `Bearer ${token}` },
-    params,
-  });
-  return res.data;
+let lastThrottledGbpAt = 0;
+
+async function waitForGbpThrottle() {
+  if (!lastThrottledGbpAt) return;
+  const elapsed = Date.now() - lastThrottledGbpAt;
+  if (elapsed < GBP_THROTTLE_MS) {
+    await sleep(GBP_THROTTLE_MS - elapsed);
+  }
+}
+
+function markGbpThrottle() {
+  lastThrottledGbpAt = Date.now();
+}
+
+async function gbpGet(token, baseUrl, path, params = {}) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await axios.get(`${baseUrl}/${path}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        params,
+      });
+      return res.data;
+    } catch (err) {
+      if (err.response?.status === 429) {
+        if (attempt === 0) {
+          console.warn(`[Vera] GBP rate limit (429) on ${path} — retrying in 60s`);
+          await sleep(60000);
+          continue;
+        }
+        console.warn(`[Vera] GBP rate limit (429) on ${path} after retry — skipping`);
+      }
+      throw err;
+    }
+  }
 }
 
 async function fetchAccounts(token) {
-  const data = await gbpGet(token, 'accounts');
+  const data = await gbpGet(token, GBP_ACCOUNT_MGMT_BASE, 'accounts');
   return data.accounts || [];
 }
 
 async function fetchLocations(token, accountName) {
-  const data = await gbpGet(token, `${accountName}/locations`, {
-    readMask: 'name,title,websiteUri',
-  });
-  return data.locations || [];
+  await waitForGbpThrottle();
+  try {
+    const data = await gbpGet(token, GBP_BUSINESS_INFO_BASE, `${accountName}/locations`, {
+      readMask: 'name,title,websiteUri',
+    });
+    return data.locations || [];
+  } finally {
+    markGbpThrottle();
+  }
 }
 
 async function fetchReviews(token, locationName) {
-  const data = await gbpGet(token, `${locationName}/reviews`, {
-    orderBy: 'updateTime desc',
-    pageSize: 20,
-  });
-  return data.reviews || [];
+  await waitForGbpThrottle();
+  try {
+    const data = await gbpGet(token, GBP_REVIEWS_BASE, `${locationName}/reviews`, {
+      orderBy: 'updateTime desc',
+      pageSize: 20,
+    });
+    return data.reviews || [];
+  } finally {
+    markGbpThrottle();
+  }
 }
 
 // ── COMPANY MATCHING ───────────────────────────────────────────────────
@@ -184,7 +229,13 @@ async function main() {
 
   let totalNew = 0, totalDrafted = 0;
 
-  for (const account of accounts) {
+  for (let i = 0; i < accounts.length; i++) {
+    const account = accounts[i];
+    const stillActiveAcct = await getClientConfig(CLIENT_ID);
+    if (!stillActiveAcct) {
+      throw new Error(`[Vera] Client ${CLIENT_ID} deactivated mid-run — aborting at account ${i + 1}/${accounts.length}`);
+    }
+
     let locations;
     try {
       locations = await fetchLocations(token, account.name);
@@ -193,7 +244,13 @@ async function main() {
       continue;
     }
 
-    for (const location of locations) {
+    for (let j = 0; j < locations.length; j++) {
+      const location = locations[j];
+      const stillActiveLoc = await getClientConfig(CLIENT_ID);
+      if (!stillActiveLoc) {
+        throw new Error(`[Vera] Client ${CLIENT_ID} deactivated mid-run — aborting at account ${i + 1}/${accounts.length}, location ${j + 1}/${locations.length}`);
+      }
+
       const title      = location.title || location.name;
       const company    = await findCompany(title);
       // Default lookback: 7 days if Vera has never run for this location
@@ -217,7 +274,13 @@ async function main() {
       console.log(`[Vera] ${title}: ${newReviews.length} new review(s)`);
       totalNew += newReviews.length;
 
-      for (const review of newReviews) {
+      for (let k = 0; k < newReviews.length; k++) {
+        const review = newReviews[k];
+        const stillActiveReview = await getClientConfig(CLIENT_ID);
+        if (!stillActiveReview) {
+          throw new Error(`[Vera] Client ${CLIENT_ID} deactivated mid-run — aborting at account ${i + 1}/${accounts.length}, location ${j + 1}/${locations.length}, review ${k + 1}/${newReviews.length} after ${totalDrafted} drafts`);
+        }
+
         const stars      = STAR_NUM[review.starRating] || 3;
         const starEmoji  = '⭐'.repeat(stars);
         const reviewer   = review.reviewer?.displayName || 'Anonymous';
@@ -282,3 +345,4 @@ if (require.main === module) {
     process.exit(1);
   });
 }
+

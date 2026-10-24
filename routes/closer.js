@@ -80,7 +80,7 @@ router.get(['/api/pipeline', '/pipeline'], sessionAuth, requireRole('admin', 'ma
       id: row.id,
       business_name: String(row.notes || '').split('\n\n--- setter notes ---\n')[0].split('—')[0].trim() || `${row.first_name || ''} ${row.last_name || ''}`.trim() || row.email || 'Unknown Lead',
       vertical: row.vertical || 'unknown',
-      city: row.city || 'Manchester NH',
+      city: row.service_area_match || row.city || 'Providence RI',
       score: Number(row.icp_score || 0),
       booked_at: row.booked_at,
       setter_notes: String(row.notes || '').split('\n\n--- setter notes ---\n')[1] || '',

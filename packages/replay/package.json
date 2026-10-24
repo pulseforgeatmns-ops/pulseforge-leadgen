@@ -1,0 +1,19 @@
+{
+  "name": "@pulseforge/replay",
+  "version": "1.0.0",
+  "description": "Deterministic Replay & Temporal Reasoning Engine (SPEC-018)",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "license": "ISC",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@pulseforge/reasoning-runtime": "file:../reasoning-runtime",
+    "@pulseforge/market-strategy": "file:../market-strategy",
+    "@pulseforge/market-ontology": "file:../market-ontology"
+  }
+}

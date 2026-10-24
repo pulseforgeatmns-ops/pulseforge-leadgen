@@ -1,12 +1,46 @@
 require('dotenv').config();
 const pool = require('./db');
 const axios = require('axios');
-const Anthropic = require('@anthropic-ai/sdk');
+const Anthropic = require('./utils/meteredAnthropic').forAgent('rex');
+const { randomUUID } = require('crypto');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
+const { reportAgentRun } = require('./utils/agentObservability');
 
-const client = new Anthropic();
+const client = new Anthropic(undefined, { tenantId: () => CLIENT_ID });
 const AGENT_NAME = 'rex';
 const CLIENT_ID = getRuntimeClientId();
+let lastSendReportError = null;
+
+function makeRunId() {
+  return `${AGENT_NAME}-${CLIENT_ID || 'none'}-${new Date().toISOString()}-${randomUUID()}`;
+}
+
+function captureErrorSample(err) {
+  if (!err) return null;
+  if (err.response?.data) return err.response.data;
+  return {
+    message: err.message,
+    code: err.code || null,
+    status: err.response?.status || null,
+  };
+}
+
+async function reportRexRun({ runId, attempts, successes, skipped = 0, errorSample = null }) {
+  try {
+    return await reportAgentRun({
+      agent: AGENT_NAME,
+      clientId: CLIENT_ID,
+      runId,
+      attempts,
+      successes,
+      skipped,
+      errorSample,
+    });
+  } catch (err) {
+    console.error('[Rex] Observability report failed:', err.message);
+    return null;
+  }
+}
 
 async function getWeeklyData() {
   const weekAgo = "NOW() - INTERVAL '7 days'";
@@ -103,19 +137,20 @@ async function getWeeklyData() {
   const contentPerf = await pool.query(`
     SELECT channel, content_type,
            COUNT(*) AS posts_published,
-           ROUND(AVG(engagement_rate), 4) AS avg_engagement,
+           COUNT(*) FILTER (WHERE metrics_fetched_at IS NOT NULL) AS measured_count,
+           ROUND(AVG(engagement_rate) FILTER (WHERE metrics_fetched_at IS NOT NULL), 4) AS avg_engagement,
            MAX(engagement_rate) AS best_engagement
     FROM post_analytics
     WHERE published_at > ${weekAgo}
     GROUP BY channel, content_type
-    ORDER BY avg_engagement DESC
+    ORDER BY avg_engagement DESC NULLS LAST
     LIMIT 10
   `).catch(() => ({ rows: [] }));
 
   // Top post this week
   const topPost = await pool.query(`
     SELECT channel, content_type, post_text,
-           likes, comments, shares, reach, engagement_rate
+           likes, comments, shares, reach, impressions, engagement_rate
     FROM post_analytics
     WHERE published_at > ${weekAgo}
       AND engagement_rate > 0
@@ -137,15 +172,85 @@ async function getWeeklyData() {
   const emailFunnel = await pool.query(`
     SELECT
       COUNT(CASE WHEN action_type = 'outbound'           THEN 1 END)::int AS sent,
-      COUNT(CASE WHEN action_type = 'email_opened'       THEN 1 END)::int AS opened,
+      (
+        SELECT COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))::int
+        FROM email_events
+        WHERE client_id = $1
+          AND event_type = 'delivered'
+          AND event_at > ${weekAgo}
+      ) AS delivered,
+      (
+        SELECT COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))::int
+        FROM email_events
+        WHERE client_id = $1
+          AND event_type = 'opened'
+          AND event_at > ${weekAgo}
+      ) AS opened,
       COUNT(CASE WHEN action_type = 'email_clicked'      THEN 1 END)::int AS clicked,
       COUNT(CASE WHEN action_type = 'email_bounced'      THEN 1 END)::int AS bounced,
       COUNT(CASE WHEN action_type = 'email_soft_bounce'  THEN 1 END)::int AS soft_bounced,
       COUNT(CASE WHEN action_type = 'email_unsubscribed' THEN 1 END)::int AS unsubscribed,
       COUNT(CASE WHEN action_type = 'email_spam'         THEN 1 END)::int AS spam
     FROM touchpoints
-    WHERE channel = 'email' AND created_at > ${weekAgo}
-  `).catch(() => ({ rows: [{}] }));
+    WHERE channel = 'email'
+      AND client_id = $1
+      AND created_at > ${weekAgo}
+  `, [CLIENT_ID]).catch(() => ({ rows: [{}] }));
+
+  const emailReplyMetrics = await pool.query(`
+    SELECT
+      (
+        SELECT COUNT(*)::int
+        FROM agent_log
+        WHERE action = 'email_sent'
+          AND client_id = $1
+          AND ran_at > ${weekAgo}
+      ) AS sent,
+      (
+        SELECT COUNT(*)::int
+        FROM agent_log r
+        WHERE r.action = 'email_reply_received'
+          AND r.client_id = $1
+          AND r.ran_at > ${weekAgo}
+          AND EXISTS (
+            SELECT 1
+            FROM agent_log s
+            WHERE s.prospect_id = r.prospect_id
+              AND s.client_id = r.client_id
+              AND s.action = 'email_sent'
+              AND s.ran_at > ${weekAgo}
+          )
+      ) AS replies
+  `, [CLIENT_ID]).catch(() => ({ rows: [{ sent: 0, replies: 0 }] }));
+
+  const warmSignalsSent = await pool.query(`
+    SELECT COUNT(*)::int AS count
+    FROM agent_log
+    WHERE action = 'warm_signal_text_sent'
+      AND client_id = $1
+      AND ran_at > ${weekAgo}
+  `, [CLIENT_ID]).catch(() => ({ rows: [{ count: 0 }] }));
+
+  const discoveryCallsBooked = await pool.query(`
+    SELECT COUNT(*)::int AS count
+    FROM prospects
+    WHERE booked_at > ${weekAgo}
+      AND setter_status = 'booked'
+      AND client_id = $1
+  `, [CLIENT_ID]).catch(() => ({ rows: [{ count: 0 }] }));
+
+  const emailRejections = await pool.query(`
+    SELECT
+      COALESCE(payload->>'reason', 'unknown') AS reason,
+      COUNT(*)::int AS count
+    FROM agent_log
+    WHERE agent_name = 'scout'
+      AND action = 'email_rejected'
+      AND client_id = $1
+      AND ran_at > ${weekAgo}
+    GROUP BY 1
+    ORDER BY count DESC
+  `, [CLIENT_ID]).catch(() => ({ rows: [] }));
 
   // Email engagement by sequence day
   const emailByDay = await pool.query(`
@@ -168,19 +273,45 @@ async function getWeeklyData() {
 
   // Email performance by vertical
   const emailByVertical = await pool.query(`
+    WITH touchpoint_rollup AS (
+      SELECT
+        co.industry,
+        COUNT(CASE WHEN t.action_type = 'outbound'      THEN 1 END)::int AS sent,
+        COUNT(CASE WHEN t.action_type = 'email_clicked' THEN 1 END)::int AS clicked
+      FROM touchpoints t
+      JOIN prospects p ON t.prospect_id = p.id
+      JOIN companies co ON p.company_id = co.id
+      WHERE t.channel = 'email' AND t.created_at > ${weekAgo}
+      GROUP BY co.industry
+    ), event_rollup AS (
+      SELECT
+        co.industry,
+        COUNT(DISTINCT NULLIF(LOWER(TRIM(ee.recipient_email)), ''))
+          FILTER (WHERE ee.event_type = 'delivered')::int AS delivered,
+        COUNT(DISTINCT NULLIF(LOWER(TRIM(ee.recipient_email)), ''))
+          FILTER (WHERE ee.event_type = 'opened')::int AS opened
+      FROM email_events ee
+      JOIN prospects p
+        ON p.client_id = ee.client_id
+       AND LOWER(p.email) = LOWER(ee.recipient_email)
+      JOIN companies co ON p.company_id = co.id AND co.client_id = p.client_id
+      WHERE ee.event_at > ${weekAgo}
+      GROUP BY co.industry
+    )
     SELECT
-      co.industry,
-      COUNT(CASE WHEN t.action_type = 'outbound'      THEN 1 END)::int AS sent,
-      COUNT(CASE WHEN t.action_type = 'email_opened'  THEN 1 END)::int AS opened,
-      COUNT(CASE WHEN t.action_type = 'email_clicked' THEN 1 END)::int AS clicked
-    FROM touchpoints t
-    JOIN prospects p ON t.prospect_id = p.id
-    JOIN companies co ON p.company_id = co.id
-    WHERE t.channel = 'email' AND t.created_at > ${weekAgo}
-    GROUP BY co.industry
+      COALESCE(t.industry, e.industry, 'unknown') AS industry,
+      COALESCE(t.sent, 0)::int AS sent,
+      COALESCE(e.delivered, 0)::int AS delivered,
+      COALESCE(e.opened, 0)::int AS opened,
+      COALESCE(t.clicked, 0)::int AS clicked,
+      ROUND(e.opened::numeric / NULLIF(e.delivered, 0) * 100, 1) AS open_rate
+    FROM touchpoint_rollup t
+    FULL JOIN event_rollup e ON e.industry IS NOT DISTINCT FROM t.industry
     ORDER BY opened DESC
     LIMIT 8
   `).catch(() => ({ rows: [] }));
+
+  const slotTestVerdict = await getSlotTestVerdict();
 
   return {
     weekOf: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
@@ -193,13 +324,18 @@ async function getWeeklyData() {
     activityByDay: activityByDay.rows,
     emailStats: emailStats.rows,
     mostNurtured: mostNurtured.rows,
-    contentPerf: contentPerf.rows,
+    contentPerf: contentPerf.rows.map(formatContentPerfRow),
     topPost: topPost.rows[0] || null,
     worstPost: worstPost.rows[0] || null,
     emailFunnel:     emailFunnel.rows[0] || {},
+    emailReplyMetrics: emailReplyMetrics.rows[0] || { sent: 0, replies: 0 },
+    warmSignalsSent: warmSignalsSent.rows[0]?.count || 0,
+    discoveryCallsBooked: discoveryCallsBooked.rows[0]?.count || 0,
+    emailRejections: emailRejections.rows,
     emailByDay:      emailByDay.rows,
     dncAdded:        dncAdded.rows[0]?.count || 0,
     emailByVertical: emailByVertical.rows,
+    slotTestVerdict,
   };
 }
 
@@ -207,7 +343,7 @@ async function generateReport(data) {
   const dataString = JSON.stringify(data, null, 2);
 
   const message = await client.messages.create({
-    model: 'claude-sonnet-4-5',
+    model: 'claude-sonnet-4-6',
     max_tokens: 1500,
     messages: [{
       role: 'user',
@@ -221,7 +357,7 @@ Generate a weekly performance report with these sections:
 
 1. WEEK IN REVIEW — 2-3 sentences summarizing overall system activity and health
 2. CHANNEL PERFORMANCE — how each channel (LinkedIn, Facebook, email) performed this week, what's working and what's lagging
-3. EMAIL PERFORMANCE — use emailFunnel, emailByVertical, emailByDay data: open rate, click rate, bounce rate; which vertical has highest open rate; which subject lines drove the most engagement; which sequence day (Day 0/4/8/13) performed best based on subject patterns; DNC additions this week; note if tracking data is still accumulating if tables are empty
+3. EMAIL PERFORMANCE — use emailFunnel, emailReplyMetrics, emailByVertical, emailByDay data. Open rate is always emailFunnel.opened / emailFunnel.delivered (distinct recipients; proxy opens excluded), never opened / sent. Treat reply rate (emailReplyMetrics.replies / emailReplyMetrics.sent) as the primary engagement metric — do NOT emphasize click rate (sequences are reply-driven; click rate is N/A). Report open rate, reply rate, bounce rate, warmSignalsSent, discoveryCallsBooked, and emailRejections breakdown; which vertical has highest open rate; which subject lines drove the most sends; DNC additions this week; note if tracking data is still accumulating if tables are empty
 4. CONTENT PERFORMANCE — which content types and channels are getting the most engagement; call out top and worst posts if data is available
 5. PIPELINE HEALTH — state of the prospect pipeline, who's moving and who's stalled
 6. APPROVAL RATE — comment and content approval patterns, anything worth noting
@@ -236,7 +372,103 @@ Be analytical and direct. Use plain text. Back every claim with a specific numbe
   return message.content[0].text;
 }
 
+function formatContentPerfRow(row) {
+  const postsPublished = Number(row.posts_published || 0);
+  const measuredCount = Number(row.measured_count || 0);
+  const avgEngagement = row.avg_engagement == null ? null : Number(row.avg_engagement);
+  const hasMeasuredAvg = measuredCount > 0 && Number.isFinite(avgEngagement);
+
+  return {
+    ...row,
+    posts_published: postsPublished,
+    measured_count: measuredCount,
+    avg_engagement: hasMeasuredAvg ? avgEngagement : null,
+    avg_engagement_display: hasMeasuredAvg
+      ? `${avgEngagement.toFixed(4)} (${measuredCount} of ${postsPublished} measured)`
+      : `0 of ${postsPublished} measured`,
+  };
+}
+
+function parseStats(stats) {
+  if (!stats) return null;
+  if (typeof stats === 'object') return stats;
+  try {
+    return JSON.parse(stats);
+  } catch (_) {
+    return null;
+  }
+}
+
+function engagementRate(stats) {
+  const impressions = Number(stats?.impressions || 0);
+  if (impressions <= 0) return null;
+  return (
+    Number(stats?.reactions || 0) +
+    Number(stats?.comments || 0) +
+    Number(stats?.saves || 0)
+  ) / impressions;
+}
+
+function buildSlotTestVerdict(pairs) {
+  const slot1Wins = pairs.filter(pair => pair.winner === 1).length;
+  const slot2Wins = pairs.filter(pair => pair.winner === 2).length;
+  const count = pairs.length;
+  if (count < 6) {
+    return `Slot test: ${count}/10 pairs collected, not yet conclusive (Slot 1 leading ${slot1Wins}-${slot2Wins}).`;
+  }
+
+  const leader = slot1Wins >= slot2Wins ? 1 : 2;
+  const leaderWins = Math.max(slot1Wins, slot2Wins);
+  if (leaderWins / count >= 0.7) {
+    return `Slot test: Slot ${leader} wins (${slot1Wins}-${slot2Wins}). Recommend defaulting new posts to Slot ${leader}.`;
+  }
+
+  return `Slot test: inconclusive (${slot1Wins}-${slot2Wins} across ${count} pairs). Slot timing not a meaningful lever. Recommend closing the test.`;
+}
+
+async function getSlotTestVerdict() {
+  try {
+    const res = await pool.query(`
+      SELECT id, format, slot, stats, posted_at, created_at
+      FROM pending_comments
+      WHERE client_id = $1
+        AND channel = 'linkedin_personal'
+        AND slot IN (1, 2)
+        AND format IS NOT NULL
+        AND stats IS NOT NULL
+      ORDER BY format, COALESCE(posted_at, created_at), created_at
+    `, [CLIENT_ID]);
+
+    const byFormat = new Map();
+    for (const row of res.rows) {
+      if (!byFormat.has(row.format)) byFormat.set(row.format, { 1: [], 2: [] });
+      byFormat.get(row.format)[Number(row.slot)].push(row);
+    }
+
+    const pairs = [];
+    for (const group of byFormat.values()) {
+      const count = Math.min(group[1].length, group[2].length);
+      for (let i = 0; i < count; i++) {
+        const slot1Rate = engagementRate(parseStats(group[1][i].stats));
+        const slot2Rate = engagementRate(parseStats(group[2][i].stats));
+        if (slot1Rate == null || slot2Rate == null) continue;
+        pairs.push({
+          winner: slot1Rate > slot2Rate ? 1 : slot2Rate > slot1Rate ? 2 : null,
+          slot1Rate,
+          slot2Rate,
+        });
+      }
+    }
+
+    return buildSlotTestVerdict(pairs.slice(0, 10));
+  } catch (err) {
+    console.warn('[Rex] Slot test verdict skipped:', err.message);
+    return 'Slot test: 0/10 pairs collected, not yet conclusive (Slot 1 leading 0-0).';
+  }
+}
+
 async function sendReport(reportText, data) {
+  lastSendReportError = null;
   const totalActions = data.agentActivity.reduce((a, b) => a + parseInt(b.count), 0);
   const totalProspects = data.pipeline.reduce((a, b) => a + parseInt(b.count), 0);
   const pendingCount = data.pendingByChannel
@@ -250,6 +482,11 @@ Week of ${data.weekOf}
 ${'═'.repeat(50)}
 
 ${reportText}
+
+${data.slotTestVerdict || 'Slot test: 0/10 pairs collected, not yet conclusive (Slot 1 leading 0-0).'}
+
+${'═'.repeat(50)}
+${formatFunnelMetrics(data)}
 
 ${'═'.repeat(50)}
 RAW NUMBERS THIS WEEK
@@ -284,7 +521,8 @@ Rex runs every Sunday. Reply to adjust reporting cadence.`;
     console.log('Report sent — Message ID:', response.data.messageId);
     return true;
   } catch (err) {
-    console.error('Failed to send report:', err.response?.data || err.message);
+    lastSendReportError = captureErrorSample(err);
+    console.error('Failed to send report:', lastSendReportError);
     return false;
   }
 }
@@ -298,6 +536,32 @@ async function logAgentRun(status) {
 
 function pct(num, den) {
   return den > 0 ? +((Number(num || 0) / Number(den || 0)) * 100).toFixed(1) : 0;
+}
+
+function formatRejectionBreakdown(rejections = []) {
+  if (!rejections.length) return '  None this week';
+  return rejections.map(r => `  ${r.reason}: ${r.count}`).join('\n');
+}
+
+function formatFunnelMetrics(data) {
+  const f = data.emailFunnel || {};
+  const sent = Number(f.sent || 0);
+  const delivered = Number(f.delivered || 0);
+  const opened = Number(f.opened || 0);
+  const bounced = Number(f.bounced || 0) + Number(f.soft_bounced || 0);
+  const replySent = Number(data.emailReplyMetrics?.sent || 0);
+  const replies = Number(data.emailReplyMetrics?.replies || 0);
+
+  return `FUNNEL METRICS
+Open rate: ${pct(opened, delivered)}% (${opened}/${delivered} delivered recipients)
+Click rate: N/A (reply-driven sequences)
+Reply rate: ${pct(replies, replySent)}% (${replies}/${replySent}) — primary engagement metric
+Bounce rate: ${pct(bounced, sent)}% (${bounced}/${sent})
+Warm signals generated this week: ${data.warmSignalsSent ?? 0}
+Discovery calls booked this week: ${data.discoveryCallsBooked ?? 0}
+
+Email rejection breakdown (Scout):
+${formatRejectionBreakdown(data.emailRejections)}`;
 }
 
 function money(value) {
@@ -328,11 +592,20 @@ async function getCrossMarketExecutiveData() {
         SELECT
           client_id,
           COUNT(*) FILTER (WHERE channel = 'email' AND action_type = 'outbound' AND created_at > ${weekAgo})::int AS emails_sent_week,
-          COUNT(*) FILTER (WHERE channel = 'email' AND action_type = 'email_opened' AND created_at > ${weekAgo})::int AS emails_opened_week,
           COUNT(*) FILTER (WHERE channel = 'email' AND action_type IN ('email_clicked', 'click') AND created_at > ${weekAgo})::int AS email_clicks_week,
           COUNT(*) FILTER (WHERE channel = 'email' AND action_type IN ('email_bounced', 'email_soft_bounce') AND created_at > ${weekAgo})::int AS email_bounces_week,
           COUNT(*) FILTER (WHERE channel = 'phone' AND created_at > ${weekAgo})::int AS setter_calls_week
         FROM touchpoints
+        GROUP BY client_id
+      ),
+      email_event_stats AS (
+        SELECT
+          client_id,
+          COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))
+            FILTER (WHERE event_type = 'delivered' AND event_at > ${weekAgo})::int AS emails_delivered_week,
+          COUNT(DISTINCT NULLIF(LOWER(TRIM(recipient_email)), ''))
+            FILTER (WHERE event_type = 'opened' AND event_at > ${weekAgo})::int AS emails_opened_week
+        FROM email_events
         GROUP BY client_id
       ),
       post_stats AS (
@@ -353,7 +626,8 @@ async function getCrossMarketExecutiveData() {
         COALESCE(ps.booked_calls, 0)::int AS booked_calls,
         COALESCE(ps.mrr, 0)::numeric AS mrr,
         COALESCE(ts.emails_sent_week, 0)::int AS emails_sent_week,
-        COALESCE(ts.emails_opened_week, 0)::int AS emails_opened_week,
+        COALESCE(es.emails_delivered_week, 0)::int AS emails_delivered_week,
+        COALESCE(es.emails_opened_week, 0)::int AS emails_opened_week,
         COALESCE(ts.email_clicks_week, 0)::int AS email_clicks_week,
         COALESCE(ts.email_bounces_week, 0)::int AS email_bounces_week,
         COALESCE(ts.setter_calls_week, 0)::int AS setter_calls_week,
@@ -361,6 +635,7 @@ async function getCrossMarketExecutiveData() {
       FROM clients c
       LEFT JOIN prospect_stats ps ON ps.client_id = c.id
       LEFT JOIN touchpoint_stats ts ON ts.client_id = c.id
+      LEFT JOIN email_event_stats es ON es.client_id = c.id
       LEFT JOIN post_stats pos ON pos.client_id = c.id
       WHERE COALESCE(c.active, true) = true
       ORDER BY c.name ASC
@@ -388,7 +663,7 @@ async function getCrossMarketExecutiveData() {
   return {
     markets: marketOverview.rows.map(row => ({
       ...row,
-      open_rate: pct(row.emails_opened_week, row.emails_sent_week),
+      open_rate: pct(row.emails_opened_week, row.emails_delivered_week),
       bounce_rate: pct(row.email_bounces_week, row.emails_sent_week),
       warm_signals_week: Number(row.emails_opened_week || 0) + Number(row.email_clicks_week || 0),
     })),
@@ -469,15 +744,22 @@ async function generateAndLogExecutiveSummary() {
 }
 
 async function run() {
+  const runId = makeRunId();
+  let attempts = 0;
+  let successes = 0;
+  let errorSample = null;
+
   console.log('\nRex agent running...\n');
   const clientConfig = await getClientConfig(CLIENT_ID);
   if (!clientConfig) throw new Error(`Active client not found: ${CLIENT_ID}`);
   if (CLIENT_ID !== 1) {
     console.log('Rex weekly reporting is enabled only for Pulseforge client_id=1.');
+    await reportRexRun({ runId, attempts, successes, skipped: 0, errorSample });
     return;
   }
 
   try {
+    attempts = 1;
     console.log('Pulling weekly data...');
     const data = await getWeeklyData();
 
@@ -489,14 +771,26 @@ async function run() {
     console.log('--- END PREVIEW ---\n');
 
     console.log('Sending report...');
-    await sendReport(report, data);
+    const sent = await sendReport(report, data);
+    successes = sent ? 1 : 0;
+
+    if (!sent) {
+      errorSample = lastSendReportError || 'sendReport returned false';
+      await logAgentRun('failed').catch(() => {});
+      await reportRexRun({ runId, attempts, successes, skipped: 0, errorSample });
+      console.log('\nRex failed: weekly report send did not complete.');
+      return;
+    }
 
     await logAgentRun('success');
     await generateAndLogExecutiveSummary();
+    await reportRexRun({ runId, attempts, successes, skipped: 0, errorSample });
     console.log('\nRex complete.');
   } catch (err) {
+    errorSample = errorSample || captureErrorSample(err);
     console.error('Rex error:', err.message);
     await logAgentRun('failed').catch(() => {});
+    await reportRexRun({ runId, attempts, successes, skipped: 0, errorSample });
   }
 
 }
@@ -509,3 +803,4 @@ if (require.main === module) {
     process.exit(1);
   });
 }
+

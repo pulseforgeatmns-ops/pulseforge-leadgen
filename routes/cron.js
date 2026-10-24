@@ -1,15 +1,105 @@
 const express = require('express');
+const Anthropic = require('../utils/meteredAnthropic').forAgent('cron_summary');
 const router = express.Router();
+// PF-CLARITY-001: bearer-authenticated POST only, two flags + tenant grant fail closed.
+router.post('/cron/clarity-weekly-review', (req,res) => require('../services/clarityJobs').createClarityCronHandler()(req,res));
+// No missing-secret bypass and no GET mutation. These stay separate from legacy
+// agent enablement: the durable program is the delegated authority, not autosend.
+function anchorCron(method) {
+  return async (req, res) => {
+    const crypto = require('crypto');
+    const expected = Buffer.from(process.env.CRON_SECRET || '');
+    const supplied = Buffer.from(String(req.get('authorization') || '').replace(/^Bearer /, ''));
+    if (!expected.length || expected.length !== supplied.length || !crypto.timingSafeEqual(expected, supplied)) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    try {
+      const result = method === 'poll'
+        ? await require('../services/governedOutboundExecutionClock').runGovernedOutboundPollCycle()
+        : await require('../anchorDailyOutboundCron')[method]();
+      return res.set('Cache-Control', 'no-store').json(result);
+    } catch (e) { return res.status(500).json({ error: e.code || 'anchor_daily_outbound_failed' }); }
+  };
+}
+async function handleGovernedOutboundTickCron(req, res) {
+  const crypto = require('crypto');
+  const expected = Buffer.from(process.env.CRON_SECRET || '');
+  const supplied = Buffer.from(String(req.get('authorization') || '').replace(/^Bearer /, ''));
+  if (!expected.length || expected.length !== supplied.length || !crypto.timingSafeEqual(expected, supplied)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const result = await require('../services/governedOutboundExecutionClock').runGovernedOutboundTickCycle({
+      allTenants: true,
+    });
+    return res.set('Cache-Control', 'no-store').json(result);
+  } catch (e) {
+    return res.status(500).json({ error: e.code || 'governed_outbound_tick_failed' });
+  }
+}
+router.post('/cron/anchor-daily-outbound', handleGovernedOutboundTickCron);
+router.post('/cron/governed-outbound-tick', handleGovernedOutboundTickCron);
+router.post('/cron/anchor-outbound-replies', anchorCron('poll'));
+router.post('/cron/anchor-max-outbound-control', async (req, res) => {
+  const crypto = require('crypto');
+  const expected = Buffer.from(process.env.CRON_SECRET || '');
+  const supplied = Buffer.from(String(req.get('authorization') || '').replace(/^Bearer /, ''));
+  if (!expected.length || expected.length !== supplied.length || !crypto.timingSafeEqual(expected, supplied)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const pool = require('../db');
+    const execute = String(req.query.execute || 'true').toLowerCase() !== 'false';
+    const tenantId = req.query.tenant_id || req.query.tenantId || null;
+    // Bounded orchestration only. Each tenant cycle starts under its own
+    // control lock and continues after this response. Scout evidence stays in
+    // the control-loop event, not in this body.
+    const result = await require('../services/governedOutboundControlDispatch').dispatchGovernedOutboundControl({
+      pool,
+      execute,
+      logger: console,
+      tenantId: tenantId ? String(tenantId) : null,
+    });
+    return res.set('Cache-Control', 'no-store').json(result);
+  } catch (e) {
+    return res.status(500).json({ error: e.code || 'anchor_max_outbound_control_failed' });
+  }
+});
+const pool = require('../db');
 const { normalizeClientId } = require('../utils/clientContext');
+const {
+  isAgentEnabledForClient,
+  logBlockedDispatch,
+  BLOCK_REASON,
+} = require('../utils/agentDispatchPolicy');
 const { runScoutExpansionCron } = require('../scoutExpansion');
+const { createMaxDecayCronHandler } = require('../utils/maxDecayCron');
+const { diagnoseScoutPlaces } = require('../services/scoutPlacesDiagnostic');
+const { withResearchProviderScope, isResearchProviderControlError } = require('../utils/anchorResearchProviderPause');
+
+const anthropic = new Anthropic();
+
+/** Agents handled by dedicated cron handlers (not CRON_MODULES run()). */
+const CRON_SPECIAL_HANDLERS = Object.freeze({
+  'scout-places-diagnostic': 'scoutPlacesDiagnostic',
+  scout_places_diagnostic: 'scoutPlacesDiagnostic',
+});
+
+function isScoutPlacesDiagnosticAgent(agent) {
+  const key = String(agent || '').trim();
+  return CRON_SPECIAL_HANDLERS[key] === 'scoutPlacesDiagnostic';
+}
 
 const CRON_MODULES = {
   scout:     '../leadgen',
-  emmett:    '../emmettAgent',
+  emmett:    '../emmettSchedulerCron',
   max:       '../maxAgent',
   rex:       '../rexAgent',
   sketch:    '../sketchAgent',
   paige:     '../paigeAgent',
+  enrich_prospects: '../enrichProspects',
+  tiered_enrichment: '../tieredEnrichmentAgent',
+  scout_unenriched_enrichment: '../scoutUnenrichedEnrichmentAgent',
   faye:      '../facebookAgent',
   link:      '../linkedinAgent',
   sam:       '../samAgent',
@@ -23,11 +113,38 @@ const CRON_MODULES = {
   setter_handoff: '../setterHandoffAgent',
   sync_setter:    '../syncSetterLeadList',
   handoff_utility: '../setterHandoffAgent',
+  mira_transcription: '../miraTranscriptionAgent',
+  mira_classifier: '../miraClassifierAgent',
+  mira_router: '../miraRouterAgent',
+  mira_digest: '../miraDigestAgent',
+  warm_routing: '../warmRoutingAgent',
+  max_decay: '../maxDecayAgent',
+  paige_reflection: '../agents/reflection/run',
+  tenant_outreach_executor: '../tenantOutreachSchedulerCron',
 };
 
-function runCronAgent(agent, res, query = {}) {
+async function runCronAgent(agent, res, query = {}) {
   if (!CRON_MODULES[agent]) return res.status(400).json({ error: `Unknown agent: ${agent}` });
   const clientId = normalizeClientId(query.client_id || query.clientId);
+
+  const dispatchGate = await isAgentEnabledForClient(clientId, agent);
+  if (!dispatchGate.allowed) {
+    await logBlockedDispatch({
+      agentName: agent,
+      clientId,
+      reason: dispatchGate.reason || BLOCK_REASON,
+      channel: 'cron',
+      payload: { triggered_by: 'cron' },
+    });
+    return res.json({
+      success: false,
+      skipped: true,
+      reason: dispatchGate.reason || BLOCK_REASON,
+      agent,
+      client_id: clientId,
+    });
+  }
+
   res.json({ success: true, agent, client_id: clientId });
   try {
     delete require.cache[require.resolve(CRON_MODULES[agent])];
@@ -38,12 +155,79 @@ function runCronAgent(agent, res, query = {}) {
         industry: query.industry,
         location: query.location,
         maxResults: query.maxResults || query.max || query.limit,
+        sourceMode: query.sourceMode || query.source_mode || query['source-mode'],
+        titleFilter: query.titleFilter || query.title_filter || query['title-filter'],
+        titleExclude: query.titleExclude || query.title_exclude || query['title-exclude'],
+        sizeSignal: query.sizeSignal || query.size_signal || query['size-signal'],
+        dryRun: query.dryRun ?? query.dry_run ?? query['dry-run'],
+        maxRequests: query.maxRequests || query.max_requests || query['max-requests'],
+        pageDepth: query.pageDepth || query.page_depth || query['page-depth'],
         client_id: clientId,
       }).catch(err => {
         console.error(`[cron] scout run error:`, err.message);
       });
     } else if ((agent === 'setter_handoff' || agent === 'handoff_utility') && typeof mod.run === 'function') {
       mod.run({ lookbackDays: query.lookbackDays, client_id: clientId }).catch(err => {
+        console.error(`[cron] ${agent} run error:`, err.message);
+      });
+    } else if (agent === 'mira_digest' && typeof mod.run === 'function') {
+      // The legacy external trigger still arrives around 06:30 ET. The digest
+      // agent guards that call and the in-process scheduler sends at 07:00 ET.
+      mod.run({ client_id: clientId, scheduled: true }).catch(err => {
+        console.error(`[cron] ${agent} run error:`, err.message);
+      });
+    } else if (agent === 'paige_organic') {
+      const { runOrganicPipeline } = require('../services/paigeAnchorOrganicSocial');
+      runOrganicPipeline({
+        client_id: clientId,
+        skipMediaSync: query.skipMediaSync === 'true' || query.skip_media_sync === 'true',
+        minBacklog: query.minBacklog || query.min_backlog,
+      }).catch(err => {
+        console.error(`[cron] ${agent} run error:`, err.message);
+      });
+    } else if (agent === 'paige') {
+      const { routePaigeSocialContentExecution } = require('../services/paigeSocialContentExecution');
+      routePaigeSocialContentExecution({
+        client_id: clientId,
+        tenantId: String(clientId),
+        dryRun: query.dryRun ?? query.dry_run ?? query['dry-run'],
+        channel: query.channel,
+        platform: query.platform || query.channel,
+        format: query.format,
+        count: query.count,
+        simulateMiraUnavailable: query.simulateMiraUnavailable ?? query.simulate_mira_unavailable,
+        contentObjective: query.contentObjective || query.content_objective,
+        workspaceContext: query.workspaceContext || query.workspace_context,
+        missionContext: query.missionContext || query.mission_context,
+        evidence: (() => {
+          if (!query.evidence) return undefined;
+          try {
+            return JSON.parse(String(query.evidence));
+          } catch (_) {
+            return undefined;
+          }
+        })(),
+        cadenceContext: query.cadenceContext || query.cadence_context,
+        source: 'cron',
+      }).catch(err => {
+        console.error(`[cron] ${agent} run error:`, err.message);
+      });
+    } else if (agent === 'paige_reflection' && typeof mod.run === 'function') {
+      mod.run({
+        client_id: clientId,
+        windowStart: query.windowStart || query.window_start,
+        windowEnd: query.windowEnd || query.window_end,
+        dryRun: query.dryRun ?? query.dry_run ?? query['dry-run'],
+      }).catch(err => {
+        console.error(`[cron] ${agent} run error:`, err.message);
+      });
+    } else if (agent === 'max_decay' && typeof mod.run === 'function') {
+      mod.run({
+        client_id: query.client_id || query.clientId || clientId,
+        dry_run: query.dry_run ?? query.dryRun,
+        limit: query.limit,
+        after_id: query.after_id || query.afterId,
+      }).catch(err => {
         console.error(`[cron] ${agent} run error:`, err.message);
       });
     } else if (typeof mod.run === 'function') {
@@ -53,6 +237,157 @@ function runCronAgent(agent, res, query = {}) {
     }
   } catch (err) {
     console.error(`[cron] ${agent} error:`, err.message);
+  }
+}
+
+async function handlePennyDailyReviewCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const clientId = normalizeClientId(
+    req.body?.client_id || req.body?.clientId || req.query.client_id || req.query.clientId || 10
+  );
+  const dispatchGate = await isAgentEnabledForClient(clientId, 'penny');
+  if (!dispatchGate.allowed) {
+    await logBlockedDispatch({
+      agentName: 'penny',
+      clientId,
+      reason: dispatchGate.reason || BLOCK_REASON,
+      channel: 'daily_cron',
+      payload: { triggered_by: 'penny_daily_review' },
+    });
+    return res.status(403).json({
+      success: false,
+      skipped: true,
+      reason: dispatchGate.reason || BLOCK_REASON,
+      agent: 'penny',
+      client_id: clientId,
+    });
+  }
+  try {
+    const result = await require('../pennyAgent').run({ client_id: clientId });
+    return res.set('Cache-Control', 'no-store').json({ success: true, agent: 'penny', ...result });
+  } catch (err) {
+    console.error('[cron] penny-daily error:', err.message);
+    return res.status(500).json({ success: false, error: err.message, agent: 'penny', client_id: clientId });
+  }
+}
+
+async function handleExecuteAnchorOneOutboundCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const { run } = require('../scripts/executeAnchorOneOutbound');
+    const missionId = String(
+      req.query.mission_id
+      || req.query.missionId
+      || req.body?.mission_id
+      || req.body?.missionId
+      || ''
+    ).trim() || undefined;
+    const report = await run({ confirmProduction: true, missionId });
+    const ok = report.verdict && report.verdict.startsWith('one real');
+    return res.status(ok ? 200 : 422).json(report);
+  } catch (err) {
+    console.error('[cron] execute-anchor-one-outbound error:', err.message);
+    return res.status(err.code === 'pre_send_not_green' ? 409 : 500).json({
+      error: { code: err.code || null, message: err.message, sent: err.sent || null },
+      completedAt: new Date().toISOString(),
+    });
+  }
+}
+
+async function handleInspectAnchorCanonicalOutboundCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const { run } = require('../scripts/inspectAnchorCanonicalOutbound');
+    const report = await run({ confirmProduction: true });
+    return res.json(report);
+  } catch (err) {
+    console.error('[cron] inspect-anchor-canonical-outbound error:', err.message);
+    return res.status(500).json({
+      error: { code: err.code || null, message: err.message },
+      completedAt: new Date().toISOString(),
+    });
+  }
+}
+
+async function handleContinueAnchorStrScoutInvestigationCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const { run } = require('../scripts/continueAnchorStrScoutInvestigation');
+    const missionId = String(
+      req.query.mission_id
+      || req.query.missionId
+      || req.body?.mission_id
+      || req.body?.missionId
+      || ''
+    ).trim() || undefined;
+    const report = await run({ confirmProduction: true, missionId });
+    const ok = report.candidatesPreserved !== false && report.rolledBack !== true;
+    return res.status(ok ? 200 : 422).json(report);
+  } catch (err) {
+    console.error('[cron] continue-anchor-str-scout-investigation error:', err.message);
+    return res.status(err.code === 'no_pending_investigation' ? 409 : 500).json({
+      error: { code: err.code || null, message: err.message },
+      before: err.before || null,
+      completedAt: new Date().toISOString(),
+      sent: false,
+    });
+  }
+}
+
+async function handleRecoverAnchorCanonicalOutboundCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const recover = ['1', 'true', 'yes'].includes(
+    String(req.query.recover || req.body?.recover || '').toLowerCase()
+  );
+  try {
+    const { run } = require('../scripts/recoverAnchorCanonicalOutbound');
+    if (!recover) {
+      const report = await run({ confirmProduction: true, inspectOnly: true });
+      return res.json({ ...report, recover_hint: 'POST recover=true to advance to READY without sending' });
+    }
+    const report = await run({ confirmProduction: true });
+    return res.status(report.success ? 200 : 422).json(report);
+  } catch (err) {
+    console.error('[cron] recover-anchor-canonical-outbound error:', err.message);
+    return res.status(500).json({
+      error: { code: err.code || null, message: err.message, sent: false },
+      completedAt: new Date().toISOString(),
+    });
+  }
+}
+
+async function handleSeedDirectMailAoCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const apply = ['1', 'true', 'yes'].includes(String(req.query.apply || req.body?.apply || '').toLowerCase());
+  try {
+    const { run, APPLY_CONFIRMATION } = require('../scripts/seedAnchorDirectMailAoQueue');
+    if (apply) {
+      const output = await run({ apply: true });
+      return res.json(output);
+    }
+    const dryRun = await run({ apply: false });
+    return res.json({ ...dryRun, apply_hint: `POST with apply=true and confirm=${APPLY_CONFIRMATION} via CLI` });
+  } catch (err) {
+    console.error('[cron] seed-direct-mail-ao error:', err.message);
+    return res.status(500).json({ error: err.message });
   }
 }
 
@@ -71,25 +406,441 @@ async function handleScoutExpansionCron(req, res) {
   }
 }
 
-router.post('/cron/scoutExpansion', handleScoutExpansionCron);
-router.get('/cron/scoutExpansion', handleScoutExpansionCron);
+function extractClaudeText(message) {
+  return (message.content || [])
+    .filter(block => block && block.type === 'text' && typeof block.text === 'string')
+    .map(block => block.text)
+    .join('\n')
+    .trim();
+}
 
-router.post('/cron/:agent', async (req, res) => {
-  const { agent } = req.params;
+function parsePulseHealthJson(text) {
+  try {
+    return JSON.parse(text);
+  } catch (_) {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error('Claude response was not valid JSON');
+    return JSON.parse(match[0]);
+  }
+}
+
+async function handlePulseHealthCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
   if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  runCronAgent(agent, res, req.query);
+
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS monitor_state (
+        id BIGSERIAL PRIMARY KEY,
+        snapshot JSONB NOT NULL,
+        digest TEXT,
+        alert_level TEXT,
+        checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    const [
+      sendsByAction,
+      failuresByVertical,
+      failureSpike,
+      warmProspects,
+      sentTodayByClient,
+      recentErrors,
+      previousSnapshot,
+    ] = await Promise.all([
+      pool.query(`
+        SELECT client_id, action, COUNT(*)::int AS count
+        FROM agent_log
+        WHERE action IN ('email_sent', 'email_failed')
+          AND ran_at >= NOW() - INTERVAL '24 hours'
+        GROUP BY client_id, action
+        ORDER BY client_id, action
+      `),
+      pool.query(`
+        SELECT COALESCE(payload->>'vertical', 'unknown') AS vertical, COUNT(*)::int AS count
+        FROM agent_log
+        WHERE action = 'email_failed'
+          AND ran_at >= NOW() - INTERVAL '24 hours'
+        GROUP BY COALESCE(payload->>'vertical', 'unknown')
+        ORDER BY count DESC, vertical
+      `),
+      pool.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE action = 'email_failed')::int AS email_failed_count,
+          COUNT(*) FILTER (
+            WHERE action = 'email_failed'
+              AND (
+                payload->>'error' ILIKE '%Connection timeout%'
+                OR error_msg ILIKE '%Connection timeout%'
+              )
+          )::int AS timeout_count
+        FROM agent_log
+        WHERE ran_at >= NOW() - INTERVAL '2 hours'
+          AND (
+            action = 'email_failed'
+            OR payload->>'error' ILIKE '%Connection timeout%'
+            OR error_msg ILIKE '%Connection timeout%'
+          )
+      `),
+      pool.query(`
+        SELECT
+          p.id,
+          p.client_id,
+          p.first_name,
+          p.last_name,
+          p.email,
+          p.phone,
+          p.vertical,
+          p.icp_score,
+          p.status,
+          p.created_at,
+          c.name AS company_name
+        FROM prospects p
+        LEFT JOIN companies c ON c.id = p.company_id
+        WHERE p.status = 'warm'
+        ORDER BY p.icp_score DESC NULLS LAST, p.created_at DESC
+        LIMIT 25
+      `),
+      pool.query(`
+        SELECT client_id, COUNT(*)::int AS count
+        FROM agent_log
+        WHERE action = 'email_sent'
+          AND DATE(ran_at) = CURRENT_DATE
+        GROUP BY client_id
+        ORDER BY client_id
+      `),
+      pool.query(`
+        SELECT id, agent_name, action, payload, status, error_msg, ran_at, client_id
+        FROM agent_log
+        WHERE payload ? 'error'
+          AND action != 'email_sent'
+          AND ran_at >= NOW() - INTERVAL '24 hours'
+        ORDER BY ran_at DESC
+        LIMIT 15
+      `),
+      pool.query(`
+        SELECT snapshot, digest, alert_level, checked_at
+        FROM monitor_state
+        ORDER BY checked_at DESC
+        LIMIT 1
+      `),
+    ]);
+
+    const metrics = {
+      sends_by_action: sendsByAction.rows,
+      failures_by_vertical: failuresByVertical.rows,
+      failure_spike: failureSpike.rows[0] || { email_failed_count: 0, timeout_count: 0 },
+      warm_prospects: warmProspects.rows,
+      sent_today_by_client: sentTodayByClient.rows,
+      recent_errors: recentErrors.rows,
+      checked_at: new Date().toISOString(),
+    };
+    const previous = previousSnapshot.rows[0] || null;
+
+    const message = await anthropic.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 500,
+      system: `You are the Pulseforge health monitor. Terse, signal-dense, no preamble.
+Report to Jacob who wants the truth and one action item — not reassurance.
+Historical context: email failures are logged with action='email_failed'.
+If you see Connection timeouts only in rows where action='email_sent',
+those are pre-fix stale data and must NOT be flagged as current failures.
+Only count action='email_failed' rows as real failures.
+Classify alert_level as: critical (zero sends in window, or any
+Connection timeout), warn (failure spike, vertical drift, cap near 40),
+or ok.
+Respond with valid JSON only:
+{ "alert_level": "ok|warn|critical", "digest": "one-line status",
+  "report": "full 8-line report matching the PULSE HEALTH format" }`,
+      messages: [
+        {
+          role: 'user',
+          content: JSON.stringify({ current: metrics, previous }),
+        },
+      ],
+    });
+
+    const result = parsePulseHealthJson(extractClaudeText(message));
+    const alertLevel = ['ok', 'warn', 'critical'].includes(result.alert_level)
+      ? result.alert_level
+      : 'warn';
+    const digest = String(result.digest || 'Pulse health check completed.');
+
+    await pool.query(
+      `INSERT INTO monitor_state (snapshot, digest, alert_level)
+       VALUES ($1, $2, $3)`,
+      [metrics, digest, alertLevel]
+    );
+
+    await pool.query(
+      `INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
+       VALUES ($1, $2, $3, $4, NOW(), $5)`,
+      [
+        'pulse_health',
+        'health_check',
+        { alert_level: alertLevel, digest },
+        alertLevel === 'critical' ? 'failed' : 'success',
+        1,
+      ]
+    );
+
+    return res.status(200).json({ ok: true, alert_level: alertLevel, digest });
+  } catch (err) {
+    console.error('[cron] pulse-health error:', err.message);
+    try {
+      await pool.query(
+        `INSERT INTO agent_log (agent_name, action, payload, status, error_msg, ran_at, client_id)
+         VALUES ($1, $2, $3, $4, $5, NOW(), $6)`,
+        ['pulse_health', 'health_check', { error: err.message }, 'failed', err.message, 1]
+      );
+    } catch (logErr) {
+      console.error('[cron] pulse-health agent_log error:', logErr.message);
+    }
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+}
+
+async function handleScoutPlacesDiagnostic(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const compareRaw =
+      req.query.compare_places_new ??
+      req.query.comparePlacesNew ??
+      req.body?.compare_places_new ??
+      req.body?.comparePlacesNew;
+    let comparePlacesNew = true;
+    if (compareRaw != null && compareRaw !== '') {
+      const s = String(compareRaw).trim().toLowerCase();
+      if (['0', 'false', 'no', 'off'].includes(s)) comparePlacesNew = false;
+      if (['1', 'true', 'yes', 'on'].includes(s)) comparePlacesNew = true;
+    }
+
+    // Unlike legacy cron defaults, a paid diagnostic needs explicit identity
+    // while armed. Preserve all supplied values so conflicts fail closed.
+    const tenants = [req.query.client_id, req.query.clientId, req.body?.client_id, req.body?.clientId]
+      .filter(value => value != null);
+    if (!tenants.length) tenants.push(undefined);
+    const run = tenants.reduceRight((next, tenant) => () => withResearchProviderScope(tenant, next),
+      () => diagnoseScoutPlaces({
+        comparePlacesNew,
+        query: req.query.query || req.body?.query
+          ? String(req.query.query || req.body.query) : undefined,
+      }));
+    const report = await run();
+
+    res.set('Cache-Control', 'no-store');
+    return res.status(report.ok ? 200 : 422).json({
+      ...report,
+      reviewOnly: true,
+      crmWritesMade: false,
+      outreachCopyGenerated: false,
+      accountChangesMade: false,
+      placeholdersCreated: false,
+      fullKeyLogged: false,
+    });
+  } catch (err) {
+    console.error('[cron] scout-places-diagnostic error:', err.message);
+    const status = isResearchProviderControlError(err)
+      ? (err.code === 'anchor_research_provider_paused' ? 423 : 400) : 500;
+    return res.status(status).json({
+      ok: false,
+      error: err.message,
+      crmWritesMade: false,
+      outreachCopyGenerated: false,
+      placeholdersCreated: false,
+      fullKeyLogged: false,
+    });
+  }
+}
+
+function maxAttentionCronResult(result) {
+  const response = { ...result, ok: !(result.failed > 0 || result.error) };
+  // Keep run/item identifiers and counters, but not database/provider exception
+  // messages. The scheduler's durable run record retains the detailed errors.
+  if (result.error) response.error = 'max_attention_cycle_failed';
+  if (result.telemetry) {
+    response.telemetry = Object.fromEntries(Object.entries(result.telemetry).map(([key, value]) => [
+      key,
+      key.startsWith('release_error_') ? 'attention_claim_release_failed'
+        : key.startsWith('error_') ? 'attention_item_failed' : value,
+    ]));
+  }
+  return response;
+}
+
+async function handleMaxAttentionCycleCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  // Missing configuration must never grant scheduler execution authority.
+  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  res.set('Cache-Control', 'no-store');
+  try {
+    // Attention cycles can create durable decisions/tasks. Never infer tenant 1
+    // or broaden an omitted/malformed selector into all-client execution.
+    const selectors = [req.query.client_id, req.query.clientId, req.body?.client_id, req.body?.clientId]
+      .filter(value => value !== undefined);
+    const tenantIds = selectors.map(value => {
+      if (!['string', 'number'].includes(typeof value) || !/^[1-9][0-9]*$/.test(String(value))) return null;
+      const id = Number(value);
+      return Number.isSafeInteger(id) ? id : null;
+    });
+    if (!tenantIds.length || tenantIds.some(id => id === null) || new Set(tenantIds).size !== 1) {
+      return res.status(400).json({ ok: false, error: 'max_attention_explicit_tenant_required' });
+    }
+    const clientId = tenantIds[0];
+    const limits = [req.query.limit, req.body?.limit].filter(value => value !== undefined);
+    const parsedLimits = limits.map(value => {
+      if (!['string', 'number'].includes(typeof value) || !/^[1-9][0-9]*$/.test(String(value))) return null;
+      const limit = Number(value);
+      return Number.isInteger(limit) && limit <= 20 ? limit : null;
+    });
+    if (parsedLimits.some(limit => limit === null) || new Set(parsedLimits).size > 1) {
+      return res.status(400).json({ ok: false, error: 'max_attention_invalid_limit' });
+    }
+    const limit = parsedLimits[0] ?? 20;
+    const now = req.query.now || req.body?.now ? new Date(req.query.now || req.body.now) : new Date();
+    const { runAttentionScheduler } = require('../services/maxAttentionService');
+    const result = maxAttentionCronResult(await runAttentionScheduler(clientId, { now, limit }));
+    return res.status(result.ok ? 200 : 500).json({ client_id: clientId, ...result });
+  } catch (err) {
+    console.error('[cron] max-attention-cycle failed');
+    return res.status(500).json({ ok: false, error: 'max_attention_cycle_failed' });
+  }
+}
+
+router.post('/cron/max-attention-cycle', handleMaxAttentionCycleCron);
+router.get('/cron/max-attention-cycle', handleMaxAttentionCycleCron);
+
+router.post('/cron/scoutExpansion', handleScoutExpansionCron);
+router.get('/cron/scoutExpansion', handleScoutExpansionCron);
+router.post('/cron/penny-daily', handlePennyDailyReviewCron);
+router.post('/cron/pulse-health', handlePulseHealthCron);
+router.get('/cron/pulse-health', handlePulseHealthCron);
+// Dedicated path (preferred). Also registered in /cron/:agent dispatcher below so
+// production never returns Unknown agent: scout-places-diagnostic.
+router.post('/cron/scout-places-diagnostic', handleScoutPlacesDiagnostic);
+router.get('/cron/scout-places-diagnostic', handleScoutPlacesDiagnostic);
+router.post('/cron/scout_places_diagnostic', handleScoutPlacesDiagnostic);
+router.get('/cron/scout_places_diagnostic', handleScoutPlacesDiagnostic);
+router.post('/cron/seed-direct-mail-ao', handleSeedDirectMailAoCron);
+router.get('/cron/seed-direct-mail-ao', handleSeedDirectMailAoCron);
+router.post('/cron/execute-anchor-one-outbound', handleExecuteAnchorOneOutboundCron);
+router.get('/cron/execute-anchor-one-outbound', handleExecuteAnchorOneOutboundCron);
+router.post('/cron/inspect-anchor-canonical-outbound', handleInspectAnchorCanonicalOutboundCron);
+router.get('/cron/inspect-anchor-canonical-outbound', handleInspectAnchorCanonicalOutboundCron);
+router.post('/cron/recover-anchor-canonical-outbound', handleRecoverAnchorCanonicalOutboundCron);
+router.get('/cron/recover-anchor-canonical-outbound', handleRecoverAnchorCanonicalOutboundCron);
+router.post('/cron/continue-anchor-str-scout-investigation', handleContinueAnchorStrScoutInvestigationCron);
+router.get('/cron/continue-anchor-str-scout-investigation', handleContinueAnchorStrScoutInvestigationCron);
+
+async function handleTenantOutreachExecutorCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const { executeDueScheduledSends } = require('../services/tenantOutreachScheduler');
+    const result = await executeDueScheduledSends({
+      limit: Number(req.query.limit || req.body?.limit || 20),
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('[cron] tenant-outreach-executor error:', err.message);
+    return res.status(500).json({ error: err.message, success: false });
+  }
+}
+
+router.post('/cron/tenant-outreach-executor', handleTenantOutreachExecutorCron);
+router.get('/cron/tenant-outreach-executor', handleTenantOutreachExecutorCron);
+
+async function handleTenantMailboxPollCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const { executeTenantMailboxPolls } = require('../services/tenantMailboxPollExecutor');
+    const result = await executeTenantMailboxPolls();
+    res.set('Cache-Control', 'no-store');
+    const status = result.success ? 200 : 207;
+    return res.status(status).json(result);
+  } catch (err) {
+    console.error('[cron] tenant-mailbox-poll error:', err.message);
+    return res.status(500).json({ success: false, error: err.message, failed: 1 });
+  }
+}
+
+router.post('/cron/tenant-mailbox-poll', handleTenantMailboxPollCron);
+router.get('/cron/tenant-mailbox-poll', handleTenantMailboxPollCron);
+
+async function handleSignalShadowCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (!process.env.DATABASE_URL) {
+    return res.status(503).json({ error: 'DATABASE_URL required for signal shadow cron' });
+  }
+  try {
+    const { createSignalStore } = require('../packages/signal-v1/storage/createSignalStore');
+    const { createShadowModeServiceFromStore, runShadowSchedulerTick } = require('../packages/signal-v1/prospective/shadowScheduler');
+    const { GeckoTerminalMarketDataProvider } = require('../packages/signal-v1/providers/GeckoTerminalMarketDataProvider');
+    const store = await createSignalStore(pool, { seedFixtures: false });
+    const marketProvider = new GeckoTerminalMarketDataProvider();
+    const service = await createShadowModeServiceFromStore(store, { marketProvider });
+    const result = await runShadowSchedulerTick(service);
+    res.set('Cache-Control', 'no-store');
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('[cron] signal-shadow error:', err.message);
+    return res.status(500).json({ error: err.message, success: false });
+  }
+}
+
+router.post('/cron/signal-shadow', handleSignalShadowCron);
+router.get('/cron/signal-shadow', handleSignalShadowCron);
+
+router.post('/internal/cron/max-decay', createMaxDecayCronHandler());
+
+router.post('/cron/:agent', async (req, res) => {
+  const { agent } = req.params;
+  if (isScoutPlacesDiagnosticAgent(agent)) {
+    return handleScoutPlacesDiagnostic(req, res);
+  }
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  await runCronAgent(agent, res, { ...req.query, ...(req.body || {}) });
 });
 
 router.get('/cron/:agent', async (req, res) => {
   const { agent } = req.params;
+  if (isScoutPlacesDiagnosticAgent(agent)) {
+    return handleScoutPlacesDiagnostic(req, res);
+  }
   const secret = req.query.secret;
   if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  runCronAgent(agent, res, req.query);
+  await runCronAgent(agent, res, req.query);
 });
 
 module.exports = router;
+module.exports.handleScoutPlacesDiagnostic = handleScoutPlacesDiagnostic;
+module.exports.handleSeedDirectMailAoCron = handleSeedDirectMailAoCron;
+module.exports.handlePennyDailyReviewCron = handlePennyDailyReviewCron;
+module.exports.handleExecuteAnchorOneOutboundCron = handleExecuteAnchorOneOutboundCron;
+module.exports.handleInspectAnchorCanonicalOutboundCron = handleInspectAnchorCanonicalOutboundCron;
+module.exports.handleRecoverAnchorCanonicalOutboundCron = handleRecoverAnchorCanonicalOutboundCron;
+module.exports.isScoutPlacesDiagnosticAgent = isScoutPlacesDiagnosticAgent;
+module.exports.CRON_SPECIAL_HANDLERS = CRON_SPECIAL_HANDLERS;
+

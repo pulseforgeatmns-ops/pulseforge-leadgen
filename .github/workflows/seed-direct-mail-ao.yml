@@ -1,0 +1,34 @@
+name: Seed Anchor Direct Mail AO Queue
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Apply seed to database (false = dry run only)
+        required: true
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Dry run seed
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: node scripts/seedAnchorDirectMailAoQueue.js
+      - name: Apply seed
+        if: inputs.apply == 'true'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: node scripts/seedAnchorDirectMailAoQueue.js --apply --confirm=client_10-direct-mail-ao-2026-08-16

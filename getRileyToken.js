@@ -23,7 +23,11 @@ const credKeys = credentials.installed || credentials.web;
 const { client_id, client_secret } = credKeys;
 const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, REDIRECT_URI);
 
-const authUrl = oAuth2Client.generateAuthUrl({ access_type: 'offline', scope: SCOPES, prompt: 'consent' });
+const authUrl = oAuth2Client.generateAuthUrl({
+  access_type: 'offline',
+  prompt: 'consent',
+  scope: SCOPES,
+});
 console.log('\nOpen this URL in your browser:\n');
 console.log(authUrl);
 
@@ -38,8 +42,17 @@ const server = http.createServer(async (req, res) => {
   }
 
   const { tokens } = await oAuth2Client.getToken(code);
-  console.log('\n✓ Token JSON (copy this into Railway as GMAIL_TOKEN):\n');
+  console.log('\n✓ Riley OAuth tokens received.\n');
+  console.log('Set these Railway env vars:\n');
+  console.log(`RILEY_ACCESS_TOKEN=${tokens.access_token || ''}`);
+  console.log(`RILEY_REFRESH_TOKEN=${tokens.refresh_token || ''}`);
+  if (tokens.expiry_date) console.log(`RILEY_TOKEN_EXPIRY=${tokens.expiry_date}`);
+  console.log('\nFull token JSON, for local fallback only:\n');
   console.log(JSON.stringify(tokens, null, 2));
+
+  if (!tokens.refresh_token) {
+    console.warn('\n⚠ Google did not return a refresh token. Revoke the old app grant for this Google account, then run this script again.');
+  }
 
   res.writeHead(200, { 'Content-Type': 'text/html' });
   res.end('<html><body><h2>Authorization successful! You can close this tab.</h2></body></html>');

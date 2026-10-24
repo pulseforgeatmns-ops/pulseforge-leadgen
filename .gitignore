@@ -1,13 +1,35 @@
 .env
+.data/
 node_modules
 *.csv
 
 # Auth credentials & session tokens — never commit these
 gmail_credentials.json
 gmail_token.json
+anchor_mailbox_token.json
+studio_substral_mailbox_token.json
+google_ads_credentials.json
+google_ads_token.json
+.env.anchor-google-ads
 facebook_session.json
 linkedin_session.json
 sheets_credentials.json
 .env.save
 client_secret_*.json
 .DS_Store
+*.bak
+
+# Python research package (packages/kalshi-research) — local only
+**/.venv/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+packages/kalshi-research/*.db
+packages/kalshi-research/.env
+packages/kalshi-research/*.key
+.pytest_cache/
+ci-stage-timings.jsonl
+
+# Signal REA behavior lab — local targets and captured evidence may contain
+# third-party application material or authenticated runtime observations.
+signal-v1/rea-workspace/

@@ -1,0 +1,107 @@
+const assert = require('node:assert/strict');
+const {
+  mapBufferPostMetrics,
+  buildBufferMetricsQuery,
+  parseBufferPostResponse,
+} = require('../analyticsAgent');
+
+const mapped = mapBufferPostMetrics([
+  { type: 'impressions', name: 'Impressions', value: 250, unit: 'number' },
+  { type: 'comments', name: 'Comments', value: 3, unit: 'number' },
+  { type: 'reactions', name: 'Reactions', value: 17, unit: 'number' },
+  { type: 'reposts', name: 'Reposts', value: 1, unit: 'number' },
+  { type: 'engagementRate', name: 'Engagement rate', value: 9.2, unit: 'percentage' },
+]);
+
+assert.deepEqual(mapped, {
+  likes: 17,
+  comments: 3,
+  shares: 1,
+  reach: null,
+  impressions: 250,
+  clicks: null,
+  engagement_rate: '8.4000',
+  buffer_engagement_rate: 9.2,
+  share_metric_type: 'reposts',
+});
+
+const withSharesOnly = mapBufferPostMetrics([
+  { type: 'impressions', name: 'Impressions', value: 100, unit: 'number' },
+  { type: 'shares', name: 'Shares', value: 4, unit: 'number' },
+]);
+
+assert.equal(withSharesOnly.shares, 4);
+assert.equal(withSharesOnly.share_metric_type, 'shares');
+assert.equal(withSharesOnly.reach, null);
+
+const withReachOnly = mapBufferPostMetrics([
+  { type: 'impressions', name: 'Impressions', value: 194, unit: 'number' },
+  { type: 'reach', name: 'Reach', value: 13, unit: 'number' },
+  { type: 'reactions', name: 'Reactions', value: 3, unit: 'number' },
+]);
+
+assert.equal(withReachOnly.reach, 13);
+assert.equal(withReachOnly.shares, null);
+assert.equal(withReachOnly.share_metric_type, null);
+
+const withoutImpressions = mapBufferPostMetrics([
+  { type: 'comments', name: 'Comments', value: 3, unit: 'number' },
+  { type: 'reactions', name: 'Reactions', value: 17, unit: 'number' },
+]);
+
+assert.equal(withoutImpressions.engagement_rate, null);
+assert.equal(withoutImpressions.impressions, null);
+assert.equal(withoutImpressions.likes, 17);
+assert.equal(withoutImpressions.shares, null);
+assert.equal(withoutImpressions.reach, null);
+
+const withoutReactions = mapBufferPostMetrics([
+  { type: 'impressions', name: 'Impressions', value: 250, unit: 'number' },
+  { type: 'comments', name: 'Comments', value: 3, unit: 'number' },
+]);
+
+assert.equal(withoutReactions.likes, null);
+
+const zeroMetrics = [
+  { type: 'impressions', name: 'Impressions', value: 0, unit: 'count' },
+  { type: 'reactions', name: 'Reactions', value: 0, unit: 'count' },
+  { type: 'comments', name: 'Comments', value: 0, unit: 'count' },
+  { type: 'shares', name: 'Shares', value: 0, unit: 'count' },
+];
+const zeroPost = parseBufferPostResponse({ data: { post: { metrics: zeroMetrics } } });
+assert.equal(zeroPost.metrics, zeroMetrics);
+assert.deepEqual(mapBufferPostMetrics(zeroPost.metrics), {
+  likes: 0,
+  comments: 0,
+  shares: 0,
+  reach: null,
+  impressions: 0,
+  clicks: null,
+  engagement_rate: null,
+  buffer_engagement_rate: null,
+  share_metric_type: 'shares',
+});
+
+assert.throws(
+  () => parseBufferPostResponse({ data: { post: null } }),
+  /missing data\.post/
+);
+assert.throws(
+  () => parseBufferPostResponse({ data: { post: {} } }),
+  /missing or is not an array/
+);
+assert.throws(
+  () => parseBufferPostResponse({ data: { post: { metrics: [] } } }),
+  /metrics is empty/
+);
+
+const query = buildBufferMetricsQuery('post_123');
+assert.match(query, /post\(input: \{ id: "post_123" \}\)/);
+assert.match(query, /text/);
+assert.match(query, /metrics \{\s+type\s+name\s+value\s+unit\s+\}/);
+assert.match(query, /metricsUpdatedAt/);
+assert.doesNotMatch(query, /statistics/);
+assert.doesNotMatch(query, /likes/);
+assert.doesNotMatch(query, /clicks/);
+
+console.log('buffer metrics tests passed');

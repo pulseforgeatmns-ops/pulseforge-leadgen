@@ -1,0 +1,539 @@
+'use strict';
+const { rethrowResearchProviderControl } = require('../utils/anchorResearchProviderPause');
+
+const amo = require('../packages/acquisition-mission');
+const { hash, fail, missionScope } = require('../packages/acquisition-mission/DailyOutboundPolicy');
+const { unwrapSpecialistPayload } = require('../packages/acquisition-mission/ContributionSupersession');
+const { loadMissionSnapshot } = require('./acquisitionMissionPersistence');
+const { getAcquisitionMissionRuntime } = require('./acquisitionMissionRuntime');
+const { resolveCanonicalSenderIdentity, evaluateCanonicalSenderReadiness } = require('../utils/canonicalSenderIdentity');
+const { buildInboxSnapshot } = require('./emmettOutboundSnapshot');
+const { createOutboundEngine, assessOperatingCapacity } = require('../packages/emmett-outbound');
+const { resolveOperatorDelegatedMaximumDailyCapacity } = require('../packages/emmett-outbound/OperatorDelegatedCapacity');
+const { loadBestCrmProspectForMissionBoundKey } = require('../packages/max/workspace/MissionBoundCrmResolver');
+const { governedContactReason } = require('../utils/governedContactEligibility');
+const { createGovernedOutboundTenantContext } = require('./governedOutboundTenant');
+const { createGovernedOutboundContext } = require('./governedOutboundContext');
+const { buildTenantMailboxInboxSnapshot } = require('./emmettTenantMailboxSnapshot');
+const { createGovernedTenantMailboxSend } = require('../utils/governedOutboundTransport');
+
+
+// Count every known path; duplicate evidence conservatively consumes capacity.
+async function readOutboundHistory(pool, tenantId, clientId, ignoreItem = null) {
+  const { rows } = await pool.query(`SELECT count(*)::int AS today,max(attempted_at) AS last_attempt FROM (
+      SELECT attempted_at FROM acquisition_mission_outbound_executions WHERE tenant_id=$3 AND status IN ('sent','attempted','failed')
+        AND NOT (status='attempted' AND prospect_id=$1 AND prepared_artifact_revision=$2)
+      UNION ALL SELECT ran_at FROM agent_log WHERE client_id=$4 AND agent_name='emmett' AND action='email_sent'
+      UNION ALL SELECT sent_at FROM tenant_outreach_messages WHERE tenant_id=$3 AND direction='OUTBOUND' AND status='sent'
+      ) evidence WHERE (attempted_at AT TIME ZONE 'America/New_York')::date=(now() AT TIME ZONE 'America/New_York')::date`,
+  [ignoreItem?.candidate_id || '', ignoreItem?.snapshot?.revision || '', tenantId, clientId]);
+  return rows[0];
+}
+
+async function governedScheduleConsumesCapacity(pool, tenantId, scheduleId) {
+  if (!scheduleId) return false;
+  const { rows } = await pool.query(
+    `SELECT EXISTS (
+        SELECT 1 FROM tenant_outreach_scheduled_sends
+         WHERE tenant_id=$1 AND id=$2 AND status IN ('SCHEDULED','EXECUTING','SENT')
+      ) OR EXISTS (
+        SELECT 1 FROM emmett_tenant_mailbox_capacity_reservations
+         WHERE tenant_id=$1 AND schedule_id=$2 AND status IN ('scheduled','executing','sent')
+      ) AS consumed`,
+    [String(tenantId), String(scheduleId)]
+  );
+  return rows[0]?.consumed === true;
+}
+
+function adapters(pool, dependencies = {}) {
+  const governedContext = dependencies.governedContext
+    || createGovernedOutboundContext({
+      tenantId: dependencies.tenantId,
+      program: dependencies.program,
+    });
+  const ctx = governedContext.transport || createGovernedOutboundTenantContext(governedContext.tenantId);
+  const tenantId = governedContext.tenantId;
+  const clientId = governedContext.clientId;
+  const loadMission = dependencies.loadMission || ((id, options = {}) => loadMissionSnapshot(id, tenantId, options.persistencePool || pool, { skipEnsure: options.preinitializedSchema === true }));
+  const contact = dependencies.contact || (id => loadBestCrmProspectForMissionBoundKey({ pool, clientId, missionBoundKey: id }));
+  async function tenant(program, options = {}) {
+    if (dependencies.tenant) return dependencies.tenant(program);
+    const { rows } = await pool.query('SELECT * FROM clients WHERE id=$1', [clientId]);
+    const client = rows[0];
+    if (!client || client.active !== true || client.autosend_enabled !== false) fail('tenant_inactive_or_legacy_autosend_enabled');
+    const sender = await resolveCanonicalSenderIdentity({ tenantId, clientId, client, pool });
+    if (!sender.ok || sender.identity.senderEmail.toLowerCase() !== program.policy.senderEmail) fail('sender_changed');
+    let integration;
+    if (options.preinitializedSchema === true) {
+      const row = (await pool.query('SELECT id,tenant_id,status,mailbox_address FROM tenant_mailbox_integrations WHERE tenant_id=$1 AND id=$2', [tenantId, program.policy.inboxIntegrationId])).rows[0];
+      integration = row ? { ...row, mailboxAddress: row.mailbox_address } : null;
+    } else {
+      const { PostgresTenantMailboxStore } = require('./tenantMailbox');
+      integration = await new PostgresTenantMailboxStore(pool).getIntegration(tenantId, program.policy.inboxIntegrationId);
+    }
+    if (!integration || integration.status !== 'active' || integration.mailboxAddress.toLowerCase() !== program.policy.senderEmail) fail('anchor_reply_mailbox_not_ready');
+    if (ctx.requiresAoOwners) {
+      const owners = options.preinitializedSchema === true
+        ? await pool.query('SELECT id FROM users WHERE client_id=$1 AND active=true AND id::text=ANY($2::text[])', [clientId, program.policy.aoOwnerIds.map(String)])
+        : await pool.query('SELECT id FROM users WHERE client_id=$1 AND active=true AND id=ANY($2::int[])', [clientId, program.policy.aoOwnerIds]);
+      if (!owners.rows.length) fail('ao_owner_unavailable');
+    }
+    const triggers = await pool.query(`SELECT count(*)::int AS n FROM pg_trigger
+      WHERE tgname='acquisition_outbound_observe' AND tgenabled IN ('O','A') AND NOT tgisinternal`);
+    if (triggers.rows[0]?.n !== 6) fail('suppression_triggers_missing');
+    return { client, sender: sender.identity };
+  }
+  async function infrastructure(program, now = new Date(), ignoreItem = null, opts = {}) {
+    if (dependencies.infrastructure) return dependencies.infrastructure(program, now, ignoreItem, opts);
+    const { client, sender } = await tenant(program);
+    if (ctx.requiresLegacyEmailTelemetry) {
+      const readiness = await evaluateCanonicalSenderReadiness({ identity: sender, client, pool });
+      if (!readiness.ready) fail(readiness.code || 'sender_not_ready');
+    }
+    let snapshot;
+    if (ctx.requiresLegacyEmailTelemetry) {
+      await pool.query('SELECT event_type,event_at,sender_identity_status FROM email_events WHERE client_id=$1 LIMIT 1', [clientId]);
+      await pool.query('SELECT action,payload,ran_at FROM agent_log WHERE client_id=$1 LIMIT 1', [clientId]);
+      snapshot = await buildInboxSnapshot(clientId, { pool, now });
+    } else {
+      snapshot = await buildTenantMailboxInboxSnapshot({
+        tenantId,
+        sendingIdentityId: program.policy.sendingIdentityId,
+        mailboxIntegrationId: program.policy.inboxIntegrationId,
+      }, { pool, now });
+      if (!snapshot?.authentication?.smtp || snapshot.authentication.smtp.state === 'fail') {
+        fail('tenant_mailbox_not_ready');
+      }
+    }
+    if (ctx.usesTenantMailboxTransport) {
+      const produced = await require('./emmettTenantMailboxCapacity').produceTenantMailboxCapacityEnvelope(
+        tenantId, program.policy.sendingIdentityId, { pool, now });
+      const envelope = produced.envelope;
+      if (!envelope || !Number.isFinite(Number(envelope.maxSendsPerDay))) fail('emmett_capacity_unavailable');
+      const validUntil = envelope.validUntil ? Date.parse(envelope.validUntil) : NaN;
+      if (Number.isFinite(validUntil) && validUntil <= +now) fail('emmett_capacity_unavailable');
+      if (envelope.mailboxIntegrationId !== program.policy.inboxIntegrationId) fail('capacity_mailbox_changed');
+      const assessed = envelope.emmettContribution || {};
+      const governorOutcome = String(envelope.governorState || assessed.governor?.outcome || '').toLowerCase();
+      if (assessed.governor?.halt || !['proceed', 'slow'].includes(governorOutcome)) fail('emmett_governor_halted');
+      const history = await readOutboundHistory(pool, tenantId, clientId, ignoreItem);
+      const inWindow = require('../packages/acquisition-mission/DailyOutboundPolicy').clock(now);
+      const counts = await new (require('./governedOutboundStore').GovernedOutboundStore)(pool, tenantId).counts(program, inWindow.day);
+      const grantWindow = {
+        startHour: program.policy.startHour ?? envelope.allowedSendWindow?.startHour ?? 9,
+        endHour: program.policy.endHour ?? envelope.allowedSendWindow?.endHour ?? 17,
+        timezone: program.policy.timeZone || envelope.allowedSendWindow?.timezone || 'America/New_York',
+      };
+      const operatingBase = assessOperatingCapacity({
+        assessed: {
+          ...assessed,
+          capacity: assessed.capacity || { recommended: envelope.maxSendsPerDay },
+          governor: assessed.governor || {
+            outcome: governorOutcome,
+            halt: ['pause', 'emergency'].includes(governorOutcome),
+          },
+          health: assessed.health || {},
+        },
+        policy: program.policy,
+        emmettCapacity: envelope.maxSendsPerDay,
+        sentToday: envelope.currentSentCount,
+        totalAttempted: counts.total,
+        now,
+        requireEmmettAuthority: true,
+        schedule: {
+          allowedSendWindow: grantWindow,
+          minSpacingMinutes: Math.max(program.policy.spacingMinutes, envelope.minimumSpacingMinutes),
+        },
+      });
+      if (operatingBase.emmettAuthorityMissing) fail('emmett_capacity_unavailable');
+      const reserved = Number(envelope.currentScheduledCount || 0) + Number(envelope.currentExecutingCount || 0);
+      const reservedScheduleConsumesCapacity = opts.reservedScheduleId
+        ? await governedScheduleConsumesCapacity(pool, tenantId, opts.reservedScheduleId)
+        : false;
+      // Execution validation must evaluate capacity around its own durable reservation.
+      // The reservation remains authoritative; only the availability calculation excludes
+      // that one already-authorized unit so a cap of one does not reject itself.
+      const otherReserved = Math.max(0, reserved - (reservedScheduleConsumesCapacity ? 1 : 0));
+      const authorizedRemaining = Math.max(0, operatingBase.authorizationLimitedCapacity
+        - Number(envelope.currentSentCount || 0) - otherReserved);
+      const calendarOpen = inWindow.hour >= grantWindow.startHour
+        && inWindow.hour < grantWindow.endHour
+        && inWindow.weekday > 0 && inWindow.weekday < 6;
+      const dispatchNow = calendarOpen && authorizedRemaining > 0 && (envelope.remainingCapacity > 0 || Boolean(ignoreItem))
+        ? Math.min(operatingBase.dispatchCapacityNow, authorizedRemaining)
+        : 0;
+      const planningDailyCapacity = Math.min(
+        operatingBase.planningDailyCapacity,
+        Math.max(0, operatingBase.authorizationLimitedCapacity - otherReserved),
+      );
+      if (!Number.isFinite(planningDailyCapacity) || planningDailyCapacity <= 0) fail('emmett_capacity_exhausted');
+      if (opts.mode === 'dispatch' && dispatchNow <= 0) fail('dispatch_unavailable_now');
+      Object.assign(snapshot, sender, { sentToday: envelope.currentSentCount, inboxId: sender.senderEmail, domain: sender.sendingDomain });
+      const operating = {
+        ...operatingBase,
+        planningDailyCapacity,
+        dispatchCapacityNow: dispatchNow,
+        dispatchableDailyCapacity: dispatchNow,
+        scheduledToday: Number(envelope.currentScheduledCount || 0),
+        executingToday: Number(envelope.currentExecutingCount || 0),
+      };
+      return {
+        snapshot,
+        assessed,
+        cap: planningDailyCapacity,
+        sender,
+        envelope,
+        totalAttempted: counts.total,
+        lastAttempt: history.last_attempt,
+        dispatchUnavailableNow: dispatchNow <= 0,
+        operating,
+      };
+    }
+    const history = await readOutboundHistory(pool, tenantId, clientId, ignoreItem);
+    snapshot.sentToday = Math.max(snapshot.sentToday, history.today);
+    snapshot.inboxId = sender.senderEmail;
+    snapshot.domain = sender.sendingDomain;
+    Object.assign(snapshot, sender);
+    const assessed = createOutboundEngine().assess({ tenantId, snapshot, now });
+    if (assessed.governor.halt || !['proceed', 'slow'].includes(assessed.governor.outcome)) fail('emmett_governor_halted');
+    const programTotals = await pool.query(`SELECT count(*)::int AS total
+      FROM acquisition_outbound_items i
+      JOIN acquisition_outbound_envelopes e ON e.id=i.envelope_id
+      WHERE e.program_id=$1 AND i.attempted_at IS NOT NULL`, [program.id]).catch(() => ({ rows: [{ total: 0 }] }));
+
+    const grantWindow = {
+      startHour: program.policy.startHour ?? 9,
+      endHour: program.policy.endHour ?? 17,
+      timezone: program.policy.timeZone || 'America/New_York',
+    };
+    const operating = assessOperatingCapacity({
+      assessed,
+      policy: program.policy,
+      sentToday: snapshot.sentToday,
+      totalAttempted: programTotals.rows[0]?.total || 0,
+      now,
+      schedule: {
+        allowedSendWindow: grantWindow,
+        minSpacingMinutes: program.policy.spacingMinutes ?? program.policy.minSpacingMinutes ?? 60,
+      },
+    });
+    const mode = opts.mode || 'planning';
+    const planningCap = operating.planningDailyCapacity;
+    const dispatchNow = operating.dispatchCapacityNow;
+    if (!Number.isFinite(planningCap) || planningCap <= 0) fail('emmett_capacity_exhausted');
+    if (mode === 'dispatch') {
+      if (!Number.isFinite(dispatchNow) || dispatchNow <= 0 || dispatchNow <= snapshot.sentToday) {
+        fail('dispatch_unavailable_now');
+      }
+    }
+    return {
+      snapshot,
+      assessed,
+      cap: planningCap,
+      operating,
+      sender,
+      lastAttempt: history.last_attempt,
+      dispatchUnavailableNow: dispatchNow <= 0 || dispatchNow <= snapshot.sentToday,
+    };
+  }
+  async function runtimeFor(options = {}) {
+    if (dependencies.runtime) return dependencies.runtime;
+    const runtime = getAcquisitionMissionRuntime({ pool, persist: true });
+    await runtime.hydrate(tenantId, { pool: options.persistencePool || pool, persist: true, preinitializedSchema: options.preinitializedSchema === true });
+    return runtime;
+  }
+  async function route(runtime, missionId, program, intent, extra = {}) {
+    const engine = runtime.engine();
+    const mission = engine.get(missionId, tenantId);
+    const request = amo.createExecutionRequest({ source: amo.EXECUTION_SOURCES.API, intent,
+      missionId, mission, stage: mission.stage, operatorId: program.authorized_by,
+      permissions: { canExecute: true, role: 'operator' },
+      payload: { question: `Bounded delegation ${program.id}: ${intent}`, maxSends: 1,
+        ...(extra.prospectId ? { prospectId: extra.prospectId } : {}) } });
+    const result = await amo.routeExecutionRequest(request, { engine, tenantId,
+      pool: dependencies.persist === false ? undefined : (extra.persistencePool || pool), persist: dependencies.persist !== false,
+      operatorId: program.authorized_by, allowFixtureFallback: false, ...extra });
+    if (result.executionResult?.rolledBack) throw result.executionResult.error || new Error(result.executionResult.rollbackReason);
+    return result;
+  }
+  async function scoutWithEligibility(mission, opts, program, store) {
+    if (program.tenant_id != null && String(program.tenant_id) !== tenantId) fail('governed_outbound_tenant_mismatch');
+    if (tenantId === '10') {
+      const state = await require('./anchorEmailRecovery').loadRecoveryState(pool);
+      if (state.mode !== 'legacy') {
+        if (state.mode !== 'scoped_resume') fail('anchor_recovery_separate_preparation_approval_required');
+        const authority = await require('./anchorScopedResume').assertScopedResumeCapability(pool,
+          { program, capability: 'research', operation: 'research_existing_source' });
+        await require('./anchorScopedResumeControl').consumeScopedOperation(pool, {
+          manifest: authority.manifest, capability: 'research', operation: 'research_existing_source',
+          operationId: require('node:crypto').randomUUID(), units: 1,
+        });
+      }
+    }
+    const runScoutForAmoMission = dependencies.runScout || require('../packages/max/workspace/ScoutDiscoveryExecutor').runScoutForAmoMission;
+    const result = await runScoutForAmoMission(mission, { ...opts, pool, governedProgram: program, runScout: undefined, allowFixtureFallback: false });
+    const payload = result.payload;
+    const { buildMissionBoundCandidates } = require('../packages/max/workspace/EmmettMissionCandidates');
+    const admission = dependencies.admission || require('../packages/max/workspace/MissionBoundCrmAdmission');
+    const enrichProspectRow = dependencies.enrich || require('../scripts/lib/anchorMissionBoundEnrichment').enrichProspectRow;
+    const candidates = buildMissionBoundCandidates(mission, [{ id: `discovery_${mission.id}`, missionId: mission.id,
+      specialist: 'scout', kind: 'discovery', payload, createdAt: new Date().toISOString() }]);
+    await admission.ensureMissionBoundCrmSchema(pool);
+    const eligible = {};
+    let attempts = 0;
+    for (const candidate of candidates) {
+      const id = String(candidate.id);
+      if (attempts >= program.policy.enrichmentLimit) { eligible[id] = { eligible: false, reason: 'enrichment_budget' }; continue; }
+      try {
+        let crm = await contact(id);
+        const ownership = store.candidateOwnership && await store.candidateOwnership(candidate);
+        if (ownership || (crm && await store.suppression({ candidateId: id, prospectId: crm.prospect_id,
+          companyId: crm.company_id, email: String(crm.email || '') }))) {
+          eligible[id] = { eligible: false, reason: 'prior_contact_or_human_owned' }; continue;
+        }
+        if (crm && !governedContactReason(crm, program.policy)) {
+          eligible[id] = { eligible: true, reason: null, prospectId: crm.prospect_id };
+          continue;
+        }
+        attempts++;
+        const admitted = await admission.admitMissionBoundCandidate(pool, candidate, { missionId: mission.id, clientId, mission });
+        if (admitted?.blocked) {
+          eligible[id] = { eligible: false, reason: admitted.reason, detail: admitted.detail || null }; continue;
+        }
+        crm = await contact(id);
+        if (crm) await enrichProspectRow(crm, { db: pool, dryRun: false });
+        crm = await contact(id);
+        const reason = governedContactReason(crm, program.policy)
+          || await store.suppression({ candidateId: id, prospectId: crm.prospect_id,
+            companyId: crm.company_id, email: crm.email });
+        eligible[id] = { eligible: !reason, reason, prospectId: crm?.prospect_id || null };
+      } catch (e) {
+        rethrowResearchProviderControl(e);
+        // A conflicting company/contact (including Stewart duplicates) quarantines
+        // that candidate without dropping the remainder of the replenishment run.
+        eligible[id] = { eligible: false, reason: e.code || 'enrichment_failed' };
+      }
+    }
+    payload.dailyOutboundEligibility = eligible;
+    await store.event('inventory_replenished', [mission.id, hash(eligible)], { programId: program.id,
+      missionId: mission.id, attempts, eligible: Object.values(eligible).filter(x => x.eligible).length, candidates: eligible });
+    if (!Object.values(eligible).some(x => x.eligible)) fail('verified_inventory_shortfall');
+    return result;
+  }
+  async function prepare(program, source, day, store, recovery = null) {
+    // Preparation-only authority covers existing reviewed artifacts, not paid
+    // discovery, enrichment or generation via the mission runtime.
+    if (program.policy.preparationOnly && (source?.mission?.stage !== 'ready' || recovery)) fail('preparation_research_not_authorized');
+    const reuseReady = source?.mission?.stage === 'ready' && !recovery;
+    const authority = await require('./anchorEmailRecoveryIntegration').assertLegacyPreparation(pool,
+      { tenantId, program, operation: reuseReady ? 'reuse_existing_artifacts' : 'generate_deterministic_existing_template' });
+    const scopedResume = authority?.manifest?.kind === 'scoped_resume';
+    // A preparation grant cannot authorize Scout, enrichment, or paid LLM copy.
+    // Existing ready artifacts can flow to the independently reserved freeze/refill.
+    if (scopedResume && !reuseReady) fail('anchor_scoped_resume_paid_preparation_unverified');
+    if ((ctx.usesTenantMailboxTransport || scopedResume) && reuseReady) {
+      await prepared(source, program, scopedResume ? { preinitializedSchema: true, persistencePool: pool } : {});
+      return source;
+    }
+    const runtime = await runtimeFor();
+    const engine = runtime.engine();
+    const defaultMissionId = `mission_daily_${hash([program.id, day]).slice(0, 24)}`;
+    const { progress } = await store.ensurePreparation(program, day);
+    const missionId = progress.mission_id || defaultMissionId;
+    let mission = engine.get(missionId, tenantId);
+    if (mission?.stage === 'ready') return loadMission(missionId);
+    if (recovery) {
+      if (missionId !== recovery.nextMissionId || progress.attempts !== recovery.review.nextAttempt
+        || mission) fail('replenishment_reservation_changed');
+    } else {
+      // A crashed recovery cannot silently spend another attempt or lose its
+      // reviewed research inputs through an ordinary scheduled tick.
+      if (missionId !== defaultMissionId) fail('replenishment_requires_operator_review');
+      const { preparationRetryReason, preparationInventoryState } = require('./governedPreparationRetry');
+      const state = await preparationInventoryState(pool, store, program, source);
+      const previous = await store.one(`SELECT payload FROM acquisition_outbound_events
+        WHERE tenant_id=$1 AND program_id=$2 AND event_type='preparation_attempt_reserved'
+        ORDER BY created_at DESC LIMIT 1`, [tenantId, program.id]);
+      const retryReason = preparationRetryReason(progress, previous?.payload?.fingerprint, state.fingerprint);
+      if (retryReason) fail(retryReason);
+      await pool.query('UPDATE acquisition_outbound_preparation SET attempts=attempts+1,last_attempt_at=now(),last_error=NULL WHERE program_id=$1 AND local_day=$2', [program.id, day]);
+      await store.event('preparation_attempt_reserved', [program.id, day, progress.attempts + 1],
+        { programId: program.id, localDay: day, attempt: progress.attempts + 1,
+          fingerprint: state.fingerprint, cleanInventory: state.inventory.clean.length });
+    }
+    try {
+      if (!mission) {
+        const input = { ...missionScope(source.mission), id: missionId, tenantId, clientId,
+          title: `Governed daily outbound ${day}`, createdBy: 'max', orchestrationMissionId: source.mission.id };
+        await runtime.create(input, { pool, persist: true });
+      }
+      const infra = await infrastructure(program);
+      for (let steps = 0; steps < 8; steps++) {
+        mission = engine.get(missionId, tenantId);
+        if (mission.stage === 'ready') return loadMission(missionId);
+        const snapshot = engine.inspect(missionId, { tenantId });
+        const ctx = amo.specialistContext(snapshot.contributions || [], { missionId });
+        let intent;
+        if (mission.stage === 'discover') intent = amo.intentFromPendingDecision(mission.pendingOperatorDecision);
+        else if (!ctx.maxComplete) fail('max_prioritization_missing');
+        else if (!ctx.acquisitionApproachComplete) intent = amo.EXECUTION_INTENTS.DECIDE_ACQUISITION_APPROACH;
+        else if (!ctx.paigeComplete) intent = amo.EXECUTION_INTENTS.GENERATE_VARIANTS;
+        else intent = amo.EXECUTION_INTENTS.GENERATE_CAPACITY;
+        const allowed = ['APPROVE_DISCOVERY','CONTINUE_INVESTIGATION','APPROVE_PRIORITIZATION','DECIDE_ACQUISITION_APPROACH','GENERATE_VARIANTS','GENERATE_CAPACITY'];
+      if (!allowed.includes(intent)) fail('preparation_requires_operator_judgment');
+        await route(runtime, missionId, program, intent, {
+          infrastructureSnapshot: infra.snapshot,
+          runEmmett: dependencies.runEmmett,
+          runScout: (m, o) => scoutWithEligibility(m, { ...o,
+            ...(recovery ? { scoutCompanies: require('./governedOutboundReplenishment').scoutCompanies(recovery.review.research) } : {}) }, program, store),
+        });
+      }
+      fail('preparation_step_budget');
+    } catch (e) {
+      rethrowResearchProviderControl(e);
+      await pool.query('UPDATE acquisition_outbound_preparation SET last_error=$3 WHERE program_id=$1 AND local_day=$2', [program.id, day, e.code || e.message]);
+      throw e;
+    }
+  }
+  async function prepared(snapshot, program, options = {}) {
+    if (!snapshot?.mission || String(snapshot.mission.tenantId) !== tenantId
+      || snapshot.mission.planCancelled || !['ready', 'execute'].includes(snapshot.mission.stage)) fail('mission_not_executable');
+    if (hash(missionScope(snapshot.mission)) !== program.scope_hash) fail('daily_mission_scope_changed');
+    if (String(tenantId) === '1') {
+      const reason = require('../utils/pulseforgeCashflowOffer').pulseforgeMissionReason(snapshot.mission);
+      if (reason) fail(reason);
+    }
+    const contributions = snapshot.contributions;
+    const paige = amo.findPaigeVariants(contributions, snapshot.mission);
+    const emmett = amo.findEmmettCapacity(contributions, snapshot.mission);
+    if (!paige || !emmett) fail('missing_prepared_artifacts');
+    const capacity = unwrapSpecialistPayload(emmett);
+    const variants = unwrapSpecialistPayload(paige);
+    if (!amo.validateProspectMessageBindings(capacity).valid) fail('message_binding_contamination');
+    if (capacity.governor?.halt || !['proceed', 'slow'].includes(capacity.governor?.outcome)) fail('prepared_governor_halted');
+    const { sender } = await tenant(program, options);
+    const binding = require('../utils/canonicalSenderIdentity').assertCapacityMatchesCanonical(capacity, sender);
+    if (!binding.ok) fail('capacity_sender_changed');
+    if (ctx.usesTenantMailboxTransport) {
+      const inventory = await require('./acquisitionMissionInventory').loadKnowledgeInventory(pool, snapshot.mission, program.policy);
+      for (const item of capacity.queue?.items || []) {
+        const row = inventory.find(r => [String(r.company_id), String(r.id)].includes(String(item.prospectId || item.id)));
+        if (!row) continue;
+        const copy = amo.resolvePaigeVariant(variants, { candidateId: item.paige?.candidateId || item.id, variantLabel: item.paige?.variantLabel || 'Primary' });
+        if (item.paige?.subject !== copy?.subject || item.paige?.body !== copy?.body) fail('capacity_copy_binding_mismatch');
+        const approved = row.approved_asset?.content;
+        if (approved && (copy?.subject !== approved.subject || copy?.body !== (approved.body || approved.statement))) {
+          fail('approved_copy_binding_mismatch');
+        }
+      }
+    }
+    return { sender, revision: amo.computePreparedArtifactRevision(snapshot.mission.id, contributions),
+      capacity: Number(capacity.capacity?.recommended || 0),
+      candidates: (capacity.queue?.items || []).map(item => ({ item,
+        candidateId: String(item.prospectId || item.id),
+        message: amo.resolvePaigeVariant(variants, { candidateId: item.paige?.candidateId || item.id,
+          variantLabel: item.paige?.variantLabel || 'Primary', includeIdentity: ctx.usesBrevoTransport }) })) };
+  }
+  async function liveGate(program, item, _prepared, now, opts = {}) {
+    const { rows } = await pool.query(`SELECT 1 FROM acquisition_outbound_inbox_health
+      WHERE tenant_id=$1 AND integration_id=$2 AND last_success_at>now()-interval '5 minutes'`, [tenantId, program.policy.inboxIntegrationId]);
+    if (!rows.length) fail('reply_poll_stale');
+    const infra = await infrastructure(program, now, item, {
+      mode: 'dispatch',
+      reservedScheduleId: opts.reservedScheduleId || null,
+    });
+    if (infra.lastAttempt && +now - +new Date(infra.lastAttempt) < Math.max(program.policy.spacingMinutes, infra.envelope?.minimumSpacingMinutes || 0) * 60000) {
+      fail('cross_path_spacing');
+    }
+    if (await require('../dbClient').checkDNC(item.prospect_id, { clientId, pool })) fail('dnc');
+  }
+  function createBrevoSend(binding = {}, program = null) {
+    const providerSend = require('../packages/providers/brevo/sendEmail').sendEmail;
+    const brevoSend = command => providerSend({ ...command,
+      governedRecoveryContext: program && binding.envelope && binding.item
+        ? { provider: 'brevo', transport: 'governed_brevo', programId: program.id, envelopeId: binding.envelope.id, itemId: binding.item.id } : undefined,
+      outreachAuthorization: { prospectId: binding.item?.prospect_id || command.outreachAuthorization?.prospectId, clientId, pool } });
+    brevoSend.beforeAttempt = null;
+    // Scope this rollout to Anchor. The shared provider declares instrumentation,
+    // but only this opted-in, tenant-bound adapter can defer conservative marking.
+    if (clientId === 10 && process.env.ANCHOR_BREVO_BOUNDARY_DIAGNOSTICS_ENABLED === 'true'
+      && providerSend.providerBoundaryInstrumentation === 'brevo_http_v1') {
+      Object.defineProperty(brevoSend, 'isInstrumentedBrevoTransport', { value: true });
+    }
+    return brevoSend;
+  }
+  function sendFor(program, binding = {}) {
+    if (ctx.usesBrevoTransport) {
+      return createBrevoSend(binding, program);
+    }
+    return createGovernedTenantMailboxSend({ ...program, tenant_id: tenantId, pool }, binding);
+  }
+  return {
+    tenantId,
+    clientId,
+    loadMission, contact, infrastructure, prepare, prepared, liveGate, validateTenant: tenant, sendFor,
+    complete: async envelope => {
+      const runtime = await runtimeFor();
+      const engine = runtime.engine();
+      const mission = engine.get(envelope.mission_id, tenantId);
+      if (!mission || !mission.executionSummary || mission.executionSummary.complete) return;
+      mission.executionSummary.complete = true;
+      engine.store.putMission(mission);
+      await runtime.persistMissionState(mission.id, { pool, persist: true });
+    },
+    send: createBrevoSend(),
+    approve: async (snapshot, program, binding, options = {}) => {
+      if (program.tenant_id != null && String(program.tenant_id) !== tenantId) fail('governed_outbound_tenant_mismatch');
+      if (tenantId === '10') {
+        const state = await require('./anchorEmailRecovery').loadRecoveryState(options.persistencePool || pool);
+        if (!['legacy', 'scoped_resume'].includes(state.mode) && options.preinitializedSchema !== true) {
+          fail('anchor_recovery_separate_preparation_approval_required');
+        }
+        if (state.mode === 'scoped_resume') {
+          await require('./anchorScopedResume').assertScopedResumeCapability(options.persistencePool || pool,
+            { program, capability: 'preparation', operation: 'approve_canonical_envelope' });
+        }
+      }
+      // Recovery never initializes schema. Its dedicated client keeps canonical
+      // session advisory locks on one connection, separate from the outer latch.
+      if (options.preinitializedSchema === true && (!options.persistencePool || dependencies.persist === false)) fail('anchor_recovery_preinitialized_persistence_required');
+      let missionLock = null;
+      const schemaReady = options.preinitializedSchema === true;
+      // Hold the existing ADR-075 namespace on this dedicated connection before
+      // hydration. The canonical stage's nested lock is PostgreSQL-reentrant.
+      // No other mission writer can replace artifacts between review and commit.
+      if (schemaReady) {
+        const { MISSION_DURABLE_LOCK_NAMESPACE } = require('../packages/acquisition-mission/TransactionalPersistence');
+        missionLock = [MISSION_DURABLE_LOCK_NAMESPACE, require('node:crypto').createHash('sha256').update(snapshot.mission.id).digest().readInt32BE(0)];
+        const result = await options.persistencePool.query('SELECT pg_try_advisory_lock($1,$2) AS locked', missionLock);
+        if (result.rows[0]?.locked !== true) fail('anchor_recovery_mission_busy');
+      }
+      try {
+        const snapshotHash = value => hash(JSON.parse(JSON.stringify({ mission: value.mission,
+          contributions: [...value.contributions].sort((a,b) => String(a.id).localeCompare(String(b.id))) })));
+        if (schemaReady) {
+          const current = await loadMission(snapshot.mission.id, options);
+          if (!current || snapshotHash(current) !== snapshotHash(snapshot)) fail('anchor_recovery_artifacts_changed');
+        }
+        const runtime = await runtimeFor(options);
+        if (schemaReady && snapshotHash({ mission: runtime.engine().get(snapshot.mission.id, tenantId),
+          contributions: runtime.engine().store.listContributions(snapshot.mission.id) }) !== snapshotHash(snapshot)) fail('anchor_recovery_runtime_artifacts_changed');
+        const result = await route(runtime, snapshot.mission.id, program, amo.EXECUTION_INTENTS.APPROVE_EXECUTION, { governedApproval: binding,
+          ...(schemaReady ? { preinitializedSchema: true, persistencePool: options.persistencePool } : {}) });
+        return result.executionResult?.approval;
+      } finally {
+        if (missionLock) await options.persistencePool.query('SELECT pg_advisory_unlock($1,$2)', missionLock);
+      }
+    },
+    execute: async (envelope, item, program, sendEmail) => {
+      const runtime = await runtimeFor();
+      const transport = sendEmail || sendFor(program);
+      return route(runtime, envelope.mission_id, program, amo.EXECUTION_INTENTS.EXECUTE_OUTBOUND,
+        { governedEnvelopeId: envelope.id, maxSends: 1, prospectId: item.candidate_id,
+          governedManifestCandidateIds: (envelope.manifest || []).map(row => String(row.candidateId || '')).filter(Boolean),
+          governedRefillItem: item.snapshot?.refill === true ? item : null,
+          sendEmail: transport, requireProviderReadiness: ctx.requiresLegacyEmailTelemetry });
+    },
+  };
+}
+module.exports = { adapters, readOutboundHistory };

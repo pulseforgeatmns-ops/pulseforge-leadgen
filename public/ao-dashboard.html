@@ -1,0 +1,3122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#10203c">
+<title>Max — Field</title>
+<link rel="icon" href="/favicon.ico">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@400;500&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/shared/tokens.css">
+<link rel="stylesheet" href="/shared/shell.css">
+<script src="/shared/aoImpersonationBanner.js" defer></script>
+<script src="/shared/aoShellNav.js" defer></script>
+<script src="/shared/aoQueueFormat.js"></script>
+<script src="/shared/aoNavigation.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  height: 100%;
+  background: var(--pf-bg);
+  color: var(--pf-text);
+  font-family: var(--pf-font-body);
+  overflow: hidden;
+}
+body {
+  display: flex;
+  flex-direction: column;
+  max-width: 480px;
+  margin: 0 auto;
+  border-left: 1px solid var(--pf-border);
+  border-right: 1px solid var(--pf-border);
+}
+
+.ao-header {
+  background: var(--pf-nav-bg);
+  color: var(--pf-nav-text);
+  padding: 12px 16px 10px;
+  border-bottom: 2px solid var(--pf-gold);
+  flex-shrink: 0;
+}
+.ao-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ao-crm-open {
+  font-family: var(--pf-font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  text-decoration: none;
+  color: var(--pf-gold);
+  border: 1px solid rgba(201, 162, 39, 0.45);
+  border-radius: 6px;
+  padding: 8px 10px;
+  white-space: nowrap;
+}
+.ao-brand {
+  font-family: var(--pf-font-display);
+  font-size: 1.4rem;
+  letter-spacing: 3px;
+}
+.ao-sub {
+  font-family: var(--pf-font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--pf-nav-muted);
+  margin-top: 2px;
+}
+.ao-contact-card {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--pf-nav-text);
+}
+.ao-contact-card .ao-contact-title {
+  font-family: var(--pf-font-mono);
+  font-size: 0.52rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--pf-gold);
+  margin-bottom: 6px;
+}
+.ao-contact-meta { color: var(--pf-nav-muted); font-size: 0.72rem; margin-top: 4px; }
+.ao-metrics {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  overflow-x: auto;
+}
+.ao-metric {
+  flex-shrink: 0;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  padding: 6px 10px;
+  min-width: 72px;
+}
+.ao-metric-val {
+  font-family: var(--pf-font-display);
+  font-size: 1.2rem;
+  color: var(--pf-gold);
+  line-height: 1;
+}
+.ao-metric-lbl {
+  font-family: var(--pf-font-mono);
+  font-size: 0.5rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--pf-nav-muted);
+  margin-top: 2px;
+}
+
+.ao-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ao-tabs {
+  display: flex;
+  gap: 0;
+  padding: 8px 12px 0;
+  background: var(--pf-bg-raised);
+  border-bottom: 1px solid var(--pf-border);
+  flex-shrink: 0;
+}
+.ao-tab {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font-family: var(--pf-font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--pf-text-muted);
+  padding: 10px 4px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  min-height: var(--pf-touch-target);
+}
+.ao-tab.active {
+  color: var(--pf-navy);
+  border-bottom-color: var(--pf-gold);
+  font-weight: 600;
+}
+
+.ao-panel { display: none; flex: 1; flex-direction: column; min-height: 0; }
+.ao-panel.active { display: flex; }
+
+/* Max chat */
+.ao-chat {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 12px calc(96px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+}
+.ao-msg {
+  max-width: 88%;
+  padding: 10px 12px;
+  border-radius: 14px;
+  font-size: 0.92rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+.ao-msg.max {
+  align-self: flex-start;
+  background: var(--pf-bg-card);
+  border: 1px solid var(--pf-border);
+  border-bottom-left-radius: 4px;
+}
+.ao-msg.user {
+  align-self: flex-end;
+  background: var(--pf-nav-bg);
+  color: var(--pf-nav-text);
+  border-bottom-right-radius: 4px;
+}
+.ao-msg.system {
+  align-self: center;
+  background: var(--pf-violet-glow);
+  border: 1px solid rgba(109,91,208,0.25);
+  color: var(--pf-violet);
+  font-family: var(--pf-font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.5px;
+  max-width: 95%;
+  text-align: center;
+}
+
+.ao-modes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 0 12px 8px;
+  flex-shrink: 0;
+}
+.ao-mode-btn {
+  background: var(--pf-bg-card);
+  border: 1px solid var(--pf-border);
+  border-radius: var(--pf-radius);
+  padding: 12px 10px;
+  font-family: var(--pf-font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--pf-text);
+  cursor: pointer;
+  min-height: var(--pf-touch-target);
+  text-align: center;
+}
+.ao-mode-btn:active { background: var(--pf-gold-glow); border-color: var(--pf-gold); }
+.ao-mode-btn.primary {
+  grid-column: 1 / -1;
+  background: var(--pf-nav-bg);
+  color: var(--pf-gold);
+  border-color: var(--pf-gold);
+  font-size: 0.68rem;
+}
+
+.ao-compose-wrap {
+  flex-shrink: 0;
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  background: var(--pf-bg-card);
+  border-top: 1px solid var(--pf-border);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.ao-attach-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px 0;
+}
+.ao-attach-chip {
+  font-family: var(--pf-font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.4px;
+  border: 1px solid var(--pf-border);
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: var(--pf-text-dim);
+}
+.ao-compose {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  align-items: flex-end;
+}
+.ao-compose-plus-wrap { position: relative; flex-shrink: 0; }
+.ao-compose-plus {
+  width: var(--pf-touch-target);
+  height: var(--pf-touch-target);
+  border-radius: 999px;
+  border: 1px solid var(--pf-border);
+  background: var(--pf-bg);
+  color: var(--pf-gold);
+  font-size: 1.35rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.ao-compose-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  min-width: 210px;
+  background: var(--pf-bg-card);
+  border: 1px solid var(--pf-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+  padding: 6px;
+  display: none;
+  z-index: 30;
+}
+.ao-compose-menu.open { display: block; }
+.ao-compose-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  font-family: var(--pf-font-body);
+  font-size: 0.85rem;
+  padding: 10px 10px;
+  color: var(--pf-text);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.ao-compose-menu button:active { background: var(--pf-gold-glow); }
+.ao-compose input {
+  flex: 1;
+  border: 1px solid var(--pf-border);
+  border-radius: 999px;
+  padding: 12px 16px;
+  font-size: 1rem;
+  font-family: var(--pf-font-body);
+  background: var(--pf-bg);
+  color: var(--pf-text);
+  outline: none;
+  min-height: var(--pf-touch-target);
+}
+.ao-compose input:focus { border-color: var(--pf-gold); }
+.ao-compose input::placeholder { color: var(--pf-text-muted); }
+.ao-conv-actions {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px 8px;
+}
+.ao-conv-actions button {
+  flex: 1;
+  min-height: 34px;
+  border-radius: 6px;
+  border: 1px solid var(--pf-border);
+  background: transparent;
+  font-family: var(--pf-font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--pf-text-dim);
+  cursor: pointer;
+}
+.ao-conv-actions button.primary {
+  border-color: var(--pf-gold);
+  color: var(--pf-gold-strong);
+}
+.ao-conv-actions button.danger {
+  border-color: rgba(179,38,30,0.35);
+  color: var(--pf-red);
+}
+.ao-history-list {
+  padding: 0 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ao-history-item {
+  background: var(--pf-bg-card);
+  border: 1px solid var(--pf-border);
+  border-radius: var(--pf-radius-lg);
+  padding: 12px;
+}
+.ao-history-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.ao-history-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.ao-history-status {
+  font-family: var(--pf-font-mono);
+  font-size: 0.52rem;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--pf-text-muted);
+}
+.ao-history-preview {
+  font-size: 0.82rem;
+  color: var(--pf-text-dim);
+  line-height: 1.4;
+  margin-bottom: 8px;
+}
+.ao-history-meta {
+  font-size: 0.72rem;
+  color: var(--pf-text-muted);
+  margin-bottom: 8px;
+}
+.ao-history-actions {
+  display: flex;
+  gap: 8px;
+}
+.ao-history-actions button {
+  flex: 1;
+  min-height: 34px;
+  border-radius: 6px;
+  border: 1px solid var(--pf-border);
+  background: transparent;
+  font-family: var(--pf-font-mono);
+  font-size: 0.52rem;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--pf-text-dim);
+  cursor: pointer;
+}
+.ao-history-actions button.primary {
+  border-color: var(--pf-gold);
+  color: var(--pf-gold-strong);
+}
+.ao-done-banner {
+  margin: 8px 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--pf-border);
+  background: rgba(109, 91, 208, 0.08);
+  font-size: 0.85rem;
+  color: var(--pf-text-dim);
+}
+.ao-done-banner-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.ao-done-banner-actions button {
+  flex: 1;
+  min-height: 32px;
+  border-radius: 6px;
+  border: 1px solid var(--pf-border);
+  background: transparent;
+  font-family: var(--pf-font-mono);
+  font-size: 0.52rem;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.ao-send {
+  width: var(--pf-touch-target);
+  height: var(--pf-touch-target);
+  border-radius: 50%;
+  border: none;
+  background: var(--pf-gold);
+  color: var(--pf-nav-bg);
+  font-size: 1.1rem;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* Queue */
+.ao-queue-filters {
+  display: flex;
+  gap: 6px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  flex-shrink: 0;
+  -webkit-overflow-scrolling: touch;
+}
+.ao-filter {
+  flex-shrink: 0;
+  border: 1px solid var(--pf-border);
+  background: var(--pf-bg-card);
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-family: var(--pf-font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--pf-text-muted);
+  cursor: pointer;
+  min-height: 36px;
+}
+.ao-filter.active {
+  background: var(--pf-nav-bg);
+  color: var(--pf-gold);
+  border-color: var(--pf-gold);
+}
+.ao-queue-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 12px 12px;
+  -webkit-overflow-scrolling: touch;
+}
+.ao-task {
+  background: var(--pf-bg-card);
+  border: 1px solid var(--pf-border);
+  border-radius: var(--pf-radius-lg);
+  padding: 12px;
+  margin-bottom: 10px;
+  box-shadow: var(--pf-shadow);
+}
+.ao-task.high { border-left: 3px solid var(--pf-amber); }
+.ao-task.warm { border-left: 3px solid #e07a5f; }
+.ao-task.waiting { border-left: 3px solid var(--pf-violet); }
+.ao-task-badge {
+  display: inline-block;
+  font-family: var(--pf-font-mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: #e07a5f;
+  background: rgba(224, 122, 95, 0.12);
+  border: 1px solid rgba(224, 122, 95, 0.35);
+  border-radius: 999px;
+  padding: 2px 8px;
+  margin-bottom: 6px;
+}
+.ao-task-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.ao-task-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--pf-navy);
+}
+.ao-task-due {
+  font-family: var(--pf-font-mono);
+  font-size: 0.58rem;
+  color: var(--pf-text-muted);
+  white-space: nowrap;
+}
+.ao-task-meta {
+  font-size: 0.82rem;
+  color: var(--pf-text-dim);
+  margin-bottom: 8px;
+}
+.ao-task-msg {
+  font-size: 0.82rem;
+  color: var(--pf-text);
+  background: var(--pf-violet-glow);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
+.ao-task-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.ao-task-actions button {
+  flex: 1;
+  min-width: 80px;
+  min-height: 36px;
+  border-radius: 6px;
+  border: 1px solid var(--pf-border);
+  background: transparent;
+  font-family: var(--pf-font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--pf-text-dim);
+  cursor: pointer;
+}
+.ao-task-actions button.primary {
+  background: var(--pf-gold-glow);
+  border-color: var(--pf-gold);
+  color: var(--pf-gold-strong);
+}
+.ao-task-actions button.danger {
+  border-color: rgba(179,38,30,0.35);
+  color: var(--pf-red);
+}
+.ao-empty {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--pf-text-muted);
+  font-size: 0.9rem;
+}
+
+.ao-logout {
+  color: var(--pf-nav-muted);
+  font-family: var(--pf-font-mono);
+  font-size: 0.58rem;
+  text-decoration: none;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+/* Script */
+.ao-script {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 12px 12px;
+  -webkit-overflow-scrolling: touch;
+}
+.ao-script-card {
+  background: var(--pf-bg-card);
+  border: 1px solid var(--pf-border);
+  border-radius: var(--pf-radius-lg);
+  padding: 14px;
+  margin-bottom: 12px;
+  box-shadow: var(--pf-shadow);
+}
+.ao-script-title {
+  font-family: var(--pf-font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--pf-gold-strong);
+  margin-bottom: 10px;
+}
+.ao-script-quote {
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: var(--pf-text);
+  border-left: 3px solid var(--pf-gold);
+  padding-left: 12px;
+}
+.ao-script-note {
+  margin-top: 10px;
+  font-size: 0.78rem;
+  color: var(--pf-text-muted);
+  line-height: 1.4;
+}
+.ao-script-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ao-script-list li {
+  font-size: 0.88rem;
+  line-height: 1.4;
+  padding-left: 16px;
+  position: relative;
+}
+.ao-script-list li::before {
+  content: '•';
+  position: absolute;
+  left: 0;
+  color: var(--pf-gold);
+  font-weight: 700;
+}
+.ao-objection {
+  margin-bottom: 14px;
+}
+.ao-objection:last-child { margin-bottom: 0; }
+.ao-objection-trigger {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--pf-navy);
+  margin-bottom: 6px;
+}
+.ao-objection-response {
+  font-size: 0.86rem;
+  line-height: 1.45;
+  color: var(--pf-text);
+  padding-left: 12px;
+  border-left: 2px solid var(--pf-border);
+}
+.ao-script-footer {
+  flex-shrink: 0;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  background: var(--pf-bg-card);
+  border-top: 1px solid var(--pf-border);
+}
+.ao-script-log-btn {
+  width: 100%;
+  min-height: var(--pf-touch-target);
+  background: var(--pf-nav-bg);
+  color: var(--pf-gold);
+  border: 1px solid var(--pf-gold);
+  border-radius: var(--pf-radius);
+  font-family: var(--pf-font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.ao-script-log-btn:active { background: var(--pf-gold-glow); }
+
+/* Route planner */
+.ao-queue-toolbar {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px 8px;
+  flex-shrink: 0;
+}
+.ao-start-route {
+  flex: 1;
+  min-height: 40px;
+  background: var(--pf-nav-bg);
+  color: var(--pf-gold);
+  border: 1px solid var(--pf-gold);
+  border-radius: var(--pf-radius);
+  font-family: var(--pf-font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.ao-start-route:active { background: var(--pf-gold-glow); }
+
+.ao-route-header {
+  padding: 10px 12px;
+  background: var(--pf-bg-raised);
+  border-bottom: 1px solid var(--pf-border);
+  flex-shrink: 0;
+}
+.ao-route-title {
+  font-family: var(--pf-font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--pf-gold-strong);
+  margin-bottom: 4px;
+}
+.ao-route-meta {
+  font-size: 0.78rem;
+  color: var(--pf-text-muted);
+}
+.ao-route-end {
+  margin-top: 8px;
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--pf-border);
+  background: transparent;
+  border-radius: 6px;
+  font-family: var(--pf-font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--pf-text-dim);
+  cursor: pointer;
+}
+
+.ao-stop {
+  background: var(--pf-bg-card);
+  border: 1px solid var(--pf-border);
+  border-radius: var(--pf-radius-lg);
+  padding: 12px;
+  margin-bottom: 10px;
+  box-shadow: var(--pf-shadow);
+}
+.ao-stop.current {
+  border-color: var(--pf-gold);
+  box-shadow: 0 0 0 1px var(--pf-gold-glow);
+}
+.ao-stop-num {
+  font-family: var(--pf-font-mono);
+  font-size: 0.5rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--pf-text-muted);
+  margin-bottom: 4px;
+}
+.ao-stop-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--pf-navy);
+  margin-bottom: 4px;
+}
+.ao-stop-addr {
+  font-size: 0.82rem;
+  color: var(--pf-text-dim);
+  margin-bottom: 6px;
+}
+.ao-stop-addr.missing { color: var(--pf-amber); font-style: italic; }
+.ao-stop-contact {
+  font-size: 0.8rem;
+  color: var(--pf-text-dim);
+  margin-bottom: 6px;
+}
+.ao-stop-brief {
+  font-size: 0.82rem;
+  color: var(--pf-text);
+  background: var(--pf-violet-glow);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+.ao-stop-opening {
+  font-size: 0.78rem;
+  color: var(--pf-text-muted);
+  font-style: italic;
+  margin-bottom: 10px;
+  line-height: 1.35;
+}
+.ao-stop-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.ao-stop-actions button {
+  flex: 1;
+  min-width: 72px;
+  min-height: 36px;
+  border-radius: 6px;
+  border: 1px solid var(--pf-border);
+  background: transparent;
+  font-family: var(--pf-font-mono);
+  font-size: 0.52rem;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--pf-text-dim);
+  cursor: pointer;
+}
+.ao-stop-actions button.primary {
+  background: var(--pf-gold-glow);
+  border-color: var(--pf-gold);
+  color: var(--pf-gold-strong);
+}
+.ao-stop-actions button.danger {
+  border-color: rgba(179,38,30,0.35);
+  color: var(--pf-red);
+}
+.ao-stop-actions a.btn-link {
+  flex: 1;
+  min-width: 72px;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid var(--pf-border);
+  font-family: var(--pf-font-mono);
+  font-size: 0.52rem;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--pf-text-dim);
+  text-decoration: none;
+}
+
+.ao-needs-addr {
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px dashed rgba(245, 158, 11, 0.4);
+  border-radius: var(--pf-radius-lg);
+  padding: 12px;
+  margin-bottom: 10px;
+}
+.ao-needs-addr-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--pf-amber);
+  margin-bottom: 6px;
+}
+.ao-addr-input {
+  width: 100%;
+  border: 1px solid var(--pf-border);
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 0.9rem;
+  font-family: var(--pf-font-body);
+  background: var(--pf-bg);
+  color: var(--pf-text);
+  margin-bottom: 8px;
+}
+.ao-addr-save {
+  width: 100%;
+  min-height: 36px;
+  background: var(--pf-gold-glow);
+  border: 1px solid var(--pf-gold);
+  border-radius: 6px;
+  font-family: var(--pf-font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--pf-gold-strong);
+  cursor: pointer;
+}
+
+.ao-modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  z-index: 100;
+  align-items: flex-end;
+  justify-content: center;
+}
+.ao-modal-overlay.open { display: flex; }
+.ao-modal {
+  background: var(--pf-bg-card);
+  border-top-left-radius: 16px;
+  border-top-right-radius: 16px;
+  width: 100%;
+  max-width: 480px;
+  max-height: 85vh;
+  overflow-y: auto;
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+  border-top: 2px solid var(--pf-gold);
+}
+.ao-modal h3 {
+  font-family: var(--pf-font-display);
+  font-size: 1.2rem;
+  letter-spacing: 2px;
+  color: var(--pf-navy);
+  margin-bottom: 12px;
+}
+.ao-modal-section {
+  margin-bottom: 14px;
+}
+.ao-modal-label {
+  font-family: var(--pf-font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--pf-text-muted);
+  margin-bottom: 6px;
+}
+.ao-modal-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ao-modal-opt {
+  border: 1px solid var(--pf-border);
+  background: var(--pf-bg);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 0.88rem;
+  text-align: left;
+  cursor: pointer;
+  color: var(--pf-text);
+}
+.ao-modal-opt.selected {
+  border-color: var(--pf-gold);
+  background: var(--pf-gold-glow);
+}
+.ao-modal-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.ao-modal-actions button {
+  flex: 1;
+  min-height: var(--pf-touch-target);
+  border-radius: var(--pf-radius);
+  font-family: var(--pf-font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.ao-modal-cancel {
+  border: 1px solid var(--pf-border);
+  background: transparent;
+  color: var(--pf-text-dim);
+}
+.ao-modal-confirm {
+  border: 1px solid var(--pf-gold);
+  background: var(--pf-nav-bg);
+  color: var(--pf-gold);
+}
+.ao-voice-modal .ao-voice-timer {
+  font-family: var(--pf-font-mono);
+  font-size: 2rem;
+  text-align: center;
+  letter-spacing: 2px;
+  margin: 16px 0 8px;
+  color: var(--pf-navy);
+}
+.ao-voice-modal .ao-voice-status {
+  text-align: center;
+  font-size: 0.88rem;
+  color: var(--pf-text-dim);
+  margin-bottom: 16px;
+}
+.ao-voice-modal .ao-voice-error {
+  color: #b42318;
+  font-size: 0.82rem;
+  text-align: center;
+  margin-bottom: 8px;
+}
+</style>
+<script src="/shared/maxVoiceRecorder.js"></script>
+<script src="/shared/review-navigation.js"></script>
+<script src="/shared/spreadsheetReview.js"></script>
+<link rel="stylesheet" href="/shared/spreadsheetReview.css">
+<link rel="stylesheet" href="/shared/content-review.css">
+<link rel="stylesheet" href="/shared/account-review.css">
+<script src="/shared/account-review.js" defer></script>
+</head>
+<body>
+<header class="ao-header">
+  <div class="ao-header-top">
+    <div>
+      <div class="ao-brand">MAX</div>
+      <div class="ao-sub" id="aoGreeting">Field follow-up</div>
+      <div class="ao-contact-card" id="aoContactCard" hidden>
+        <div class="ao-contact-title">Email &amp; Contact</div>
+        <div id="aoContactLines"></div>
+        <div class="ao-contact-meta" id="aoContactStatus"></div>
+      </div>
+    </div>
+    <a class="ao-crm-open" href="/ao/crm">Open CRM</a>
+  </div>
+  <div class="ao-metrics" id="metrics">
+    <div class="ao-metric"><div class="ao-metric-val" id="mVisits">—</div><div class="ao-metric-lbl">Visits</div></div>
+    <div class="ao-metric"><div class="ao-metric-val" id="mDue">—</div><div class="ao-metric-lbl">Due</div></div>
+    <div class="ao-metric"><div class="ao-metric-val" id="mOverdue">—</div><div class="ao-metric-lbl">Overdue</div></div>
+    <div class="ao-metric"><div class="ao-metric-val" id="mEsc">—</div><div class="ao-metric-lbl">Escalated</div></div>
+  </div>
+</header>
+
+<div class="ao-main">
+  <div class="ao-tabs">
+    <button class="ao-tab active" data-tab="max">Max</button>
+    <button class="ao-tab" data-tab="queue">Queue</button>
+    <button class="ao-tab" data-tab="history">History</button>
+    <button class="ao-tab" data-tab="script">Script</button>
+  </div>
+
+  <section class="ao-panel active" id="panel-max">
+    <div class="ao-modes" id="modeButtons">
+      <button class="ao-mode-btn primary" data-mode="log_visit">Log Visit</button>
+      <button class="ao-mode-btn" data-mode="follow_up">Follow Up</button>
+      <button class="ao-mode-btn" data-mode="book_walkthrough">Book Walkthrough</button>
+      <button class="ao-mode-btn" data-mode="daily_debrief">Daily Debrief</button>
+      <button class="ao-mode-btn" data-mode="ask_for_help">Ask for Help</button>
+    </div>
+    <div class="ao-conv-actions" id="convActions">
+      <button type="button" id="newConversationBtn">New conversation</button>
+      <button type="button" id="markConversationDoneBtn">Mark done</button>
+      <button type="button" id="flagRoutingBtn">Flag routing issue</button>
+      <button type="button" class="danger" id="flagConversationBtn">Flag conversation</button>
+    </div>
+    <div class="ao-done-banner" id="doneBanner" style="display:none">
+      <div id="doneBannerText">Conversation marked done.</div>
+      <div class="ao-done-banner-actions">
+        <button type="button" id="reopenConversationBtn">Reopen</button>
+        <button type="button" id="viewHistoryBtn">View history</button>
+      </div>
+    </div>
+    <div class="ao-chat" id="chat" role="log" aria-live="polite"></div>
+    <div class="ao-compose-wrap">
+      <div id="spreadsheetScope"></div>
+      <div id="spreadsheetProposal"></div>
+      <div class="ao-attach-chips" id="composerAttachmentChips" hidden></div>
+      <form class="ao-compose" id="composeForm">
+        <div class="ao-compose-plus-wrap">
+          <button type="button" class="ao-compose-plus" id="composerPlusBtn" aria-label="Add attachment" aria-expanded="false">+</button>
+          <div class="ao-compose-menu" id="composerAttachMenu" role="menu">
+            <button type="button" data-attach="voice">Voice note</button>
+            <button type="button" data-attach="spreadsheet">Upload spreadsheet</button>
+            <button type="button" data-attach="file">Upload file</button>
+            <button type="button" data-attach="image">Upload photo / screenshot</button>
+          </div>
+        </div>
+        <input id="fileInputSpreadsheet" type="file" hidden accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv">
+        <input id="fileInputDocument" type="file" hidden accept=".txt,.md,.pdf,.docx,text/plain">
+        <input id="fileInputImage" type="file" hidden accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp">
+        <input id="fileInputVoice" type="file" hidden accept="audio/*,.webm,.m4a,.mp3,.wav">
+        <input id="messageInput" type="text" placeholder="Message Max…" autocomplete="off" enterkeyhint="send">
+        <button class="ao-send" type="submit" aria-label="Send">↑</button>
+      </form>
+    </div>
+  </section>
+
+  <section class="ao-panel" id="panel-queue">
+    <div class="ao-queue-filters" id="queueFilters">
+      <button class="ao-filter active" data-filter="today">Today</button>
+      <button class="ao-filter" data-filter="overdue">Overdue</button>
+      <button class="ao-filter" data-filter="week">This Week</button>
+      <button class="ao-filter" data-filter="direct_mail">Direct Mail</button>
+      <button class="ao-filter" data-filter="phone">Phone</button>
+      <button class="ao-filter" data-filter="high">High Priority</button>
+      <button class="ao-filter" data-filter="waiting">Waiting on Jake</button>
+    </div>
+    <div class="ao-queue-toolbar" id="queueToolbar">
+      <button type="button" class="ao-start-route" id="startRouteBtn">Start Route</button>
+    </div>
+    <div class="ao-route-header" id="routeHeader" style="display:none">
+      <div class="ao-route-title" id="routeTitle">Active Route</div>
+      <div class="ao-route-meta" id="routeMeta"></div>
+      <button type="button" class="ao-route-end" id="endRouteBtn">End Route</button>
+    </div>
+    <div class="ao-queue-list" id="queueList"></div>
+    <div class="ao-queue-list" id="routeList" style="display:none"></div>
+  </section>
+
+  <section class="ao-panel" id="panel-history">
+    <div class="ao-history-list" id="historyList">
+      <div class="ao-empty">Loading conversation history…</div>
+    </div>
+  </section>
+
+  <section class="ao-panel" id="panel-script">
+    <div class="ao-script" id="scriptScroll">
+      <article class="ao-script-card">
+        <h2 class="ao-script-title">Direct Mail Follow-Up Opening</h2>
+        <p class="ao-script-quote">Hey, I'm Mike with Anchor Cleaning. We recently sent some info over about commercial cleaning. I'm just stopping by to make sure it got to the right person. Who usually handles cleaning or facility vendors here?</p>
+        <p class="ao-script-note">Use this for Campaign 001 queue items — then tap the task in Queue and log the visit with Max.</p>
+      </article>
+
+      <article class="ao-script-card">
+        <h2 class="ao-script-title">Opening</h2>
+        <p class="ao-script-quote">Hey, I'm with Anchor Cleaning. We're local and help businesses keep their spaces consistently clean. Quick question: who usually handles your cleaning or facilities vendors?</p>
+      </article>
+
+      <article class="ao-script-card">
+        <h2 class="ao-script-title">Qualifying Questions</h2>
+        <ul class="ao-script-list">
+          <li>Are you using an outside cleaner now?</li>
+          <li>How often is the space cleaned?</li>
+          <li>Any issues with consistency, communication, quality, or scheduling?</li>
+          <li>Who usually handles vendor decisions?</li>
+        </ul>
+      </article>
+
+      <article class="ao-script-card">
+        <h2 class="ao-script-title">Walkthrough Ask</h2>
+        <p class="ao-script-quote">Would it be worth having Jake stop by for a quick walkthrough and give you a second option?</p>
+      </article>
+
+      <article class="ao-script-card">
+        <h2 class="ao-script-title">Common Objections</h2>
+        <div class="ao-objection">
+          <div class="ao-objection-trigger">"We already have someone."</div>
+          <div class="ao-objection-response">Totally. A lot of the businesses we talk to already have a cleaner. Is the current service consistent?</div>
+        </div>
+        <div class="ao-objection">
+          <div class="ao-objection-trigger">"Not interested."</div>
+          <div class="ao-objection-response">No problem. Is there a better person to leave this with in case cleaning ever becomes an issue?</div>
+        </div>
+        <div class="ao-objection">
+          <div class="ao-objection-trigger">"Send info."</div>
+          <div class="ao-objection-response">Absolutely. Who should I send it to, and would a quick walkthrough be useful or too early?</div>
+        </div>
+        <div class="ao-objection">
+          <div class="ao-objection-trigger">"We're all set."</div>
+          <div class="ao-objection-response">Glad to hear it. If anything changes, who would be the best person to check back with?</div>
+        </div>
+      </article>
+
+      <article class="ao-script-card">
+        <h2 class="ao-script-title">What To Listen For</h2>
+        <ul class="ao-script-list">
+          <li>Inconsistent cleaner</li>
+          <li>Missed details</li>
+          <li>Poor communication</li>
+          <li>Complaints from staff/customers</li>
+          <li>No clear schedule</li>
+          <li>Price shopping</li>
+          <li>Multiple locations</li>
+          <li>Upcoming change, renovation, new tenant, or new manager</li>
+        </ul>
+      </article>
+
+      <article class="ao-script-card">
+        <h2 class="ao-script-title">What Not To Do</h2>
+        <ul class="ao-script-list">
+          <li>Don't quote prices</li>
+          <li>Don't promise availability</li>
+          <li>Don't criticize their current cleaner</li>
+          <li>Don't push if they clearly say no</li>
+          <li>Don't guess on insurance or contracts</li>
+          <li>Route serious questions to Jake</li>
+        </ul>
+      </article>
+
+      <article class="ao-script-card">
+        <h2 class="ao-script-title">After The Visit</h2>
+        <p class="ao-script-quote">Open Max, tap Log Visit, and tell Max what happened.</p>
+      </article>
+    </div>
+    <div class="ao-script-footer">
+      <button type="button" class="ao-script-log-btn" id="scriptLogVisit">Log Visit</button>
+    </div>
+  </section>
+</div>
+
+<div class="ao-modal-overlay" id="routeModal">
+  <div class="ao-modal" role="dialog" aria-labelledby="routeModalTitle">
+    <h3 id="routeModalTitle">Plan Route</h3>
+    <div class="ao-modal-section">
+      <div class="ao-modal-label">Route order</div>
+      <div class="ao-modal-options" id="sortOptions">
+        <button type="button" class="ao-modal-opt" data-sort="farthest_first">Farthest first, work back</button>
+        <button type="button" class="ao-modal-opt selected" data-sort="closest_first">Closest first</button>
+        <button type="button" class="ao-modal-opt" data-sort="shortest_route">Shortest route</button>
+        <button type="button" class="ao-modal-opt" data-sort="manual">Manual order (queue sequence)</button>
+      </div>
+    </div>
+    <div class="ao-modal-section">
+      <div class="ao-modal-label">Starting point</div>
+      <div class="ao-modal-options" id="startOptions">
+        <button type="button" class="ao-modal-opt selected" data-start="current_location">Current location</button>
+        <button type="button" class="ao-modal-opt" data-start="anchor_office">Anchor office</button>
+        <button type="button" class="ao-modal-opt" data-start="custom">Custom address</button>
+      </div>
+      <input class="ao-addr-input" id="customStartAddress" type="text" placeholder="Custom start address…" style="display:none;margin-top:8px">
+    </div>
+    <div class="ao-modal-section">
+      <div class="ao-modal-label">Navigation app</div>
+      <div class="ao-modal-options" id="navAppOptions">
+        <button type="button" class="ao-modal-opt selected" data-nav="google_maps">Google Maps</button>
+        <button type="button" class="ao-modal-opt" data-nav="waze">Waze</button>
+        <button type="button" class="ao-modal-opt" data-nav="apple_maps">Apple Maps</button>
+        <button type="button" class="ao-modal-opt" data-nav="ask_every_time">Ask every time</button>
+      </div>
+    </div>
+    <div class="ao-modal-actions">
+      <button type="button" class="ao-modal-cancel" id="routeModalCancel">Cancel</button>
+      <button type="button" class="ao-modal-confirm" id="routeModalConfirm">Create Route</button>
+    </div>
+  </div>
+</div>
+
+<div class="ao-modal-overlay" id="navPickerModal">
+  <div class="ao-modal" role="dialog" aria-labelledby="navPickerTitle">
+    <h3 id="navPickerTitle">Open in…</h3>
+    <div class="ao-modal-options" id="navPickerOptions">
+      <button type="button" class="ao-modal-opt" data-open-nav="google_maps">Google Maps</button>
+      <button type="button" class="ao-modal-opt" data-open-nav="waze">Waze</button>
+      <button type="button" class="ao-modal-opt" data-open-nav="apple_maps">Apple Maps</button>
+    </div>
+    <div class="ao-modal-actions">
+      <button type="button" class="ao-modal-cancel" id="navPickerCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div class="ao-modal-overlay" id="flagRoutingModal">
+  <div class="ao-modal" role="dialog" aria-labelledby="flagRoutingTitle">
+    <h3 id="flagRoutingTitle">Flag routing issue</h3>
+    <p style="font-size:0.88rem;line-height:1.45;color:var(--pf-text-dim);margin:0 0 10px">
+      Tell us what Max routed wrong. Issue type is required.
+    </p>
+    <div class="ao-modal-section">
+      <div class="ao-modal-label">Issue type</div>
+      <select class="ao-addr-input" id="flagRoutingIssueType" style="margin-bottom:10px">
+        <option value="wrong_route">Wrong route</option>
+        <option value="wrong_prospect">Wrong prospect</option>
+        <option value="wrong_mission">Wrong mission</option>
+        <option value="lost_context">Lost context</option>
+        <option value="should_have_opened_brief">Should have opened brief</option>
+        <option value="should_have_opened_conversation">Should have opened conversation</option>
+        <option value="treated_as_done_incorrectly">Treated as done incorrectly</option>
+        <option value="other">Other</option>
+      </select>
+    </div>
+    <textarea class="ao-addr-input" id="flagRoutingNote" rows="3" placeholder="What went wrong?" style="resize:vertical;min-height:72px"></textarea>
+    <div class="ao-modal-actions">
+      <button type="button" class="ao-modal-cancel" id="flagRoutingCancel">Cancel</button>
+      <button type="button" class="ao-modal-confirm" id="flagRoutingSubmit">Submit flag</button>
+    </div>
+  </div>
+</div>
+
+<div class="ao-modal-overlay" id="flagReportModal">
+  <div class="ao-modal" role="dialog" aria-labelledby="flagReportTitle">
+    <h3 id="flagReportTitle">Flag conversation</h3>
+    <p style="font-size:0.88rem;line-height:1.45;color:var(--pf-text-dim);margin:0 0 10px">
+      Capture this Max thread for operator review. Optional note:
+    </p>
+    <textarea class="ao-addr-input" id="flagReportNote" rows="3" placeholder="What went wrong?" style="resize:vertical;min-height:72px"></textarea>
+    <div class="ao-modal-actions">
+      <button type="button" class="ao-modal-cancel" id="flagReportCancel">Cancel</button>
+      <button type="button" class="ao-modal-confirm" id="flagReportSubmit">Submit report</button>
+    </div>
+  </div>
+</div>
+
+<div class="ao-modal-overlay" id="callModal">
+  <div class="ao-modal" role="dialog" aria-labelledby="callModalTitle">
+    <h3 id="callModalTitle">Call Instead</h3>
+    <div id="callModalBody"></div>
+    <div class="ao-modal-actions" id="callModalActions"></div>
+  </div>
+</div>
+
+<div class="ao-modal-overlay" id="crmLinkRecoveryModal">
+  <div class="ao-modal" role="dialog" aria-labelledby="crmLinkRecoveryTitle">
+    <h3 id="crmLinkRecoveryTitle">Prospect not linked to CRM</h3>
+    <p id="crmLinkRecoveryIntro" style="font-size:0.88rem;line-height:1.45;color:var(--pf-text-dim);margin:0 0 10px">
+      This prospect is not linked to a CRM account yet. You can link it to an existing account, create a new account, or correct the prospect details.
+    </p>
+    <div id="crmLinkRecoveryBody"></div>
+    <div class="ao-modal-actions" id="crmLinkRecoveryActions"></div>
+  </div>
+</div>
+
+<div class="ao-modal-overlay" id="voiceRecordModal">
+  <div class="ao-modal ao-voice-modal" role="dialog" aria-labelledby="voiceRecordTitle">
+    <h3 id="voiceRecordTitle">Voice note</h3>
+    <div class="ao-voice-status" id="voiceRecordStatus">Tap record and talk naturally.</div>
+    <div class="ao-voice-timer" id="voiceRecordTimer">00:00</div>
+    <div class="ao-voice-error" id="voiceRecordError" hidden></div>
+    <div class="ao-modal-actions">
+      <button type="button" class="ao-modal-cancel" id="voiceRecordCancel">Cancel</button>
+      <button type="button" class="ao-modal-confirm" id="voiceRecordPrimary">Record</button>
+    </div>
+  </div>
+</div>
+
+<div class="ao-modal-overlay" id="crmOutcomeModal">
+  <div class="ao-modal" role="dialog" aria-labelledby="crmOutcomeTitle">
+    <h3 id="crmOutcomeTitle">What happened?</h3>
+    <p style="font-size:0.88rem;line-height:1.45;color:var(--pf-text-dim);margin:0 0 10px">
+      Log the outcome before clearing today's queue. The account stays in <a href="/ao/crm">My Accounts</a>.
+    </p>
+    <div id="crmOutcomeBody"></div>
+    <div class="ao-modal-actions">
+      <button type="button" class="ao-modal-cancel" id="crmOutcomeCancel">Cancel</button>
+      <button type="button" class="ao-modal-confirm" id="crmOutcomeSave">Save &amp; update account</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const chat = document.getElementById('chat');
+const messageInput = document.getElementById('messageInput');
+const composerPlusBtn = document.getElementById('composerPlusBtn');
+const composerAttachMenu = document.getElementById('composerAttachMenu');
+const composerAttachmentChips = document.getElementById('composerAttachmentChips');
+const fileInputSpreadsheet = document.getElementById('fileInputSpreadsheet');
+const fileInputDocument = document.getElementById('fileInputDocument');
+const fileInputImage = document.getElementById('fileInputImage');
+const fileInputVoice = document.getElementById('fileInputVoice');
+let pendingComposerAttachments = [];
+let maxComposerMemory = null;
+let maxComposerConversationId = null;
+const spreadsheetReview = window.PulseforgeSpreadsheetReview.create({
+  fetch: (...args) => fetch(...args),
+  host: () => document.getElementById('spreadsheetProposal'),
+  scopeHost: () => document.getElementById('spreadsheetScope'),
+  onMessage: text => addMsg(text, 'max'),
+});
+spreadsheetReview.loadScope().catch(err => addMsg(err.message, 'system'));
+document.addEventListener('pulseforge:tenant-changed', () => {
+  spreadsheetReview.clear(); maxComposerMemory = null; maxComposerConversationId = null;
+  pendingComposerAttachments = []; renderComposerAttachmentChips();
+  spreadsheetReview.loadScope().catch(err => addMsg(err.message, 'system'));
+});
+let conversationSessionId = null;
+let lastDoneConversationId = null;
+let wizardSessionId = null;
+let activeMode = null;
+let queueFilter = 'today';
+let activeRoute = null;
+let routeSortMode = localStorage.getItem('ao_route_sort') || 'closest_first';
+let routeStartType = localStorage.getItem('ao_route_start') || 'current_location';
+let navAppPreference = localStorage.getItem('ao_nav_app') || 'google_maps';
+let crmOutcomeCache = { outcomes: [], nextActions: [] };
+let pendingCrmOutcome = null;
+let pendingCrmLinkRecovery = null;
+let crmLinkRecoveryStep = 'menu';
+let pendingNavigate = null;
+let callModalState = null;
+let voiceRecorder = null;
+let pendingVoiceReview = null;
+
+function saveRoutePreferences() {
+  localStorage.setItem('ao_route_sort', routeSortMode);
+  localStorage.setItem('ao_route_start', routeStartType);
+  localStorage.setItem('ao_nav_app', navAppPreference);
+}
+
+function applySavedRouteModalSelections() {
+  document.querySelectorAll('#sortOptions .ao-modal-opt').forEach(o => {
+    o.classList.toggle('selected', o.dataset.sort === routeSortMode);
+  });
+  document.querySelectorAll('#startOptions .ao-modal-opt').forEach(o => {
+    o.classList.toggle('selected', o.dataset.start === routeStartType);
+  });
+  document.querySelectorAll('#navAppOptions .ao-modal-opt').forEach(o => {
+    o.classList.toggle('selected', o.dataset.nav === navAppPreference);
+  });
+  document.getElementById('customStartAddress').style.display = routeStartType === 'custom' ? 'block' : 'none';
+}
+
+function openNavigate(address, urls) {
+  if (!AoNavigation.isUsableAddress(address)) return;
+  const navUrls = urls || AoNavigation.buildNavigateUrls(address);
+  if (!navUrls) return;
+
+  if (navAppPreference === 'ask_every_time') {
+    pendingNavigate = navUrls;
+    document.getElementById('navPickerModal').classList.add('open');
+    return;
+  }
+
+  const url = AoNavigation.resolveNavigateUrl(address, navUrls, navAppPreference);
+  if (url) window.open(url, '_blank', 'noopener');
+}
+
+function hideNavPicker() {
+  document.getElementById('navPickerModal').classList.remove('open');
+  pendingNavigate = null;
+}
+
+function scrollChatToBottom() {
+  requestAnimationFrame(() => {
+    chat.scrollTop = chat.scrollHeight;
+  });
+}
+
+function switchTab(tabName) {
+  document.querySelectorAll('.ao-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.tab === tabName);
+  });
+  document.querySelectorAll('.ao-panel').forEach(p => {
+    p.classList.toggle('active', p.id === 'panel-' + tabName);
+  });
+  if (tabName === 'queue') {
+    loadQueue();
+    loadActiveRoute();
+  }
+  if (tabName === 'history') {
+    loadConversationHistory();
+  }
+}
+
+function hideDoneBanner() {
+  document.getElementById('doneBanner').style.display = 'none';
+}
+
+function showDoneBanner(conversationId) {
+  lastDoneConversationId = conversationId;
+  document.getElementById('doneBannerText').textContent = 'Conversation marked done.';
+  document.getElementById('doneBanner').style.display = 'block';
+}
+
+function renderChatMessages(messages = []) {
+  chat.innerHTML = '';
+  messages.forEach(msg => {
+    if (!msg?.content) return;
+    addMsg(msg.content, msg.role === 'user' ? 'user' : msg.role === 'max' ? 'max' : 'system');
+  });
+}
+
+async function hydrateActiveConversation() {
+  try {
+    const result = await api('/api/max/conversations/active');
+    const conversation = result.conversation;
+    if (!conversation?.session_id) return;
+
+    conversationSessionId = conversation.session_id;
+    wizardSessionId = null;
+    activeMode = 'conversation';
+    renderChatMessages(conversation.messages || []);
+    hideDoneBanner();
+    if (!conversation.messages?.length) {
+      addMsg('Ask me about your accounts, log a visit, or pick a mode above. I remember every visit.', 'max');
+    }
+    messageInput.placeholder = 'Ask Max anything…';
+  } catch (err) {
+    console.error('[ao] active conversation hydrate failed:', err);
+  }
+}
+
+async function requestProspectBrief({ leadId = null, prospectId = null, businessName = '' }) {
+  switchTab('max');
+  hideDoneBanner();
+  addMsg(businessName ? `Brief requested for ${businessName}…` : 'Brief requested…', 'system');
+  try {
+    const result = await api('/api/max/prospect-brief', {
+      method: 'POST',
+      body: JSON.stringify({
+        lead_id: leadId || undefined,
+        prospect_id: prospectId || undefined,
+        session_id: conversationSessionId,
+        source: 'prospect_card_brief_button',
+      }),
+    });
+    chat.lastChild.remove();
+    conversationSessionId = result.session_id || conversationSessionId;
+    wizardSessionId = null;
+    activeMode = 'conversation';
+    addMsg('Give me the AO brief for this prospect.', 'user');
+    addMsg(result.reply, 'max');
+    messageInput.placeholder = 'Ask Max a follow-up…';
+  } catch (err) {
+    chat.lastChild.remove();
+    addMsg(err.message, 'system');
+  }
+}
+
+function historyItemCard(item) {
+  const updated = item.updated_at ? new Date(item.updated_at).toLocaleString() : '';
+  return `
+    <article class="ao-history-item" data-conversation-id="${item.conversation_id}">
+      <div class="ao-history-head">
+        <div class="ao-history-title">${escapeHtml(item.prospect_label || 'Conversation')}</div>
+        <div class="ao-history-status">${escapeHtml(item.status || 'unknown')}</div>
+      </div>
+      <div class="ao-history-preview">${escapeHtml(item.last_message_preview || 'No messages yet')}</div>
+      <div class="ao-history-meta">${updated}${item.message_count ? ` · ${item.message_count} messages` : ''}</div>
+      <div class="ao-history-actions">
+        ${item.status === 'done' || item.status === 'closed' || item.status === 'archived'
+          ? `<button type="button" class="primary" data-reopen-conversation="${item.conversation_id}">Reopen</button>`
+          : `<button type="button" data-open-conversation="${item.conversation_id}">Open</button>`}
+      </div>
+    </article>
+  `;
+}
+
+async function loadConversationHistory() {
+  const list = document.getElementById('historyList');
+  list.innerHTML = '<div class="ao-empty">Loading conversation history…</div>';
+  try {
+    const result = await api('/api/max/conversations?limit=50');
+    const conversations = result.conversations || [];
+    if (!conversations.length) {
+      list.innerHTML = '<div class="ao-empty">No conversations yet.</div>';
+      return;
+    }
+    list.innerHTML = conversations.map(historyItemCard).join('');
+  } catch (err) {
+    list.innerHTML = `<div class="ao-empty">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+async function openConversation(conversationId, { reopen = false } = {}) {
+  try {
+    const result = reopen
+      ? await api('/api/max/conversations/' + conversationId + '/reopen', { method: 'POST' })
+      : await api('/api/max/conversations/' + conversationId);
+    const conversation = reopen ? result : result.conversation;
+    conversationSessionId = conversation.session_id || conversation.conversation_id;
+    wizardSessionId = null;
+    activeMode = 'conversation';
+    switchTab('max');
+    renderChatMessages(conversation.messages || []);
+    if (reopen && conversation.reply) addMsg(conversation.reply, 'max');
+    hideDoneBanner();
+    messageInput.placeholder = 'Ask Max a follow-up…';
+    loadConversationHistory();
+  } catch (err) {
+    addMsg(err.message, 'system');
+  }
+}
+
+async function reopenConversation(conversationId) {
+  return openConversation(conversationId, { reopen: true });
+}
+
+async function markConversationDone() {
+  if (!conversationSessionId) {
+    addMsg('Start a conversation with Max before marking it done.', 'system');
+    return;
+  }
+  try {
+    const doneId = conversationSessionId;
+    await api('/api/max/conversations/' + doneId + '/done', { method: 'POST' });
+    showDoneBanner(doneId);
+    conversationSessionId = null;
+    addMsg('Conversation marked done. You can reopen it from History anytime.', 'system');
+    loadConversationHistory();
+  } catch (err) {
+    addMsg(err.message, 'system');
+  }
+}
+
+function showFlagRoutingModal() {
+  if (!conversationSessionId) {
+    addMsg('Start a conversation with Max before flagging a routing issue.', 'system');
+    return;
+  }
+  document.getElementById('flagRoutingIssueType').value = 'wrong_route';
+  document.getElementById('flagRoutingNote').value = '';
+  document.getElementById('flagRoutingModal').classList.add('open');
+}
+
+function hideFlagRoutingModal() {
+  document.getElementById('flagRoutingModal').classList.remove('open');
+}
+
+async function submitFlagRouting() {
+  if (!conversationSessionId) return;
+  const issueType = document.getElementById('flagRoutingIssueType').value;
+  const notes = document.getElementById('flagRoutingNote').value.trim();
+  try {
+    const result = await api('/api/max/flag-routing', {
+      method: 'POST',
+      body: JSON.stringify({
+        session_id: conversationSessionId,
+        conversation_id: conversationSessionId,
+        issue_type: issueType,
+        notes,
+      }),
+    });
+    hideFlagRoutingModal();
+    addMsg(`Routing issue flagged (${result.flag.id}).`, 'system');
+  } catch (err) {
+    addMsg(err.message, 'system');
+  }
+}
+
+async function api(path, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+  const res = await fetch('/ao' + path, {
+    credentials: 'same-origin',
+    ...options,
+    headers,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401) throw new Error('Session expired — log in again');
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
+}
+
+function addMsg(text, role) {
+  const el = document.createElement('div');
+  el.className = 'ao-msg ' + role;
+  el.textContent = text;
+  chat.appendChild(el);
+  scrollChatToBottom();
+}
+
+function clearChat() {
+  chat.innerHTML = '';
+  wizardSessionId = null;
+  activeMode = null;
+}
+
+function activeSessionId() {
+  return wizardSessionId || conversationSessionId;
+}
+
+function isConversationMode() {
+  return !wizardSessionId && Boolean(conversationSessionId);
+}
+
+function renderCommunicationIdentity(profile) {
+  const card = document.getElementById('aoContactCard');
+  const lines = document.getElementById('aoContactLines');
+  const status = document.getElementById('aoContactStatus');
+  const ci = profile?.communication_identity;
+  if (!ci || profile?.role !== 'ao') {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+  const nameLine = profile.name ? `${profile.name}` : '';
+  const roleLine = ci.role || 'Acquisition Operator';
+  lines.innerHTML = [
+    nameLine ? `<div><strong>${nameLine}</strong></div>` : '',
+    `<div>${roleLine}</div>`,
+    ci.email ? `<div>${ci.email}</div>` : '',
+    ci.phone ? `<div>${ci.phone}</div>` : '',
+  ].filter(Boolean).join('');
+  const mailbox = ci.mailboxStatusLabel || 'Not configured';
+  const sending = ci.sendingEnabled ? 'Enabled' : 'Disabled';
+  status.textContent = `Mailbox: ${mailbox} · Sending: ${sending}`;
+}
+
+function setGreeting(profile) {
+  const el = document.getElementById('aoGreeting');
+  if (profile?.role === 'ao' && profile?.name) {
+    el.textContent = `Hey ${profile.name.split(' ')[0]} · Field Mode`;
+  } else {
+    el.textContent = 'Field Mode';
+  }
+  renderCommunicationIdentity(profile);
+}
+
+async function loadProfile() {
+  const profile = await api('/api/profile');
+  setGreeting(profile);
+  return profile;
+}
+
+async function loadMetrics() {
+  const m = await api('/api/metrics/today');
+  document.getElementById('mVisits').textContent = m.visits_logged ?? '0';
+  document.getElementById('mDue').textContent = m.due_today ?? '0';
+  document.getElementById('mOverdue').textContent = m.overdue ?? '0';
+  document.getElementById('mEsc').textContent = m.pending_escalations ?? '0';
+  return m;
+}
+
+async function startPhoneFollowUp(taskId) {
+  activeMode = 'phone_follow_up';
+  messageInput.placeholder = 'Reply to Max…';
+  switchTab('max');
+  addMsg('Starting phone follow-up log…', 'system');
+  try {
+    const result = await api('/api/max/start', {
+      method: 'POST',
+      body: JSON.stringify({
+        mode: 'phone_follow_up',
+        task_id: taskId,
+        conversation_session_id: conversationSessionId,
+      }),
+    });
+    chat.lastChild.remove();
+    addMsg(result.reply, 'max');
+    wizardSessionId = result.session_id || null;
+  } catch (err) {
+    chat.lastChild.remove();
+    addMsg(err.message, 'system');
+  }
+}
+
+function hideCallModal() {
+  document.getElementById('callModal').classList.remove('open');
+  callModalState = null;
+}
+
+function renderCallModal() {
+  const body = document.getElementById('callModalBody');
+  const actions = document.getElementById('callModalActions');
+  if (!callModalState) return;
+
+  const { business_name, contact_phone, has_phone, task_id, tel_url } = callModalState;
+  document.getElementById('callModalTitle').textContent = has_phone
+    ? `Call ${business_name}`
+    : 'Phone needed';
+
+  if (!has_phone) {
+    body.innerHTML = `
+      <p style="font-size:0.9rem;line-height:1.45;margin-bottom:10px">No phone number saved. Add one or escalate to Jake?</p>
+      <input class="ao-addr-input" id="callPhoneInput" type="tel" placeholder="Phone number…">
+    `;
+    actions.innerHTML = `
+      <button type="button" class="ao-modal-cancel" id="callModalClose">Cancel</button>
+      <button type="button" class="ao-modal-confirm" id="callSavePhone">Save & Continue</button>
+      <button type="button" class="ao-modal-cancel" style="color:var(--pf-red)" id="callEscalateNoPhone">Escalate to Jake</button>
+    `;
+    return;
+  }
+
+  body.innerHTML = `
+    <p style="font-size:0.9rem;line-height:1.45;margin-bottom:8px">${escapeHtml(business_name)}</p>
+    <p style="font-family:var(--pf-font-mono);font-size:0.85rem;color:var(--pf-gold-strong)">${escapeHtml(contact_phone)}</p>
+  `;
+  actions.innerHTML = `
+    <a class="ao-modal-confirm" href="${escapeHtml(tel_url)}" style="display:flex;align-items:center;justify-content:center;text-decoration:none">Call Now</a>
+    <button type="button" class="ao-modal-confirm" id="callLogWithMax">Log Call With Max</button>
+    <button type="button" class="ao-modal-cancel" id="callMoveLater">Move Later</button>
+    <button type="button" class="ao-modal-cancel" style="color:var(--pf-red)" id="callEscalate">Escalate</button>
+  `;
+}
+
+async function openCallInstead(taskId) {
+  try {
+    const result = await api('/api/tasks/' + taskId + '/call-instead', { method: 'POST', body: JSON.stringify({}) });
+    callModalState = {
+      task_id: taskId,
+      business_name: result.business_name,
+      contact_phone: result.contact_phone,
+      has_phone: result.has_phone,
+      tel_url: result.tel_url,
+    };
+    if (result.route) {
+      activeRoute = result.route;
+      renderRouteView();
+    } else {
+      loadActiveRoute();
+    }
+    loadQueue();
+    renderCallModal();
+    document.getElementById('callModal').classList.add('open');
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+document.getElementById('callModal').addEventListener('click', e => {
+  if (e.target.id === 'callModal') hideCallModal();
+});
+
+document.getElementById('callModal').addEventListener('click', async e => {
+  if (!callModalState) return;
+  const taskId = callModalState.task_id;
+
+  if (e.target.id === 'callModalClose') {
+    hideCallModal();
+    return;
+  }
+
+  try {
+    if (e.target.id === 'callSavePhone') {
+      const phone = document.getElementById('callPhoneInput').value.trim();
+      if (!phone) {
+        alert('Enter a phone number or escalate to Jake.');
+        return;
+      }
+      const result = await api('/api/tasks/' + taskId + '/call-instead', {
+        method: 'POST',
+        body: JSON.stringify({ phone }),
+      });
+      callModalState = {
+        ...callModalState,
+        contact_phone: result.contact_phone,
+        has_phone: result.has_phone,
+        tel_url: result.tel_url,
+      };
+      renderCallModal();
+      return;
+    }
+
+    if (e.target.id === 'callLogWithMax') {
+      hideCallModal();
+      await startPhoneFollowUp(taskId);
+      return;
+    }
+
+    if (e.target.id === 'callMoveLater') {
+      const d = new Date();
+      d.setDate(d.getDate() + 2);
+      await api('/api/tasks/' + taskId, {
+        method: 'PATCH',
+        body: JSON.stringify({ due_date: d.toISOString().slice(0, 10) }),
+      });
+      hideCallModal();
+      loadQueue();
+      return;
+    }
+
+    if (e.target.id === 'callEscalate' || e.target.id === 'callEscalateNoPhone') {
+      await api('/api/tasks/' + taskId + '/escalate', {
+        method: 'POST',
+        body: JSON.stringify({ reason: 'high_interest', summary: 'AO escalated from Call Instead' }),
+      });
+      hideCallModal();
+      loadQueue();
+      loadMetrics();
+    }
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
+async function startRouteFollowUp(taskId, isDirectMail) {
+  activeMode = isDirectMail ? 'direct_mail_follow_up' : 'route_follow_up';
+  messageInput.placeholder = 'Reply to Max…';
+  switchTab('max');
+  addMsg('Starting route stop log…', 'system');
+  try {
+    const mode = isDirectMail ? 'direct_mail_follow_up' : 'route_follow_up';
+    const result = await api('/api/max/start', {
+      method: 'POST',
+      body: JSON.stringify({
+        mode,
+        task_id: taskId,
+        conversation_session_id: conversationSessionId,
+      }),
+    });
+    chat.lastChild.remove();
+    addMsg(result.reply, 'max');
+    wizardSessionId = result.session_id || null;
+  } catch (err) {
+    chat.lastChild.remove();
+    addMsg(err.message, 'system');
+  }
+}
+
+async function startDirectMailFollowUp(taskId) {
+  return startRouteFollowUp(taskId, true);
+}
+
+async function startMode(mode) {
+  activeMode = mode;
+  messageInput.placeholder = 'Reply to Max…';
+  if (mode !== 'follow_up') {
+    addMsg('Starting…', 'system');
+  }
+  try {
+    const result = await api('/api/max/start', {
+      method: 'POST',
+      body: JSON.stringify({
+        mode,
+        conversation_session_id: conversationSessionId,
+      }),
+    });
+    if (mode !== 'follow_up') chat.lastChild.remove();
+    addMsg(result.reply, 'max');
+    if (result.mode === 'conversation') {
+      conversationSessionId = result.session_id || null;
+      wizardSessionId = null;
+    } else {
+      wizardSessionId = result.session_id || null;
+    }
+    if (result.show_queue) {
+      switchTab('queue');
+    }
+  } catch (err) {
+    chat.lastChild.remove();
+    addMsg(err.message, 'system');
+  }
+}
+
+// Composer context is page-local; never recover tenant/actor data from unscoped session storage.
+function loadMaxComposerMemory() {}
+function saveMaxComposerMemory(mem) { maxComposerMemory = mem || null; }
+
+function renderComposerAttachmentChips() {
+  if (!composerAttachmentChips) return;
+  if (!pendingComposerAttachments.length) {
+    composerAttachmentChips.hidden = true;
+    composerAttachmentChips.innerHTML = '';
+    return;
+  }
+  composerAttachmentChips.hidden = false;
+  composerAttachmentChips.innerHTML = pendingComposerAttachments
+    .map((a, idx) => `<span class="ao-attach-chip">${escapeHtml(a.file.name)} <button type="button" data-remove-attach="${idx}" aria-label="Remove" style="border:none;background:none;color:inherit;cursor:pointer">×</button></span>`)
+    .join('');
+  composerAttachmentChips.querySelectorAll('[data-remove-attach]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      pendingComposerAttachments.splice(Number(btn.getAttribute('data-remove-attach')), 1);
+      renderComposerAttachmentChips();
+    });
+  });
+}
+
+function toggleComposerMenu(open) {
+  if (!composerAttachMenu || !composerPlusBtn) return;
+  const next = open ?? !composerAttachMenu.classList.contains('open');
+  composerAttachMenu.classList.toggle('open', next);
+  composerPlusBtn.setAttribute('aria-expanded', next ? 'true' : 'false');
+}
+
+function inferComposerAttachmentType(file) {
+  const name = (file.name || '').toLowerCase();
+  if (/\.(xlsx|xls|csv)$/.test(name)) return 'spreadsheet';
+  if (/\.(png|jpe?g|webp|gif)$/.test(name) || (file.type || '').startsWith('image/')) return 'image';
+  if ((file.type || '').startsWith('audio/')) return 'voice';
+  return 'document';
+}
+
+function queueComposerFile(file) {
+  if (!file) return;
+  pendingComposerAttachments.push({ file, type: inferComposerAttachmentType(file) });
+  renderComposerAttachmentChips();
+}
+
+async function submitComposerTurn(text, { confirm = false, attachments = null, durationMs = null } = {}) {
+  loadMaxComposerMemory();
+  if (!maxComposerConversationId) {
+    maxComposerConversationId = `ao-${Date.now()}`;
+  }
+  const form = new FormData();
+  const isSpreadsheet = (attachments || pendingComposerAttachments).some(entry => inferComposerAttachmentType(entry.file || entry) === 'spreadsheet');
+  if (isSpreadsheet) await spreadsheetReview.appendScope(form);
+  const reviewEpoch = spreadsheetReview.token();
+  form.append('text', text || '');
+  form.append('conversation_id', maxComposerConversationId);
+  if (confirm) form.append('confirm', 'true');
+  if (maxComposerMemory) form.append('conversation_memory', JSON.stringify(maxComposerMemory));
+  const attachList = attachments || pendingComposerAttachments;
+  attachList.forEach((entry) => {
+    const file = entry.file || entry;
+    form.append('files', file, file.name);
+    if (entry.durationMs != null) form.append('duration_ms', String(entry.durationMs));
+  });
+  if (durationMs != null) form.append('duration_ms', String(durationMs));
+  const res = await fetch('/api/v1/max/composer', {
+    method: 'POST',
+    credentials: 'same-origin',
+    body: form,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.message || data.error || 'Composer submission failed');
+  }
+  if (isSpreadsheet && reviewEpoch !== spreadsheetReview.token()) throw new Error('Review scope changed; upload again in this workspace.');
+  if (data.conversation_memory && !data.spreadsheet_proposal) saveMaxComposerMemory(data.conversation_memory);
+  spreadsheetReview.accept(data, reviewEpoch);
+  return data;
+}
+
+function formatComposerMaxReply(data) {
+  if (data.voice_review_required && data.understanding_preview) {
+    const header = data.transcript
+      ? `I understood:\n\n${data.transcript}\n\n${data.understanding_preview}`
+      : `I understood:\n\n${data.understanding_preview}`;
+    return `${header}\n\nReply Save to commit, or edit the transcript / add a correction and send again.`;
+  }
+  if (data.operational_response) return data.operational_response;
+  if (data.batch_preview?.summary) return data.batch_preview.summary;
+  if (data.attachment_task_intent && data.reconciliation_plan && !data.understanding_preview) {
+    return 'Spreadsheet reconciliation is ready — review the plan before saving.';
+  }
+  if (data.understanding_preview && !/stay curious/i.test(data.understanding_preview)) {
+    return data.understanding_preview;
+  }
+  if (data.understanding_preview) return data.understanding_preview;
+  if (data.preview_only && data.review_required) {
+    return `${data.batch_preview?.summary || 'Review required.'}\n\nReply “confirm” after checking, or adjust your message.`;
+  }
+  if (data.clarification_required) return data.clarification_required;
+  if (data.receipt) return typeof data.receipt === 'string' ? data.receipt : (data.receipt.title || 'Update recorded.');
+  return 'Got it — I processed that update.';
+}
+
+function hideVoiceRecordModal() {
+  document.getElementById('voiceRecordModal')?.classList.remove('open');
+  document.getElementById('voiceRecordError').hidden = true;
+  voiceRecorder?.cancel();
+  voiceRecorder = null;
+}
+
+function showVoiceRecordError(msg) {
+  const el = document.getElementById('voiceRecordError');
+  if (!el) return;
+  el.hidden = !msg;
+  el.textContent = msg || '';
+}
+
+function openVoiceRecordModal() {
+  const modal = document.getElementById('voiceRecordModal');
+  if (!modal || !window.MaxVoiceRecorder) {
+    fileInputVoice?.click();
+    return;
+  }
+  showVoiceRecordError('');
+  document.getElementById('voiceRecordStatus').textContent = 'Tap record and talk naturally.';
+  document.getElementById('voiceRecordTimer').textContent = '00:00';
+  const primary = document.getElementById('voiceRecordPrimary');
+  primary.textContent = 'Record';
+  voiceRecorder = MaxVoiceRecorder.create({
+    onEvent(event, detail) {
+      if (event === 'tick') {
+        document.getElementById('voiceRecordTimer').textContent = detail.label;
+      }
+      if (event === 'warn') {
+        document.getElementById('voiceRecordStatus').textContent = 'Approaching 5 minute limit…';
+      }
+      if (event === 'error') {
+        showVoiceRecordError('Recording failed. Try again.');
+      }
+      if (event === 'stopped' && detail.blob) {
+        document.getElementById('voiceRecordStatus').textContent = 'Processing…';
+        const file = voiceRecorder.toFile(`voice-${Date.now()}`);
+        if (file) {
+          pendingComposerAttachments = [{ file, type: 'voice', durationMs: detail.durationMs }];
+          renderComposerAttachmentChips();
+          hideVoiceRecordModal();
+          processVoiceComposerPreview().catch(err => addMsg(err.message, 'system'));
+        }
+      }
+    },
+  });
+  modal.classList.add('open');
+}
+
+async function processVoiceComposerPreview() {
+  if (!pendingComposerAttachments.length) return;
+  addMsg('[Voice note]', 'user');
+  const data = await submitComposerTurn('', { confirm: false });
+  pendingVoiceReview = {
+    attachments: pendingComposerAttachments.slice(),
+    envelopeId: data.envelope?.id,
+  };
+  addMsg(formatComposerMaxReply(data), 'max');
+  if (data.transcript) {
+    messageInput.placeholder = 'Edit transcript or type Save to commit…';
+  }
+}
+
+async function askMaxFreeform(text) {
+  const result = await api('/api/max/ask', {
+    method: 'POST',
+    body: JSON.stringify({
+      message: text.trim(),
+      session_id: conversationSessionId,
+    }),
+  });
+  conversationSessionId = result.session_id || conversationSessionId;
+  addMsg(result.reply, 'max');
+}
+
+async function sendMessage(text) {
+  const trimmed = text.trim();
+  const hasAttachments = pendingComposerAttachments.length > 0;
+  if (!trimmed && !hasAttachments) return;
+
+  if (!hasAttachments && !spreadsheetReview.hasPending() && !pendingVoiceReview && !wizardSessionId) {
+    const reviewResult = await window.PulseforgeReviewNavigation?.routeText(trimmed);
+    if (reviewResult) {
+      if (reviewResult === true) messageInput.value = '';
+      return;
+    }
+  }
+
+  if (!hasAttachments && spreadsheetReview.hasPending()) {
+    if (trimmed) addMsg(trimmed, 'user');
+    messageInput.value = '';
+    try { await spreadsheetReview.handleText(trimmed); } catch (err) { addMsg(err.message, 'system'); }
+    return;
+  }
+
+  if (pendingVoiceReview && !wizardSessionId) {
+    const save = /^(save|confirm|yes)$/i.test(trimmed);
+    const correction = trimmed && !save;
+    if (trimmed) addMsg(trimmed, 'user');
+    messageInput.value = '';
+    try {
+      const data = await submitComposerTurn(correction || '', {
+        confirm: save,
+        attachments: save ? pendingVoiceReview.attachments : [],
+      });
+      addMsg(formatComposerMaxReply(data), 'max');
+      if (save || (!data.preview_only && data.ok)) {
+        pendingVoiceReview = null;
+        pendingComposerAttachments = [];
+        renderComposerAttachmentChips();
+        messageInput.placeholder = 'Message Max…';
+      }
+    } catch (err) {
+      addMsg(err.message, 'system');
+    }
+    return;
+  }
+
+  if (trimmed) addMsg(trimmed, 'user');
+  else addMsg(`[${pendingComposerAttachments.length} attachment(s)]`, 'user');
+  messageInput.value = '';
+
+  if (hasAttachments && !wizardSessionId) {
+    try {
+      const confirm = /^confirm$/i.test(trimmed) || /^save$/i.test(trimmed);
+      const data = await submitComposerTurn(trimmed, { confirm });
+      addMsg(formatComposerMaxReply(data), 'max');
+      if (data.voice_review_required) {
+        pendingVoiceReview = { attachments: pendingComposerAttachments.slice(), envelopeId: data.envelope?.id };
+      } else {
+        pendingComposerAttachments = [];
+        pendingVoiceReview = null;
+      }
+      renderComposerAttachmentChips();
+      toggleComposerMenu(false);
+    } catch (err) {
+      addMsg(err.message, 'system');
+    }
+    return;
+  }
+
+  if (wizardSessionId) {
+    try {
+      const result = await api('/api/max/respond', {
+        method: 'POST',
+        body: JSON.stringify({ session_id: wizardSessionId, message: text.trim() }),
+      });
+      addMsg(result.reply, 'max');
+      if (result.completed) {
+        wizardSessionId = null;
+        if (result.conversation_session_id) {
+          conversationSessionId = result.conversation_session_id;
+        }
+        messageInput.placeholder = 'Ask Max a follow-up…';
+        loadMetrics();
+        loadQueue();
+        if (result.route) {
+          activeRoute = result.route;
+          renderRouteView();
+        } else {
+          loadActiveRoute();
+        }
+      }
+    } catch (err) {
+      addMsg(err.message, 'system');
+    }
+    return;
+  }
+
+  try {
+    await askMaxFreeform(text);
+  } catch (err) {
+    addMsg(err.message, 'system');
+  }
+}
+
+async function startNewConversation() {
+  spreadsheetReview.clear(); maxComposerMemory = null; maxComposerConversationId = null;
+  try {
+    const result = await api('/api/max/new-conversation', {
+      method: 'POST',
+      body: JSON.stringify({ previous_session_id: conversationSessionId }),
+    });
+    conversationSessionId = result.session_id;
+    wizardSessionId = null;
+    activeMode = 'conversation';
+    chat.innerHTML = '';
+    hideDoneBanner();
+    addMsg(result.reply, 'max');
+    messageInput.placeholder = 'Ask Max anything…';
+    loadConversationHistory();
+  } catch (err) {
+    addMsg(err.message, 'system');
+  }
+}
+
+function showFlagReportModal() {
+  if (!conversationSessionId) {
+    addMsg('Start a conversation with Max before flagging a report.', 'system');
+    return;
+  }
+  document.getElementById('flagReportNote').value = '';
+  document.getElementById('flagReportModal').classList.add('open');
+}
+
+function hideFlagReportModal() {
+  document.getElementById('flagReportModal').classList.remove('open');
+}
+
+async function submitFlagReport() {
+  if (!conversationSessionId) return;
+  const note = document.getElementById('flagReportNote').value.trim();
+  try {
+    const result = await api('/api/max/report', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: conversationSessionId, note }),
+    });
+    hideFlagReportModal();
+    const st = result.status || 'open';
+    if (result.flagged_for_jake && result.flag_id) {
+      addMsg(
+        result.duplicate
+          ? `Already flagged for Jake (${st}).`
+          : `Flagged for Jake (${st}) — flag ${result.flag_id.slice(0, 8)}…`,
+        'system'
+      );
+    } else {
+      addMsg(`Could not escalate to Jake: ${result.error || 'unknown error'}`, 'system');
+    }
+  } catch (err) {
+    addMsg(err.message, 'system');
+  }
+}
+
+function taskCard(task) {
+  const cls = ['ao-task'];
+  if (task.priority === 'high') cls.push('high');
+  if (task.priority === 'warm') cls.push('warm');
+  if (task.waiting_on_jake) cls.push('waiting');
+  const due = AoQueueFormat.formatDueDateLabel(task.due_date);
+  const isDirectMail = task.attribution_source === 'direct_mail_campaign';
+  const badge = isDirectMail
+    ? `<div class="ao-task-badge">Direct Mail${task.campaign_name ? ' · ' + escapeHtml(task.campaign_name) : ''}</div>`
+    : '';
+  const addrLine = task.address
+    ? `<div class="ao-task-meta">${escapeHtml(task.address)}</div>`
+    : `<div class="ao-task-meta" style="color:var(--pf-amber);font-style:italic">Address needed</div>`;
+  const isPhoneFollowUp = task.next_action === 'phone_follow_up';
+  const phoneBadge = isPhoneFollowUp
+    ? `<div class="ao-task-badge" style="color:var(--pf-violet);background:rgba(109,91,208,0.12);border-color:rgba(109,91,208,0.35)">Phone Follow-up</div>`
+    : '';
+  const logBtn = isPhoneFollowUp
+    ? `<button class="primary" data-log-phone="${task.id}">Log Call With Max</button>`
+    : isDirectMail
+      ? `<button class="primary" data-log-follow-up="${task.id}">Log with Max</button>`
+      : '';
+  const callInsteadBtn = !task.call_prohibited && !isPhoneFollowUp && (isDirectMail || task.next_action === 'in_person_revisit')
+    ? `<button data-call-instead="${task.id}">Call Instead</button>`
+    : '';
+  const callNowBtn = !task.call_prohibited && isPhoneFollowUp && task.contact_phone
+    ? `<a class="btn-link" href="tel:${String(task.contact_phone).replace(/[^\d+]/g, '')}" style="display:flex;align-items:center;justify-content:center;text-decoration:none">Call Now</a>`
+    : !task.call_prohibited && isPhoneFollowUp
+      ? `<button data-call-instead="${task.id}">Add Phone</button>`
+      : '';
+  return `
+    <article class="${cls.join(' ')}" data-task-id="${task.id}" data-lead-id="${task.lead_id || ''}">
+      ${badge}
+      ${phoneBadge}
+      <div class="ao-task-head">
+        <div class="ao-task-name">${escapeHtml(task.business_name || 'Unknown')}</div>
+        <div class="ao-task-due">${due}</div>
+      </div>
+      ${addrLine}
+      <div class="ao-task-meta">${escapeHtml(task.contact_name || 'No contact')} · ${escapeHtml(task.next_action || 'Follow up')}</div>
+      ${task.suggested_message ? `<div class="ao-task-msg">"${escapeHtml(task.suggested_message)}"</div>` : ''}
+      <div class="ao-task-actions">
+        <button data-brief-lead="${task.lead_id || ''}" data-brief-name="${escapeHtml(task.business_name || '')}">Brief</button>
+        ${callNowBtn}
+        ${logBtn}
+        ${callInsteadBtn}
+        <button${isDirectMail || isPhoneFollowUp ? '' : ' class="primary"'} data-done="${task.id}" data-crm-prospect="${task.crm_prospect_id || ''}">Done</button>
+        <button data-reschedule="${task.id}">+2 Days</button>
+        <button class="danger" data-escalate="${task.id}">Escalate</button>
+      </div>
+    </article>
+  `;
+}
+
+function stopCard(stop, isCurrent) {
+  const cls = ['ao-stop'];
+  if (isCurrent) cls.push('current');
+  const due = AoQueueFormat.formatDueDateLabel(stop.due_date);
+  const badge = stop.source_badge
+    ? `<div class="ao-task-badge">${escapeHtml(stop.source_badge)}</div>`
+    : '';
+  const addrClass = stop.address_usable ? 'ao-stop-addr' : 'ao-stop-addr missing';
+  const addrText = stop.address_usable ? escapeHtml(stop.address) : 'Address needed';
+  const isDirectMail = stop.attribution_source === 'direct_mail_campaign';
+  const navBtn = stop.address_usable
+    ? `<button type="button" class="btn-link" data-navigate="${escapeHtml(stop.address)}">Navigate</button>`
+    : `<button type="button" disabled title="Address needed">Navigate</button>`;
+  return `
+    <article class="${cls.join(' ')}" data-stop-id="${stop.id}" data-task-id="${stop.task_id}">
+      <div class="ao-stop-num">Stop ${stop.sequence}${isCurrent ? ' · Up next' : ''}</div>
+      ${badge}
+      <div class="ao-stop-name">${escapeHtml(stop.business_name)}</div>
+      <div class="${addrClass}">${addrText}</div>
+      <div class="ao-stop-contact">${escapeHtml(stop.contact_line || 'No contact yet')}</div>
+      <div class="ao-stop-meta ao-task-due" style="margin-bottom:6px">${due}</div>
+      <div class="ao-stop-brief">${escapeHtml(stop.brief)}</div>
+      <div class="ao-stop-opening">"${escapeHtml(stop.opening)}"</div>
+      <div class="ao-stop-actions">
+        <button data-brief-lead="${stop.lead_id || ''}" data-brief-name="${escapeHtml(stop.business_name || '')}">Brief</button>
+        ${navBtn}
+        <button data-route-log="${stop.task_id}" data-direct-mail="${isDirectMail ? '1' : '0'}" class="primary">Log with Max</button>
+        <button data-call-instead="${stop.task_id}">Call Instead</button>
+        <button data-route-done="${stop.id}">Done</button>
+        <button data-route-skip="${stop.id}">Skip</button>
+        <button data-route-later="${stop.id}">Move Later</button>
+        <button class="danger" data-route-escalate="${stop.task_id}">Escalate</button>
+      </div>
+    </article>
+  `;
+}
+
+function needsAddressCard(item) {
+  return `
+    <div class="ao-needs-addr" data-lead-id="${item.lead_id}">
+      <div class="ao-needs-addr-title">${escapeHtml(item.business_name)} — Address needed</div>
+      <input class="ao-addr-input" type="text" placeholder="Enter business address…" data-addr-input="${item.lead_id}">
+      <button type="button" class="ao-addr-save" data-addr-save="${item.lead_id}">Save Address</button>
+    </div>
+  `;
+}
+
+function showRouteModal() {
+  applySavedRouteModalSelections();
+  document.getElementById('routeModal').classList.add('open');
+}
+
+function hideRouteModal() {
+  document.getElementById('routeModal').classList.remove('open');
+}
+
+function getGeolocation() {
+  return new Promise(resolve => {
+    if (!navigator.geolocation) return resolve(null);
+    navigator.geolocation.getCurrentPosition(
+      pos => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      () => resolve(null),
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 },
+    );
+  });
+}
+
+async function startRoute() {
+  hideRouteModal();
+  saveRoutePreferences();
+  const list = document.getElementById('routeList');
+  list.innerHTML = '<div class="ao-empty">Building route…</div>';
+
+  const body = {
+    filter: queueFilter,
+    sort_mode: routeSortMode,
+    start_point_type: routeStartType,
+  };
+
+  if (routeStartType === 'custom') {
+    body.start_address = document.getElementById('customStartAddress').value.trim();
+    if (!body.start_address) {
+      alert('Enter a custom start address');
+      showRouteModal();
+      return;
+    }
+  } else if (routeStartType === 'current_location') {
+    const loc = await getGeolocation();
+    if (loc) {
+      body.start_lat = loc.lat;
+      body.start_lng = loc.lng;
+    }
+  }
+
+  try {
+    const result = await api('/api/routes/start', { method: 'POST', body: JSON.stringify(body) });
+    activeRoute = result.route;
+    renderRouteView(result.needs_address || []);
+    if (result.skipped_no_address) {
+      addMsg(`${result.skipped_no_address} stop(s) skipped — add addresses below the route.`, 'system');
+    }
+  } catch (err) {
+    alert(err.message);
+    loadQueue();
+  }
+}
+
+function renderRouteView(needsAddress = []) {
+  const hasRoute = activeRoute && activeRoute.status === 'active' && activeRoute.stops?.length;
+  document.getElementById('routeHeader').style.display = hasRoute ? 'block' : 'none';
+  document.getElementById('queueList').style.display = hasRoute ? 'none' : 'block';
+  document.getElementById('routeList').style.display = hasRoute ? 'block' : 'none';
+  document.getElementById('startRouteBtn').style.display = hasRoute ? 'none' : 'block';
+
+  if (!hasRoute) {
+    document.getElementById('routeList').innerHTML = '';
+    return;
+  }
+
+  const pending = activeRoute.stops.filter(s => s.status === 'pending');
+  const currentId = pending[0]?.id;
+  document.getElementById('routeTitle').textContent = `Route · ${pending.length} stop${pending.length === 1 ? '' : 's'} left`;
+  document.getElementById('routeMeta').textContent = `${activeRoute.sort_mode.replace(/_/g, ' ')} · ${activeRoute.queue_filter.replace(/_/g, ' ')}`;
+
+  let html = activeRoute.stops
+    .filter(s => s.status === 'pending')
+    .map(s => stopCard(s, s.id === currentId))
+    .join('');
+
+  const needs = needsAddress.length ? needsAddress : (activeRoute.needs_address || []);
+  if (needs.length) {
+    html += '<div class="ao-empty" style="padding:16px 0 8px;font-size:0.78rem">Needs address before adding to route:</div>';
+    html += needs.map(needsAddressCard).join('');
+  }
+
+  if (!html) {
+    html = '<div class="ao-empty">Route complete — nice work.</div>';
+  }
+
+  document.getElementById('routeList').innerHTML = html;
+}
+
+async function loadActiveRoute() {
+  try {
+    const data = await api('/api/routes/active');
+    activeRoute = data.route;
+    renderRouteView();
+  } catch (err) {
+    console.error('[ao] active route load failed:', err);
+  }
+}
+
+async function handleRouteStopAction(stopId, status) {
+  const result = await api('/api/routes/stops/' + stopId, {
+    method: 'PATCH',
+    body: JSON.stringify({ status }),
+  });
+  activeRoute = result.route;
+  renderRouteView();
+  loadMetrics();
+  if (result.next_stop_debrief && status === 'done') {
+    switchTab('max');
+    addMsg(result.next_stop_debrief, 'max');
+  }
+}
+
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+async function ensureCrmOutcomeMeta() {
+  if (crmOutcomeCache.outcomes.length) return crmOutcomeCache;
+  try {
+    const data = await api('/api/crm/dashboard');
+    crmOutcomeCache.outcomes = data.outcomes || [];
+    crmOutcomeCache.nextActions = data.next_actions || [
+      'call', 'follow_up', 'visit', 'email', 'ask_jake', 'book_walkthrough',
+      'send_information', 'check_back_later', 'disqualify', 'no_action',
+    ];
+  } catch (_err) {
+    crmOutcomeCache.outcomes = [
+      { value: 'no_answer', label: 'No answer' },
+      { value: 'left_voicemail', label: 'Left voicemail' },
+      { value: 'spoke_gatekeeper', label: 'Spoke with gatekeeper' },
+      { value: 'spoke_decision_maker', label: 'Spoke with decision-maker' },
+      { value: 'asked_to_follow_up', label: 'Asked to follow up' },
+      { value: 'interested', label: 'Interested' },
+      { value: 'not_interested', label: 'Not interested' },
+      { value: 'bad_fit', label: 'Bad fit' },
+      { value: 'booked_walkthrough', label: 'Booked walkthrough' },
+      { value: 'needs_jake', label: 'Needs Jake' },
+      { value: 'other', label: 'Other' },
+    ];
+  }
+  return crmOutcomeCache;
+}
+
+function hideCrmOutcomeModal() {
+  document.getElementById('crmOutcomeModal').classList.remove('open');
+  pendingCrmOutcome = null;
+}
+
+async function showCrmOutcomeModal(ctx) {
+  await ensureCrmOutcomeMeta();
+  pendingCrmOutcome = ctx;
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const defaultDate = tomorrow.toISOString().slice(0, 10);
+  const outcomes = crmOutcomeCache.outcomes;
+  const nextActions = crmOutcomeCache.nextActions;
+  document.getElementById('crmOutcomeTitle').textContent = ctx.business_name
+    ? `What happened? — ${ctx.business_name}`
+    : 'What happened?';
+  document.getElementById('crmOutcomeBody').innerHTML = `
+    <div class="ao-modal-section">
+      <div class="ao-modal-label">Outcome *</div>
+      <select class="ao-addr-input" id="crm-outcome">${outcomes.map(o => `<option value="${o.value}">${o.label}</option>`).join('')}</select>
+    </div>
+    <div class="ao-modal-section">
+      <div class="ao-modal-label">Notes *</div>
+      <textarea class="ao-addr-input" id="crm-notes" rows="3" placeholder="What happened on the call or visit?" style="resize:vertical;min-height:72px"></textarea>
+    </div>
+    <div class="ao-modal-section">
+      <div class="ao-modal-label">Next action *</div>
+      <select class="ao-addr-input" id="crm-next-action">${nextActions.map(a => `<option value="${a}">${String(a).replace(/_/g, ' ')}</option>`).join('')}</select>
+    </div>
+    <div class="ao-modal-section">
+      <div class="ao-modal-label">Next action date *</div>
+      <input class="ao-addr-input" id="crm-next-date" type="date" value="${defaultDate}">
+    </div>
+    <div class="ao-modal-section">
+      <div class="ao-modal-label">Help needed?</div>
+      <select class="ao-addr-input" id="crm-help"><option value="false">No</option><option value="true">Yes — ask Jake</option></select>
+    </div>
+    ${ctx.contact_name ? `<div class="ao-modal-section"><div class="ao-modal-label">Contact</div><div style="font-size:0.85rem">${escapeHtml(ctx.contact_name)}</div></div>` : ''}
+  `;
+  document.getElementById('crmOutcomeModal').classList.add('open');
+}
+
+function hideCrmLinkRecoveryModal() {
+  document.getElementById('crmLinkRecoveryModal').classList.remove('open');
+  pendingCrmLinkRecovery = null;
+  crmLinkRecoveryStep = 'menu';
+}
+
+function crmLinkRecoveryActionButtons(html) {
+  document.getElementById('crmLinkRecoveryActions').innerHTML = html;
+}
+
+async function resumeAfterCrmLinkage(prospectId) {
+  const ctx = pendingCrmLinkRecovery;
+  hideCrmLinkRecoveryModal();
+  if (!ctx || !prospectId) return;
+  await showCrmOutcomeModal({
+    ...ctx,
+    prospect_id: prospectId,
+    follow_up_task_id: ctx.task_id || ctx.follow_up_task_id,
+  });
+}
+
+function renderCrmLinkRecoveryMenu() {
+  crmLinkRecoveryStep = 'menu';
+  document.getElementById('crmLinkRecoveryTitle').textContent = 'Prospect not linked to CRM';
+  document.getElementById('crmLinkRecoveryIntro').style.display = '';
+  document.getElementById('crmLinkRecoveryBody').innerHTML = `
+    <div class="ao-modal-section">
+      <div style="font-size:0.9rem;font-weight:600">${escapeHtml(pendingCrmLinkRecovery?.business_name || 'Queue item')}</div>
+    </div>`;
+  crmLinkRecoveryActionButtons(`
+    <button type="button" class="ao-modal-confirm" id="crmLinkExistingBtn">Link Existing Account</button>
+    <button type="button" class="ao-modal-confirm" id="crmLinkCreateBtn">Create CRM Account</button>
+    <button type="button" class="ao-modal-confirm" id="crmLinkEditBtn">Edit Prospect</button>
+    <button type="button" class="ao-modal-cancel" id="crmLinkCloseBtn">Close</button>
+  `);
+}
+
+function renderCrmLinkSearchStep() {
+  crmLinkRecoveryStep = 'link';
+  document.getElementById('crmLinkRecoveryIntro').style.display = 'none';
+  const p = pendingCrmLinkRecovery?.prospect || {};
+  document.getElementById('crmLinkRecoveryBody').innerHTML = `
+    <div class="ao-modal-section">
+      <div class="ao-modal-label">Search CRM accounts</div>
+      <input class="ao-addr-input" id="crm-link-q" placeholder="Business name, address, phone, domain" value="${escapeHtml(p.business_name || pendingCrmLinkRecovery?.business_name || '')}">
+      <button type="button" class="ao-modal-confirm" id="crmLinkSearchBtn" style="margin-top:8px;width:100%">Search</button>
+    </div>
+    <div id="crmLinkSearchResults" class="ao-modal-section"></div>
+    <div id="crmLinkConfirmBox" class="ao-modal-section" style="display:none"></div>
+  `;
+  crmLinkRecoveryActionButtons(`
+    <button type="button" class="ao-modal-cancel" id="crmLinkBackBtn">Back</button>
+    <button type="button" class="ao-modal-cancel" id="crmLinkCloseBtn">Close</button>
+  `);
+}
+
+function renderCrmLinkEditStep() {
+  crmLinkRecoveryStep = 'edit';
+  document.getElementById('crmLinkRecoveryIntro').style.display = 'none';
+  const p = pendingCrmLinkRecovery?.prospect || {};
+  document.getElementById('crmLinkRecoveryBody').innerHTML = `
+    <div class="ao-modal-section"><div class="ao-modal-label">Business name</div>
+      <input class="ao-addr-input" id="crm-edit-business" value="${escapeHtml(p.business_name || '')}"></div>
+    <div class="ao-modal-section"><div class="ao-modal-label">Street address</div>
+      <input class="ao-addr-input" id="crm-edit-street" value="${escapeHtml(p.street_address || '')}"></div>
+    <div class="ao-modal-section"><div class="ao-modal-label">City</div>
+      <input class="ao-addr-input" id="crm-edit-city" value="${escapeHtml(p.city || '')}"></div>
+    <div class="ao-modal-section"><div class="ao-modal-label">State</div>
+      <input class="ao-addr-input" id="crm-edit-state" value="${escapeHtml(p.state || '')}"></div>
+    <div class="ao-modal-section"><div class="ao-modal-label">ZIP</div>
+      <input class="ao-addr-input" id="crm-edit-postal" value="${escapeHtml(p.postal || '')}"></div>
+    <div class="ao-modal-section"><div class="ao-modal-label">Phone</div>
+      <input class="ao-addr-input" id="crm-edit-phone" value="${escapeHtml(p.phone || '')}"></div>
+    <div class="ao-modal-section"><div class="ao-modal-label">Business type</div>
+      <input class="ao-addr-input" id="crm-edit-type" value="${escapeHtml(p.business_type || '')}"></div>
+    <div class="ao-modal-section"><div class="ao-modal-label">Contact name</div>
+      <input class="ao-addr-input" id="crm-edit-contact" value="${escapeHtml(p.contact_name || '')}"></div>
+  `;
+  crmLinkRecoveryActionButtons(`
+    <button type="button" class="ao-modal-cancel" id="crmLinkBackBtn">Back</button>
+    <button type="button" class="ao-modal-confirm" id="crmLinkSaveEditBtn">Save changes</button>
+    <button type="button" class="ao-modal-cancel" id="crmLinkCloseBtn">Close</button>
+  `);
+}
+
+async function loadCrmLinkRecoveryContext(ctx) {
+  pendingCrmLinkRecovery = { ...ctx };
+  if (ctx.lead_id) {
+    try {
+      const linkage = await api('/api/leads/' + ctx.lead_id + '/crm-linkage');
+      pendingCrmLinkRecovery = { ...ctx, ...linkage, prospect: linkage.prospect };
+    } catch (_err) { /* keep task context */ }
+  }
+  if (pendingCrmLinkRecovery.crm_prospect_id) {
+    await resumeAfterCrmLinkage(pendingCrmLinkRecovery.crm_prospect_id);
+    return;
+  }
+  document.getElementById('crmLinkRecoveryModal').classList.add('open');
+  renderCrmLinkRecoveryMenu();
+}
+
+async function runCrmAccountSearch() {
+  const q = document.getElementById('crm-link-q')?.value?.trim();
+  const box = document.getElementById('crmLinkSearchResults');
+  if (!box) return;
+  box.innerHTML = '<div class="ao-empty">Searching…</div>';
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  const data = await api('/api/crm/accounts/search?' + params.toString());
+  if (!data.accounts?.length) {
+    box.innerHTML = '<div class="ao-empty">No matching CRM accounts.</div>';
+    return;
+  }
+  box.innerHTML = data.accounts.map(a => `
+    <button type="button" class="ao-modal-opt crm-link-result" style="width:100%;text-align:left;margin-bottom:6px"
+      data-prospect="${a.prospect_id}">
+      <strong class="crm-link-result-name">${escapeHtml(a.company_name)}</strong><br>
+      <span style="font-size:0.78rem;color:var(--pf-text-dim)">${escapeHtml([a.address, a.city, a.state].filter(Boolean).join(', '))}${a.phone ? ' · ' + escapeHtml(a.phone) : ''}${a.domain ? ' · ' + escapeHtml(a.domain) : ''}</span>
+    </button>
+  `).join('');
+}
+
+async function confirmCrmLink(prospectId, accountName) {
+  const leadId = pendingCrmLinkRecovery?.lead_id;
+  if (!leadId) return;
+  const ok = window.confirm(`Link "${pendingCrmLinkRecovery.business_name || 'this prospect'}" to "${accountName}"?`);
+  if (!ok) return;
+  try {
+    const result = await postLeadCrmAction('/api/leads/' + leadId + '/crm-link', {
+      prospect_id: prospectId,
+      task_id: pendingCrmLinkRecovery.task_id,
+    });
+    await resumeAfterCrmLinkage(result.crm_prospect_id);
+  } catch (err) {
+    if (err.status === 409 && err.data?.code === 'CRM_LINK_CONFLICT') {
+      alert(`CRM linkage changed. Current account: ${err.data.company_name || err.data.crm_prospect_id}`);
+      hideCrmLinkRecoveryModal();
+    } else {
+      alert(err.message || 'Link failed');
+    }
+  }
+}
+
+async function postLeadCrmAction(path, body) {
+  const res = await fetch('/ao' + path, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.error || `Request failed (${res.status})`);
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
+  return data;
+}
+
+async function createCrmAccountFromRecovery(forceCreate) {
+  const leadId = pendingCrmLinkRecovery?.lead_id;
+  if (!leadId) return;
+  try {
+    const result = await postLeadCrmAction('/api/leads/' + leadId + '/crm-account', {
+      task_id: pendingCrmLinkRecovery.task_id,
+      force_create: forceCreate,
+    });
+    await resumeAfterCrmLinkage(result.crm_prospect_id);
+  } catch (err) {
+    if (err.status === 409 && err.data?.duplicate_candidates?.length) {
+      const names = err.data.duplicate_candidates.map(c => c.company_name).join(', ');
+      const proceed = window.confirm(
+        `Likely matches already exist (${names}). Create a new CRM account anyway?`
+      );
+      if (proceed) await createCrmAccountFromRecovery(true);
+      return;
+    }
+    alert(err.message || 'Create account failed');
+  }
+}
+
+async function saveCrmProspectEdits() {
+  const leadId = pendingCrmLinkRecovery?.lead_id;
+  if (!leadId) return;
+  const result = await api('/api/leads/' + leadId + '/prospect', {
+    method: 'PATCH',
+    body: JSON.stringify({
+      business_name: document.getElementById('crm-edit-business').value.trim(),
+      street_address: document.getElementById('crm-edit-street').value.trim(),
+      city: document.getElementById('crm-edit-city').value.trim(),
+      state: document.getElementById('crm-edit-state').value.trim(),
+      postal: document.getElementById('crm-edit-postal').value.trim(),
+      phone: document.getElementById('crm-edit-phone').value.trim(),
+      business_type: document.getElementById('crm-edit-type').value.trim(),
+      contact_name: document.getElementById('crm-edit-contact').value.trim(),
+    }),
+  });
+  pendingCrmLinkRecovery = {
+    ...pendingCrmLinkRecovery,
+    business_name: document.getElementById('crm-edit-business').value.trim(),
+    prospect: {
+      ...(pendingCrmLinkRecovery.prospect || {}),
+      business_name: document.getElementById('crm-edit-business').value.trim(),
+    },
+    crm_prospect_id: result.crm_prospect_id,
+    duplicate_candidates: result.duplicate_candidates,
+  };
+  if (result.crm_prospect_id) {
+    await resumeAfterCrmLinkage(result.crm_prospect_id);
+    return;
+  }
+  renderCrmLinkRecoveryMenu();
+  addMsg('Prospect updated — link or create a CRM account when ready.', 'system');
+}
+
+async function openOutcomeForFieldTask(taskId, presetProspectId) {
+  let prospectId = presetProspectId || null;
+  let ctx = { task_id: taskId, follow_up_task_id: taskId, business_name: null };
+  if (!prospectId) {
+    const resolved = await api('/api/tasks/' + taskId + '/crm-context');
+    prospectId = resolved.prospect_id;
+    ctx = { ...ctx, ...resolved, follow_up_task_id: taskId };
+  } else {
+    ctx.prospect_id = prospectId;
+  }
+  if (!prospectId) {
+    await loadCrmLinkRecoveryContext(ctx);
+    return;
+  }
+  ctx.prospect_id = prospectId;
+  await showCrmOutcomeModal(ctx);
+}
+
+async function submitCrmOutcomeFromField() {
+  if (!pendingCrmOutcome?.prospect_id) return;
+  const notes = document.getElementById('crm-notes').value.trim();
+  if (!notes) {
+    alert('Notes are required.');
+    return;
+  }
+  const nextDate = document.getElementById('crm-next-date').value;
+  if (!nextDate) {
+    alert('Next action date is required.');
+    return;
+  }
+  await api('/api/crm/accounts/' + pendingCrmOutcome.prospect_id + '/outcome', {
+    method: 'POST',
+    body: JSON.stringify({
+      outcome: document.getElementById('crm-outcome').value,
+      notes,
+      next_action: document.getElementById('crm-next-action').value,
+      next_action_date: nextDate,
+      help_needed: document.getElementById('crm-help').value === 'true',
+      follow_up_task_id: pendingCrmOutcome.follow_up_task_id || pendingCrmOutcome.task_id,
+      contact_name: pendingCrmOutcome.contact_name || undefined,
+      contact_role: pendingCrmOutcome.contact_role || undefined,
+      phone: pendingCrmOutcome.contact_phone || undefined,
+      email: pendingCrmOutcome.contact_email || undefined,
+    }),
+  });
+  hideCrmOutcomeModal();
+  loadQueue();
+  loadMetrics();
+  addMsg('Outcome saved — account updated in My Accounts.', 'system');
+}
+
+async function loadQueue() {
+  const list = document.getElementById('queueList');
+  list.innerHTML = '<div class="ao-empty">Loading…</div>';
+  try {
+    const data = await api('/api/queue?filter=' + encodeURIComponent(queueFilter));
+    if (!data.tasks.length) {
+      list.innerHTML = '<div class="ao-empty">Nothing in this queue — nice work.</div>';
+      return;
+    }
+    list.innerHTML = data.tasks.map(taskCard).join('');
+  } catch (err) {
+    list.innerHTML = `<div class="ao-empty">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+document.getElementById('modeButtons').addEventListener('click', e => {
+  const btn = e.target.closest('[data-mode]');
+  if (!btn) return;
+  startMode(btn.dataset.mode);
+});
+
+document.getElementById('composeForm').addEventListener('submit', e => {
+  e.preventDefault();
+  sendMessage(messageInput.value);
+});
+
+composerPlusBtn?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  toggleComposerMenu();
+});
+document.addEventListener('click', () => toggleComposerMenu(false));
+composerAttachMenu?.addEventListener('click', (e) => e.stopPropagation());
+composerAttachMenu?.querySelectorAll('[data-attach]').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const kind = btn.getAttribute('data-attach');
+    toggleComposerMenu(false);
+    if (kind === 'spreadsheet') fileInputSpreadsheet?.click();
+    else if (kind === 'file') fileInputDocument?.click();
+    else if (kind === 'image') fileInputImage?.click();
+    else if (kind === 'voice') openVoiceRecordModal();
+  });
+});
+document.getElementById('voiceRecordCancel')?.addEventListener('click', hideVoiceRecordModal);
+document.getElementById('voiceRecordModal')?.addEventListener('click', (e) => {
+  if (e.target.id === 'voiceRecordModal') hideVoiceRecordModal();
+});
+document.getElementById('voiceRecordPrimary')?.addEventListener('click', async () => {
+  const primary = document.getElementById('voiceRecordPrimary');
+  if (!voiceRecorder) return;
+  try {
+    if (voiceRecorder.getState() === 'idle' || voiceRecorder.getState() === 'stopped') {
+      await voiceRecorder.start();
+      document.getElementById('voiceRecordStatus').textContent = 'Recording…';
+      primary.textContent = 'Stop';
+    } else if (voiceRecorder.getState() === 'recording') {
+      voiceRecorder.stop();
+      primary.textContent = 'Record';
+    }
+  } catch (err) {
+    showVoiceRecordError(err.message || 'Could not access microphone.');
+  }
+});
+[fileInputSpreadsheet, fileInputDocument, fileInputImage, fileInputVoice].forEach((input) => {
+  input?.addEventListener('change', () => {
+    if (input.files?.[0]) queueComposerFile(input.files[0]);
+    input.value = '';
+  });
+});
+loadMaxComposerMemory();
+
+document.querySelectorAll('.ao-tab').forEach(tab => {
+  tab.addEventListener('click', () => switchTab(tab.dataset.tab));
+});
+
+document.getElementById('scriptLogVisit').addEventListener('click', () => {
+  switchTab('max');
+  if (activeMode === 'log_visit' && wizardSessionId) return;
+  startMode('log_visit');
+});
+
+document.getElementById('newConversationBtn').addEventListener('click', startNewConversation);
+document.getElementById('markConversationDoneBtn').addEventListener('click', markConversationDone);
+document.getElementById('flagRoutingBtn').addEventListener('click', showFlagRoutingModal);
+document.getElementById('flagRoutingCancel').addEventListener('click', hideFlagRoutingModal);
+document.getElementById('flagRoutingSubmit').addEventListener('click', submitFlagRouting);
+document.getElementById('flagRoutingModal').addEventListener('click', e => {
+  if (e.target.id === 'flagRoutingModal') hideFlagRoutingModal();
+});
+document.getElementById('reopenConversationBtn').addEventListener('click', () => {
+  if (lastDoneConversationId) reopenConversation(lastDoneConversationId);
+});
+document.getElementById('viewHistoryBtn').addEventListener('click', () => switchTab('history'));
+document.getElementById('historyList').addEventListener('click', async e => {
+  const reopenId = e.target.dataset.reopenConversation;
+  const openId = e.target.dataset.openConversation;
+  if (reopenId) {
+    await reopenConversation(reopenId);
+    return;
+  }
+  if (openId) {
+    await openConversation(openId, { reopen: false });
+  }
+});
+document.getElementById('flagConversationBtn').addEventListener('click', showFlagReportModal);
+document.getElementById('flagReportCancel').addEventListener('click', hideFlagReportModal);
+document.getElementById('flagReportSubmit').addEventListener('click', submitFlagReport);
+document.getElementById('flagReportModal').addEventListener('click', e => {
+  if (e.target.id === 'flagReportModal') hideFlagReportModal();
+});
+
+document.getElementById('crmOutcomeCancel').addEventListener('click', hideCrmOutcomeModal);
+document.getElementById('crmOutcomeSave').addEventListener('click', () => {
+  submitCrmOutcomeFromField().catch(err => alert(err.message));
+});
+document.getElementById('crmOutcomeModal').addEventListener('click', e => {
+  if (e.target.id === 'crmOutcomeModal') hideCrmOutcomeModal();
+});
+
+document.getElementById('crmLinkRecoveryModal').addEventListener('click', e => {
+  if (e.target.id === 'crmLinkRecoveryModal') hideCrmLinkRecoveryModal();
+  if (e.target.id === 'crmLinkCloseBtn') hideCrmLinkRecoveryModal();
+  if (e.target.id === 'crmLinkBackBtn') renderCrmLinkRecoveryMenu();
+  if (e.target.id === 'crmLinkExistingBtn') {
+    renderCrmLinkSearchStep();
+    runCrmAccountSearch().catch(err => alert(err.message));
+  }
+  if (e.target.id === 'crmLinkCreateBtn') {
+    createCrmAccountFromRecovery(false).catch(err => alert(err.message));
+  }
+  if (e.target.id === 'crmLinkEditBtn') renderCrmLinkEditStep();
+  if (e.target.id === 'crmLinkSearchBtn') {
+    runCrmAccountSearch().catch(err => alert(err.message));
+  }
+  if (e.target.id === 'crmLinkSaveEditBtn') {
+    saveCrmProspectEdits().catch(err => alert(err.message));
+  }
+  const pick = e.target.closest('.crm-link-result');
+  if (pick) {
+    const accountName = pick.querySelector('.crm-link-result-name')?.textContent?.trim() || 'CRM account';
+    confirmCrmLink(pick.dataset.prospect, accountName).catch(err => alert(err.message));
+  }
+});
+
+document.getElementById('startRouteBtn').addEventListener('click', showRouteModal);
+
+document.getElementById('routeModalCancel').addEventListener('click', hideRouteModal);
+
+document.getElementById('routeModalConfirm').addEventListener('click', startRoute);
+
+document.getElementById('sortOptions').addEventListener('click', e => {
+  const opt = e.target.closest('[data-sort]');
+  if (!opt) return;
+  document.querySelectorAll('#sortOptions .ao-modal-opt').forEach(o => o.classList.remove('selected'));
+  opt.classList.add('selected');
+  routeSortMode = opt.dataset.sort;
+});
+
+document.getElementById('startOptions').addEventListener('click', e => {
+  const opt = e.target.closest('[data-start]');
+  if (!opt) return;
+  document.querySelectorAll('#startOptions .ao-modal-opt').forEach(o => o.classList.remove('selected'));
+  opt.classList.add('selected');
+  routeStartType = opt.dataset.start;
+  document.getElementById('customStartAddress').style.display = routeStartType === 'custom' ? 'block' : 'none';
+});
+
+document.getElementById('navAppOptions').addEventListener('click', e => {
+  const opt = e.target.closest('[data-nav]');
+  if (!opt) return;
+  document.querySelectorAll('#navAppOptions .ao-modal-opt').forEach(o => o.classList.remove('selected'));
+  opt.classList.add('selected');
+  navAppPreference = opt.dataset.nav;
+});
+
+document.getElementById('navPickerCancel').addEventListener('click', hideNavPicker);
+
+document.getElementById('navPickerOptions').addEventListener('click', e => {
+  const opt = e.target.closest('[data-open-nav]');
+  if (!opt || !pendingNavigate) return;
+  const url = pendingNavigate[opt.dataset.openNav];
+  hideNavPicker();
+  if (url) window.open(url, '_blank', 'noopener');
+});
+
+document.getElementById('endRouteBtn').addEventListener('click', async () => {
+  if (!activeRoute?.id) return;
+  try {
+    await api('/api/routes/' + activeRoute.id + '/cancel', { method: 'POST' });
+    activeRoute = null;
+    renderRouteView();
+    loadQueue();
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
+document.getElementById('routeList').addEventListener('click', async e => {
+  const navigateBtn = e.target.closest('[data-navigate]');
+  const briefLeadId = e.target.dataset.briefLead;
+  const logTaskId = e.target.dataset.routeLog;
+  const callInsteadTask = e.target.dataset.callInstead;
+  const doneStop = e.target.dataset.routeDone;
+  const skipStop = e.target.dataset.routeSkip;
+  const laterStop = e.target.dataset.routeLater;
+  const escalateTask = e.target.dataset.routeEscalate;
+  const saveAddr = e.target.dataset.addrSave;
+
+  try {
+    if (briefLeadId) {
+      await requestProspectBrief({
+        leadId: briefLeadId,
+        businessName: e.target.dataset.briefName || '',
+      });
+      return;
+    }
+    if (navigateBtn) {
+      openNavigate(navigateBtn.dataset.navigate);
+      return;
+    }
+    if (saveAddr) {
+      const input = document.querySelector(`[data-addr-input="${saveAddr}"]`);
+      await api('/api/leads/' + saveAddr + '/address', {
+        method: 'PATCH',
+        body: JSON.stringify({ address: input.value.trim() }),
+      });
+      loadQueue();
+      return;
+    }
+    if (logTaskId) {
+      const isDm = e.target.dataset.directMail === '1';
+      await startRouteFollowUp(logTaskId, isDm);
+      return;
+    }
+    if (callInsteadTask) {
+      await openCallInstead(callInsteadTask);
+      return;
+    }
+    if (doneStop) await handleRouteStopAction(doneStop, 'done');
+    if (skipStop) await handleRouteStopAction(skipStop, 'skipped');
+    if (laterStop) await handleRouteStopAction(laterStop, 'moved_later');
+    if (escalateTask) {
+      await api('/api/tasks/' + escalateTask + '/escalate', {
+        method: 'POST',
+        body: JSON.stringify({ reason: 'high_interest', summary: 'AO escalated from route' }),
+      });
+      loadMetrics();
+    }
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
+document.getElementById('queueFilters').addEventListener('click', e => {
+  const btn = e.target.closest('[data-filter]');
+  if (!btn) return;
+  document.querySelectorAll('.ao-filter').forEach(f => f.classList.remove('active'));
+  btn.classList.add('active');
+  queueFilter = btn.dataset.filter;
+  loadQueue();
+});
+
+document.getElementById('queueList').addEventListener('click', async e => {
+  const briefLeadId = e.target.dataset.briefLead;
+  const logFollowUpId = e.target.dataset.logFollowUp;
+  const logPhoneId = e.target.dataset.logPhone;
+  const callInsteadId = e.target.dataset.callInstead;
+  const doneId = e.target.dataset.done;
+  const rescheduleId = e.target.dataset.reschedule;
+  const escalateId = e.target.dataset.escalate;
+  try {
+    if (briefLeadId) {
+      await requestProspectBrief({
+        leadId: briefLeadId,
+        businessName: e.target.dataset.briefName || '',
+      });
+      return;
+    }
+    if (logFollowUpId) {
+      await startDirectMailFollowUp(logFollowUpId);
+      return;
+    }
+    if (logPhoneId) {
+      await startPhoneFollowUp(logPhoneId);
+      return;
+    }
+    if (callInsteadId) {
+      await openCallInstead(callInsteadId);
+      return;
+    }
+    if (doneId) {
+      await openOutcomeForFieldTask(doneId, e.target.dataset.crmProspect || '');
+    }
+    if (rescheduleId) {
+      const d = new Date();
+      d.setDate(d.getDate() + 2);
+      await api('/api/tasks/' + rescheduleId, {
+        method: 'PATCH',
+        body: JSON.stringify({ due_date: d.toISOString().slice(0, 10) }),
+      });
+    }
+    if (escalateId) {
+      await api('/api/tasks/' + escalateId + '/escalate', {
+        method: 'POST',
+        body: JSON.stringify({ reason: 'high_interest', summary: 'AO escalated from queue' }),
+      });
+    }
+    loadQueue();
+    loadMetrics();
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
+async function bootDashboard() {
+  try {
+    await loadProfile();
+  } catch (err) {
+    console.error('[ao] profile load failed:', err);
+    addMsg(`Profile error: ${err.message}`, 'system');
+  }
+  try {
+    const m = await loadMetrics();
+    if (m?.client_missing) {
+      addMsg('Your account needs a client assigned (client_id 10). Ask admin to update /admin/users.', 'system');
+    }
+  } catch (err) {
+    console.error('[ao] metrics load failed:', err);
+    addMsg(`Metrics error: ${err.message}`, 'system');
+  }
+  await hydrateActiveConversation();
+  const urlSession = new URLSearchParams(window.location.search).get('session');
+  if (urlSession) {
+    await openConversation(urlSession, { reopen: false });
+    const messageIdx = new URLSearchParams(window.location.search).get('message');
+    if (messageIdx != null && messageIdx !== '') {
+      const nodes = document.querySelectorAll('#chat .msg');
+      const node = nodes[Number(messageIdx)];
+      if (node) node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+  if (!conversationSessionId) {
+    addMsg('Ask me about your accounts, log a visit, or pick a mode above. I remember every visit.', 'max');
+  }
+  messageInput.placeholder = 'Ask Max anything…';
+  loadActiveRoute();
+}
+bootDashboard();
+</script>
+</body>
+</html>

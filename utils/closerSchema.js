@@ -1,33 +1,10 @@
 const pool = require('../db');
 const { ensureClientArchitecture } = require('./clientContext');
+const { refreshUsersRoleConstraint } = require('./usersRoleConstraint');
 
 async function ensureCloserSchema() {
   await ensureClientArchitecture();
-  await pool.query('SELECT pg_advisory_lock(91720260517)');
-  try {
-    // Drop every CHECK constraint on users that references `role`, then add
-    // the canonical one that includes 'sales'. The old version of this code
-    // hardcoded the constraint name and excluded 'sales', which threw
-    // "check constraint ... is violated by some row" once any user had
-    // role='sales' (Levi).
-    const { rows: existing } = await pool.query(`
-      SELECT con.conname
-      FROM pg_constraint con
-      JOIN pg_class cls ON cls.oid = con.conrelid
-      WHERE cls.relname = 'users'
-        AND con.contype = 'c'
-        AND pg_get_constraintdef(con.oid) ILIKE '%role%'
-    `);
-    for (const row of existing) {
-      await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS "${row.conname}"`);
-    }
-    await pool.query(`
-      ALTER TABLE users ADD CONSTRAINT users_role_check
-      CHECK (role IN ('admin', 'manager', 'setter', 'closer', 'sales'))
-    `);
-  } finally {
-    await pool.query('SELECT pg_advisory_unlock(91720260517)');
-  }
+  await refreshUsersRoleConstraint(pool);
   await pool.query(`
     ALTER TABLE prospects
     ADD COLUMN IF NOT EXISTS closer_id INTEGER REFERENCES users(id),
@@ -35,7 +12,7 @@ async function ensureCloserSchema() {
     ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS mrr_value NUMERIC(10,2),
     ADD COLUMN IF NOT EXISTS close_notes TEXT,
-    ADD COLUMN IF NOT EXISTS closer_status TEXT DEFAULT 'booked'
+    ADD COLUMN IF NOT EXISTS closer_status TEXT
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS commissions (

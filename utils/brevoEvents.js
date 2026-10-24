@@ -1,0 +1,668 @@
+const crypto = require('crypto');
+const pool = require('../db');
+const {
+  classifyOpenSource,
+  ensureOpenSignalSchema,
+  isOpenOrClickEventType,
+  logZeroSendSuppression,
+  markBatchProxyEvents,
+} = require('./openSignalGate');
+const {
+  correlateBrevoSend,
+  isCanonicalCorrelation,
+  legacySendMatchFromCorrelation,
+  findLegacyAgentLogSend,
+} = require('./brevoSendCorrelation');
+const {
+  persistMissionProviderEvent,
+  logCorrelationFailure,
+  ensureOutboundExecutionSchema,
+} = require('../services/acquisitionMissionOutboundPersistence');
+const { consumeMissionProviderEvent } = require('../services/acquisitionMissionProviderObservation');
+const {
+  SENDER_IDENTITY_STATUS,
+  classifyEventSenderIdentity,
+  shouldIngestCanonicalReputation,
+} = require('./canonicalSenderIdentity');
+const { ensureSenderIdentityEventSchema } = require('./emailEventIdentitySchema');
+
+const BREVO_EVENT_MAP = {
+  request: 'sent',
+  requests: 'sent',
+  sent: 'sent',
+  delivered: 'delivered',
+  open: 'opened',
+  opens: 'opened',
+  opened: 'opened',
+  loaded_by_proxy: 'opened_proxy',
+  loadedByProxy: 'opened_proxy',
+  loadedbyproxy: 'opened_proxy',
+  proxyOpen: 'opened_proxy',
+  proxyopen: 'opened_proxy',
+  proxy_open: 'opened_proxy',
+  unique_opened: 'opened',
+  uniqueOpened: 'opened',
+  uniqueopened: 'opened',
+  unique_loaded_by_proxy: 'opened_proxy',
+  uniqueLoadedByProxy: 'opened_proxy',
+  uniqueloadedbyproxy: 'opened_proxy',
+  uniqueProxyOpen: 'opened_proxy',
+  uniqueproxyopen: 'opened_proxy',
+  unique_proxy_open: 'opened_proxy',
+  clicks: 'clicked',
+  click: 'clicked',
+  clicked: 'clicked',
+  soft_bounce: 'soft_bounce',
+  softBounce: 'soft_bounce',
+  softbounce: 'soft_bounce',
+  softBounces: 'soft_bounce',
+  softbounces: 'soft_bounce',
+  bounce: 'hard_bounce',
+  hard_bounce: 'hard_bounce',
+  hardBounce: 'hard_bounce',
+  hardbounce: 'hard_bounce',
+  hardBounces: 'hard_bounce',
+  hardbounces: 'hard_bounce',
+  blocked: 'blocked',
+  deferred: 'deferred',
+  invalid: 'invalid',
+  invalid_email: 'invalid',
+  invalidEmail: 'invalid',
+  invalidemail: 'invalid',
+  error: 'error',
+  spam: 'spam',
+  complaint: 'spam',
+  complaints: 'spam',
+  spamReport: 'spam',
+  spamreport: 'spam',
+  spamReports: 'spam',
+  spamreports: 'spam',
+  unsubscribe: 'unsubscribed',
+  unsubscribed: 'unsubscribed',
+  replied: 'replied',
+  reply: 'replied',
+};
+
+// These lifecycle states can occur at most once for a Brevo message. The live
+// webhook and the history API use different raw names (for example `request`
+// versus `requests`) and can timestamp the same event one second apart, so the
+// message id + canonical type is the stable cross-source identity.
+const SINGLETON_MESSAGE_EVENT_TYPES = new Set([
+  'sent',
+  'delivered',
+  'hard_bounce',
+  'blocked',
+  'invalid',
+  'spam',
+  'unsubscribed',
+]);
+
+const TWO_PART_SUFFIXES = new Set([
+  'co.uk',
+  'com.au',
+  'com.br',
+  'com.mx',
+  'co.nz',
+  'co.in',
+  'co.jp',
+  'com.sg',
+]);
+
+function normalizeEmail(value) {
+  return value === undefined || value === null ? '' : String(value).trim().toLowerCase();
+}
+
+function brevoMessageId(payload = {}) {
+  return payload.messageId ||
+    payload.message_id ||
+    payload['message-id'] ||
+    payload['Message-ID'] ||
+    payload['messageId'] ||
+    payload.uuid ||
+    null;
+}
+
+function textValue(value) {
+  if (value === undefined || value === null) return null;
+  const str = String(value).trim();
+  return str || null;
+}
+
+function extractEmail(value) {
+  if (!value) return '';
+  if (typeof value === 'object') {
+    return normalizeEmail(value.email || value.address || value.mail);
+  }
+  const raw = String(value).trim();
+  const match = raw.match(/<([^<>@\s]+@[^<>\s]+)>/) || raw.match(/([^<>\s]+@[^<>\s]+)/);
+  return normalizeEmail(match ? match[1] : raw);
+}
+
+function recipientEmail(payload = {}) {
+  return extractEmail(
+    payload.email ||
+    payload.recipient ||
+    payload.rcpt ||
+    payload.to?.[0] ||
+    payload.to
+  );
+}
+
+function senderEmail(payload = {}) {
+  return extractEmail(
+    payload.from ||
+    payload.sender ||
+    payload.sender_email ||
+    payload.from_email ||
+    payload.metadata?.from_email
+  );
+}
+
+function rootDomainFromEmail(email) {
+  const domain = normalizeEmail(email).split('@').pop();
+  if (!domain) return null;
+  return normalizeRootDomain(domain);
+}
+
+function normalizeRootDomain(value) {
+  if (!value) return null;
+  let host = String(value).trim().toLowerCase();
+  host = host.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].split(':')[0];
+  host = host.replace(/[<>"'()]/g, '');
+  const labels = host.split('.').filter(Boolean);
+  if (labels.length <= 2) return labels.join('.') || null;
+  const suffix = labels.slice(-2).join('.');
+  if (TWO_PART_SUFFIXES.has(suffix) && labels.length >= 3) {
+    return labels.slice(-3).join('.');
+  }
+  return labels.slice(-2).join('.');
+}
+
+function eventAt(payload = {}) {
+  const timestamp = Number(payload.ts);
+  if (payload.ts != null && payload.ts !== '' && Number.isFinite(timestamp)) {
+    return new Date(timestamp * 1000);
+  }
+
+  if (payload.date) {
+    const match = String(payload.date).match(
+      /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?$/
+    );
+    if (match) {
+      const [, year, month, day, hour, minute, second, milliseconds = '0'] = match;
+      const localAsUtc = Date.UTC(
+        Number(year),
+        Number(month) - 1,
+        Number(day),
+        Number(hour),
+        Number(minute),
+        Number(second),
+        Number(milliseconds.padEnd(3, '0'))
+      );
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23',
+      });
+      const offsetAt = utcMillis => {
+        const probe = Math.floor(utcMillis / 1000) * 1000;
+        const parts = formatter.formatToParts(new Date(probe));
+        const part = type => Number(parts.find(item => item.type === type).value);
+        return Date.UTC(
+          part('year'),
+          part('month') - 1,
+          part('day'),
+          part('hour'),
+          part('minute'),
+          part('second')
+        ) - probe;
+      };
+      let utc = localAsUtc - offsetAt(localAsUtc);
+      utc = localAsUtc - offsetAt(utc);
+      return new Date(utc);
+    }
+  }
+
+  const value = payload.date || payload.timestamp || payload.event_at || payload.created_at;
+  if (!value) return new Date();
+  const parsed = new Date(value);
+  if (!Number.isNaN(parsed.getTime())) return parsed;
+  const normalized = new Date(String(value).replace(' ', 'T'));
+  return Number.isNaN(normalized.getTime()) ? new Date() : normalized;
+}
+
+function eventName(payload = {}) {
+  return String(payload.event || payload.event_type || payload.type || '').trim();
+}
+
+function internalEventType(payload = {}) {
+  const name = eventName(payload);
+  return BREVO_EVENT_MAP[name] || BREVO_EVENT_MAP[name.toLowerCase()] || null;
+}
+
+function metadataValue(payload, key) {
+  return payload?.metadata?.[key] ?? payload?.params?.[key] ?? payload?.[key] ?? null;
+}
+
+function eventId(payload = {}, eventType, email, messageId) {
+  const explicit = payload.event_id || payload.eventId;
+  if (explicit) return String(explicit);
+  const raw = [
+    payload.id || payload.uuid || '',
+    messageId || '',
+    eventName(payload),
+    eventType || '',
+    email || '',
+    payload.date || payload.ts || payload.timestamp || '',
+    payload.link || '',
+  ].join('|');
+  return crypto.createHash('sha256').update(raw).digest('hex');
+}
+
+function parseStep(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const match = String(value).match(/\d+/);
+  if (!match) return null;
+  const n = Number.parseInt(match[0], 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseJsonMaybe(value) {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return {};
+  }
+}
+
+async function findMatchingSend(params, dbPool = pool) {
+  return findLegacyAgentLogSend(params, dbPool);
+}
+
+async function persistCanonicalProviderEvent({
+  correlation,
+  payload,
+  eventType,
+  eventId: brevoEventId,
+  occurredAt,
+}, dbPool = pool) {
+  if (!isCanonicalCorrelation(correlation)) return null;
+  await ensureOutboundExecutionSchema(dbPool);
+  const rawEventType = String(payload.event || payload.event_type || payload.type || '').trim() || null;
+  const providerEventId = payload.id || payload.uuid || payload.event_id || payload.eventId || null;
+  return persistMissionProviderEvent({
+    missionId: correlation.missionId,
+    tenantId: correlation.tenantId,
+    prospectId: correlation.prospectId,
+    executionRecordId: correlation.executionRecordId,
+    preparedArtifactRevision: correlation.preparedArtifactRevision,
+    provider: 'brevo',
+    providerMessageId: correlation.providerMessageId,
+    eventType,
+    rawEventType,
+    providerEventId,
+    occurredAt,
+    link: payload.link || null,
+    payload: {
+      brevo_event_id: brevoEventId,
+      correlation_source: correlation.source,
+      open_source: payload.open_source || null,
+    },
+  }, dbPool);
+}
+
+async function resolveProspect(email, clientId, sendMatch, dbPool = pool) {
+  if (sendMatch?.prospect_id) {
+    const byId = await dbPool.query(`
+      SELECT id, client_id, email, vertical
+      FROM prospects
+      WHERE id = $1
+        AND client_id = $2
+      LIMIT 1
+    `, [sendMatch.prospect_id, sendMatch.client_id]);
+    if (byId.rows.length) return byId.rows[0];
+  }
+
+  const params = [email];
+  if (clientId) params.push(clientId);
+  const byEmail = await dbPool.query(`
+    SELECT id, client_id, email, vertical
+    FROM prospects
+    WHERE LOWER(email) = $1
+      ${clientId ? 'AND client_id = $2' : ''}
+    ORDER BY created_at DESC
+    LIMIT 1
+  `, params);
+  return byEmail.rows[0] || null;
+}
+
+function resolveEventSendingDomain(payload = {}, sendPayload = {}) {
+  const fromEmail = senderEmail(payload) || normalizeEmail(sendPayload.from_email);
+  const fromDomain = rootDomainFromEmail(fromEmail);
+  if (fromDomain) {
+    return { domain: fromDomain, source: 'sender_email' };
+  }
+
+  const payloadDomain = normalizeRootDomain(payload.sending_domain || metadataValue(payload, 'sending_domain'));
+  if (payloadDomain) {
+    return { domain: payloadDomain, source: 'payload_sending_domain' };
+  }
+
+  return { domain: null, source: null };
+}
+
+async function loadTenantSendingDomain(clientId, dbPool = pool) {
+  if (!clientId) return null;
+  try {
+    const clientRes = await dbPool.query(
+      'SELECT sending_domain FROM clients WHERE id = $1 LIMIT 1',
+      [clientId]
+    );
+    return normalizeRootDomain(clientRes.rows[0]?.sending_domain);
+  } catch (_) {
+    return null;
+  }
+}
+
+async function sendingDomainForPayload(payload, sendPayload) {
+  return resolveEventSendingDomain(payload, sendPayload).domain;
+}
+
+async function logBrevoEvent({ eventId, eventType, email, prospectId, clientId, inserted }, dbPool = pool) {
+  await dbPool.query(`
+    INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at, client_id)
+    VALUES ('riley', 'brevo_event_received', $1, $2, 'success', NOW(), $3)
+  `, [
+    prospectId || null,
+    JSON.stringify({
+      event_id: eventId,
+      event_type: eventType,
+      recipient_email: email,
+      inserted,
+    }),
+    clientId || null,
+  ]);
+}
+
+async function insertBrevoEvent(rawPayload = {}, dbPool = pool) {
+  await ensureOpenSignalSchema(dbPool);
+  await ensureOutboundExecutionSchema(dbPool);
+  await ensureSenderIdentityEventSchema(dbPool);
+  const payload = rawPayload || {};
+  const recipient = recipientEmail(payload);
+  const type = internalEventType(payload);
+  if (!recipient || !type) {
+    return { inserted: false, skipped: true, reason: 'missing_email_or_event_type' };
+  }
+
+  const messageId = brevoMessageId(payload);
+  const payloadClientId = Number(
+    metadataValue(payload, 'client_id') ||
+    payload.clientId ||
+    payload.client_id
+  ) || null;
+  const subject = textValue(payload.subject || metadataValue(payload, 'subject'));
+  const tags = Array.isArray(payload.tags) ? payload.tags : [];
+  const correlation = await correlateBrevoSend({
+    messageId,
+    email: recipient,
+    clientId: payloadClientId,
+    subject,
+    tags,
+  }, dbPool);
+  const sendMatch = legacySendMatchFromCorrelation(correlation);
+  const sendPayload = parseJsonMaybe(sendMatch?.payload);
+  const clientId = Number(
+    correlation.clientId
+    || sendMatch?.client_id
+    || payloadClientId
+  ) || null;
+  const prospect = await resolveProspect(recipient, clientId, sendMatch, dbPool);
+  if (correlation.failed && messageId) {
+    await logCorrelationFailure({
+      providerMessageId: messageId,
+      recipientEmail: recipient,
+      eventType: type,
+      reason: correlation.reason || 'no_matching_send',
+      clientId: clientId || payloadClientId || null,
+      prospectId: prospect?.id || null,
+    }, dbPool);
+  }
+  const finalClientId = Number(prospect?.client_id || clientId) || null;
+  const eventDomainInfo = resolveEventSendingDomain(payload, sendPayload);
+  const tenantDomain = finalClientId
+    ? await loadTenantSendingDomain(finalClientId, dbPool)
+    : null;
+  const senderIdentity = classifyEventSenderIdentity({
+    eventDomain: eventDomainInfo.domain,
+    tenantDomain,
+  });
+  const domain = senderIdentity.eventDomain;
+  const id = eventId(payload, type, recipient, messageId);
+  const sequence = textValue(metadataValue(payload, 'sequence') || sendPayload.sequence || tags[0]);
+  const step = parseStep(metadataValue(payload, 'step') || sendPayload.step || tags.find(tag => /^step_/i.test(String(tag))));
+  const occurredAt = eventAt(payload);
+  const openClassification = await classifyOpenSource(dbPool, {
+    eventType: type,
+    eventAt: occurredAt,
+    payload,
+    prospectId: prospect?.id || null,
+    clientId: finalClientId,
+    recipientEmail: recipient,
+    messageId,
+    subject,
+    sendMatch,
+  });
+
+  const insert = await dbPool.query(`
+    INSERT INTO email_events (
+      event_id,
+      prospect_id,
+      client_id,
+      sending_domain,
+      recipient_email,
+      event_type,
+      subject_line,
+      sequence,
+      step,
+      brevo_message_id,
+      raw_payload,
+      event_at,
+      open_source,
+      open_source_reason,
+      open_source_classified_at,
+      user_agent,
+      ip_address,
+      sender_identity_status,
+      sender_identity_reason
+    )
+    SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12,
+      $13::open_source, $14, CASE WHEN $14::text IS NULL THEN NULL ELSE NOW() END, $15, $16,
+      $18, $19
+    WHERE NOT (
+      (
+        $17::boolean
+        AND $10::text IS NOT NULL
+        AND EXISTS (
+          SELECT 1
+          FROM email_events existing
+          WHERE existing.brevo_message_id = $10
+            AND existing.event_type = $6
+        )
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM email_events existing
+        WHERE existing.event_type = $6
+          AND existing.raw_payload = $11::jsonb
+      )
+    )
+    ON CONFLICT (event_id) DO UPDATE
+      SET event_type = EXCLUDED.event_type,
+          open_source = CASE
+            WHEN EXCLUDED.open_source = 'unknown'::open_source THEN email_events.open_source
+            ELSE EXCLUDED.open_source
+          END,
+          open_source_reason = COALESCE(EXCLUDED.open_source_reason, email_events.open_source_reason),
+          open_source_classified_at = COALESCE(EXCLUDED.open_source_classified_at, email_events.open_source_classified_at),
+          user_agent = COALESCE(EXCLUDED.user_agent, email_events.user_agent),
+          ip_address = COALESCE(EXCLUDED.ip_address, email_events.ip_address),
+          sender_identity_status = COALESCE(EXCLUDED.sender_identity_status, email_events.sender_identity_status),
+          sender_identity_reason = COALESCE(EXCLUDED.sender_identity_reason, email_events.sender_identity_reason)
+      WHERE email_events.event_type IS DISTINCT FROM EXCLUDED.event_type
+        OR email_events.open_source IS DISTINCT FROM EXCLUDED.open_source
+        OR email_events.user_agent IS DISTINCT FROM EXCLUDED.user_agent
+        OR email_events.ip_address IS DISTINCT FROM EXCLUDED.ip_address
+        OR email_events.sender_identity_status IS DISTINCT FROM EXCLUDED.sender_identity_status
+    RETURNING id, open_source::text AS open_source, open_source_reason, (xmax = 0) AS inserted
+  `, [
+    id,
+    prospect?.id || null,
+    finalClientId,
+    domain,
+    recipient,
+    type,
+    subject,
+    sequence,
+    step,
+    messageId,
+    JSON.stringify(payload),
+    occurredAt,
+    openClassification.openSource,
+    openClassification.reason,
+    openClassification.userAgent,
+    openClassification.ipAddress,
+    SINGLETON_MESSAGE_EVENT_TYPES.has(type),
+    senderIdentity.status,
+    senderIdentity.reason,
+  ]);
+
+  const inserted = insert.rows[0]?.inserted === true;
+  const updated = insert.rowCount > 0 && !inserted;
+  let openSource = insert.rows[0]?.open_source || openClassification.openSource;
+  let openSourceReason = insert.rows[0]?.open_source_reason || openClassification.reason || null;
+  let reclassifiedProxyEvents = [];
+  if (insert.rows[0]?.id && inserted && openClassification.source) {
+    const batchUpdated = await markBatchProxyEvents(dbPool, {
+      clientId: finalClientId,
+      eventAt: occurredAt,
+      source: openClassification.source,
+      insertedEventId: insert.rows[0].id,
+    });
+    if (batchUpdated) {
+      const current = await dbPool.query(
+        'SELECT open_source::text AS open_source, open_source_reason FROM email_events WHERE id = $1',
+        [insert.rows[0].id]
+      );
+      openSource = current.rows[0]?.open_source || openSource;
+      openSourceReason = current.rows[0]?.open_source_reason || openSourceReason;
+      const reclassified = await dbPool.query(`
+        SELECT event_id, prospect_id, client_id, event_at
+        FROM email_events
+        WHERE client_id = $1
+          AND event_type IN ('opened','open')
+          AND open_source = 'proxy'::open_source
+          AND open_source_reason = 'batch_fire'
+          AND event_at >= $2::timestamptz - ($3::int * INTERVAL '1 second')
+          AND event_at <= $2::timestamptz
+          AND prospect_id IS NOT NULL
+      `, [finalClientId, occurredAt, 10]);
+      reclassifiedProxyEvents = reclassified.rows;
+    }
+  }
+
+  if (inserted && isOpenOrClickEventType(type) && !sendMatch && !openClassification.hasSend) {
+    await logZeroSendSuppression(dbPool, {
+      source: 'riley',
+      eventId: id,
+      eventType: type,
+      prospectId: prospect?.id || null,
+      clientId: finalClientId,
+      recipientEmail: recipient,
+      messageId,
+      subject,
+    });
+  }
+
+  await logBrevoEvent({
+    eventId: id,
+    eventType: type,
+    email: recipient,
+    prospectId: prospect?.id || null,
+    clientId: finalClientId,
+    inserted,
+  }, dbPool);
+
+  let missionProviderEvent = null;
+  let missionProviderObservation = null;
+  const ingestReputation = shouldIngestCanonicalReputation(senderIdentity);
+  if (isCanonicalCorrelation(correlation) && ingestReputation) {
+    try {
+      missionProviderEvent = await persistCanonicalProviderEvent({
+        correlation,
+        payload,
+        eventType: type,
+        eventId: id,
+        occurredAt,
+      }, dbPool);
+      if (missionProviderEvent && missionProviderEvent.event) {
+        missionProviderObservation = await consumeMissionProviderEvent(missionProviderEvent, dbPool);
+      }
+    } catch (err) {
+      console.error('[Brevo] mission provider event/observation failed:', err.message);
+    }
+  }
+
+  return {
+    inserted,
+    updated,
+    duplicate: insert.rowCount === 0,
+    event_id: id,
+    event_type: type,
+    recipient_email: recipient,
+    prospect_id: prospect?.id || null,
+    client_id: finalClientId,
+    sending_domain: domain,
+    sender_identity_status: senderIdentity.status,
+    sender_identity_reason: senderIdentity.reason,
+    event_sending_domain: senderIdentity.eventDomain,
+    tenant_sending_domain: senderIdentity.tenantDomain,
+    reputation_ingest: ingestReputation,
+    open_source: openSource,
+    open_source_reason: openSourceReason,
+    has_corresponding_send: Boolean(sendMatch || openClassification.hasSend || isCanonicalCorrelation(correlation)),
+    reclassified_proxy_events: reclassifiedProxyEvents,
+    correlation,
+    mission_id: correlation.missionId || null,
+    execution_record_id: correlation.executionRecordId || null,
+    mission_provider_event: missionProviderEvent,
+    mission_provider_observation: missionProviderObservation,
+  };
+}
+
+module.exports = {
+  BREVO_EVENT_MAP,
+  brevoMessageId,
+  eventAt,
+  eventId,
+  insertBrevoEvent,
+  internalEventType,
+  normalizeRootDomain,
+  recipientEmail,
+  rootDomainFromEmail,
+  senderEmail,
+  findMatchingSend,
+  persistCanonicalProviderEvent,
+  resolveEventSendingDomain,
+  loadTenantSendingDomain,
+  sendingDomainForPayload,
+  ensureSenderIdentityEventSchema,
+  SENDER_IDENTITY_STATUS,
+};

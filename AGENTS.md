@@ -9,7 +9,7 @@ An AI-powered lead generation and outreach CRM for Pulseforge. It scrapes leads,
 
 | File | Purpose |
 |---|---|
-| `server.js` | Entry point. ~370 lines after route split. Handles auth, session, login/logout, /dashboard, /preview, /api/status, /api/search, /api/export/csv, /api/post-comment, and app.listen. |
+| `server.js` | Entry point. Handles auth, session, login/logout, /dashboard, /preview, /api/status, /api/search, /api/export/csv, /api/post-comment, and app.listen. |
 | `routes/api.js` | All /api/* dashboard routes (19 endpoints) |
 | `routes/cron.js` | CRON_MODULES, runCronAgent, GET/POST /cron/:agent handlers |
 | `routes/webhooks.js` | POST /webhooks/brevo and /webhooks/bland with BREVO_EVENT_MAP and checkAndUpdateWarmStatus |
@@ -35,7 +35,7 @@ Each agent is a standalone JS module that reads from the DB and writes results b
 |---|---|---|
 | `maxAgent.js` | Max | Daily manager briefing — pulls system snapshot, generates AI summary of pipeline health |
 | `paigeAgent.js` | Paige | Content creation — writes posts for GBP, Facebook, LinkedIn; queues to `pending_comments` for approval |
-| `emmettAgent.js` | Emmett | Email outreach — writes and sends cold email sequences via Brevo API |
+| `emmettAgent.js` | Emmett | Outbound infrastructure — Safe Send Governor, explainable inbox health/capacity, operator-approved daily queue (SPEC-117). Does not write copy. |
 | `rileyAgent.js` | Riley | Inbound triage — reads Gmail inbox, classifies replies from known prospects (interested/not_now/unsubscribe/out_of_office/wrong_person/negative), updates prospect status, logs inbound touchpoints, deposits action cards for interested replies. Also processes Brevo email event webhooks. |
 | `warmSignalAgent.js` | Warm Signal | Detects 2+ opens in 7 days, writes 🔥 2ND OPEN flag to Setter Lead List Google Sheet |
 | `setterHandoffAgent.js` | handoff_utility | Runs after Scout to evaluate newly inserted prospect rows. Applies scoring threshold and writes qualified leads to the setter queue with `setter_status = 'new'` and `setter_visible = true`. Also serves as a backfill agent for historical prospects that were never handed off. Triggered post-Scout via n8n/Railway cron or manual invocation. |
@@ -49,6 +49,7 @@ Each agent is a standalone JS module that reads from the DB and writes results b
 | `analyticsAgent.js` | Analytics | Pulls post performance data, writes back to `post_analytics` table |
 | `sketchAgent.js` | Sketch | Site mockup generator using Puppeteer |
 | `pennyAgent.js` | Penny | (check file for current role) |
+| `enrichProspects.js` | enrich_prospects | Daily enrichment pass for newly added prospects (last 7 days): if `email` and `phone` are both NULL and DNC is false, uses Hunter domain search to backfill phone/email and logs each attempt to `agent_log` (`action=enrichment_attempt`). |
 
 ---
 
@@ -65,7 +66,7 @@ Routes are now split across `routes/api.js`, `routes/cron.js`, `routes/webhooks.
 - **Pending comments**: `GET /api/pending-comments`, `POST /api/approve-comment/:id`, `POST /api/reject-comment/:id` — in `routes/approvals.js`
 - **Analytics**: `/api/analytics`, `/api/analytics/posts`, `/api/analytics/summary`, `/api/analytics/top-posts`, `/api/analytics/email` — in `routes/api.js`
 - **Activity**: `/api/activity`, `/api/activity-panel`, `/api/activity-timeline` — in `routes/api.js`
-- **Dashboard UI**: `GET /dashboard` → serves `public/dashboard.html` — in `server.js`
+- **Dashboard UI**: `GET /dashboard` → serves `public/dashboard.html` with authenticated live data only — in `server.js`
 - **Brevo warm signal**: Brevo POSTs email events here → Riley logs touchpoints and upgrades cold→warm automatically — in `routes/webhooks.js`
 
 ---
@@ -150,6 +151,6 @@ Agents that generate content (Paige, Link, Faye, Vera) do NOT post directly. The
 - **Sensitive JSON files** — `gmail_token.json`, `gmail_credentials.json`, `facebook_session.json`, `linkedin_session.json` are in `.gitignore` — never remove them from there. They are injected as env vars on Railway.
 - **`pool.end()` is forbidden in agents** — the pool is shared across the server process. Calling `pool.end()` in an agent kills all subsequent DB connections.
 - **Vertical routing** — Scout tags every prospect with `vertical` at insert time based on `CONFIG.industry`. Emmett reads `vertical` to pick the correct email sequence. Sequences exist for: cleaning, restaurant, salon, fitness, property, landscaping. All others fall back to cleaning.
-- **Email sequences** — live entirely in `emmettAgent.js` in the `SEQUENCES` object. To add a new vertical: add the sequence array, add a routing condition in `getSequenceForProspect`.
+- **Email sequences** — Email sequences are now managed through Paige and the Acquisition Mission Orchestration system (SPEC-118). Legacy sequence templates have been removed. All outbound copy must be authored by Paige before Emmett sends.
 - **GMAIL_CREDENTIALS format** — the Railway env var must be the full credentials JSON starting with `{"web":` — not just the client secret file.
 - **GOOGLE_SHEETS_REFRESH_TOKEN vs GOOGLE_REFRESH_TOKEN** — `GOOGLE_REFRESH_TOKEN` is for GBP/Calendar. `GOOGLE_SHEETS_REFRESH_TOKEN` is for Sheets write access in warmSignalAgent. They use different OAuth clients and scopes — do not conflate them.

@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pulseforge — Client Command Center</title>
+<link rel="icon" href="/favicon.ico">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <style>
@@ -84,8 +85,8 @@ body::before {
 .clock { font-family:'JetBrains Mono',monospace; font-size:0.72rem; color:var(--gray-light); letter-spacing:2px; }
 .user-avatar { width:32px; height:32px; border-radius:50%; background:var(--purple-glow); border:1.5px solid var(--purple-bright); display:flex; align-items:center; justify-content:center; font-size:0.65rem; font-weight:700; color:var(--purple-bright); box-shadow:0 0 12px rgba(139,92,246,0.3); }
 .main { flex:1; display:grid; grid-template-columns:1fr 340px; overflow:hidden; gap:0; }
-.agents-area, .approvals-area, .prospects-area, .activity-area, .analytics-area { overflow-y:auto; overflow-x:hidden; padding:2rem; height:100%; min-width:0; }
-.approvals-area, .prospects-area, .activity-area, .analytics-area { display:none; }
+.agents-area, .approvals-area, .prospects-area, .activity-area, .analytics-area, .revenue-area { overflow-y:auto; overflow-x:hidden; padding:2rem; height:100%; min-width:0; }
+.approvals-area, .prospects-area, .activity-area, .analytics-area, .revenue-area { display:none; }
 .agents-area::-webkit-scrollbar, .approvals-area::-webkit-scrollbar, .prospects-area::-webkit-scrollbar, .activity-area::-webkit-scrollbar, .analytics-area::-webkit-scrollbar { width:3px; }
 .agents-area::-webkit-scrollbar-thumb, .approvals-area::-webkit-scrollbar-thumb, .prospects-area::-webkit-scrollbar-thumb, .activity-area::-webkit-scrollbar-thumb, .analytics-area::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
 .area-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:2rem; }
@@ -96,6 +97,12 @@ body::before {
 .section-divider { display:flex; align-items:center; gap:1rem; margin-bottom:1.25rem; margin-top:0.5rem; }
 .section-divider-label { font-family:'JetBrains Mono',monospace; font-size:0.6rem; letter-spacing:3px; text-transform:uppercase; color:var(--gray); flex-shrink:0; }
 .section-divider-line { flex:1; height:1px; background:linear-gradient(90deg, var(--border), transparent); }
+.client-stat-row { display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); gap:0.85rem; margin-bottom:1.5rem; }
+.client-stat-card { background:var(--bg1); border:1px solid var(--border); border-radius:10px; padding:0.95rem 1rem; min-width:0; }
+.client-stat-label { font-family:'JetBrains Mono',monospace; font-size:0.55rem; color:var(--gray); letter-spacing:1.6px; text-transform:uppercase; margin-bottom:0.45rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.client-stat-val { font-family:'Bebas Neue',sans-serif; font-size:1.8rem; line-height:1; letter-spacing:1px; color:var(--white); }
+.client-stat-val.t { color:var(--teal); } .client-stat-val.p { color:var(--purple-bright); } .client-stat-val.g { color:var(--green); } .client-stat-val.o { color:var(--orange); } .client-stat-val.y { color:var(--yellow); }
+.client-stat-sub { font-family:'JetBrains Mono',monospace; font-size:0.55rem; color:var(--gray-light); margin-top:0.35rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .agents-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:1rem; margin-bottom:1.5rem; max-width:75%; }
 .agent-card { background:var(--bg1); border:1px solid var(--border); border-radius:12px; padding:0; cursor:pointer; transition:all 0.3s; position:relative; overflow:hidden; aspect-ratio:0.75; display:flex; flex-direction:column; }
 .agent-card:hover { border-color:rgba(0,212,180,0.4); transform:translateY(-3px); box-shadow:0 12px 40px rgba(0,0,0,0.4), 0 0 30px rgba(0,212,180,0.1); }
@@ -147,6 +154,21 @@ body::before {
 .max-label { font-family:'JetBrains Mono',monospace; font-size:0.58rem; letter-spacing:2px; text-transform:uppercase; color:var(--purple-bright); display:flex; align-items:center; gap:6px; margin-bottom:0.5rem; }
 .max-dot { width:5px; height:5px; border-radius:50%; background:var(--purple-bright); box-shadow:0 0 6px var(--purple-bright); }
 .max-text { font-size:0.75rem; color:rgba(255,255,255,0.65); line-height:1.6; max-height:8rem; overflow:auto; }
+.revenue-layout { display:grid; grid-template-columns:minmax(360px, .8fr) minmax(500px, 1.2fr); gap:1rem; }
+.revenue-card { background:var(--bg1); border:1px solid var(--border); border-radius:10px; padding:1rem; }
+.revenue-form { display:grid; grid-template-columns:1fr 1fr; gap:.75rem; }
+.revenue-form .full { grid-column:1/-1; }
+.revenue-form label { display:block; font-family:'JetBrains Mono',monospace; font-size:.55rem; color:var(--gray-light); letter-spacing:1px; text-transform:uppercase; margin-bottom:.35rem; }
+.revenue-form input,.revenue-form select,.revenue-form textarea { width:100%; background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.09); color:var(--white); border-radius:5px; padding:.65rem; }
+.revenue-checks { display:grid; grid-template-columns:1fr 1fr; gap:.45rem; padding:.6rem; background:rgba(255,255,255,.025); border-radius:6px; }
+.revenue-checks label { text-transform:none; letter-spacing:0; }
+.revenue-checks input { width:auto; margin-right:.35rem; }
+.revenue-submit { grid-column:1/-1; border:0; border-radius:5px; padding:.75rem; color:#04100d; background:var(--teal); font-family:'JetBrains Mono',monospace; font-weight:700; cursor:pointer; }
+.revenue-message { grid-column:1/-1; min-height:1.2rem; font-size:.72rem; color:var(--gray-light); }
+.revenue-summary { display:grid; grid-template-columns:repeat(4,1fr); gap:.6rem; margin-bottom:1rem; }
+.revenue-table { width:100%; border-collapse:collapse; font-size:.72rem; }
+.revenue-table th,.revenue-table td { text-align:left; padding:.65rem .45rem; border-bottom:1px solid rgba(255,255,255,.05); }
+.revenue-table th { color:var(--gray-light); font-family:'JetBrains Mono',monospace; font-size:.54rem; text-transform:uppercase; }
 .approvals-filters { display:flex; gap:6px; margin-bottom:1.5rem; flex-wrap:wrap; }
 .filter-btn { font-family:'JetBrains Mono',monospace; font-size:0.6rem; letter-spacing:1px; text-transform:uppercase; padding:5px 12px; border-radius:4px; border:1px solid var(--border); background:transparent; color:var(--gray-light); cursor:pointer; transition:all 0.15s; }
 .filter-btn:hover { color:var(--white); border-color:var(--gray); }
@@ -222,9 +244,9 @@ body::before {
 .sb-item { font-family:'JetBrains Mono',monospace; font-size:0.58rem; color:var(--gray); display:flex; align-items:center; gap:5px; }
 .sb-item span { color:var(--teal); }
 .sb-item.right { margin-left:auto; }
-@media (max-width:1100px) { .main{grid-template-columns:1fr;} .right-panel{display:none;} .agents-grid{grid-template-columns:repeat(2,minmax(0,1fr));max-width:100%;} }
+@media (max-width:1100px) { .main{grid-template-columns:1fr;} .right-panel{display:none;} .client-stat-row{grid-template-columns:repeat(3,minmax(0,1fr));} .agents-grid{grid-template-columns:repeat(2,minmax(0,1fr));max-width:100%;} }
 @media (max-width:900px) { .topbar{gap:1rem;} .topbar-right{display:none;} .nav-tabs{margin-left:auto;overflow-x:auto;min-width:0;} }
-@media (max-width:760px) { .topbar{padding:0 1rem;gap:0.75rem;} .logo{font-size:1rem;letter-spacing:2px;max-width:210px;} .nav-tabs{overflow-x:auto;margin-left:0;min-width:0;} .nav-tab{padding:5px 10px;} .topbar-right{display:none;} .agents-area,.approvals-area,.prospects-area,.activity-area,.analytics-area{padding:1rem;} .agents-grid,.analytics-grid{grid-template-columns:1fr;} }
+@media (max-width:760px) { .topbar{padding:0 1rem;gap:0.75rem;} .logo{font-size:1rem;letter-spacing:2px;max-width:210px;} .nav-tabs{overflow-x:auto;margin-left:0;min-width:0;} .nav-tab{padding:5px 10px;} .topbar-right{display:none;} .agents-area,.approvals-area,.prospects-area,.activity-area,.analytics-area{padding:1rem;} .client-stat-row,.agents-grid,.analytics-grid{grid-template-columns:1fr;} }
 </style>
 </head>
 <body data-auth="login">
@@ -251,6 +273,7 @@ body::before {
       <div class="nav-tab" data-tab="prospects">Prospects</div>
       <div class="nav-tab" data-tab="activity">Activity</div>
       <div class="nav-tab" data-tab="analytics">Analytics</div>
+      <div class="nav-tab" data-tab="revenue">Revenue</div>
     </div>
     <div class="topbar-right">
       <div class="sys-status"><div class="sys-dot"></div><span id="agentLiveCount">0 LIVE</span></div>
@@ -267,8 +290,16 @@ body::before {
           <div class="area-sub" id="agentRosterSub">Client-visible agents · Read-only</div>
         </div>
       </div>
+      <div class="client-stat-row" id="clientStatsRow">
+        <div class="client-stat-card"><div class="client-stat-label">Active</div><div class="client-stat-val t" id="statLeads">0</div><div class="client-stat-sub" id="statLeadsSub">0 queued</div></div>
+        <div class="client-stat-card"><div class="client-stat-label">Emails Sent</div><div class="client-stat-val o" id="statEmails">0</div><div class="client-stat-sub" id="statEmailsSub">0 total</div></div>
+        <div class="client-stat-card"><div class="client-stat-label">Open Rate</div><div class="client-stat-val p" id="statOpenRate">0%</div><div class="client-stat-sub" id="statOpenSub">0 of 0 opened</div></div>
+        <div class="client-stat-card"><div class="client-stat-label">Response Rate</div><div class="client-stat-val g" id="statResponseRate">0%</div><div class="client-stat-sub" id="statResponseSub">0 replies</div></div>
+        <div class="client-stat-card"><div class="client-stat-label">Warm Signals</div><div class="client-stat-val y" id="statWarmSignals">0</div><div class="client-stat-sub" id="statWarmSub">0 warm prospects</div></div>
+      </div>
       <div class="section-divider"><div class="section-divider-label">Active Client Agents</div><div class="section-divider-line"></div></div>
       <div class="agents-grid" id="agentsGrid"></div>
+      <div class="no-data-note" id="agentsEmpty" style="display:none;">Agent stack not configured — contact support.</div>
     </div>
 
     <div class="approvals-area" id="approvalsPanel">
@@ -361,6 +392,47 @@ body::before {
       </div>
     </div>
 
+    <div class="revenue-area" id="revenuePanel">
+      <div class="area-header"><div><div class="area-title">CLOSED-LOOP REVENUE</div><div class="area-sub">Manual entry · tenant scoped · no automatic sends</div></div></div>
+      <div class="revenue-layout">
+        <div class="revenue-card">
+          <div class="section-divider"><div class="section-divider-label">Complete a job</div><div class="section-divider-line"></div></div>
+          <form class="revenue-form" id="revenueForm">
+            <div class="full"><label>Existing prospect</label><select id="revProspect" required></select></div>
+            <div><label>Customer type</label><select id="revCustomerType"><option value="residential">Residential</option><option value="commercial">Commercial</option><option value="short_term_rental">Short-term rental</option><option value="property_manager">Property manager</option><option value="partner">Partner</option><option value="other">Other</option></select></div>
+            <div><label>Lead source</label><select id="revSource"><option value="yelp">Yelp</option><option value="referral">Referral</option><option value="outbound_email">Outbound email</option><option value="outbound_phone">Outbound phone</option><option value="cleaning_company_overflow">Cleaning company overflow</option><option value="property_manager">Property manager</option><option value="str_partner">STR partner</option><option value="manual">Manual</option><option value="unknown">Unknown</option></select></div>
+            <div class="full"><label>Service type</label><input id="revService" required placeholder="One-time residential cleaning"></div>
+            <div><label>Scheduled start</label><input id="revScheduled" type="datetime-local" required></div>
+            <div><label>Completion date</label><input id="revCompleted" type="datetime-local" required></div>
+            <div><label>Final charge ($)</label><input id="revAmount" type="number" min="0" step="0.01" required></div>
+            <div><label>Actual labor + supply cost ($)</label><input id="revCost" type="number" min="0" step="0.01" placeholder="Optional"></div>
+            <div><label>Payment method</label><select id="revPaymentMethod"><option value="card">Card</option><option value="cash">Cash</option><option value="check">Check</option><option value="ach">ACH</option><option value="other">Other</option></select></div>
+            <div><label>Reactivate on</label><input id="revReactivate" type="date"></div>
+            <div class="full"><label>Completion notes</label><textarea id="revNotes" rows="2"></textarea></div>
+            <div class="revenue-checks full">
+              <label><input id="revFully" type="checkbox" checked>Fully completed</label>
+              <label><input id="revPaid" type="checkbox">Payment received</label>
+              <label><input id="revReview" type="checkbox" checked>Review eligible</label>
+              <label><input id="revRecurring" type="checkbox">Recurring eligible</label>
+            </div>
+            <button class="revenue-submit" type="submit">Record completed job</button>
+            <div class="revenue-message" id="revenueMessage"></div>
+          </form>
+        </div>
+        <div class="revenue-card">
+          <div class="revenue-summary" id="revenueSummary"></div>
+          <div class="section-divider"><div class="section-divider-label">Revenue outcomes</div><div class="section-divider-line"></div></div>
+          <div style="overflow:auto"><table class="revenue-table"><thead><tr><th>Customer</th><th>Source</th><th>Status</th><th>Booked</th><th>Delivered</th><th>Collected</th><th>Profit</th></tr></thead><tbody id="revenueRows"></tbody></table></div>
+        </div>
+      </div>
+      <div class="revenue-card" style="margin-top:1rem">
+        <div class="section-divider"><div class="section-divider-label">Revenue health</div><div class="section-divider-line"></div></div>
+        <div class="revenue-summary" id="revenueHealth"></div>
+        <div class="section-divider"><div class="section-divider-label">Operator audit</div><div class="section-divider-line"></div></div>
+        <div style="overflow:auto"><table class="revenue-table"><thead><tr><th>Actor</th><th>Action</th><th>Time</th><th>Source</th><th>Events</th><th>Correlation</th><th>Financial delta</th><th>Confidence</th></tr></thead><tbody id="revenueAuditRows"></tbody></table></div>
+      </div>
+    </div>
+
     <div class="right-panel">
       <div class="panel-header">
         <div class="panel-title">COMMAND FEED</div>
@@ -370,7 +442,7 @@ body::before {
         <div class="metric-tile"><div class="metric-tile-label">Pending</div><div class="metric-tile-val p" id="metricPending">0</div><div class="metric-tile-change">Approval queue</div></div>
         <div class="metric-tile"><div class="metric-tile-label">Open Rate</div><div class="metric-tile-val t" id="metricOpenRate">0%</div><div class="metric-tile-change" id="metricOpenDetail">0 of 0 opened</div></div>
         <div class="metric-tile"><div class="metric-tile-label">Posted</div><div class="metric-tile-val g" id="metricPosted">0</div><div class="metric-tile-change">This week</div></div>
-        <div class="metric-tile"><div class="metric-tile-label">Prospects</div><div class="metric-tile-val o" id="metricProspects">0</div><div class="metric-tile-change" id="metricProspectsSub">This vertical</div></div>
+        <div class="metric-tile"><div class="metric-tile-label">Active</div><div class="metric-tile-val o" id="metricProspects">0</div><div class="metric-tile-change" id="metricProspectsSub">In active outreach</div></div>
       </div>
       <div class="activity-feed" id="activityFeed">
         <div class="feed-label">Live Activity</div>
@@ -430,6 +502,7 @@ function esc(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
 }
 function fmtNum(n) { return new Intl.NumberFormat().format(Number(n || 0)); }
+function fmtMoney(cents) { return new Intl.NumberFormat('en-US', { style:'currency', currency:'USD' }).format(Number(cents || 0) / 100); }
 function fmtDate(d) {
   if (!d) return '—';
   return new Date(d).toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
@@ -472,15 +545,25 @@ function renderClientHeader() {
   document.getElementById('loginSub').textContent = `${business} · Client command center`;
   document.getElementById('agentTitle').textContent = business;
   document.getElementById('feedSub').textContent = `${titleCase(vertical)} activity · Read only`;
-  document.getElementById('metricProspectsSub').textContent = titleCase(vertical);
+  document.getElementById('metricProspectsSub').textContent = 'In active outreach';
 }
 
 function renderDashboard() {
   renderClientHeader();
   const stats = dashboard.stats || {};
+  document.getElementById('statLeads').textContent = fmtNum(stats.total_prospects);
+  document.getElementById('statLeadsSub').textContent = `${fmtNum(stats.cold_prospects)} queued`;
+  document.getElementById('statEmails').textContent = fmtNum(stats.emails_sent_this_week);
+  document.getElementById('statEmailsSub').textContent = `${fmtNum(stats.emails_sent_total)} total`;
+  document.getElementById('statOpenRate').textContent = pct(stats.open_rate);
+  document.getElementById('statOpenSub').textContent = `${fmtNum(stats.opened_contacts)} of ${fmtNum(stats.delivered_contacts)} delivered recipients opened`;
+  document.getElementById('statResponseRate').textContent = pct(stats.response_rate);
+  document.getElementById('statResponseSub').textContent = `${fmtNum(stats.replied_contacts)} replies`;
+  document.getElementById('statWarmSignals').textContent = fmtNum(stats.warm_signals);
+  document.getElementById('statWarmSub').textContent = `${fmtNum(stats.warm_prospects)} warm prospects`;
   document.getElementById('metricPending').textContent = fmtNum(stats.pending_approvals);
   document.getElementById('metricOpenRate').textContent = pct(stats.open_rate);
-  document.getElementById('metricOpenDetail').textContent = `${fmtNum(stats.opened_contacts)} of ${fmtNum(stats.emailed_contacts)} opened`;
+  document.getElementById('metricOpenDetail').textContent = `${fmtNum(stats.opened_contacts)} of ${fmtNum(stats.delivered_contacts)} delivered recipients opened`;
   document.getElementById('metricPosted').textContent = fmtNum(stats.content_published_week);
   document.getElementById('metricProspects').textContent = fmtNum(stats.total_prospects);
   const live = (dashboard.agents || []).filter(a => a.active).length;
@@ -492,7 +575,15 @@ function renderDashboard() {
 }
 
 function renderAgents(agents) {
-  document.getElementById('agentsGrid').innerHTML = agents.map(agent => {
+  const grid = document.getElementById('agentsGrid');
+  const empty = document.getElementById('agentsEmpty');
+  if (!agents.length) {
+    grid.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+  grid.innerHTML = agents.map(agent => {
     const ring = 251.2 * (1 - Number(agent.ring || 0));
     const statusClass = agent.active ? 'st-live' : 'st-standby';
     const statusText = agent.active ? 'LIVE' : 'STANDBY';
@@ -589,10 +680,20 @@ async function handleApproval(id, action, btn) {
   const card = btn.closest('.approval-card');
   card.querySelectorAll('button').forEach(b => b.disabled = true);
   try {
+    const item = approvals.find(a => String(a.id) === String(id));
+    let binding = {};
+    if (action === 'approved' && ['linkedin_page','linkedin_personal','facebook_page','google_business'].includes(item?.channel)) {
+      const preview = await api(`/api/approvals/${id}/preview`);
+      if (!window.confirm(`Approve this exact post for ${preview.account.id} (${preview.account.externalAccountId})?\n\n${preview.artifact.body}\n\nAn operator will publish after approval.`)) {
+        card.querySelectorAll('button').forEach(b => b.disabled = false);
+        return;
+      }
+      binding = { accountId: preview.account.id, expectedApprovalHash: preview.approvalHash };
+    }
     await api(`/api/approvals/${id}`, {
       method:'POST',
       headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({ action, ...binding }),
     });
     card.classList.add('fading');
     setTimeout(() => {
@@ -604,6 +705,7 @@ async function handleApproval(id, action, btn) {
       }
     }, 250);
   } catch (err) {
+    const notice = document.createElement('p'); notice.textContent = err.message || 'Unable to approve this content.'; card.appendChild(notice);
     card.querySelectorAll('button').forEach(b => b.disabled = false);
   }
 }
@@ -732,6 +834,118 @@ async function loadAnalytics() {
   renderAnalytics(await api('/api/analytics'));
 }
 
+async function revenueApi(path, method = 'GET', body) {
+  const headers = { 'Content-Type':'application/json', 'X-Correlation-ID':crypto.randomUUID() };
+  if (method !== 'GET') headers['Idempotency-Key'] = crypto.randomUUID();
+  const res = await fetch(`/clients/${clientId}${path}`, {
+    method, credentials:'include', headers, body:body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Revenue operation failed');
+  return data;
+}
+
+function cents(value) { return Math.round(Number(value || 0) * 100); }
+
+function setRevenueDefaults() {
+  const now = new Date();
+  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0,16);
+  if (!document.getElementById('revScheduled').value) document.getElementById('revScheduled').value = local;
+  if (!document.getElementById('revCompleted').value) document.getElementById('revCompleted').value = local;
+}
+
+function renderRevenue(context, outcomes) {
+  const summary = context.summary || {};
+  document.getElementById('revenueSummary').innerHTML = [
+    ['Booked', summary.booked_revenue_cents, 'p'], ['Delivered', summary.delivered_revenue_cents, 't'],
+    ['Collected', summary.collected_revenue_cents, 'g'], ['Gross Profit', summary.gross_profit_cents, 'o'],
+  ].map(([label, value, color]) => `<div class="client-stat-card"><div class="client-stat-label">${label}</div><div class="client-stat-val ${color}" style="font-size:1.25rem">${fmtMoney(value)}</div></div>`).join('');
+  document.getElementById('revenueRows').innerHTML = outcomes.map(row => `<tr>
+    <td>${esc(row.display_name)}</td><td>${esc(titleCase(row.lead_source))}</td><td>${esc(titleCase(row.outcome_status))}</td>
+    <td>${fmtMoney(row.booked_revenue_cents)}</td><td>${fmtMoney(row.delivered_revenue_cents)}</td>
+    <td>${fmtMoney(row.collected_revenue_cents)}</td><td>${row.gross_profit_cents === null ? 'Cost missing' : fmtMoney(row.gross_profit_cents)}</td>
+  </tr>`).join('') || '<tr><td colspan="7" class="no-data-note">No revenue outcomes yet.</td></tr>';
+}
+
+function renderRevenueOperations(health, audit) {
+  document.getElementById('revenueHealth').innerHTML = [
+    ['Reconciliation', health.reconciliation_status || 'not run'],
+    ['Unprojected', health.unprojected_event_count || 0],
+    ['Projection lag', `${health.projection_lag_seconds || 0}s`],
+    ['Last rebuild', health.last_successful_rebuild ? fmtDate(health.last_successful_rebuild) : 'never'],
+  ].map(([label, value]) => `<div class="client-stat-card"><div class="client-stat-label">${esc(label)}</div><div class="client-stat-val" style="font-size:.9rem">${esc(value)}</div></div>`).join('');
+  document.getElementById('revenueAuditRows').innerHTML = audit.map(row => `<tr>
+    <td>${esc(row.actor_id || row.actor_type)}</td><td>${esc(titleCase(row.action))}</td><td>${fmtDate(row.occurred_at)}</td>
+    <td>${esc(`${row.source_entity_type || 'n/a'}:${row.source_entity_id || 'n/a'}`)}</td><td>${fmtNum((row.resulting_events || []).length)}</td>
+    <td><code>${esc(row.correlation_id)}</code></td><td><code>${esc(JSON.stringify(row.financial_delta || {}))}</code></td><td>${esc(row.attribution_confidence)}</td>
+  </tr>`).join('') || '<tr><td colspan="8" class="no-data-note">No operator revenue actions yet.</td></tr>';
+}
+
+async function loadRevenue() {
+  if (!prospects.length) await loadProspects();
+  document.getElementById('revProspect').innerHTML = prospects.map(p => `<option value="${esc(p.id)}">${esc(p.business)}${p.email ? ` · ${esc(p.email)}` : ''}</option>`).join('');
+  setRevenueDefaults();
+  const [context, outcomes, health, audit] = await Promise.all([
+    revenueApi('/operator/revenue-context'), revenueApi('/revenue-outcomes'), revenueApi('/revenue-health'), revenueApi('/revenue-audit'),
+  ]);
+  renderRevenue(context, outcomes);
+  renderRevenueOperations(health, audit);
+}
+
+document.getElementById('revenueForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const message = document.getElementById('revenueMessage');
+  const button = event.currentTarget.querySelector('button[type="submit"]');
+  button.disabled = true;
+  message.style.color = 'var(--gray-light)';
+  message.textContent = 'Recording customer, opportunity, job, outcome, and payment evidence…';
+  try {
+    const prospectId = document.getElementById('revProspect').value;
+    const serviceType = document.getElementById('revService').value.trim();
+    const amountCents = cents(document.getElementById('revAmount').value);
+    const costValue = document.getElementById('revCost').value;
+    const customerResult = await revenueApi('/customers', 'POST', {
+      prospectId, customerType:document.getElementById('revCustomerType').value,
+    });
+    const opportunityResult = await revenueApi('/opportunities', 'POST', {
+      customerId:customerResult.customer.id, prospectId, serviceType,
+      estimatedValueCents:amountCents, estimatedCostCents:costValue === '' ? null : cents(costValue),
+      source:document.getElementById('revSource').value,
+    });
+    let opportunity = opportunityResult.opportunity;
+    for (const stage of ['contacted','qualified','quoted']) {
+      opportunity = (await revenueApi(`/opportunities/${opportunity.id}`, 'PATCH', { stage })).opportunity;
+    }
+    const job = (await revenueApi('/jobs', 'POST', {
+      opportunityId:opportunity.id, customerId:customerResult.customer.id, serviceType,
+      scheduledStart:new Date(document.getElementById('revScheduled').value).toISOString(), quotedAmountCents:amountCents,
+      estimatedDirectCostCents:costValue === '' ? null : cents(costValue),
+    })).job;
+    const completion = await revenueApi(`/jobs/${job.id}/complete`, 'POST', {
+      completionDate:new Date(document.getElementById('revCompleted').value).toISOString(),
+      completionConfirmed:true, fullyCompleted:document.getElementById('revFully').checked,
+      finalAmountCents:amountCents, actualDirectCostCents:costValue === '' ? null : cents(costValue),
+      completionNotes:document.getElementById('revNotes').value,
+      requestReview:document.getElementById('revReview').checked,
+      recurringEligible:document.getElementById('revRecurring').checked,
+      reactivationDate:document.getElementById('revReactivate').value || null,
+    });
+    if (document.getElementById('revPaid').checked) {
+      await revenueApi('/payments', 'POST', {
+        jobId:job.id, amountCents, status:'succeeded',
+        paymentMethod:document.getElementById('revPaymentMethod').value,
+        receivedAt:new Date(document.getElementById('revCompleted').value).toISOString(),
+      });
+    }
+    message.style.color = 'var(--green)';
+    message.textContent = `Recorded ${titleCase(completion.revenueOutcome.outcome_status)} outcome. Follow-ups remain approval-gated.`;
+    await loadRevenue();
+  } catch (error) {
+    message.style.color = 'var(--red)';
+    message.textContent = error.message;
+  } finally { button.disabled = false; }
+});
+
 document.getElementById('loginForm').addEventListener('submit', async e => {
   e.preventDefault();
   document.getElementById('loginError').style.display = 'none';
@@ -757,13 +971,14 @@ document.querySelectorAll('.nav-tab').forEach(tab => {
     document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
     tab.classList.add('active');
     const name = tab.dataset.tab;
-    ['agents','approvals','prospects','activity','analytics'].forEach(panel => {
+    ['agents','approvals','prospects','activity','analytics','revenue'].forEach(panel => {
       document.getElementById(`${panel}Panel`).style.display = panel === name ? 'block' : 'none';
     });
     if (name === 'approvals') await loadApprovals();
     if (name === 'prospects') await loadProspects();
     if (name === 'activity') await loadActivity();
     if (name === 'analytics') await loadAnalytics();
+    if (name === 'revenue') await loadRevenue();
   });
 });
 

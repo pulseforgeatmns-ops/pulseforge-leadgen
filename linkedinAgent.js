@@ -2,9 +2,10 @@ require('dotenv').config();
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
-const Anthropic = require('@anthropic-ai/sdk');
+const Anthropic = require('./utils/meteredAnthropic').forAgent('link');
 const db = require('./dbClient');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
+const { buildVoiceConstraintBlock } = require('./utils/voiceRules');
 
 puppeteer.use(StealthPlugin());
 
@@ -12,7 +13,7 @@ const AGENT_NAME = 'link';
 const SESSION_FILE = './linkedin_session.json';
 const CLIENT_ID = getRuntimeClientId();
 
-const client = new Anthropic();
+const client = new Anthropic(undefined, { tenantId: () => CLIENT_ID });
 
 const agentPersona = {
   name: 'Jake Maynard',
@@ -26,19 +27,6 @@ const RELEVANT_KEYWORDS = [
   'owner', 'entrepreneur', 'leads', 'growth', 'slow season', 'busy season',
   'referrals', 'reviews', 'google', 'visibility', 'social media'
 ];
-
-function isRailwayRuntime() {
-  return Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_SERVICE_ID);
-}
-
-function assertCanRunLink() {
-  if (isRailwayRuntime()) {
-    throw new Error('Link uses local Puppeteer browser automation and cannot run on Railway. Run linkedinAgent.js locally with a valid LinkedIn session.');
-  }
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error('ANTHROPIC_API_KEY is missing; Link cannot generate comments.');
-  }
-}
 
 function randomDelay(min, max) {
   return new Promise(resolve =>
@@ -95,11 +83,20 @@ async function extractPosts(page) {
   return page.evaluate(() => {
     const posts = [];
     const seen = new Set();
+    let malformedCount = 0;
+
+    const AUTHOR_SELECTORS = [
+      '.update-components-actor__title span[aria-hidden="true"]',
+      '.update-components-actor__name span[aria-hidden="true"]',
+      '.update-components-actor__title',
+      '.feed-shared-actor__name span[aria-hidden]',
+    ];
 
     // Try multiple selector patterns across LinkedIn DOM versions
     const containers = document.querySelectorAll(
       '[data-urn*="activity"], .feed-shared-update-v2, .occludable-update'
     );
+    const containerCount = containers.length;
 
     for (const el of containers) {
       try {
@@ -116,12 +113,14 @@ async function extractPosts(page) {
         seen.add(content.slice(0, 60));
 
         // Author name
-        const authorEl = el.querySelector(
-          '.update-components-actor__name span[aria-hidden], ' +
-          '.feed-shared-actor__name span[aria-hidden], ' +
-          '.update-components-actor__name'
-        );
-        const authorName = authorEl?.innerText?.trim() || 'Unknown';
+        let authorName = 'Unknown';
+        for (const sel of AUTHOR_SELECTORS) {
+          const text = el.querySelector(sel)?.innerText?.trim();
+          if (text) {
+            authorName = text.split('\n')[0].trim();
+            break;
+          }
+        }
 
         // Post URL — look for permalink anchor
         const linkEl = el.querySelector('a[href*="/posts/"], a[href*="/activity-"]');
@@ -131,10 +130,11 @@ async function extractPosts(page) {
         if (posts.length >= 15) break;
       } catch {
         // skip malformed post
+        malformedCount++;
       }
     }
 
-    return posts;
+    return { posts, malformedCount, containerCount };
   });
 }
 
@@ -142,27 +142,52 @@ async function generateComment(postContent, authorName) {
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 150,
+    system: buildVoiceConstraintBlock(),
     messages: [{
       role: 'user',
-      content: `You are ${agentPersona.name}, ${agentPersona.title}. You're commenting on a LinkedIn post as yourself — a real person who runs a marketing automation company for local small businesses.
+      content: `You are ${agentPersona.name}, ${agentPersona.title}. You are commenting on a LinkedIn post as yourself, not as a marketer.
+
+Primary mode: Lead with substance. The comment should be a sharp observation, a pushback, or a reframe of what the post claims. Relevance to the specific post content is the highest priority. The reader should feel the comment engaged with the actual argument, not delivered a template.
+
+Personal lens: Available but secondary. Jacob's background (10+ years operating restaurants and a cleaning company, bartending while bootstrapping Pulseforge solo, working with local service businesses like home renovation contractors in Charleston WV right now, single dad) is a tool to deploy when it materially sharpens the point. Never as the opening move. Most comments should have no autobiographical anchor at all.
 
 Post by ${authorName}:
 "${postContent.slice(0, 600)}"
 
-Write a LinkedIn comment (2-3 sentences) that:
-- Responds directly to something specific in the post — show you actually read it
-- Adds a real observation or short relevant experience from running your own businesses
-- Sounds like a real person, not a marketer — no "great post!", no self-promotion, no product pitch
-- Ends naturally — can be a thought, a question, or just a statement
-- Keeps a professional but human tone
+Write a LinkedIn comment (2 to 3 sentences max) that:
+- Responds directly to something specific in the post. Reference a specific claim, premise, or detail.
+- Leads with the point, not credentials or backstory.
+- Uses background only when it materially sharpens the argument.
+- Reads like you typed it on your phone between two things. Short sentences. Direct. No corporate cadence.
 
-Return only the comment text.`
+Hard rules (do not violate):
+- Never use em dashes. Use periods or commas. Two short sentences instead of one long one joined by an em dash.
+- Do not open with "When I ran restaurants...", "In the cleaning business...", "Running restaurants taught me...", "I've opened restaurants...", "When I was scaling...", or any opener that leads with "I" plus a past tense operator verb.
+- No "great post", no "love this", no "thanks for sharing", no thought-leader phrasing like "at the end of the day", "the truth is", "double-tap", "this hits", "the messy middle", or "embracing the journey".
+- No self-promotion. No product pitch. If referencing your work, say "my agency" or "operating restaurants".
+- No moderator-style questions. If you ask a question, it should be a real one a peer would ask.
+
+Variety:
+- When background comes in, rotate the thread. Do not pull from restaurants every time. Bartending now, the current Pulseforge grind, doing outbound yourself, working with home services clients, and parenting are all available.
+- Vary the structure across comments: pure pushback on a specific claim, sharper reframe of the premise, second-order implication the post missed, counter-example from a different domain, or an observation about who the advice does or does not apply to.
+
+Examples of range (study the cadence, do not copy phrases):
+
+Example 1 (pure insight, no anchor):
+"The hardest part isn't picking the channel. It's resisting the urge to bail two weeks in when nothing's working yet. Most of what looks like wrong-channel is actually right-channel-too-soon."
+
+Example 2 (counter-take, no anchor):
+"This is the right answer for a team of 50. At 5 the bottleneck isn't process, it's whoever stops sleeping first. Different problem, different fix."
+
+Example 3 (pushback with background woven in mid-comment, not as opener):
+"The frame assumes you know what your offer is. Most early stage operators don't, and pretending you do because someone said clarity matters is how you end up rebuilding the funnel three times. Faster path is shipping the messy version and letting prospects tell you what stuck. Did this with my own client work and saved months of guessing."
+
+Return only the comment text. No preamble, no quotes around it, no "POST:" prefix.`
     }]
   });
 
   const commentText = message.content[0].text.trim();
-  // Store with delimiter so the approval flow can post the URL as a first reply
-  return `POST: ${commentText}\nFIRST_COMMENT: https://gopulseforge.com`;
+  return commentText.trim();
 }
 
 async function run() {
@@ -172,9 +197,12 @@ async function run() {
     console.log('Link engagement is enabled only for Pulseforge client_id=1.');
     return { skipped: true, reason: 'client_not_enabled', client_id: CLIENT_ID };
   }
-  assertCanRunLink();
   let browser;
   let drafted = 0;
+  let unknownCount = 0;
+  let totalPosts = 0;
+  let malformedPosts = 0;
+  let containersSeen = 0;
   const limit = 10;
   try {
     browser = await puppeteer.launch({
@@ -208,28 +236,48 @@ async function run() {
 
     // Search for small business content
     const searchUrls = [
-      'https://www.linkedin.com/search/results/content/?keywords=small%20business%20owner%20marketing&datePosted=past-week&sortBy=relevance',
-      'https://www.linkedin.com/search/results/content/?keywords=local%20business%20growth%20customers&datePosted=past-week&sortBy=relevance',
-      'https://www.linkedin.com/feed/',
+      'https://www.linkedin.com/in/retentionadam/recent-activity/all/',
+      'https://www.linkedin.com/in/justinwelsh/recent-activity/all/',
+      'https://www.linkedin.com/in/coldemailwizard/recent-activity/all/',
+      'https://www.linkedin.com/in/jasondbay/recent-activity/all/',
+      'https://www.linkedin.com/in/anthony-natoli/recent-activity/all/',
+      'https://www.linkedin.com/in/outboundsales/recent-activity/all/',
+      'https://www.linkedin.com/in/morganjingramamp/recent-activity/all/',
     ];
 
     for (const url of searchUrls) {
+      const stillActive = await getClientConfig(CLIENT_ID);
+      if (!stillActive) {
+        throw new Error(`[LinkedIn] Client ${CLIENT_ID} deactivated mid-run — aborting`);
+      }
+
       if (drafted >= limit) break;
 
       console.log(`Scanning: ${url}`);
       try {
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        try {
+          await page.waitForSelector('[data-urn*="urn:li:activity"]', { timeout: 30000 });
+        } catch (e) {
+          console.log(`No posts rendered on ${url} after 30s wait, skipping`);
+          continue;
+        }
         await randomDelay(4000, 6000);
       } catch (err) {
         console.error(`Navigation failed: ${err.message}`);
         continue;
       }
 
-      const posts = await extractPosts(page);
+      const { posts, malformedCount, containerCount } = await extractPosts(page);
+      malformedPosts += malformedCount;
+      containersSeen += containerCount;
       console.log(`Found ${posts.length} posts`);
 
       for (const post of posts) {
         if (drafted >= limit) break;
+        totalPosts++;
+        if (post.authorName === 'Unknown') unknownCount++;
+
         if (!isRelevant(post.content)) {
           console.log(`  Skipping (off-topic): ${post.authorName}`);
           continue;
@@ -271,8 +319,27 @@ async function run() {
       await randomDelay(10000, 20000);
     }
 
-    console.log(`\nLinkedIn agent complete — ${drafted} comment${drafted !== 1 ? 's' : ''} queued for approval.`);
-    return { drafted, limit, client_id: CLIENT_ID };
+    console.log(
+      `\nLinkedIn agent complete — ${drafted} comment${drafted !== 1 ? 's' : ''} queued for approval. ` +
+      `${malformedPosts} malformed post container${malformedPosts !== 1 ? 's' : ''} skipped.`
+    );
+
+    if (totalPosts === 0 && containersSeen > 0) {
+      console.error(
+        `⚠️ EXTRACTION FAILURE: ${containersSeen} post containers found but 0 posts extracted. ` +
+        `Body/content selector likely broke — check extractPosts selectors in linkedinAgent.js.`
+      );
+    }
+
+    const failRate = totalPosts ? (unknownCount / totalPosts) : 0;
+    if (failRate > 0.3) {
+      console.error(
+        `⚠️ AUTHOR EXTRACTION DEGRADED: ${unknownCount}/${totalPosts} posts (${Math.round(failRate * 100)}%) resolved to Unknown. ` +
+        `LinkedIn likely changed the actor DOM — author selectors need updating in linkedinAgent.js.`
+      );
+    }
+
+    return { drafted, limit, unknownCount, totalPosts, malformedPosts, containersSeen, client_id: CLIENT_ID };
   } finally {
     if (browser) await browser.close().catch(() => {});
   }
@@ -286,3 +353,4 @@ if (require.main === module) {
     process.exit(1);
   });
 }
+

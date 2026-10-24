@@ -1,0 +1,164 @@
+# SPEC-007 — Command Deck Composition Engine
+
+| Field | Value |
+|---|---|
+| **Status** | Done |
+| **Target Version** | v0.9.2 |
+| **Priority** | Critical |
+| **Owner** | TBD |
+| **Created** | 2026-07-26 |
+| **Completed** | 2026-07-26 |
+
+## Objective
+
+Transform intelligence into a deterministic Command Deck model.
+
+The dashboard should never know how to combine Knowledge, Reasoning, Memory, Briefing, and Policy. Introduce one layer whose only responsibility is: **Build today's Command Deck.**
+
+Think of it as the presenter for the entire intelligence stack.
+
+## Philosophy
+
+```text
+Knowledge → Reasoning → Memory → Briefing → Policy → CommandDeckComposer → UI
+```
+
+The UI consumes **one object**. Never five engines independently.
+
+The composer may: sort · merge · rank · summarize · group.
+
+The composer may **not**: reason · score · infer · invent.
+
+Those responsibilities remain below it.
+
+## Vision References
+
+- `docs/vision/Intelligence_Architecture.md`
+- `docs/vision/Product_Experience.md`
+- `docs/vision/Product_Constitution.md` (§11 Cognitive load)
+- [SPEC-004](SPEC-004_Max_Briefing_Engine.md)
+- [SPEC-005](SPEC-005_Policy_Decision_Engine.md)
+- [SPEC-006](SPEC-006_Command_Deck.md)
+- [ADR-002](../adr/ADR-002_Explainable_AI.md)
+
+## Problem
+
+Today the stack ends at Policy. The dashboard would otherwise orchestrate five systems, recompute ranking, invent empty-state copy, and lose explainability. Nothing emits a single immutable view model for the Command Deck.
+
+## Scope
+
+- Package `packages/max/commandDeck/` — composer, card contract, empty states, actions, tests
+- Single library entry: `max.compose({ tenantId, asOf, period })`
+- Assembles Morning Brief, Highest Leverage Action, Watch Alerts, Market Trends, Priority Queue
+- Common `IntelligenceCard` contract for every visible card
+- Composer-owned empty states
+- Explainability metadata on every card (`sources`, `reasoningId`, `policyId`, `briefingId`)
+- HTTP: `GET /api/v1/command-deck` → `CommandDeckModel`
+
+## Out of Scope
+
+- Command Deck UI / styling (SPEC-006)
+- Ask Max modal / conversation
+- Reasoning, scoring, inference, or invented narrative
+- Autonomous execution
+- New policy rules or briefing sections
+
+## Dependencies
+
+- ✅ SPEC-002 Max Reasoning Engine (v0.8.0)
+- ✅ SPEC-003 Temporal Intelligence & Memory (v0.8.1)
+- ✅ SPEC-004 Max Briefing Engine (v0.9.0)
+- ✅ SPEC-005 Policy & Decision Engine (v0.9.1)
+- → Enables SPEC-006 Command Deck (v1.0.0)
+
+## Architecture
+
+```text
+BriefingEngine.brief()
+PolicyEngine.evaluate()   (per surfaced recommendation)
+        │
+        ▼
+CommandDeckComposer.compose()
+        │
+        ▼
+CommandDeckModel  (immutable)
+        │
+        ▼
+GET /api/v1/command-deck → UI render-only
+```
+
+## Data Model
+
+### MorningBrief
+
+```text
+headline · summary · marketChanges · watchAlertCount · priorityCount · generatedAt
+```
+
+### HighestLeverageAction
+
+```text
+recommendation · opportunity · confidence · trend · supportingSignals · contradictingSignals · policy
+```
+
+### IntelligenceCard
+
+```text
+id · type · priority · title · summary · confidence · updatedAt · actions[]
++ sources[] · reasoningId · policyId · briefingId
+```
+
+### CommandDeckModel
+
+```text
+morningBrief
+highestLeverageAction
+watchAlerts[]
+marketTrends[]
+priorityQueue[]
+cards[]          — render-ordered IntelligenceCards
+emptyStates{}    — composer-owned copy when sections are empty
+meta             — tenantId, briefingId, generatedAt, asOf, period, buildTimeMs
+```
+
+### Action System
+
+Cards expose actions the UI renders without interpretation:
+
+`review_recommendation` · `ask_max` · `open_company` · `dismiss` · `snooze`
+
+## Implementation Plan
+
+1. Types + card helpers + empty-state catalog
+2. Section composers (morning brief, HLA, watches, trends, priority queue)
+3. `CommandDeckComposer` façade + `max.compose()`
+4. Tests (contract, empty states, determinism, no evaluate during compose-from-briefing)
+5. `GET /api/v1/command-deck` route
+6. Docs: CHANGELOG, CURRENT_STATE, README, architecture, release note
+
+## Migration Strategy
+
+Additive only. Existing `evaluate` / `remember` / `brief` / `decide` unchanged. Route returns empty-state-rich model when knowledge is unwired.
+
+## Testing
+
+- Unit: card contract, empty states, watch order/dedupe, trend summarization
+- Integration: compose over seeded briefing + policy
+- Determinism: identical inputs → identical model (ignoring wall-clock `generatedAt` when fixed via `asOf`)
+- Guard: composer does not call `ReasoningEngine.evaluate()`
+
+## Acceptance Criteria
+
+- [x] CommandDeckComposer introduced
+- [x] Dashboard receives a single immutable view model
+- [x] No UI business logic required to rank or merge engines
+- [x] All ranking delegated to the composer (from briefing order + deterministic merges)
+- [x] All cards share `IntelligenceCard` contract
+- [x] Empty states generated by the composer
+- [x] Explainability metadata included for every card
+- [x] UI renders only; it never computes intelligence
+- [x] `GET /api/v1/command-deck` returns `CommandDeckModel`
+
+## Future Work
+
+Later cards become trivial composer emissions (Today's Win, Market Risk, Competitive Movement, Pipeline Health, Revenue Forecast) without dashboard redesign.

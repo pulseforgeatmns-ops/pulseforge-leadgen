@@ -1,11 +1,11 @@
 require('dotenv').config();
-const Anthropic = require('@anthropic-ai/sdk');
+const Anthropic = require('./utils/meteredAnthropic').forAgent('sketch');
 const fs = require('fs');
 const path = require('path');
 const pool = require('./db');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 
-const client = new Anthropic();
+const client = new Anthropic(undefined, { tenantId: () => CLIENT_ID });
 const AGENT_NAME = 'sketch';
 const CLIENT_ID = getRuntimeClientId();
 
@@ -20,7 +20,7 @@ async function generateMockup(businessName, location) {
   console.log(`\nSketch generating mockup for: ${businessName} · ${location}\n`);
 
   const message = await client.messages.create({
-    model: 'claude-sonnet-4-5',
+    model: 'claude-sonnet-4-6',
     max_tokens: 8000,
     messages: [{
       role: 'user',
@@ -71,7 +71,7 @@ async function saveMockup(html, businessName) {
   return { filepath, filename, previewUrl };
 }
 
-async function saveToDatabase(businessName, location, previewUrl) {
+async function saveToDatabase(businessName, location, previewUrl, serviceAreaMatch = null) {
   // Check if prospect already exists
   const existing = await pool.query(
     `SELECT id FROM prospects WHERE first_name ILIKE $1 LIMIT 1`,
@@ -90,9 +90,9 @@ async function saveToDatabase(businessName, location, previewUrl) {
 
   // Create new prospect entry
   const result = await pool.query(
-    `INSERT INTO prospects (first_name, last_name, status, source, notes)
-     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-    [businessName, '', 'cold', 'sketch', `Sketch mockup: ${previewUrl}`]
+    `INSERT INTO prospects (first_name, last_name, status, source, notes, service_area_match)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+    [businessName, '', 'cold', 'sketch', `Sketch mockup: ${previewUrl}`, serviceAreaMatch || null]
   );
 
   const prospectId = result.rows[0].id;
@@ -127,7 +127,7 @@ async function run(params = {}) {
     const { filepath, filename, previewUrl } = await saveMockup(html, businessName);
 
     // Save to database
-    await saveToDatabase(businessName, location, previewUrl);
+    await saveToDatabase(businessName, location, previewUrl, params.service_area_match || null);
 
     // Log the run
     await logAgentRun(businessName, previewUrl, 'success');
@@ -155,3 +155,4 @@ if (require.main === module) {
     process.exit(1);
   });
 }
+

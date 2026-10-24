@@ -1,0 +1,14 @@
+{
+  "name": "@pulseforge/reasoning-runtime",
+  "version": "1.0.0",
+  "description": "Domain-neutral reasoning runtime — strategy packs, context providers, recommendation providers",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "license": "ISC",
+  "engines": {
+    "node": ">=18"
+  }
+}

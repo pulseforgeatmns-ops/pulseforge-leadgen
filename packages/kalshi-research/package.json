@@ -1,0 +1,15 @@
+{
+  "name": "@pulseforge/kalshi-research",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Isolated paper/replay Kalshi BTC research package — research only; never deployed; never places live orders",
+  "scripts": {
+    "test": "python3 -m pytest -q",
+    "feature-report": "python3 -m kalshi_research.cli feature-report",
+    "diagnose-data": "python3 -m kalshi_research.cli diagnose-data"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "ISC"
+}

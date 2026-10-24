@@ -1,0 +1,730 @@
+'use strict';
+
+/**
+ * SPEC-130 — Mission Planning Engine.
+ * Interpret once. Execute many.
+ *
+ * Pipeline: Intent Analysis → Entity Extraction → Mission Structuring →
+ * Ambiguity Detection → Operator Review → Mission Lock.
+ * Never performs execution. Specialists never parse operator English.
+ */
+
+const { asText } = require('./types');
+const {
+  inferTargetSegmentFromObjective,
+  inferSegmentKeyFromObjective,
+  resolveMarketScopeFromObjective,
+  extractGeography,
+  segmentToSearchKey,
+  BEACHHEAD_PATTERNS,
+} = require('./MissionNaming');
+const {
+  createStructuredMission,
+  formatMissionUnderstanding,
+  formatOperatorConfirmation,
+  formatAmbiguityPrompt,
+  isReadyForLock,
+  MISSION_TYPES,
+  EXECUTION_STATES,
+} = require('./StructuredMission');
+const { mayAssign, pickByPrecedence } = require('./ContextPrecedence');
+const {
+  extractCanonicalGeographyEvidence,
+  buildMissingGeographyAmbiguity,
+  tenantGeographyChoices,
+} = require('./CanonicalGeographyEvidence');
+const { responseTypeForAmbiguity } = require('./PendingDecisionResponseType');
+
+const GREATER_MANCHESTER_CITIES = Object.freeze([
+  'Manchester',
+  'Hooksett',
+  'Bedford',
+  'Auburn',
+  'Goffstown',
+  'Londonderry',
+]);
+
+const SEGMENT_META = Object.freeze({
+  short_term_rental: {
+    industry: 'hospitality',
+    buyer: 'property_operator',
+    label: 'Short-term rental operators',
+  },
+  property_management: {
+    industry: 'real_estate',
+    buyer: 'property_manager',
+    label: 'Property managers',
+  },
+  law_firm: {
+    industry: 'professional_services',
+    buyer: 'office_manager',
+    label: 'Law firms',
+  },
+  accounting: {
+    industry: 'professional_services',
+    buyer: 'office_manager',
+    label: 'Accounting firms',
+  },
+  facility_management: {
+    industry: 'facilities',
+    buyer: 'facility_manager',
+    label: 'Facility managers',
+  },
+});
+
+const INTENT_PATTERNS = Object.freeze([
+  { type: MISSION_TYPES.ACQUISITION, re: /\b(?:acquire|win|land|sign|close|find|source|prospect|outreach|get (?:a |one |new )?client)/i },
+  { type: MISSION_TYPES.RETENTION, re: /\b(?:retain|retention|churn|keep (?:the )?client)/i },
+  { type: MISSION_TYPES.EXPANSION, re: /\b(?:expand|upsell|cross-sell|additional location)/i },
+  { type: MISSION_TYPES.MARKETING, re: /\b(?:marketing|content campaign|social posts?|brand awareness)\b/i },
+  { type: MISSION_TYPES.HIRING, re: /\b(?:hir(?:e|ing)|recruit|job opening)\b/i },
+  { type: MISSION_TYPES.OPERATIONS, re: /\b(?:operations?|ops process|workflow)\b/i },
+  { type: MISSION_TYPES.RESEARCH, re: /\b(?:research|investigate|market scan)\b/i },
+  { type: MISSION_TYPES.SUPPORT, re: /\b(?:support ticket|customer support|help desk)\b/i },
+  { type: MISSION_TYPES.KNOWLEDGE, re: /\b(?:knowledge base|playbook|document this)\b/i },
+]);
+
+function addProvenance(rows, field, value, confidence, reason, source) {
+  if (value == null || value === '') return;
+  const existing = rows.findIndex((row) => row.field === field);
+  const entry = { field, value, confidence, reason, source };
+  if (existing >= 0) {
+    if (!mayAssign(rows[existing].source, source)) return;
+    rows[existing] = entry;
+    return;
+  }
+  rows.push(entry);
+}
+
+function extractCountObjective(text) {
+  const match = asText(text).match(/\b(?:acquire|get|win|land|sign|close|add)\s+(?:one|a|an|\d+)\b/i);
+  if (!match) return 1;
+  const numMatch = match[0].match(/\d+/);
+  if (numMatch) return Number(numMatch[0]);
+  if (/one|a|an/i.test(match[0])) return 1;
+  return 1;
+}
+
+function cleanObjective(text) {
+  let objective = asText(text);
+  objective = objective.replace(/\s+from\s+(?:a|an|one\s+)?[^.]+?(?:\s+in\s+[^.]+)?\.?$/i, '.');
+  objective = objective.replace(/\s+in\s+(?:greater\s+)?[A-Za-z][A-Za-z\s,]+?\.?$/i, '.');
+  objective = objective.replace(/\s+/g, ' ').trim();
+  if (!objective.endsWith('.')) objective += '.';
+  return objective;
+}
+
+function inferSegmentKey(text, targetSegment) {
+  const scope = resolveMarketScopeFromObjective(text);
+  if (scope.primarySegment) return scope.primarySegment;
+  const segmentLabel = asText(targetSegment) || inferTargetSegmentFromObjective(text);
+  if (segmentLabel) return segmentToSearchKey(segmentLabel);
+  return inferSegmentKeyFromObjective(text);
+}
+
+function inferConstraints(text) {
+  const constraints = [];
+  const hay = asText(text).toLowerCase();
+  if (/\brecurring(?:\s+only)?\b/.test(hay)) constraints.push('recurring');
+  if (/\bcommercial(?:\s+only|\s+cleaning|\s+client|\s+customer|\s+account)?\b/.test(hay)) {
+    constraints.push('commercial_only');
+  }
+  if (/\bresidential\b/.test(hay) && !constraints.includes('commercial_only')) {
+    constraints.push('residential');
+  }
+  return constraints;
+}
+
+function greaterManchesterGeography() {
+  return { region: 'Greater Manchester', cities: [...GREATER_MANCHESTER_CITIES] };
+}
+
+function expandGeography(rawGeography, text) {
+  const regionText = asText(rawGeography);
+  const hay = `${regionText} ${asText(text)}`.toLowerCase();
+
+  if (/manchester\s+uk|manchester,\s*uk|greater\s+manchester(?:\s+uk)?\s*(?:england)?/.test(hay)
+    && /uk|england|united kingdom/.test(hay)) {
+    return { region: 'Manchester UK', cities: ['Manchester'] };
+  }
+
+  if (/greater\s+manchester|manchester\s+nh|manchester,\s*nh|new hampshire/.test(hay)) {
+    const cities = [...GREATER_MANCHESTER_CITIES];
+    const extraCities = regionText
+      .split(/,|\band\b/i)
+      .map((part) => part.replace(/\bNH\b/i, '').trim())
+      .filter((part) => /^[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)?$/.test(part));
+    for (const city of extraCities) {
+      if (city && !cities.includes(city)) cities.push(city);
+    }
+    return { region: 'Greater Manchester', cities };
+  }
+
+  if (/charleston|kanawha|west virginia|\bwv\b/.test(hay)) {
+    return { region: 'Charleston WV', cities: ['Charleston', 'South Charleston', 'St. Albans'] };
+  }
+
+  if (/nashville/.test(hay)) {
+    return { region: 'Nashville TN', cities: ['Nashville'] };
+  }
+
+  if (
+    /^(?:united states(?:\s+of\s+america)?|u\.?\s?s\.?\s?a\.?|usa)$/i.test(regionText.trim())
+    || /\b(?:united states(?:\s+of\s+america)?|u\.?\s?s\.?\s?a\.?|usa)\b/i.test(hay)
+      && !/manchester|charleston|nashville|new hampshire|\bnh\b|\bwv\b/i.test(hay)
+  ) {
+    return { region: 'United States', cities: [], scope: 'nationwide' };
+  }
+
+  const cityMatches = regionText.split(/,|\band\b/i).map((part) => part.trim()).filter(Boolean);
+  if (cityMatches.length > 1) {
+    return { region: regionText, cities: cityMatches };
+  }
+
+  return {
+    region: regionText || null,
+    cities: cityMatches.length ? cityMatches : regionText ? [regionText] : [],
+  };
+}
+
+function segmentMeta(segmentKey, segmentLabel) {
+  const meta = SEGMENT_META[segmentKey] || {};
+  return {
+    segment: segmentKey,
+    industry: meta.industry || 'general',
+    buyer: meta.buyer || 'business_owner',
+    label: meta.label || segmentLabel || segmentKey,
+  };
+}
+
+function analyzeIntent(text, opts = {}) {
+  if (opts.missionType && Object.values(MISSION_TYPES).includes(opts.missionType)) {
+    return {
+      type: opts.missionType,
+      confidence: 1,
+      reason: 'Operator supplied mission type.',
+      source: 'operator',
+    };
+  }
+  const matches = INTENT_PATTERNS.filter((row) => row.re.test(text));
+  if (matches.length === 1) {
+    return {
+      type: matches[0].type,
+      confidence: 0.93,
+      reason: `Matched ${matches[0].type} intent language.`,
+      source: 'operator',
+    };
+  }
+  if (matches.length > 1) {
+    return {
+      type: matches[0].type,
+      confidence: 0.45,
+      reason: `Multiple mission types matched: ${matches.map((row) => row.type).join(', ')}.`,
+      source: 'operator',
+      ambiguous: true,
+      candidates: matches.map((row) => row.type),
+    };
+  }
+  return {
+    type: MISSION_TYPES.ACQUISITION,
+    confidence: 0.55,
+    reason: 'Defaulted to acquisition; no stronger mission-type language.',
+    source: 'general_knowledge',
+  };
+}
+
+function isBareManchester(text, regionText) {
+  const hay = `${asText(regionText)} ${asText(text)}`.toLowerCase();
+  if (!/\bmanchester\b/.test(hay)) return false;
+  if (/manchester\s+nh|manchester,\s*nh|greater\s+manchester|new hampshire|\bnh\b/.test(hay)) {
+    return false;
+  }
+  if (/manchester\s+uk|manchester,\s*uk|\buk\b|england|united kingdom/.test(hay)) {
+    return false;
+  }
+  return true;
+}
+
+function isAmbiguousPropertyManager(text, segmentKey) {
+  const hay = asText(text).toLowerCase();
+  if (segmentKey && segmentKey !== 'property_management') return false;
+  if (!/\bproperty managers?\b/.test(hay) && segmentKey !== 'property_management') return false;
+  if (/\bshort[- ]term rental|\bstr\b|\bairbnb|\bvrbo|\bvacation rental/.test(hay)) return false;
+  if (/\bresidential\b/.test(hay) || /\bcommercial\b/.test(hay) || /\bmixed\b/.test(hay)) return false;
+  if (/\boutsource cleaning\b|\bcleaning client\b|\bcleaning service\b|\bjanitorial\b|\bproperty[- ]management opportunities\b/.test(hay)) {
+    return false;
+  }
+  return /\bproperty managers?\b/.test(hay);
+}
+
+function blueprintGeography(context = {}) {
+  const blueprint = (context && context.blueprint) || {};
+  const raw = blueprint.geography || blueprint.region || blueprint.targetMarkets || null;
+  if (!raw) return null;
+  if (typeof raw === 'object') return expandGeography(raw.region || '', JSON.stringify(raw));
+  return expandGeography(String(raw), String(raw));
+}
+
+function detectAmbiguities(extracted, text, opts = {}) {
+  const ambiguities = [];
+  const hay = asText(text);
+  const resolutions = opts.resolutions || {};
+
+  if (extracted.intent && extracted.intent.ambiguous && !resolutions.missionType) {
+    ambiguities.push({
+      field: 'missionType',
+      question: 'Which kind of mission is this?',
+      choices: (extracted.intent.candidates || []).map((type) => ({
+        id: type,
+        label: type.charAt(0).toUpperCase() + type.slice(1),
+        value: type,
+      })),
+      reason: extracted.intent.reason,
+    });
+  }
+
+  if (isAmbiguousPropertyManager(hay, extracted.segmentKey) && !resolutions.segment) {
+    ambiguities.push({
+      field: 'market.segment',
+      question: 'Residential? Commercial? Short-term rental? Mixed?',
+      choices: [
+        { id: 'residential', label: 'Residential', value: { segment: 'property_management', constraint: 'residential' } },
+        { id: 'commercial', label: 'Commercial', value: { segment: 'property_management', constraint: 'commercial_only' } },
+        { id: 'short_term_rental', label: 'Short-term rental', value: { segment: 'short_term_rental' } },
+        { id: 'mixed', label: 'Mixed', value: { segment: 'property_management' } },
+      ],
+      reason: 'Property manager is ambiguous without a market slice.',
+    });
+  }
+
+  if (isBareManchester(hay, extracted.geography && extracted.geography.region) && !resolutions.geography) {
+    const blueprintGeo = blueprintGeography(opts.context);
+    const nhChoice = {
+      id: 'manchester_nh',
+      label: blueprintGeo && /manchester/i.test(blueprintGeo.region || '')
+        ? 'Manchester NH (from Blueprint)'
+        : 'Manchester NH',
+      value: greaterManchesterGeography(),
+    };
+    ambiguities.push({
+      field: 'geography.region',
+      question: 'Manchester NH or Manchester UK?',
+      choices: [
+        nhChoice,
+        { id: 'manchester_uk', label: 'Manchester UK', value: { region: 'Manchester UK', cities: ['Manchester'] } },
+      ],
+      reason: 'Manchester is ambiguous without a country or state.',
+    });
+  }
+
+  const geo = extracted.geography || {};
+  if (!geo.region && !(geo.cities && geo.cities.length) && !isBareManchester(hay, geo.region)) {
+    const choices = tenantGeographyChoices({
+      ...(opts.context || {}),
+      objectiveText: hay,
+    });
+    if (choices.length > 1) {
+      ambiguities.push({
+        field: 'geography.region',
+        question: 'Which region should this mission cover?',
+        choices,
+        reason: 'Multiple canonical geography sources disagree.',
+      });
+    } else if (!choices.length) {
+      ambiguities.push(buildMissingGeographyAmbiguity({
+        ...(opts.context || {}),
+        objectiveText: hay,
+      }));
+    }
+  }
+
+  if (!extracted.segmentKey && !resolutions.segment && !isAmbiguousPropertyManager(hay, extracted.segmentKey)) {
+    ambiguities.push({
+      field: 'market.segment',
+      question: 'Which market should Scout pursue?',
+      choices: Object.entries(SEGMENT_META).map(([id, meta]) => ({
+        id,
+        label: meta.label,
+        value: { segment: id },
+      })),
+      reason: 'No market segment was stated.',
+    });
+  }
+
+  return ambiguities.map((row) => ({
+    ...row,
+    responseType: row.responseType || responseTypeForAmbiguity(row),
+  }));
+}
+
+function applyResolutions(extracted, resolutions = {}) {
+  const next = { ...extracted, geography: { ...(extracted.geography || {}) }, constraints: [...(extracted.constraints || [])] };
+  if (resolutions.missionType) next.intent = { type: resolutions.missionType, confidence: 1, reason: 'Operator chose mission type.', source: 'operator' };
+  if (resolutions.segment) {
+    next.segmentKey = resolutions.segment;
+    next.segmentLabel = (SEGMENT_META[resolutions.segment] || {}).label || resolutions.segment;
+  }
+  if (resolutions.constraint && !next.constraints.includes(resolutions.constraint)) {
+    next.constraints.push(resolutions.constraint);
+  }
+  if (resolutions.geography) {
+    next.geography = { ...resolutions.geography };
+    next.geographyResolved = true;
+  }
+  return next;
+}
+
+function applyContextPrecedence(extracted, context = {}) {
+  const next = { ...extracted, geography: { ...(extracted.geography || {}) } };
+  if (next.geography.region || (next.geography.cities && next.geography.cities.length)) return next;
+
+  const safeContext = context || {};
+  const canonicalEvidence = extractCanonicalGeographyEvidence({
+    ...safeContext,
+    summary: safeContext.summary || safeContext.clientIntelligence,
+    objectiveText: safeContext.objectiveText,
+  });
+  if (canonicalEvidence && canonicalEvidence.geography && canonicalEvidence.geography.region) {
+    next.contextGeography = {
+      ...canonicalEvidence.geography,
+      source: canonicalEvidence.source,
+    };
+    next.geographyEvidence = canonicalEvidence;
+    return next;
+  }
+
+  const blueprintGeo = blueprintGeography(safeContext);
+  const workspaceGeo = safeContext.workspace && (safeContext.workspace.geography || safeContext.workspace.region);
+  const picked = pickByPrecedence([
+    blueprintGeo && blueprintGeo.region
+      ? { source: 'blueprint', value: blueprintGeo }
+      : null,
+    workspaceGeo
+      ? { source: 'workspace', value: typeof workspaceGeo === 'object' ? workspaceGeo : expandGeography(workspaceGeo, workspaceGeo) }
+      : null,
+  ]);
+  if (picked && picked.value) {
+    next.contextGeography = { ...picked.value, source: picked.source };
+  }
+  return next;
+}
+
+function inferEvidence(text, opts = {}) {
+  const hay = asText(text).toLowerCase();
+  if (opts.evidence) return opts.evidence;
+  if (/\bhigh(?:er)? confidence\b|\bstrong evidence\b/.test(hay)) {
+    return { minimumConfidence: 0.85, minimumBuyingSignals: 3, thresholdLabel: 'high' };
+  }
+  if (/\blow(?:er)? confidence\b|\blight evidence\b/.test(hay)) {
+    return { minimumConfidence: 0.5, minimumBuyingSignals: 1, thresholdLabel: 'low' };
+  }
+  return { minimumConfidence: 0.7, minimumBuyingSignals: 2, thresholdLabel: 'medium' };
+}
+
+/**
+ * Plan a structured mission from a canonical ResolvedObjective (SPEC-168).
+ * Consumes business objects only — no NLP.
+ * @param {object} resolvedObjective
+ * @param {object} [opts]
+ * @returns {object}
+ */
+function planMission(resolvedObjective, opts = {}) {
+  if (!resolvedObjective || typeof resolvedObjective !== 'object') {
+    throw new Error('ResolvedObjective is required for mission planning.');
+  }
+
+  const objective = asText(resolvedObjective.objective);
+  if (!objective) throw new Error('ResolvedObjective.objective is required for mission planning.');
+
+  const provenance = [];
+  const intent = resolvedObjective.intent || {
+    type: resolvedObjective.missionType,
+    confidence: 1,
+    reason: 'Consumed from canonical ResolvedObjective.',
+    source: 'resolved_objective',
+  };
+  addProvenance(provenance, 'missionType', intent.type, intent.confidence, intent.reason, intent.source);
+
+  const segmentKey = resolvedObjective.segmentKey || resolvedObjective.market;
+  const segmentLabel = resolvedObjective.segmentLabel || null;
+  const marketScope = resolvedObjective.marketScope || resolveMarketScopeFromObjective(objective);
+  if (segmentKey) {
+    const isStr = segmentKey === 'short_term_rental';
+    const isBroadCommercial = segmentKey === 'property_management'
+      && (marketScope.eligibleSubsegments || []).length > 1;
+    addProvenance(
+      provenance,
+      'market.segment',
+      segmentKey,
+      isStr ? 0.96 : 0.9,
+      isBroadCommercial
+        ? 'Broad commercial/property-management objective; STR is an eligible subsegment only.'
+        : isStr
+          ? 'Matched STR operator taxonomy.'
+          : `Matched ${segmentKey} taxonomy.`,
+      'operator'
+    );
+    if (marketScope.eligibleSubsegments && marketScope.eligibleSubsegments.length > 1) {
+      addProvenance(
+        provenance,
+        'market.eligibleSubsegments',
+        marketScope.eligibleSubsegments.join(', '),
+        0.92,
+        'Operator objective names multiple eligible commercial subsegments.',
+        'operator'
+      );
+    }
+  }
+
+  const extractedGeography = resolvedObjective.geography || { region: null, cities: [] };
+  if (extractedGeography.region) {
+    const geoSource = resolvedObjective.geographySource || 'resolved_objective';
+    addProvenance(
+      provenance,
+      'geography.region',
+      extractedGeography.region,
+      geoSource === 'blueprint' ? 0.8 : 1,
+      geoSource === 'blueprint'
+        ? 'Filled missing geography from context precedence. Blueprint informs; operator can still edit.'
+        : 'Consumed from canonical ResolvedObjective.',
+      geoSource
+    );
+  }
+
+  const market = resolvedObjective.marketMeta || {
+    ...segmentMeta(segmentKey, segmentLabel),
+    eligibleSubsegments: marketScope.eligibleSubsegments || [],
+  };
+  if (market.industry) {
+    addProvenance(provenance, 'market.industry', market.industry, 0.9, 'Derived from segment taxonomy.', 'general_knowledge');
+  }
+  if (market.buyer) {
+    addProvenance(provenance, 'market.buyer', market.buyer, 0.9, 'Derived from segment taxonomy.', 'general_knowledge');
+  }
+
+  const evidence = resolvedObjective.evidence || inferEvidence(objective, opts);
+  addProvenance(provenance, 'evidence.minimum_confidence', evidence.minimumConfidence, 0.8, `Evidence threshold ${evidence.thresholdLabel}.`, 'general_knowledge');
+
+  const ambiguities = Array.isArray(resolvedObjective.ambiguities)
+    ? resolvedObjective.ambiguities
+    : [];
+  const success = resolvedObjective.successCriteria || {};
+  const successType = success.type || (/recurr/i.test(objective) ? 'recurring_clients' : 'customers');
+  const successTarget = success.target || success.customers || 1;
+
+  const draft = createStructuredMission({
+    missionType: resolvedObjective.missionType || intent.type,
+    objective,
+    successMetric: {
+      type: successType,
+      target: successTarget,
+    },
+    market,
+    geography: extractedGeography,
+    constraints: [...new Set((resolvedObjective.constraints || []).map((row) => asText(row).toLowerCase()).filter(Boolean))],
+    priority: opts.priority != null ? opts.priority : 1,
+    evidence,
+    provenance,
+    ambiguities,
+    sourceText: asText(resolvedObjective.provenanceSource) || objective,
+    execution: { state: ambiguities.length ? EXECUTION_STATES.DRAFTING : EXECUTION_STATES.PLANNED },
+  }, { allowIncomplete: true });
+
+  const readyForConfirmation = isReadyForLock(draft);
+  return {
+    draft,
+    ambiguities,
+    readyForConfirmation,
+    understanding: formatMissionUnderstanding(draft),
+    confirmation: readyForConfirmation ? formatOperatorConfirmation(draft) : null,
+    clarification: ambiguities[0] || null,
+    clarificationPrompt: ambiguities[0] ? formatAmbiguityPrompt(ambiguities[0]) : null,
+    intent,
+    resolvedObjective,
+    pipeline: [
+      'resolved_objective',
+      'mission_structuring',
+      'ambiguity_detection',
+      readyForConfirmation ? 'operator_review' : 'operator_clarification',
+    ],
+    resolutions: opts.resolutions || null,
+    executed: false,
+  };
+}
+
+/**
+ * Legacy entry — resolves canonical objective once, then plans from the object.
+ * @param {string} sourceText
+ * @param {object} [opts]
+ * @returns {object}
+ */
+function planFromObjective(sourceText, opts = {}) {
+  const text = asText(sourceText);
+  if (!text) throw new Error('Objective text is required for mission planning.');
+
+  const { resolveCanonicalObjective } = require('../max/workspace/ResolvedObjective');
+  const resolvedObjective = resolveCanonicalObjective({
+    question: text,
+    context: opts.context,
+    resolutions: opts.resolutions,
+    targetSegment: opts.targetSegment,
+    missionType: opts.missionType,
+    constraints: opts.constraints,
+    geography: opts.geography,
+    evidence: opts.evidence,
+    executionContract: opts.executionContract,
+  });
+  return planMission(resolvedObjective, opts);
+}
+
+/**
+ * Strip compound operator messages down to the clarification answer (e.g. region text).
+ * @param {string} answer
+ * @param {object} [ambiguity]
+ * @returns {string}
+ */
+function normalizePlanClarificationAnswer(answer, ambiguity) {
+  let text = asText(answer);
+  if (!text) return text;
+  if (ambiguity && ambiguity.field === 'geography.region') {
+    text = text.replace(/^yes\s*,\s*/i, '').trim();
+  }
+  text = text.replace(/\.\s*approval\s*:\s*approved.*$/i, '').trim();
+  text = text.replace(/\bapproval\s*:\s*approved\b.*$/i, '').trim();
+  text = text.replace(/\.\s*(?:proceed with|outreach remains).*$/i, '').trim();
+  const decisionRegion = text.match(/(?:\bdecision\s*:\s*)?region\s*=\s*(.+)/i);
+  if (decisionRegion) {
+    text = decisionRegion[1].trim().replace(/\.\s*$/, '');
+  } else if (ambiguity && ambiguity.field === 'geography.region') {
+    text = text.replace(/^\s*(?:decision\s*:\s*)?region\s*[:=]\s*/i, '').trim();
+  }
+  return text;
+}
+
+function geographyChoiceFromFreeText(answer, ambiguity) {
+  if (!ambiguity || ambiguity.field !== 'geography.region') return null;
+  const normalized = normalizePlanClarificationAnswer(answer, ambiguity);
+  if (!normalized) return null;
+  const geo = expandGeography(normalized, normalized);
+  if (!geo || !geo.region) return null;
+  if (geo.scope === 'nationwide' && /\bmanchester|charleston|nashville|\bnh\b|new hampshire|southern/i.test(normalized)) {
+    return null;
+  }
+  return {
+    id: 'operator_geography',
+    label: geo.region,
+    value: geo,
+  };
+}
+
+function matchChoice(ambiguity, answer) {
+  const normalized = normalizePlanClarificationAnswer(answer, ambiguity);
+  const hay = asText(normalized).toLowerCase();
+  if (!ambiguity || !hay) return null;
+  const choices = ambiguity.choices || [];
+  const byId = choices.find((choice) => hay === String(choice.id).toLowerCase());
+  if (byId) return byId;
+  const byLabel = choices.find((choice) => hay.includes(String(choice.label).toLowerCase()) || String(choice.label).toLowerCase().includes(hay));
+  if (byLabel) return byLabel;
+  if (ambiguity.field === 'geography.region') {
+    if (/\bnh\b|new hampshire/.test(hay)) {
+      const nh = choices.find((choice) => choice.id === 'manchester_nh');
+      if (nh) return nh;
+    }
+    if (/\buk\b|england/.test(hay)) {
+      const uk = choices.find((choice) => choice.id === 'manchester_uk');
+      if (uk) return uk;
+    }
+    const freeText = geographyChoiceFromFreeText(normalized, ambiguity);
+    if (freeText) return freeText;
+  }
+  if (ambiguity.field === 'market.segment') {
+    if (/\bstr\b|short[- ]term/.test(hay)) return choices.find((choice) => choice.id === 'short_term_rental') || null;
+    if (/\bcommercial\b/.test(hay)) return choices.find((choice) => choice.id === 'commercial') || null;
+    if (/\bresidential\b/.test(hay)) return choices.find((choice) => choice.id === 'residential') || null;
+    if (/\bmixed\b/.test(hay)) return choices.find((choice) => choice.id === 'mixed') || null;
+  }
+  return null;
+}
+
+function resolutionsFromChoice(ambiguity, choice, existing = {}) {
+  const resolutions = { ...existing };
+  const value = choice && choice.value;
+  if (!ambiguity || !choice) return resolutions;
+  if (ambiguity.field === 'missionType') resolutions.missionType = value || choice.id;
+  if (ambiguity.field === 'market.segment' && value) {
+    if (value.segment) resolutions.segment = value.segment;
+    if (value.constraint) resolutions.constraint = value.constraint;
+  }
+  if (ambiguity.field === 'geography.region' && value) {
+    resolutions.geography = value;
+  }
+  return resolutions;
+}
+
+/**
+ * Apply an operator clarification and replan. Never guesses the unanswered remainder.
+ */
+function applyClarification(sourceText, answer, opts = {}) {
+  const { resolveCanonicalObjective } = require('../max/workspace/ResolvedObjective');
+  const prior = opts.prior || planFromObjective(sourceText, opts);
+  const ambiguity = (prior.ambiguities || [])[0];
+  if (!ambiguity) return prior;
+  const choice = matchChoice(ambiguity, normalizePlanClarificationAnswer(answer, ambiguity));
+  if (!choice) {
+    return {
+      ...prior,
+      unmatchedClarification: true,
+      clarificationPrompt: formatAmbiguityPrompt(ambiguity),
+    };
+  }
+  const resolutions = resolutionsFromChoice(ambiguity, choice, opts.resolutions || prior.resolutions || {});
+  const resolvedObjective = resolveCanonicalObjective({
+    question: sourceText,
+    context: opts.context,
+    resolutions,
+    targetSegment: opts.targetSegment,
+    missionType: opts.missionType,
+    constraints: opts.constraints,
+    executionContract: opts.executionContract,
+  });
+  const next = planMission(resolvedObjective, { ...opts, resolutions });
+  next.resolutions = resolutions;
+  return next;
+}
+
+/**
+ * Operator edit of a draft plan — replans with explicit field overrides.
+ */
+function applyEdits(sourceText, edits = {}, opts = {}) {
+  const resolutions = { ...(opts.resolutions || {}) };
+  if (edits.missionType) resolutions.missionType = edits.missionType;
+  if (edits.segment) resolutions.segment = edits.segment;
+  if (edits.constraint) resolutions.constraint = edits.constraint;
+  if (edits.geography) resolutions.geography = edits.geography;
+  if (asText(edits.region) || asText(edits.geographyText)) {
+    resolutions.geography = expandGeography(edits.region || edits.geographyText, edits.region || edits.geographyText);
+  }
+  return planFromObjective(edits.objective || sourceText, { ...opts, resolutions, targetSegment: edits.targetSegment || opts.targetSegment });
+}
+
+module.exports = {
+  planFromObjective,
+  planMission,
+  applyClarification,
+  applyEdits,
+  applyResolutions,
+  applyContextPrecedence,
+  normalizePlanClarificationAnswer,
+  matchChoice,
+  inferSegmentKey,
+  inferConstraints,
+  expandGeography,
+  cleanObjective,
+  analyzeIntent,
+  detectAmbiguities,
+  extractCountObjective,
+  GREATER_MANCHESTER_CITIES,
+  SEGMENT_META,
+  segmentMeta,
+};

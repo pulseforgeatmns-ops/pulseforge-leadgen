@@ -1,0 +1,111 @@
+{
+  "generated_at": "2026-07-21T17:41:49.284Z",
+  "current_queue_threshold": 40,
+  "visibility_threshold": 70,
+  "note": "No production change is made by this report. Queue membership stays at the current threshold until explicitly approved.",
+  "totals": {
+    "queue_count_at_40": 82,
+    "queue_count_at_70": 71,
+    "exclusion_delta": 11,
+    "percentage_reduction": 13.4
+  },
+  "tenants": [
+    {
+      "client_id": 1,
+      "client_name": "Pulseforge",
+      "configured_threshold": null,
+      "queue_count_at_40": 5,
+      "queue_count_at_70": 4,
+      "queue_count_at_current_threshold": 5,
+      "queue_count_at_threshold_70": 4,
+      "exclusion_delta": 1,
+      "percentage_reduction": 20,
+      "vertical_distribution_40_to_69": [
+        {
+          "vertical": "auto_repair",
+          "count": 1
+        }
+      ],
+      "historical_outcomes_40_to_69": [
+        {
+          "disposition": "(no disposition logged)",
+          "count": 1
+        }
+      ],
+      "would_be_excluded_prospect_ids": [
+        "cf4adec6-147d-44ce-9156-7b66ee713925"
+      ]
+    },
+    {
+      "client_id": 2,
+      "client_name": "Mountain State Home Innovations",
+      "configured_threshold": null,
+      "queue_count_at_40": 8,
+      "queue_count_at_70": 8,
+      "queue_count_at_current_threshold": 8,
+      "queue_count_at_threshold_70": 8,
+      "exclusion_delta": 0,
+      "percentage_reduction": 0,
+      "vertical_distribution_40_to_69": [],
+      "historical_outcomes_40_to_69": [],
+      "would_be_excluded_prospect_ids": []
+    },
+    {
+      "client_id": 5,
+      "client_name": "Pulseforge Nashville",
+      "configured_threshold": null,
+      "queue_count_at_40": 3,
+      "queue_count_at_70": 3,
+      "queue_count_at_current_threshold": 3,
+      "queue_count_at_threshold_70": 3,
+      "exclusion_delta": 0,
+      "percentage_reduction": 0,
+      "vertical_distribution_40_to_69": [],
+      "historical_outcomes_40_to_69": [],
+      "would_be_excluded_prospect_ids": []
+    },
+    {
+      "client_id": 10,
+      "client_name": "Anchor Cleaning",
+      "configured_threshold": null,
+      "queue_count_at_40": 66,
+      "queue_count_at_70": 56,
+      "queue_count_at_current_threshold": 66,
+      "queue_count_at_threshold_70": 56,
+      "exclusion_delta": 10,
+      "percentage_reduction": 15.2,
+      "vertical_distribution_40_to_69": [
+        {
+          "vertical": "law_firm",
+          "count": 8
+        },
+        {
+          "vertical": "accounting",
+          "count": 2
+        }
+      ],
+      "historical_outcomes_40_to_69": [
+        {
+          "disposition": "(no disposition logged)",
+          "count": 8
+        },
+        {
+          "disposition": "gatekeeper_relayed",
+          "count": 2
+        }
+      ],
+      "would_be_excluded_prospect_ids": [
+        "e848bd05-9ed6-4441-ab8f-6a599d00cba2",
+        "53a10c4d-0e22-4c3e-bae1-6ea609536aa8",
+        "45327522-2524-4419-a835-5f023c97b330",
+        "93e7dcef-29b9-44ed-be2f-d1e2fa8b2efa",
+        "2562943d-ded3-4901-b9bd-813aae5253d1",
+        "969e4688-f57d-4854-ba5c-4ebe82c04cc3",
+        "734c97c7-6f2a-4e5b-a7db-52684209e817",
+        "b9025611-0885-4506-aa81-34d00ff5db97",
+        "6a0db065-9d45-43ce-bada-a1e100fa60eb",
+        "19272976-8e44-4c1c-ad62-e3a5248f0a4a"
+      ]
+    }
+  ]
+}

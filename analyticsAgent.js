@@ -2,11 +2,43 @@
 require('dotenv').config();
 
 const axios = require('axios');
+const { randomUUID } = require('crypto');
 const pool  = require('./db');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
+const { reportAgentRun } = require('./utils/agentObservability');
 
 const AGENT_NAME = 'analytics';
 const CLIENT_ID = getRuntimeClientId();
+let bufferMetricsSchemaPromise;
+
+function makeRunId() {
+  return `${AGENT_NAME}-${CLIENT_ID || 'none'}-${new Date().toISOString()}-${randomUUID()}`;
+}
+
+function errorSampleFrom(err, row = null) {
+  return {
+    post_analytics_id: row?.id || null,
+    platform_post_id: row?.platform_post_id || null,
+    error: err.response?.data || err.message,
+  };
+}
+
+async function reportAnalyticsRun({ runId, attempts, successes, skipped = 0, errorSample = null }) {
+  try {
+    return await reportAgentRun({
+      agent: AGENT_NAME,
+      clientId: CLIENT_ID,
+      runId,
+      attempts,
+      successes,
+      skipped,
+      errorSample,
+    });
+  } catch (err) {
+    console.error('[Analytics] Observability report failed:', err.message);
+    return null;
+  }
+}
 
 // ── SCHEMA ────────────────────────────────────────────────────────────────────
 
@@ -27,14 +59,19 @@ async function ensureSchema() {
       comments           INT DEFAULT 0,
       shares             INT DEFAULT 0,
       reach              INT DEFAULT 0,
+      impressions        INT DEFAULT 0,
       clicks             INT DEFAULT 0,
       engagement_rate    NUMERIC(6,4) DEFAULT 0,
       metrics_fetched_at TIMESTAMPTZ,
+      buffer_metrics_updated_at TIMESTAMPTZ,
       client_id          INTEGER REFERENCES clients(id) DEFAULT 1,
       created_at         TIMESTAMPTZ DEFAULT NOW()
     )
   `);
   await pool.query(`ALTER TABLE post_analytics ADD COLUMN IF NOT EXISTS client_id INTEGER REFERENCES clients(id) DEFAULT 1`);
+  await pool.query(`ALTER TABLE post_analytics ADD COLUMN IF NOT EXISTS buffer_metrics_updated_at TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE post_analytics ADD COLUMN IF NOT EXISTS reach INT DEFAULT 0`);
+  await pool.query(`ALTER TABLE post_analytics ADD COLUMN IF NOT EXISTS impressions INT DEFAULT 0`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS content_performance_summary (
       id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -42,10 +79,12 @@ async function ensureSchema() {
       channel             TEXT NOT NULL,
       content_type        TEXT NOT NULL,
       post_count          INT DEFAULT 0,
+      measured_count      INT DEFAULT 0,
       avg_likes           NUMERIC(8,2) DEFAULT 0,
       avg_comments        NUMERIC(8,2) DEFAULT 0,
       avg_shares          NUMERIC(8,2) DEFAULT 0,
       avg_reach           NUMERIC(8,2) DEFAULT 0,
+      avg_impressions     NUMERIC(8,2) DEFAULT 0,
       avg_engagement_rate NUMERIC(6,4) DEFAULT 0,
       best_day_of_week    SMALLINT,
       best_hour           SMALLINT,
@@ -53,6 +92,23 @@ async function ensureSchema() {
       UNIQUE (company_id, channel, content_type)
     )
   `);
+  await pool.query(`ALTER TABLE content_performance_summary ADD COLUMN IF NOT EXISTS measured_count INT DEFAULT 0`);
+  await pool.query(`ALTER TABLE content_performance_summary ADD COLUMN IF NOT EXISTS avg_impressions NUMERIC(8,2) DEFAULT 0`);
+}
+
+function ensureBufferMetricsSchema() {
+  if (!bufferMetricsSchemaPromise) {
+    bufferMetricsSchemaPromise = pool.query(`
+      ALTER TABLE post_analytics
+        ADD COLUMN IF NOT EXISTS buffer_metrics_updated_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS reach INT DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS impressions INT DEFAULT 0
+    `).catch(err => {
+      bufferMetricsSchemaPromise = null;
+      throw err;
+    });
+  }
+  return bufferMetricsSchemaPromise;
 }
 
 // ── GOOGLE ACCESS TOKEN ───────────────────────────────────────────────────────
@@ -77,22 +133,31 @@ async function fetchFBPageMetrics() {
   }
 
   const { rows } = await pool.query(`
-    SELECT id, platform_post_id
+    SELECT id, platform_post_id, channel
     FROM post_analytics
     WHERE channel = 'facebook_page'
       AND client_id = $1
       AND platform_post_id IS NOT NULL
-      AND metrics_fetched_at IS NULL
-    LIMIT 50
+      AND published_at > NOW() - INTERVAL '14 days'
+      AND (
+        metrics_fetched_at IS NULL
+        OR metrics_fetched_at < NOW() - INTERVAL '6 hours'
+      )
   `, [CLIENT_ID]);
 
   if (!rows.length) {
-    console.log('[Analytics] No unanalyzed Facebook posts');
+    console.log('[Analytics] No Facebook posts due for metrics refresh');
     return;
   }
 
   let updated = 0;
-  for (const row of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Analytics] Client ${CLIENT_ID} deactivated mid-run — aborting at FB metric row ${i + 1}/${rows.length} after ${updated} updated`);
+    }
+
     try {
       const res = await axios.get(`https://graph.facebook.com/${row.platform_post_id}`, {
         params: {
@@ -138,81 +203,218 @@ async function fetchFBPageMetrics() {
 
 // ── BUFFER / LINKEDIN METRICS ─────────────────────────────────────────────────
 
-async function fetchBufferMetrics() {
+function buildBufferMetricsQuery(postId) {
+  return `query {
+  post(input: { id: ${JSON.stringify(postId)} }) {
+    id
+    text
+    metrics {
+      type
+      name
+      value
+      unit
+    }
+    metricsUpdatedAt
+  }
+}`;
+}
+
+function numericMetric(value) {
+  if (value == null) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function metricLookup(metrics) {
+  if (!Array.isArray(metrics)) return null;
+  const lookup = new Map();
+  for (const metric of metrics) {
+    if (!metric?.type || lookup.has(metric.type)) continue;
+    lookup.set(metric.type, metric);
+  }
+  return lookup;
+}
+
+function metricValue(lookup, type) {
+  if (!lookup?.has(type)) return null;
+  return numericMetric(lookup.get(type)?.value);
+}
+
+function chooseShareMetric(lookup) {
+  const reposts = metricValue(lookup, 'reposts');
+  const shares = metricValue(lookup, 'shares');
+  if (reposts != null) return { type: 'reposts', value: reposts };
+  if (shares != null) return { type: 'shares', value: shares };
+  return { type: null, value: null };
+}
+
+function mapBufferPostMetrics(metrics) {
+  const lookup = metricLookup(metrics);
+  if (!lookup) return null;
+
+  const impressions = metricValue(lookup, 'impressions');
+  const reach = metricValue(lookup, 'reach');
+  const likes = metricValue(lookup, 'reactions');
+  const comments = metricValue(lookup, 'comments');
+  const shareMetric = chooseShareMetric(lookup);
+  const engagementValues = [likes, comments, shareMetric.value].filter(value => value != null);
+  const engagement_rate = impressions > 0 && engagementValues.length
+    ? (engagementValues.reduce((sum, value) => sum + value, 0) / impressions * 100).toFixed(4)
+    : null;
+
+  return {
+    likes,
+    comments,
+    shares: shareMetric.value,
+    reach,
+    impressions,
+    clicks: null,
+    engagement_rate,
+    buffer_engagement_rate: metricValue(lookup, 'engagementRate'),
+    share_metric_type: shareMetric.type,
+  };
+}
+
+function parseBufferPostResponse(data) {
+  const post = data?.data?.post;
+  if (!post) {
+    throw new Error('Buffer response missing data.post');
+  }
+
+  const metrics = post.metrics;
+  if (!Array.isArray(metrics)) {
+    throw new Error('Buffer response data.post.metrics is missing or is not an array');
+  }
+  if (metrics.length === 0) {
+    throw new Error('Buffer response data.post.metrics is empty');
+  }
+
+  return { post, metrics };
+}
+
+async function fetchBufferMetrics(options = {}) {
   const token = process.env.BUFFER_ACCESS_TOKEN;
   if (!token) {
     console.log('[Analytics] BUFFER_ACCESS_TOKEN not set — skipping Buffer metrics');
-    return;
+    return { attempts: 0, successes: 0, skipped: 0, errorSample: null };
   }
+  await ensureBufferMetricsSchema();
 
+  const params = [CLIENT_ID];
+  let filter = '';
+  if (options.postAnalyticsId) {
+    params.push(options.postAnalyticsId);
+    filter += ` AND id = $${params.length}`;
+  }
+  if (options.platformPostId) {
+    params.push(options.platformPostId);
+    filter += ` AND platform_post_id = $${params.length}`;
+  }
+  if (Array.isArray(options.postAnalyticsIds) && options.postAnalyticsIds.length) {
+    params.push(options.postAnalyticsIds);
+    filter += ` AND id = ANY($${params.length}::uuid[])`;
+  }
+  if (options.channel) {
+    params.push(options.channel);
+    filter += ` AND channel = $${params.length}`;
+  }
+  const bufferChannels = options.includeFacebookPage
+    ? `('linkedin_page', 'linkedin_personal', 'facebook_page')`
+    : `('linkedin_page', 'linkedin_personal')`;
+  params.push(Number(options.lookbackDays || 14));
+  const lookbackParam = params.length;
   const { rows } = await pool.query(`
-    SELECT id, platform_post_id
+    SELECT id, platform_post_id, channel
     FROM post_analytics
-    WHERE channel = 'linkedin_page'
+    WHERE channel IN ${bufferChannels}
       AND client_id = $1
       AND platform_post_id IS NOT NULL
-      AND metrics_fetched_at IS NULL
-    LIMIT 50
-  `, [CLIENT_ID]);
+      AND published_at > NOW() - ($${lookbackParam}::int * INTERVAL '1 day')
+      AND (
+        metrics_fetched_at IS NULL
+        OR metrics_fetched_at < NOW() - INTERVAL '6 hours'
+      )
+      ${filter}
+  `, params);
 
   if (!rows.length) {
-    console.log('[Analytics] No unanalyzed LinkedIn posts');
-    return;
+    console.log('[Analytics] No LinkedIn posts due for metrics refresh');
+    return { attempts: 0, successes: 0, skipped: 0, errorSample: null };
   }
 
   let updated = 0;
-  for (const row of rows) {
-    try {
-      const query = `query {
-  post(id: ${JSON.stringify(row.platform_post_id)}) {
-    id
-    statistics {
-      likes
-      comments
-      shares
-      impressions
-      clicks
+  let errorSample = null;
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Analytics] Client ${CLIENT_ID} deactivated mid-run — aborting at Buffer metric row ${i + 1}/${rows.length} after ${updated} updated`);
     }
-  }
-}`;
+
+    try {
+      const query = buildBufferMetricsQuery(row.platform_post_id);
       const res = await axios.post(
         'https://api.buffer.com',
         { query },
         { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
       );
 
-      const stats = res.data?.data?.post?.statistics;
-      if (!stats) {
-        await pool.query(
-          `UPDATE post_analytics SET metrics_fetched_at = NOW() WHERE id = $1`,
-          [row.id]
-        );
-        updated++;
-        continue;
+      const gqlErrors = res.data?.errors;
+      if (gqlErrors?.length) {
+        throw new Error(JSON.stringify(gqlErrors));
       }
 
-      const likes    = stats.likes      || 0;
-      const comments = stats.comments   || 0;
-      const shares   = stats.shares     || 0;
-      const reach    = stats.impressions || 0;
-      const clicks   = stats.clicks     || 0;
-      const engagement_rate = reach > 0
-        ? ((likes + comments + shares + clicks) / reach * 100).toFixed(4)
-        : 0;
+      const { post, metrics } = parseBufferPostResponse(res.data);
+
+      if (options.logRawMetrics) {
+        console.log('[Analytics] Raw Buffer metrics payload:', JSON.stringify({
+          platform_post_id: row.platform_post_id,
+          metricsUpdatedAt: post?.metricsUpdatedAt || null,
+          metrics,
+        }, null, 2));
+      }
+      const mapped = mapBufferPostMetrics(metrics);
 
       await pool.query(`
         UPDATE post_analytics
-        SET likes = $1, comments = $2, shares = $3, reach = $4, clicks = $5,
-            engagement_rate = $6, metrics_fetched_at = NOW()
-        WHERE id = $7
-      `, [likes, comments, shares, reach, clicks, engagement_rate, row.id]);
+        SET likes = $1, comments = $2, shares = $3, reach = $4, impressions = $5, clicks = $6,
+            engagement_rate = $7, metrics_fetched_at = NOW(),
+            buffer_metrics_updated_at = $8
+        WHERE id = $9
+      `, [
+        mapped.likes,
+        mapped.comments,
+        mapped.shares,
+        mapped.reach,
+        mapped.impressions,
+        mapped.clicks,
+        mapped.engagement_rate,
+        post?.metricsUpdatedAt || null,
+        row.id,
+      ]);
+      if (options.logRawMetrics) {
+        console.log('[Analytics] Buffer metric mapping:', JSON.stringify({
+          platform_post_id: row.platform_post_id,
+          mapped_reactions_to_likes: mapped.likes,
+          mapped_share_metric_type: mapped.share_metric_type,
+          mapped_share_metric_value: mapped.shares,
+          mapped_reach: mapped.reach,
+          computed_engagement_rate: mapped.engagement_rate,
+          buffer_engagement_rate: mapped.buffer_engagement_rate,
+        }, null, 2));
+      }
       updated++;
     } catch (err) {
-      console.warn(`[Analytics] Buffer post ${row.platform_post_id} metrics failed:`, err.response?.data || err.message);
+      errorSample = errorSample || errorSampleFrom(err, row);
+      console.error(
+        `[Analytics] Buffer post ${row.platform_post_id} (${row.channel}) metrics failed:`,
+        err.response?.data || err.message
+      );
     }
     await new Promise(r => setTimeout(r, 300));
   }
-  console.log(`[Analytics] Buffer/LinkedIn metrics updated: ${updated}/${rows.length}`);
+  console.log(`[Analytics] Buffer metrics updated: ${updated}/${rows.length}`);
+  return { attempts: rows.length, successes: updated, skipped: 0, errorSample };
 }
 
 // ── SUMMARY REBUILD ───────────────────────────────────────────────────────────
@@ -225,11 +427,13 @@ async function rebuildSummary() {
       channel,
       content_type,
       COUNT(*)                          AS post_count,
+      COUNT(*) FILTER (WHERE metrics_fetched_at IS NOT NULL) AS measured_count,
       ROUND(AVG(likes), 2)              AS avg_likes,
       ROUND(AVG(comments), 2)           AS avg_comments,
       ROUND(AVG(shares), 2)             AS avg_shares,
       ROUND(AVG(reach), 2)              AS avg_reach,
-      ROUND(AVG(engagement_rate), 4)    AS avg_engagement_rate,
+      ROUND(AVG(impressions), 2)        AS avg_impressions,
+      ROUND(AVG(engagement_rate) FILTER (WHERE metrics_fetched_at IS NOT NULL), 4) AS avg_engagement_rate,
       MODE() WITHIN GROUP (ORDER BY post_day_of_week) AS best_day_of_week,
       MODE() WITHIN GROUP (ORDER BY post_hour)        AS best_hour
     FROM post_analytics
@@ -238,27 +442,35 @@ async function rebuildSummary() {
     GROUP BY company_id, channel, content_type
   `, [CLIENT_ID]);
 
-  for (const r of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const stillActive = await getClientConfig(CLIENT_ID);
+    if (!stillActive) {
+      throw new Error(`[Analytics] Client ${CLIENT_ID} deactivated mid-run — aborting at summary row ${i + 1}/${rows.length}`);
+    }
+
     await pool.query(`
       INSERT INTO content_performance_summary
-        (company_id, channel, content_type, post_count, avg_likes, avg_comments,
-         avg_shares, avg_reach, avg_engagement_rate, best_day_of_week, best_hour, updated_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
+        (company_id, channel, content_type, post_count, measured_count, avg_likes, avg_comments,
+         avg_shares, avg_reach, avg_impressions, avg_engagement_rate, best_day_of_week, best_hour, updated_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
       ON CONFLICT (company_id, channel, content_type)
       DO UPDATE SET
         post_count          = EXCLUDED.post_count,
+        measured_count      = EXCLUDED.measured_count,
         avg_likes           = EXCLUDED.avg_likes,
         avg_comments        = EXCLUDED.avg_comments,
         avg_shares          = EXCLUDED.avg_shares,
         avg_reach           = EXCLUDED.avg_reach,
+        avg_impressions     = EXCLUDED.avg_impressions,
         avg_engagement_rate = EXCLUDED.avg_engagement_rate,
         best_day_of_week    = EXCLUDED.best_day_of_week,
         best_hour           = EXCLUDED.best_hour,
         updated_at          = NOW()
     `, [
       r.company_id, r.channel, r.content_type,
-      r.post_count, r.avg_likes, r.avg_comments,
-      r.avg_shares, r.avg_reach, r.avg_engagement_rate,
+      r.post_count, r.measured_count, r.avg_likes, r.avg_comments,
+      r.avg_shares, r.avg_reach, r.avg_impressions, r.avg_engagement_rate,
       r.best_day_of_week, r.best_hour,
     ]);
   }
@@ -291,6 +503,12 @@ async function logRun(status, payload) {
 // ── MAIN ──────────────────────────────────────────────────────────────────────
 
 async function run() {
+  const runId = makeRunId();
+  let attempts = 0;
+  let successes = 0;
+  let skipped = 0;
+  let errorSample = null;
+
   console.log('\nAnalytics agent running...\n');
   try {
     const clientConfig = await getClientConfig(CLIENT_ID);
@@ -300,18 +518,33 @@ async function run() {
 
     await markUnfetchableAsAttempted();
     await fetchFBPageMetrics();
-    await fetchBufferMetrics();
+    const bufferStats = await fetchBufferMetrics();
+    attempts = bufferStats?.attempts || 0;
+    successes = bufferStats?.successes || 0;
+    skipped = bufferStats?.skipped || 0;
+    errorSample = bufferStats?.errorSample || null;
     await rebuildSummary();
 
-    await logRun('success', { ran_at: new Date().toISOString() });
+    await logRun('success', { ran_at: new Date().toISOString(), attempts, successes, skipped });
+    await reportAnalyticsRun({ runId, attempts, successes, skipped, errorSample });
     console.log('\nAnalytics agent complete.');
+    return { attempts, successes, skipped, errorSample };
   } catch (err) {
+    errorSample = errorSample || errorSampleFrom(err);
     console.error('Analytics agent error:', err.message);
     await logRun('failed', { error: err.message }).catch(() => {});
+    await reportAnalyticsRun({ runId, attempts, successes, skipped, errorSample });
+    return { attempts, successes, skipped, errorSample, failed: true };
   }
 }
 
-module.exports = { run };
+module.exports = {
+  run,
+  fetchBufferMetrics,
+  buildBufferMetricsQuery,
+  mapBufferPostMetrics,
+  parseBufferPostResponse,
+};
 
 if (require.main === module) {
   run().catch(err => {

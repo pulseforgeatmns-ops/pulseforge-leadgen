@@ -1,10 +1,22 @@
 const express = require('express');
-const Anthropic = require('@anthropic-ai/sdk');
+const { isApiUsageQuestion, parseApiSpendCommand, answerApiUsageQuestion } = require('../services/apiUsageService');
+const Anthropic = require('../utils/meteredAnthropic').forAgent('max_chat');
 const pool = require('../db');
 const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
 const { getRequestClientId } = require('../utils/clientContext');
+const { routeIntent, ROUTE_KINDS, activeMissionResolverEnabled } = require('../packages/mission-engine');
+const { getMissionEngine, missionEnabled } = require('../utils/missionRuntime');
+const { detectConversationSubject } = require('../packages/max/workspace/ConversationSubject');
+const { maybeHandleIdentityTurn } = require('../packages/max/workspace/IdentityConversationContext');
+const { LEGACY_CHAT_SYSTEM } = require('../packages/max/identity/MaxIdentity');
+const { observeLegacyChat } = require('../packages/decision-service/httpObserver');
+
+function shouldRouteAoQuestion(question) {
+  return /\b(ao|anchor|mike|field visit|campaign 001|direct mail|walkthrough|escalation|ao lead|who do i need to call|what happened today|what needs my attention|hottest ao|current cleaner|objection|promot.*crm)\b/i.test(question);
+}
 
 const router = express.Router();
+const { reviewNavigationForRequest } = require('../services/reviewNavigation');
 const requireDashboardAuth = [sessionAuth, requireRole('admin', 'manager')];
 const anthropic = new Anthropic();
 
@@ -15,7 +27,7 @@ async function loadPipelineContext(clientId) {
         COUNT(*)::int AS total,
         COUNT(*) FILTER (WHERE status = 'cold')::int AS cold,
         COUNT(*) FILTER (WHERE status = 'warm')::int AS warm,
-        COUNT(*) FILTER (WHERE status = 'hot')::int AS hot,
+        COUNT(*) FILTER (WHERE is_hot = true)::int AS hot,
         COUNT(*) FILTER (WHERE status = 'dead')::int AS dead,
         COUNT(*) FILTER (WHERE COALESCE(setter_visible, false) = true)::int AS setter_visible,
         COUNT(*) FILTER (WHERE setter_status = 'booked')::int AS booked,
@@ -144,19 +156,185 @@ async function loadProspectContext(clientId, question) {
 
 router.post('/api/max/ask', requireDashboardAuth, async (req, res) => {
   try {
-    const question = String(req.body?.question || '').trim().slice(0, 2000);
+    const question = String(req.body?.question || '').trim().slice(0, 100000);
     if (!question) return res.status(400).json({ error: 'Question is required' });
-    if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY is not configured' });
+
+    let reviewNavigation;
+    try { reviewNavigation = await reviewNavigationForRequest(req); }
+    catch (error) { return res.status(error.statusCode || 503).json({ error: 'review_navigation_unavailable', message: 'Review scope could not be verified. No review was opened.' }); }
+    if (reviewNavigation) { res.set('Cache-Control', 'no-store'); return res.json({ ...reviewNavigation, answer: reviewNavigation.prose, reply: reviewNavigation.prose }); }
+
+    if (isApiUsageQuestion(question) || parseApiSpendCommand(question)) {
+      if (parseApiSpendCommand(question)) {
+        try {
+          if (!req.get('origin') || new URL(req.get('origin')).host !== req.get('host')) return res.status(403).json({ error: 'same_origin_required' });
+        } catch { return res.status(403).json({ error: 'same_origin_required' }); }
+      }
+      res.set('Cache-Control', 'no-store');
+      return res.json(await answerApiUsageQuestion(question));
+    }
 
     const clientId = getRequestClientId(req);
+    observeLegacyChat(req, res, undefined, clientId);
+
+    const conversationSubject = detectConversationSubject(question);
+    if (conversationSubject.subject === 'identity') {
+      const identityTurn = await maybeHandleIdentityTurn({
+        question,
+        conversationSubject,
+        session: { context: { tenantId: String(clientId) } },
+      });
+      if (identityTurn && identityTurn.handled) {
+        return res.json({
+          answer: identityTurn.prose,
+          route: 'identity',
+          sources: ['max_identity'],
+          context_generated_at: new Date().toISOString(),
+        });
+      }
+    }
+
+    // SPEC-039 / ADR-025: Active Mission Resolver before IntentRouter.
+    if (missionEnabled()) {
+      const engine = await getMissionEngine();
+      const sessionKey = [
+        'max-chat',
+        (req.session && req.session.id) || req.sessionID || 'anon',
+        (req.session && req.session.user && req.session.user.id) || 'user',
+        clientId,
+      ].join(':');
+
+      if (activeMissionResolverEnabled() && engine.activeMissionResolver) {
+        const resolution = await engine.activeMissionResolver.resolve({
+          sessionId: sessionKey,
+          message: question,
+          tenantId: String(clientId),
+          clientId,
+          operatorId:
+            (req.session && req.session.user && req.session.user.email) || null,
+        });
+
+        if (
+          resolution.action === 'created' &&
+          resolution.mission &&
+          resolution.route &&
+          resolution.route.kind === ROUTE_KINDS.MISSION
+        ) {
+          const mission = resolution.mission;
+          const card = engine.toCard(mission);
+          const answer = [
+            `Mission created: ${mission.title || mission.objectiveText}.`,
+            `Status: ${mission.status}.`,
+            `Stage: ${(mission.progress && mission.progress.currentStage) || 'n/a'}.`,
+            mission.status === 'review_required'
+              ? 'Ready for review — no outbound actions were taken. Open Operations on the Command Deck.'
+              : 'Track progress in Operations on the Command Deck.',
+          ].join(' ');
+          return res.json({
+            answer,
+            route: 'mission',
+            mission,
+            card,
+            resolution: {
+              action: resolution.action,
+              classification: resolution.classification,
+              resolutionPath: resolution.resolutionPath,
+            },
+            context_generated_at: new Date().toISOString(),
+          });
+        }
+
+        if (
+          resolution.mission &&
+          (resolution.action === 'resumed' ||
+            resolution.action === 'modified' ||
+            resolution.action === 'diagnosed')
+        ) {
+          const mission = resolution.mission;
+          const card = engine.toCard(mission);
+          let answer;
+          if (resolution.action === 'diagnosed' && resolution.diagnosis) {
+            answer = resolution.diagnosis.summary;
+          } else if (resolution.action === 'modified' && resolution.modification) {
+            answer = [
+              `Mission updated: ${mission.title || mission.objectiveText}.`,
+              resolution.modification.summary,
+              `Status: ${mission.status}.`,
+            ].join(' ');
+          } else {
+            answer = [
+              `Resumed Mission: ${mission.title || mission.objectiveText}.`,
+              `Status: ${mission.status}.`,
+              `Stage: ${(mission.progress && mission.progress.currentStage) || 'n/a'}.`,
+              'Continuing with the active Mission (no new Mission created).',
+            ].join(' ');
+          }
+          return res.json({
+            answer,
+            route: 'mission',
+            mission,
+            card,
+            resolution: {
+              action: resolution.action,
+              classification: resolution.classification,
+              resolutionPath: resolution.resolutionPath,
+            },
+            context_generated_at: new Date().toISOString(),
+          });
+        }
+      } else {
+        const route = routeIntent(question);
+        if (route.kind === ROUTE_KINDS.MISSION) {
+          const mission = await engine.createFromObjective({
+            objective: question,
+            tenantId: String(clientId),
+            clientId,
+            createdBy:
+              (req.session && req.session.user && req.session.user.email) || null,
+            missionType: route.missionType,
+          });
+          const card = engine.toCard(mission);
+          const answer = [
+            `Mission created: ${mission.title || mission.objectiveText}.`,
+            `Status: ${mission.status}.`,
+            `Stage: ${(mission.progress && mission.progress.currentStage) || 'n/a'}.`,
+            mission.status === 'review_required'
+              ? 'Ready for review — no outbound actions were taken. Open Operations on the Command Deck.'
+              : 'Track progress in Operations on the Command Deck.',
+          ].join(' ');
+          return res.json({
+            answer,
+            route: 'mission',
+            mission,
+            card,
+            context_generated_at: new Date().toISOString(),
+          });
+        }
+      }
+    }
+
+    if (shouldRouteAoQuestion(question)) {
+      const aoBriefing = require('../services/aoBriefingService');
+      const aoResult = await aoBriefing.answerAoQuestion(clientId, question);
+      return res.json({
+        answer: aoResult.answer,
+        route: 'ao_briefing',
+        sources: aoResult.sources || ['ao_briefing'],
+        note: aoResult.note || null,
+        context_generated_at: new Date().toISOString(),
+      });
+    }
+
+    if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY is not configured' });
+
     const context = await loadPipelineContext(clientId);
     const actionableProspects = shouldLoadProspectContext(question)
       ? await loadProspectContext(clientId, question)
       : [];
     const message = await anthropic.messages.create({
-      model: process.env.MAX_CHAT_MODEL || 'claude-sonnet-4-5',
+      model: process.env.MAX_CHAT_MODEL || 'claude-sonnet-4-6',
       max_tokens: 700,
-      system: `You are Max, the manager agent for Pulseforge. You answer operator questions about the sales and marketing pipeline using only the provided database context. Be concise, direct, and practical. If the context does not contain enough evidence, say what is missing instead of inventing details. Prioritize warm signals, pipeline risk, next actions, and anomalies. When the user asks you to take an action like triggering Emmett or flagging prospects, respond with the specific prospect names and emails from the context provided, and confirm what action you would take. You have access to real prospect data - use it.`,
+      system: LEGACY_CHAT_SYSTEM,
       messages: [{
         role: 'user',
         content: `Current pipeline context:
@@ -176,7 +354,11 @@ ${question}`,
       .join('\n')
       .trim();
 
-    res.json({ answer, context_generated_at: context.generated_at });
+    res.json({
+      answer,
+      route: 'intelligence',
+      context_generated_at: context.generated_at,
+    });
   } catch (err) {
     console.error('[max_chat] ask error:', err.response?.data || err.message);
     res.status(500).json({ error: err.message });
@@ -184,3 +366,4 @@ ${question}`,
 });
 
 module.exports = router;
+

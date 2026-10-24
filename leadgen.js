@@ -1,3 +1,4 @@
+const { withResearchProviderScope, assertResearchProviderAllowed, rethrowResearchProviderControl } = require('./utils/anchorResearchProviderPause');
 /**
  * Pulseforge Lead Engine — Node.js CLI
  * =====================================
@@ -12,23 +13,231 @@
 
 require('dotenv').config();
 const axios = require('axios');
+const { randomUUID } = require('crypto');
 const { createObjectCsvWriter } = require('csv-writer');
 const { google } = require('googleapis');
 const pool = require('./db');
 const { appendQualifiedScoutLead } = require('./utils/setterSheet');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
+const { recordScoutBaseline } = require('./utils/icpScoring');
+const { verifyEmail } = require('./utils/emailVerifier');
+const { invalidOutreachEmailReason } = require('./utils/emailGuard');
+const { ensureEmailVerificationColumns } = require('./utils/emailVerificationSchema');
+const { applyScoutEnrichment, babrunScoutContactEvidence } = require('./utils/babrunScoutContactEvidence');
+const { ensureScoutUnenrichedTable } = require('./utils/scoutUnenrichedSchema');
+const { acquireScoutLockWithWait, releaseScoutLock, getActiveScoutLock } = require('./utils/scoutLock');
+const { awaitProspeoSlot } = require('./utils/prospeoThrottle');
+const { checkProspeoQuota, recordProspeoCall, trip429 } = require('./utils/prospeoBreaker');
+const { shouldExcludeProspect, extractEmailDomain } = require('./utils/prospectFilter');
+const { normalizeVertical } = require('./utils/normalize');
+const {
+  PLACES_FEATURES,
+  TRIGGER_MODES,
+  withPlacesContext,
+} = require('./utils/placesCostAttribution');
+const { legacyTextSearch, legacyPlaceDetails } = require('./utils/placesApi');
+const { SCOUT_SKIP_REASONS, ensureScoutSkipLogTable, logScoutSkip } = require('./utils/scoutSkipLog');
+const { reportAgentRun } = require('./utils/agentObservability');
+const { setSetterVisibility } = require('./utils/setterVisibility');
+const { safeIngestScoutLifecycleSignal } = require('./utils/maxLifecycleSignals');
+const {
+  safeWriteProspect,
+  safeWriteCompany,
+  OPERATIONAL_EVENTS,
+} = require('./utils/knowledgeDualWrite');
+const { deriveBusinessNameShort, ensureBusinessNameShortColumns } = require('./utils/businessNameShort');
+const { searchSerpApi } = require('./lib/serpapi');
+const { sourceLinkedInProspects } = require('./utils/linkedinSerpSource');
+const { ensureLinkedInScoutSchema } = require('./utils/linkedinScoutSchema');
+const {
+  configuredServiceAreas,
+  matchServiceAreaFromLocation,
+  matchServiceAreaLocality,
+  parsePlacesAddressComponents,
+} = require('./utils/serviceArea');
+const {
+  resolveVerticalTier,
+  targetVerticalEntries,
+  autonomousTargetVerticals,
+} = require('./utils/verticalTiers');
+const {
+  establishBusinessIdentity,
+  leadHasEstablishedIdentity,
+} = require('./packages/scout/identity/BusinessIdentity');
+const { expandPlacesQueriesForVertical } = require('./packages/scout/hypothesis/MarketHypothesisRegistry');
+const {
+  collectScoutPersonalizationEvidence,
+  persistScoutPersonalizationEvidence,
+} = require('./utils/scoutPersonalizationEvidence');
+
+function normalizeCompanyName(raw) {
+  if (!raw || typeof raw !== 'string') return raw;
+  return raw
+    .split('|')[0]
+    .split('—')[0]
+    .split(' - ')[0]
+    .split(/:\s/)[0]
+    .trim();
+}
 
 // Write one agent_log row per Scout run so we can answer
 // "did Scout run? for which client/industry/location? did it find anything?"
 // without trawling Railway stdout. Best-effort — never throws.
-async function logScoutRun(status, payload) {
+async function logScoutRun(status, payload, action = 'scrape') {
+  const allowedStatuses = new Set(['success', 'failed', 'pending', 'completed', 'skipped']);
+  const safeStatus = allowedStatuses.has(status) ? status : 'skipped';
   try {
-    await pool.query(`
+    const result = await pool.query(`
       INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
       VALUES ($1, $2, $3, $4, NOW(), $5)
-    `, ['scout', 'scrape', JSON.stringify(payload), status, CONFIG.clientId]);
+      RETURNING id
+    `, ['scout', action, JSON.stringify(payload), safeStatus, CONFIG.clientId]);
+    return result.rows[0]?.id || null;
   } catch (err) {
     console.error('[logScoutRun] failed to write:', err.message);
+    return null;
+  }
+}
+
+function makeScoutObservabilityRunId() {
+  return `scout-${CONFIG.clientId || 'none'}-${new Date().toISOString()}-${randomUUID()}`;
+}
+
+async function reportScoutRun({ runId, attempts, successes, skipped, errorSample = null }) {
+  try {
+    return await reportAgentRun({
+      agent: 'scout',
+      clientId: CONFIG.clientId,
+      runId,
+      attempts,
+      successes,
+      skipped,
+      errorSample,
+    });
+  } catch (err) {
+    console.error('[Scout] Observability report failed:', err.message);
+    return null;
+  }
+}
+
+async function getScoutSkipSummary(runId) {
+  if (!runId) return { total: 0, dbErrorSample: null };
+  try {
+    const [countResult, dbErrorResult] = await Promise.all([
+      pool.query('SELECT COUNT(*)::int AS count FROM scout_skip_log WHERE run_id = $1', [String(runId)]),
+      pool.query(`
+        SELECT detail
+        FROM scout_skip_log
+        WHERE run_id = $1 AND skip_reason = $2
+        ORDER BY created_at DESC
+        LIMIT 1
+      `, [String(runId), SCOUT_SKIP_REASONS.DB_ERROR]),
+    ]);
+    return {
+      total: countResult.rows[0]?.count || 0,
+      dbErrorSample: dbErrorResult.rows[0]?.detail || null,
+    };
+  } catch (err) {
+    console.error('[Scout] Skip summary lookup failed:', err.message);
+    return { total: 0, dbErrorSample: { error: err.message } };
+  }
+}
+
+async function resolveScoutObservabilityStats(stats, runId, fallbackError = null) {
+  const dbErrors = Number(stats?.skipped_breakdown?.[SCOUT_SKIP_REASONS.DB_ERROR] || 0);
+  const saved = Number(stats?.saved || 0);
+  const skipSummary = await getScoutSkipSummary(runId);
+  return {
+    attempts: saved + dbErrors,
+    successes: saved,
+    skipped: skipSummary.total,
+    errorSample: skipSummary.dbErrorSample || (fallbackError ? { error: fallbackError.message } : null),
+  };
+}
+
+function incrementBreakdown(breakdown, reason) {
+  breakdown[reason] = (breakdown[reason] || 0) + 1;
+}
+
+function booleanValue(value, fallback = false) {
+  if (value == null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
+}
+
+function positiveInteger(value, fallback, max = Number.MAX_SAFE_INTEGER) {
+  const parsed = parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, max) : fallback;
+}
+
+function normalizeSourceMode(value) {
+  return String(value || 'default').trim().toLowerCase() === 'linkedin' ? 'linkedin' : 'default';
+}
+
+function formatQueueLocation(location) {
+  const cleaned = sanitizeQueueLocation(location);
+  const match = cleaned.match(/^(.+)\s+([A-Z]{2})$/i);
+  if (!match) return cleaned.replace(/\s+/g, ' ');
+  return `${match[1].replace(/\s+/g, ' ')},${match[2].toUpperCase()}`;
+}
+
+function logScoutCompletionSummary(stats = {}) {
+  const breakdown = stats.skipped_breakdown || {};
+  console.log(
+    `[Scout] client=${CONFIG.clientId} queue_item=${CONFIG.vertical}/${formatQueueLocation(CONFIG.location)} ` +
+    `places_found=${Number(stats.places_found || 0)} ` +
+    `serpapi_found=${Number(stats.serpapi_found || 0)} ` +
+    `deduped=${Number(stats.deduped || breakdown[SCOUT_SKIP_REASONS.DUPLICATE] || 0)} ` +
+    `out_of_area=${Number(breakdown[SCOUT_SKIP_REASONS.OUT_OF_AREA] || 0)} ` +
+    `excluded=${Number(breakdown.excluded_filter || 0)} ` +
+    `saved=${Number(stats.saved || 0)} ` +
+    `parked_rows_skipped=${Number(CONFIG.parkedRowsSkipped || 0)}`
+  );
+}
+
+function scoutDiscoveryMethod(lead) {
+  return Array.isArray(lead?.source) && lead.source.includes('google_places') ? 'google_places' : 'serpapi';
+}
+
+function scoutCandidateIdentifier(lead, companyName) {
+  const identity = establishBusinessIdentity({ ...lead, company: companyName || lead?.company });
+  if (identity.identityKey) return identity.identityKey;
+  const email = typeof lead?.email === 'string' && lead.email !== '—' ? lead.email.trim() : '';
+  return email || normalizeDomain(lead?.url) || `${companyName || lead?.company || 'unknown'} @ ${CONFIG.location}`;
+}
+
+async function persistScoutSkip(runId, lead, skipReason, detail = {}, companyName = null) {
+  return logScoutSkip({
+    runId, clientId: CONFIG.clientId, vertical: CONFIG.vertical, location: CONFIG.location,
+    searchQuery: lead?.search_query || null, discoveryMethod: scoutDiscoveryMethod(lead),
+    skipReason, candidateIdentifier: scoutCandidateIdentifier(lead, companyName), detail,
+  });
+}
+
+async function recordEmailEnrichmentMethod(domain, method, details = {}) {
+  const normalizedMethod = method || 'none';
+  console.log(`[Enrichment] ${domain}: method=${normalizedMethod}`);
+  await logScoutRun(normalizedMethod === 'none' ? 'skipped' : 'success', {
+    domain,
+    method: normalizedMethod,
+    ...details,
+  }, 'email_enrichment_method');
+}
+
+async function logExcludedProspect({ email, source, exclusion }) {
+  try {
+    await pool.query(`
+      INSERT INTO excluded_prospect_log (email, domain, source, exclusion_reason, exclusion_detail)
+      VALUES ($1, $2, $3, $4, $5::jsonb)
+    `, [
+      email || null,
+      extractEmailDomain(email),
+      source || 'scout',
+      exclusion.reason,
+      JSON.stringify(exclusion.detail || {}),
+    ]);
+  } catch (err) {
+    console.error('[Scout] excluded_prospect_log write failed:', err.message);
   }
 }
 
@@ -37,6 +246,7 @@ const DOMAIN_BLACKLIST = [
   'indeed.com','glassdoor.com','ziprecruiter.com','thumbtack.com',
   'yelp.com','yellowpages.com','mapquest.com','bbb.org','patch.com',
   'avvo.com','zoominfo.com','inven.ai','prnewswire.com','ofn.org',
+  'cbsnews.com','bebee.com','amesburyma.gov',
   'townplanner.com','ccsnh.edu','servpro.com','stanleysteemer.com',
   'angieslist.com','homeadvisor.com','houzz.com','facebook.com',
   'linkedin.com','twitter.com','instagram.com','reddit.com',
@@ -49,7 +259,10 @@ const DOMAIN_BLACKLIST = [
   'tiktok.com','snapchat.com',
   'businessnhmagazine.com','nhmagazine.com','nhpr.org',
   'issuu.com','smugmug.com','aptuitivcdn.com',
-  'forbes.com','wmur.com','wokq.com',
+  'forbes.com','wmur.com','wokq.com','cnn.com','foxnews.com','nbcnews.com',
+  'abcnews.go.com','usatoday.com','apnews.com','reuters.com','bloomberg.com',
+  'nytimes.com','washingtonpost.com','wsj.com','npr.org','pbs.org',
+  'bostonglobe.com','masslive.com','wcvb.com','nbcboston.com','boston.com',
   'trulia.com','zillow.com','bostonrealtyweb.com',
   'opensecrets.org','novoco.com','dealstream.com',
   'inmyarea.com','businessesforsale.com','veteranownedbusiness.com',
@@ -67,30 +280,438 @@ const DOMAIN_BLACKLIST = [
   'pmrepublic.com','inmyarea.com','bark.com','expertise.com',
   'thumbtack.com','angi.com','porch.com','homeguide.com',
   'housekeeper.com','manchesterhousecleaning.com','co.uk',
+  'legacy.com','dignitymemorial.com','tributearchive.com',
+  'everloved.com','echovita.com','obitsarchive.com','obituary.com',
+  'obituarieshelp.org','afterall.com',
 ];
+
+function isBlacklistedDomain(domain) {
+  const host = String(domain || '').toLowerCase().replace(/^www\./, '');
+  if (!host) return true;
+  if (host.endsWith('.gov')) return true;
+  return DOMAIN_BLACKLIST.some(blocked => host === blocked || host.endsWith(`.${blocked}`) || host.includes(blocked));
+}
+
+const REJECTED_PROSPECT_NAME_PATTERNS = [
+  /^Obituary information for/i,
+  / Email Formats?$/i,
+  /^Condo.*HOA Renovations/i,
+];
+
+function rejectedProspectNameReason(name) {
+  const clean = String(name || '').trim();
+  if (!clean) return null;
+  if (REJECTED_PROSPECT_NAME_PATTERNS.some(pattern => pattern.test(clean))) {
+    return 'blocked prospect name pattern';
+  }
+  return null;
+}
+
+function preEnrichmentRejectReason(lead) {
+  const nameReason = rejectedProspectNameReason(lead?.company);
+  if (nameReason) return nameReason;
+  const domain = normalizeDomain(lead?.url);
+  if (isBlacklistedDomain(domain)) return 'blocked domain';
+  return null;
+}
 
 // ── CLI ARGS ─────────────────────────────────────────────────────────
 const args = parseArgs(process.argv.slice(2));
 let CONFIG = {
   industry:    args.industry  || 'cleaning',
-  location:    args.location  || 'Manchester NH',
+  location:    sanitizeQueueLocation(args.location || 'Manchester NH'),
   jobTitle:    args.title     || 'owner',
-  maxResults:  parseInt(args.max || '25'),
+  maxResults:  parseInt(args.max || '75'),
+  linkedinMaxResults: positiveInteger(args.max, 30, 100),
   minScore:    parseInt(args.minscore || '40'),
   mode:        args.mode      || 'both',     // smb | tech | both
+  sourceMode:  args['source-mode'] || args.sourceMode || 'default',
+  titleFilter: args['title-filter'] || args.titleFilter || args.title || 'owner|founder|ceo|president',
+  titleExclude: args['title-exclude'] || args.titleExclude || '',
+  sizeSignal:  args['size-signal'] || args.sizeSignal || '',
+  dryRun:      booleanValue(args['dry-run'] ?? args.dryRun, false),
+  maxRequests: positiveInteger(args['max-requests'] || args.maxRequests, 20, 100),
+  pageDepth:   positiveInteger(args['page-depth'] || args.pageDepth, 1, 10),
+  parkedRowsSkipped: 0,
   outputCSV:   args.csv       !== 'false',
   outputSheet: args.sheet     !== 'false',
   sheetId:     args.sheetid   || process.env.GOOGLE_SHEET_ID || '',
   clientId:    getRuntimeClientId(args),
+  vertical:    normalizeVertical(args.industry || 'cleaning') || 'unknown',
+  // Set from CLIENT_CONFIG.scoring_profile once the client row loads in run().
+  // Selects which ICP rubric scoreLead() applies. 'cleaning_buyer' = the
+  // commercial-cleaning buyer rubric; null/other = default lead-gen rubric.
+  scoringProfile: null,
 };
 let CLIENT_CONFIG = null;
 
 const GOOGLE_API_KEY    = process.env.GOOGLE_API_KEY;
 const GOOGLE_CX         = process.env.GOOGLE_CX;
 const PROSPEO_API_KEY   = process.env.PROSPEO_API_KEY;
-const SETTER_ICP_THRESHOLD = 70;
+// Per-vertical saturation caps. Once a client has accumulated this many
+// prospects in a vertical, Scout stops scraping it and rotates to the
+// least-saturated queued vertical instead. Keys are normalized (snake_case).
+const SATURATION_THRESHOLDS = {
+  auto: 50,
+  cleaning: 50,
+  restaurant: 60,
+  fitness: 40,
+  salon: 40,
+  med_spa: 30,
+  landscaping: 30,
+  property_management: 40,
+  probate_attorney: 40,
+  home_services: 30,
+  default: 40,
+};
+
+const MSHI_SCOUT_CITIES = [
+  'Charleston',
+  'South Charleston',
+  'St. Albans',
+  'Dunbar',
+  'Nitro',
+  'Cross Lanes',
+  'Hurricane',
+];
+
+const PROVIDENCE_SCOUT_CITIES = [
+  'Providence',
+  'Cranston',
+  'Warwick',
+  'Pawtucket',
+  'East Providence',
+];
+
+// clients.service_area stores configured city names, while clients.state is a
+// single home state. Cross-state service cities need an explicit search-state
+// override so Boston never becomes the invalid query "Boston RI".
+const CLIENT_SCOUT_CITY_STATE_OVERRIDES = {
+  1: { boston: 'MA' },
+};
+
+const MSHI_PROBATE_ATTORNEY_GEO = [
+  { city: 'Charleston', state: 'WV' },
+  { city: 'South Charleston', state: 'WV' },
+  { city: 'St. Albans', state: 'WV' },
+  { city: 'Dunbar', state: 'WV' },
+  { city: 'Nitro', state: 'WV' },
+  { city: 'Cross Lanes', state: 'WV' },
+  { city: 'Hurricane', state: 'WV' },
+  { city: 'Teays Valley', state: 'WV' },
+  { city: 'Scott Depot', state: 'WV' },
+  { city: 'Huntington', state: 'WV' },
+  { city: 'Barboursville', state: 'WV' },
+  { city: 'Logan', state: 'WV' },
+  { city: 'Madison', state: 'WV' },
+  { city: 'Hamlin', state: 'WV' },
+  { city: 'Fayetteville', state: 'WV' },
+  { city: 'Beckley', state: 'WV' },
+];
+
+// Manchester pilot cluster for client_id=10. Tightened from the wider ring for
+// the pilot — the held-back towns (Nashua, Concord, Derry, Merrimack,
+// Litchfield, Hudson, etc.) come back post-pilot. Must stay in sync with
+// clients.service_area, which drives Scout's out-of-area cull. Also used by the
+// cleaning ICP rubric for geography scoring and by Scout's city rotation.
+const CLEANING_AREA_CITIES = [
+  'Manchester', 'Bedford', 'Goffstown', 'Hooksett', 'Londonderry', 'Auburn',
+];
+
+const CLIENT_SCOUT_PLANS = {
+  // Cleaning company (client_id=10). Immediate-cash partner and buyer targets.
+  // Each category runs as a separate, manual Scout pass.
+  // Google Places is primary for this client (see getSourcePreference) —
+  // SerpAPI underperforms on professional offices.
+  10: {
+    state: 'NH',
+    cities: CLEANING_AREA_CITIES,
+    verticals: {
+      cleaning_company_overflow: [
+        'commercial cleaning company {city} {state}',
+        'janitorial service {city} {state}',
+        'office cleaning company {city} {state}',
+      ],
+      str_manager: [
+        'short term rental management {city} {state}',
+        'Airbnb property management {city} {state}',
+        'vacation rental management {city} {state}',
+      ],
+      property_manager: [
+        'property management company {city} {state}',
+        'commercial property management {city} {state}',
+      ],
+      realtor: [
+        'real estate agency {city} {state}',
+        'realtor office {city} {state}',
+        'real estate broker {city} {state}',
+      ],
+      restoration_remodeling_partner: [
+        'water damage restoration {city} {state}',
+        'restoration company {city} {state}',
+        'remodeling contractor {city} {state}',
+      ],
+      commercial_office: [
+        'commercial office {city} {state}',
+        'office park {city} {state}',
+        'business center {city} {state}',
+      ],
+    },
+  },
+  2: {
+    state: 'WV',
+    cities: MSHI_SCOUT_CITIES,
+    geoByVertical: {
+      probate_attorney: MSHI_PROBATE_ATTORNEY_GEO,
+    },
+    verticals: {
+      property_management: [
+        'property management company {city} WV',
+      ],
+      probate_attorney: [
+        'probate attorney {city} {state}',
+        'estate attorney {city} {state}',
+        'estate planning attorney {city} {state}',
+        'trust and estate attorney {city} {state}',
+      ],
+      renovation_lender: [
+        'mortgage broker {city} WV',
+      ],
+      insurance_restoration: [
+        'insurance agency {city} WV',
+        'public adjuster {city} WV',
+      ],
+      home_inspector: [
+        'home inspector {city} WV',
+      ],
+      listing_agent: [
+        'real estate agent {city} WV',
+      ],
+    },
+  },
+};
+
+const PLACES_PRIMARY_CLIENT_IDS = new Set([1, 10]);
+
+function getSaturationThreshold(vertical) {
+  const key = normalizeVertical(vertical) || 'unknown';
+  return Object.prototype.hasOwnProperty.call(SATURATION_THRESHOLDS, key)
+    ? SATURATION_THRESHOLDS[key]
+    : SATURATION_THRESHOLDS.default;
+}
+
+function sanitizeQueueLocation(value) {
+  return String(value == null ? '' : value)
+    .replace(/https?:\/\/\S*/gi, ' ')
+    .replace(/\bwww\.\S*/gi, ' ')
+    .replace(/[^a-zA-Z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeGeoText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function cityFromLocation(location) {
+  return sanitizeQueueLocation(location)
+    .replace(/\b[A-Z]{2}\b$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getClientScoutPlan(clientId) {
+  if (CLIENT_CONFIG?.scoring_profile === 'studio_substral') {
+    const { STUDIO_SUBSTRAL_SCOUT_PLAN } = require('./services/studioSubstralScoutIntelligence');
+    return STUDIO_SUBSTRAL_SCOUT_PLAN;
+  }
+  return CLIENT_SCOUT_PLANS[Number(clientId)] || null;
+}
+
+function hasConfiguredScoutDefinition(clientId) {
+  return Number(CLIENT_CONFIG?.id) === Number(clientId) && targetVerticalEntries(CLIENT_CONFIG).length > 0;
+}
+
+function getPlannedVerticals(clientId) {
+  if (hasConfiguredScoutDefinition(clientId)) return autonomousTargetVerticals(CLIENT_CONFIG);
+  const plan = getClientScoutPlan(clientId);
+  return plan ? Object.keys(plan.verticals || {}) : [];
+}
+
+function getPlannedLocations(clientId, fallbackLocation, vertical = CONFIG.vertical) {
+  if (hasConfiguredScoutDefinition(clientId)) {
+    const target = targetVerticalEntries(CLIENT_CONFIG)
+      .find(entry => entry.vertical === normalizeVertical(vertical));
+    if (!target?.autonomous_sourcing || target.tier !== 'A') return [];
+    const state = CLIENT_CONFIG?.state || sanitizeQueueLocation(fallbackLocation).split(/\s+/).pop() || '';
+    const cities = Array.isArray(CLIENT_CONFIG?.service_area) ? CLIENT_CONFIG.service_area : [];
+    const overrides = CLIENT_SCOUT_CITY_STATE_OVERRIDES[Number(clientId)] || {};
+    if (cities.length) {
+      return cities.map(city => {
+        const cityState = overrides[normalizeGeoText(city)] || state;
+        return sanitizeQueueLocation(`${city} ${cityState}`);
+      });
+    }
+  }
+  const plan = getClientScoutPlan(clientId);
+  const normalizedVertical = normalizeVertical(vertical);
+  const geoTargets = Array.isArray(plan?.geoByVertical?.[normalizedVertical])
+    ? plan.geoByVertical[normalizedVertical]
+    : null;
+  if (geoTargets?.length) return geoTargets.map(({ city, state }) => sanitizeQueueLocation(`${city} ${state}`));
+  const cities = Array.isArray(plan?.cities) ? plan.cities : [];
+  if (!cities.length) return [sanitizeQueueLocation(fallbackLocation)];
+  const state = plan?.state || CLIENT_CONFIG?.state || sanitizeQueueLocation(fallbackLocation).split(/\s+/).pop() || '';
+  return cities.map(city => sanitizeQueueLocation(`${city} ${state}`));
+}
+
+function hasClientScoutPlan(clientId) {
+  return hasConfiguredScoutDefinition(clientId) || !!getClientScoutPlan(clientId);
+}
+
+function plannedLocationSet(clientId, fallbackLocation, vertical) {
+  return new Set(getPlannedLocations(clientId, fallbackLocation, vertical).map(sanitizeQueueLocation));
+}
+
+function isQueueLocationValidForPlan(clientId, vertical, location) {
+  if (!hasClientScoutPlan(clientId)) return true;
+  return plannedLocationSet(clientId, location, vertical).has(sanitizeQueueLocation(location));
+}
+
+function getSearchQueriesForTarget() {
+  const city = cityFromLocation(CONFIG.location);
+  const state = sanitizeQueueLocation(CONFIG.location).split(/\s+/).pop() || CLIENT_CONFIG?.state || '';
+  const hypothesisQueries = expandPlacesQueriesForVertical(CONFIG.vertical, { city, state });
+  if (hypothesisQueries.length) return hypothesisQueries;
+
+  const configured = targetVerticalEntries(CLIENT_CONFIG)
+    .find(entry => entry.vertical === normalizeVertical(CONFIG.vertical));
+  if (configured) {
+    if (!configured.autonomous_sourcing || configured.tier !== 'A') return [];
+    return configured.seed_terms.map(seed => seed
+      .replace(/\{city\}/g, city)
+      .replace(/\{state\}/g, state)
+      .trim());
+  }
+  const plan = getClientScoutPlan(CONFIG.clientId);
+  const seeds = plan?.verticals?.[CONFIG.vertical];
+  if (!Array.isArray(seeds) || seeds.length === 0) {
+    return [sanitizeQueueLocation(`${CONFIG.industry} ${CONFIG.location}`)];
+  }
+  return seeds.map(seed => seed
+    .replace(/\{city\}/g, city)
+    .replace(/\{state\}/g, state)
+    .trim());
+}
+
+function locationToIlikePattern(location) {
+  const cleaned = sanitizeQueueLocation(location);
+  if (!cleaned) return '%';
+  const cityOnly = cleaned.replace(/\s+[A-Z]{2}$/i, '').trim();
+  const basis = cityOnly || cleaned;
+  return `%${basis.split(/\s+/).join('%')}%`;
+}
+
+function usesPlacesPrimary() {
+  return CONFIG.scoringProfile === 'cleaning_buyer' || PLACES_PRIMARY_CLIENT_IDS.has(Number(CONFIG.clientId));
+}
+
 const GENERIC_CONTACT_NAMES = new Set(['there', 'info', 'hello', 'contact', 'admin', 'support', 'sales']);
 const GENERIC_EMAIL_PREFIX_RE = /^(?:info|hello|contact|admin|support|sales|office|team|service|customerservice|customer\.?service|no-?reply|noreply|mail|inquir(?:y|ies))[\w.+-]*$/i;
+const CLEANING_JUNK_EMAIL_LOCALS = new Set([
+  'example',
+  'test',
+  'no-reply',
+  'noreply',
+  'donotreply',
+  'do-not-reply',
+]);
+const CLEANING_EXACT_JUNK_EMAILS = new Set([
+  'user@domain.com',
+  'email@domain.com',
+  'name@domain.com',
+]);
+const CLEANING_EMAIL_ASSET_RE = /\.(?:webp|png|jpe?g|gif|svg|css|js)(?:$|[?#])/i;
+const CLEANING_BASIC_EMAIL_RE = /^[^\s@<>()[\],;:"']+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i;
+
+function isCleaningBuyerProfile() {
+  return CONFIG.scoringProfile === 'cleaning_buyer';
+}
+
+function isWebDesignProfile() {
+  return CONFIG.scoringProfile === 'web_design' || CONFIG.scoringProfile === 'studio_substral';
+}
+
+function isStudioSubstralScoutProfile() {
+  return CONFIG.scoringProfile === 'studio_substral';
+}
+
+function validCleaningEmailOrNull(email) {
+  const raw = typeof email === 'string' ? email.trim() : '';
+  if (!raw || raw === '—') return null;
+  if (cleaningEmailRejection(raw)) return null;
+  return raw;
+}
+
+function cleaningEmailRejection(email) {
+  if (typeof email !== 'string' || !email.trim()) return null;
+  const raw = email.trim();
+  const lower = raw.toLowerCase();
+  if (CLEANING_EMAIL_ASSET_RE.test(lower)) return 'asset extension';
+  if (!CLEANING_BASIC_EMAIL_RE.test(raw)) return 'invalid email';
+  if (emailRejection(raw)) return emailRejection(raw);
+  if (CLEANING_EXACT_JUNK_EMAILS.has(lower)) return 'junk placeholder email';
+  const [local] = lower.split('@');
+  if (CLEANING_JUNK_EMAIL_LOCALS.has(local)) return 'junk placeholder email';
+  return null;
+}
+
+function hasValidCleaningPhone(phone) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (digits.length < 10) return false;
+  return !/^(\d)\1+$/.test(digits);
+}
+
+function normalizeScoringText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function scoringTextIncludes(haystack, needle) {
+  const normalizedNeedle = normalizeScoringText(needle);
+  if (!normalizedNeedle) return false;
+  return ` ${haystack} `.includes(` ${normalizedNeedle} `);
+}
+
+function stateMatchesLocation(locHay, state) {
+  const normalizedState = normalizeScoringText(state);
+  if (!normalizedState) return false;
+  return scoringTextIncludes(locHay, normalizedState);
+}
+
+function scoreConfiguredLocation(locHay) {
+  const normalizedLoc = normalizeScoringText(locHay);
+  if (!normalizedLoc) return 0;
+
+  if (scoringTextIncludes(normalizedLoc, CLIENT_CONFIG?.city)) return 20;
+
+  const serviceAreas = Array.isArray(CLIENT_CONFIG?.service_area) ? CLIENT_CONFIG.service_area : [];
+  if (serviceAreas.some(area => scoringTextIncludes(normalizedLoc, area))) return 15;
+
+  if (stateMatchesLocation(normalizedLoc, CLIENT_CONFIG?.state)) return 8;
+  return 0;
+}
+
+function getSearchVertical() {
+  return normalizeVertical(CONFIG.vertical || CONFIG.industry || '');
+}
 
 function sanitizeFirstName(value) {
   const raw = String(value || '').trim();
@@ -107,19 +728,29 @@ function sanitizeFirstName(value) {
 
 async function enrichWithHunter(domain) {
   const HUNTER_KEY = process.env.HUNTER_API_KEY;
+  if (!HUNTER_KEY) {
+    console.warn('[WARN] Hunter key not set — skipping Hunter enrichment');
+    return null;
+  }
   try {
+    assertResearchProviderAllowed('hunter');
     const res = await axios.get('https://api.hunter.io/v2/domain-search', {
-      params: { domain, api_key: HUNTER_KEY, limit: 5, type: 'personal' }
+      params: { domain, api_key: HUNTER_KEY, limit: 10 }, timeout: 8000
     });
     const emails = res.data?.data?.emails || [];
+    if (!emails.length) return null;
     const tf = (CONFIG.jobTitle || '').toLowerCase();
-    const match = emails.find(e => e.position?.toLowerCase().includes(tf)) || emails[0];
+    const match = emails.find(e => e.value && e.position?.toLowerCase().includes(tf))
+      || emails.find(e => e.value && e.type === 'personal') || emails.find(e => e.value);
+    if (!match) return null;
     return {
       contact: (match.first_name || '') + ' ' + (match.last_name || ''),
       email: match.value || null,
-      title: match.position || null
+      title: match.position || null,
+      sourceUrl: match.sources?.[0]?.uri || null
     };
   } catch (err) {
+    rethrowResearchProviderControl(err);
     return null;
   }
 }
@@ -128,46 +759,91 @@ async function enrichWithHunter(domain) {
 // ─────────────────────────────────────────────────────────────────────
 // STEP 2c: Scrape website for contact email (fallback for Places leads)
 // ─────────────────────────────────────────────────────────────────────
-async function scrapeWebsiteEmail(domain) {
-  const pages = [
-    `https://${domain}/contact`,
-    `https://${domain}/contact-us`,
-    `https://${domain}/about`,
-    `https://www.${domain}/contact`,
-    `https://www.${domain}`
-  ];
+function filterScrapedWebsiteEmails(html, companyDomain = null) {
+  const emailMatch = String(html || '').match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g);
+  if (!emailMatch) return [];
+  return emailMatch.filter((email) =>
+    (!companyDomain || require('./utils/canonicalEmailEligibility').isAllowedObservedWebsiteEmail(email, companyDomain))
+    && !email.includes('noreply')
+    && !email.includes('no-reply')
+    && !email.includes('example.com')
+    && !email.includes('sentry')
+    && !email.includes('wix')
+    && !email.includes('squarespace')
+    && !email.includes('.png')
+    && !email.includes('.jpg')
+  );
+}
 
-  for (const url of pages) {
+async function scrapeWebsiteEmail(domain, options = {}) {
+  const { crawlWebsite, normalizeDomain: crawlNormalizeDomain } = require('./utils/websiteEnrichmentCrawl');
+  const normalizedDomain = crawlNormalizeDomain(domain);
+  if (!normalizedDomain) return null;
+
+  const { pages } = await crawlWebsite(normalizedDomain, async (url) => {
     try {
       const res = await axios.get(url, {
         timeout: 5000,
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)' }
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)' },
+        validateStatus: () => true,
       });
-      const html = res.data;
+      return {
+        ok: res.status >= 200 && res.status < 400,
+        status: res.status,
+        text: res.data,
+        url: res.request?.res?.responseURL || url,
+      };
+    } catch (err) {
+      throw err;
+    }
+  }, { maxSuccessfulPages: 8 });
 
-      // Extract email from page
-      const emailMatch = html.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g);
-      if (emailMatch) {
-        // Filter out noreply, info@, support@ — prefer personal emails
-        const filtered = emailMatch.filter(e =>
-          !e.includes('noreply') &&
-          !e.includes('no-reply') &&
-          !e.includes('example.com') &&
-          !e.includes('sentry') &&
-          !e.includes('wix') &&
-          !e.includes('squarespace') &&
-          !e.includes('.png') &&
-          !e.includes('.jpg')
-        );
-        if (filtered.length > 0) {
-          return { email: filtered[0], contact: '', title: '' };
-        }
-      }
-    } catch(err) {
-      // try next page
+  if (options.ownerEvidence === true) {
+    const { extractWebsiteOwnerCandidates } = require('./utils/websiteOwnerEvidence');
+    const owner = extractWebsiteOwnerCandidates(pages, normalizedDomain).find(candidate =>
+      filterScrapedWebsiteEmails(candidate.email, normalizedDomain).length > 0);
+    if (owner) return owner;
+  }
+
+  for (const page of pages) {
+    const filtered = filterScrapedWebsiteEmails(page.text, normalizedDomain);
+    if (filtered.length > 0) {
+      return { email: filtered[0], contact: '', title: '', sourceUrl: page.url };
     }
   }
   return null;
+}
+
+async function fetchProbateWebsiteSignals(domain) {
+  if (CONFIG.vertical !== 'probate_attorney' || !domain) return [];
+
+  const urls = [
+    `https://${domain}`,
+    `https://${domain}/practice-areas`,
+    `https://${domain}/services`,
+    `https://${domain}/probate`,
+    `https://${domain}/estate-planning`,
+  ];
+  const signals = new Set();
+
+  for (const url of urls) {
+    try {
+      const res = await axios.get(url, {
+        timeout: 4000,
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)' },
+      });
+      const text = String(res.data || '').toLowerCase().replace(/<[^>]*>/g, ' ');
+      if (/\bprobate\b/.test(text)) signals.add('probate');
+      if (/\bestate\s+sale(s)?\b/.test(text)) signals.add('estate_sale');
+      if (/\bexecutor(s)?\b|\bexecutrix\b/.test(text)) signals.add('executor');
+      if (/\bestate\s+planning\b/.test(text)) signals.add('estate_planning');
+      if (signals.size >= 3) break;
+    } catch(err) {
+      // try next service page
+    }
+  }
+
+  return [...signals];
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -182,86 +858,242 @@ async function searchGoogle(query, numResults = 10) {
   }
 
   const results = [];
+  const socialLinks = []; // { key, facebook_url?, instagram_url? } captured from social results
   const pages = Math.ceil(numResults / 10);
 
   for (let page = 0; page < pages; page++) {
-    try {
-      const res = await axios.get('https://serpapi.com/search', {
-        params: {
-          api_key: process.env.SERPAPI_KEY,
-          q: query,
-          num: 10,
-          start: page * 10,
-          engine: 'google',
-        }
-      });
-
-      const items = res.data.organic_results || [];
-      for (const item of items) {
-        results.push({
-          company: item.title.split('|')[0].split('-')[0].trim(),
-          url:     extractDomain(item.link),
-          snippet: item.snippet,
-          source:  ['google'],
-        });
-      }
-    } catch (err) {
-      console.error('[SerpAPI] Error:', err.response?.data?.error || err.message);
+    if (results.length >= numResults) break;
+    const response = await searchSerpApi({ query, page, num: 10 });
+    if (response.error) {
+      console.error('[SerpAPI] Error:', response.error.message);
       break;
     }
+
+    const remaining = Math.max(numResults - results.length, 0);
+    const items = response.organicResults.slice(0, remaining);
+    for (const item of items) {
+      const link = item.link || '';
+      const company = normalizeCompanyName(item.title);
+      // Capture facebook/instagram profile links so they can be attached to the
+      // matching business lead instead of being discarded as junk domains.
+      if (/facebook\.com/i.test(link)) {
+        socialLinks.push({ key: socialKey(company), facebook_url: link });
+        continue;
+      }
+      if (/instagram\.com/i.test(link)) {
+        socialLinks.push({ key: socialKey(company), instagram_url: link });
+        continue;
+      }
+      results.push({
+        company,
+        url:     extractDomain(item.link),
+        snippet: item.snippet,
+        source:  ['google'],
+      });
+      if (results.length >= numResults) break;
+    }
   }
-      const skipDomains = ['facebook.com','instagram.com','yelp.com','twitter.com','linkedin.com','youtube.com'];
-      return results.filter(r => !skipDomains.some(s => r.url.includes(s)));
+
+  // Attach captured social URLs to the business lead whose name matches.
+  for (const lead of results) {
+    const key = socialKey(lead.company);
+    if (!key) continue;
+    for (const social of socialLinks) {
+      if (social.key !== key) continue;
+      if (social.facebook_url && !lead.facebook_url) lead.facebook_url = social.facebook_url;
+      if (social.instagram_url && !lead.instagram_url) lead.instagram_url = social.instagram_url;
+    }
+  }
+
+  const skipDomains = ['facebook.com','instagram.com','yelp.com','twitter.com','linkedin.com','youtube.com'];
+  return results.filter(r => !skipDomains.some(s => r.url.includes(s)));
+}
+
+// Normalized key for fuzzy-matching company names across SerpAPI result types
+// (e.g. a business's website result and its Facebook page result).
+function socialKey(name) {
+  return String(name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 // ─────────────────────────────────────────────────────────────────────
 // STEP 2: Prospeo Domain Search
 // Docs: https://prospeo.io/api
 // Takes a domain → returns contacts with name, title, email
-// Free tier: 50 searches/mo
+// Starter plan search endpoints: 30 req/min — throttle to ~28/min + backoff on 429
 // ─────────────────────────────────────────────────────────────────────
+const PROSPEO_RATE_LIMIT_BACKOFF_MS = [1000, 2000, 4000];
+
+function isProspeoRateLimited(err) {
+  if (err?.response?.status === 429) return true;
+  const body = err?.response?.data;
+  const text = typeof body === 'string'
+    ? body
+    : JSON.stringify(body || err?.message || '');
+  return /rate\s*limit/i.test(text);
+}
+
+// Decision-maker titles to ask Prospeo for. The cleaning client wants the
+// person who can authorize a walkthrough: owner OR office manager (plus the
+// usual small-firm principal titles). Other clients keep the single
+// CONFIG.jobTitle behavior.
+function getProspeoTitleIncludes() {
+  if (CONFIG.scoringProfile === 'cleaning_buyer') {
+    return ['owner', 'office manager', 'managing partner', 'partner', 'principal', 'founder', 'president'];
+  }
+  return [CONFIG.jobTitle];
+}
+
+function normalizeProspeoPersonRow(match) {
+  const person = match?.person || {};
+  return {
+    contact: `${person.first_name || ''} ${person.last_name || ''}`.trim(),
+    email: typeof person.email === 'object' ? person.email?.email || null : person.email || null,
+    title: person.job_title || null,
+  };
+}
+
+async function callProspeoSearchPerson(domain) {
+  await awaitProspeoSlot();
+
+  assertResearchProviderAllowed('prospeo');
+  const res = await axios.post('https://api.prospeo.io/search-person',
+    {
+      page: 1,
+      filters: {
+        company: {
+          websites: { include: [domain] }
+        },
+        person_job_title: {
+          include: getProspeoTitleIncludes()
+        }
+      }
+    },
+    {
+      headers: {
+        'Content-Type': 'application/json',
+        'X-KEY': PROSPEO_API_KEY
+      }
+    }
+  );
+
+  const results = res.data?.results || [];
+  if (!results.length) return null;
+
+  return normalizeProspeoPersonRow(results[0]);
+}
+
+async function searchProspeoContactsForDomain(domain, {
+  excludeEmails = [],
+  titleIncludes = null,
+} = {}) {
+  if (process.env.PROSPEO_ENABLED !== 'true' || !PROSPEO_API_KEY) {
+    return { ok: false, reason: 'provider_unavailable', contacts: [] };
+  }
+  assertResearchProviderAllowed('prospeo');
+  const quota = await checkProspeoQuota();
+  if (!quota.ok) {
+    return { ok: false, reason: 'provider_unavailable', contacts: [] };
+  }
+  await recordProspeoCall();
+  try {
+    await awaitProspeoSlot();
+    const titles = Array.isArray(titleIncludes) && titleIncludes.length
+      ? titleIncludes
+      : getProspeoTitleIncludes();
+    assertResearchProviderAllowed('prospeo');
+    const res = await axios.post('https://api.prospeo.io/search-person',
+      {
+        page: 1,
+        filters: {
+          company: { websites: { include: [domain] } },
+          person_job_title: { include: titles },
+        },
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-KEY': PROSPEO_API_KEY,
+        },
+      }
+    );
+    const excluded = new Set((excludeEmails || []).map(e => String(e || '').trim().toLowerCase()).filter(Boolean));
+    const contacts = [];
+    for (const row of res.data?.results || []) {
+      const normalized = normalizeProspeoPersonRow(row);
+      const email = String(normalized.email || '').trim().toLowerCase();
+      if (!email || excluded.has(email)) continue;
+      contacts.push(normalized);
+    }
+    return { ok: true, reason: null, contacts };
+  } catch (_err) {
+    rethrowResearchProviderControl(_err);
+    return { ok: false, reason: 'provider_error', contacts: [] };
+  }
+}
+
+async function listProspeoContactsForDomain(domain, opts = {}) {
+  const result = await searchProspeoContactsForDomain(domain, opts);
+  return result.contacts || [];
+}
+
 async function enrichWithProspeo(domain) {
+  assertResearchProviderAllowed('prospeo');
+  if (process.env.PROSPEO_ENABLED !== 'true') {
+    return null;
+  }
+
   if (!PROSPEO_API_KEY) {
     console.warn('[WARN] Prospeo key not set — skipping enrichment');
     return null;
   }
 
-  try {
-    const res = await axios.post('https://api.prospeo.io/search-person',
-      {
-        page: 1,
-        filters: {
-          company: {
-            websites: { include: [domain] }
-          },
-          person_job_title: {
-            include: [CONFIG.jobTitle]
-          }
-        }
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'X-KEY': PROSPEO_API_KEY
-        }
-      }
-    );
-
-    const results = res.data?.results || [];
-    if (!results.length) return null;
-
-    const match = results[0];
-    const person = match.person || {};
-
-    return {
-      contact: `${person.first_name || ''} ${person.last_name || ''}`.trim(),
-      email:   typeof person.email === 'object' ? person.email?.email || null : person.email || null,
-      title:   person.job_title || null,
-};
-  } catch (err) {
-    console.warn(`[Prospeo] ${domain}:`, err.response?.data || err.message);
+  assertResearchProviderAllowed('prospeo');
+  const quota = await checkProspeoQuota();
+  if (!quota.ok) {
+    console.warn(`[Prospeo] Skipped (${quota.reason}): ${quota.count ?? '?'}/${quota.cap}`);
     return null;
   }
+  await recordProspeoCall();
+
+  const maxAttempts = 1 + PROSPEO_RATE_LIMIT_BACKOFF_MS.length;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await callProspeoSearchPerson(domain);
+    } catch (err) {
+      rethrowResearchProviderControl(err);
+      const rateLimited = isProspeoRateLimited(err);
+      if (rateLimited) trip429();
+      const backoffMs = PROSPEO_RATE_LIMIT_BACKOFF_MS[attempt];
+
+      if (rateLimited && backoffMs != null) {
+        await logScoutRun('skipped', {
+          domain,
+          attempt: attempt + 1,
+          backoff_ms: backoffMs,
+          error: err.response?.data || err.message,
+        }, 'prospeo_rate_limited');
+        console.warn(`[Prospeo] ${domain}: rate limited — retry in ${backoffMs}ms (attempt ${attempt + 1})`);
+        await new Promise(r => setTimeout(r, backoffMs));
+        continue;
+      }
+
+      if (rateLimited) {
+        await logScoutRun('skipped', {
+          domain,
+          attempt: attempt + 1,
+          exhausted: true,
+          error: err.response?.data || err.message,
+        }, 'prospeo_rate_limited');
+        console.warn(`[Prospeo] ${domain}: rate limit retries exhausted`);
+      } else {
+        console.warn(`[Prospeo] ${domain}:`, err.response?.data || err.message);
+      }
+      return null;
+    }
+  }
+
+  return null;
 }
 
 
@@ -272,17 +1104,39 @@ async function enrichWithProspeo(domain) {
 // ─────────────────────────────────────────────────────────────────────
 const PLACES_TEXTSEARCH = 'https://maps.googleapis.com/maps/api/place/textsearch/json';
 const PLACES_DETAILS    = 'https://maps.googleapis.com/maps/api/place/details/json';
+const PLACE_DETAILS_FIELDS =
+  'name,formatted_address,address_components,formatted_phone_number,website,place_id,rating,user_ratings_total,types';
 
 async function fetchPlaceDetails(placeId, apiKey) {
-  const res = await axios.get(PLACES_DETAILS, {
-    params: {
-      place_id: placeId,
-      fields: 'name,formatted_address,formatted_phone_number,website,place_id',
-      key: apiKey,
+  const traced = await legacyPlaceDetails({
+    placeId,
+    fields: PLACE_DETAILS_FIELDS,
+    apiKey,
+    record: {
+      caller: 'leadgen.js',
+      feature: PLACES_FEATURES.LEADGEN,
     },
   });
-  if (res.data.status !== 'OK') return null;
-  return res.data.result;
+  if (traced.googleStatus !== 'OK') return null;
+  return traced.data?.result || null;
+}
+
+const B2B_SIGNAL_RE = /\b(commercial|industrial|business|facility|facilit(?:y|ies)|corporate|office|property management|hoa|association management|janitorial|staffing|recruiting|freight|logistics|insurance|managed (?:it|service)|msp|fire protection|fire sprinkler|access control|low voltage|mechanical contractor)\b/i;
+const B2C_SIGNAL_RE = /\b(residential|homeowner|homeowners|home service|household|house call|house calls|electrical repair|home repair|our homes|your home)\b/i;
+
+function classifyPlacesB2B(lead) {
+  const evidence = [lead.company, lead.url, lead.snippet, ...(lead.place_types || [])]
+    .filter(Boolean)
+    .join(' ');
+  const b2b = B2B_SIGNAL_RE.test(evidence);
+  const b2c = B2C_SIGNAL_RE.test(evidence);
+  if (b2c && !b2b) return { classification: 'b2c', evidence };
+  if (b2b && !b2c) return { classification: 'b2b', evidence };
+  return { classification: 'ambiguous', evidence };
+}
+
+function requiresB2BPlacesGate() {
+  return resolveVerticalTier(CONFIG.vertical, CLIENT_CONFIG).tier === 'A';
 }
 
 async function searchGooglePlaces(industry, location, numResults = 20) {
@@ -293,51 +1147,240 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
   }
 
   const leads = [];
-  const query = `${industry} ${location}`;
+  const query = sanitizeQueueLocation(`${industry || ''} ${location || ''}`);
 
   try {
-    const res = await axios.get(PLACES_TEXTSEARCH, {
-      params: { query, key: PLACES_KEY },
+    const traced = await legacyTextSearch({
+      query,
+      apiKey: PLACES_KEY,
+      deferRecord: true,
+      record: {
+        caller: 'leadgen.js',
+        feature: PLACES_FEATURES.LEADGEN,
+        providerId: 'google_places',
+      },
     });
 
-    const status = res.data.status;
+    const status = traced.googleStatus;
     if (status !== 'OK' && status !== 'ZERO_RESULTS') {
-      console.error('[Places] Text Search status:', status, res.data.error_message || '');
+      console.error('[Places] Text Search status:', status, traced.data?.error_message || '');
+      if (typeof traced.commitRecord === 'function') {
+        await traced.commitRecord({ businessesReturned: 0, businessesAccepted: 0 });
+      }
       return [];
     }
 
-    const results = (res.data.results || []).slice(0, numResults);
+    const results = (traced.data?.results || []).slice(0, numResults);
 
     for (const hit of results) {
       try {
         const details = await fetchPlaceDetails(hit.place_id, PLACES_KEY);
-        if (!details?.website) continue;
+        if (!details?.name && !hit.name) continue;
 
-        const domain = extractDomain(details.website);
-        if (!domain || DOMAIN_BLACKLIST.some(b => domain.includes(b))) continue;
+        const placeAddress = parsePlacesAddressComponents(details?.address_components || hit.address_components);
+        const domain = details?.website ? extractDomain(details.website) : null;
+        if (domain && isBlacklistedDomain(domain)) continue;
 
-        leads.push({
-          company: details.name || hit.name || 'Unknown',
-          url: domain,
-          phone: details.formatted_phone_number || null,
-          address: details.formatted_address || hit.formatted_address || '',
-          place_id: details.place_id || hit.place_id,
+        const leadDraft = {
+          company: normalizeCompanyName(details?.name || hit.name || 'Unknown'),
+          url: domain || null,
+          phone: details?.formatted_phone_number || null,
+          address: details?.formatted_address || hit.formatted_address || '',
+          places_locality: placeAddress.locality,
+          places_administrative_area_level_1: placeAddress.administrativeAreaLevel1,
+          places_postal_code: placeAddress.postalCode,
+          place_id: details?.place_id || hit.place_id,
+          google_rating: details?.rating ?? hit.rating ?? null,
+          google_review_count: details?.user_ratings_total ?? hit.user_ratings_total ?? null,
+          place_types: details?.types || hit.types || [],
           source: ['google_places'],
           snippet: '',
-        });
+        };
+
+        const identity = establishBusinessIdentity(leadDraft);
+        if (!identity.established) continue;
+
+        leads.push(leadDraft);
 
         await new Promise(r => setTimeout(r, 200));
       } catch (err) {
+        rethrowResearchProviderControl(err);
         // skip individual place errors
       }
     }
 
-    console.log(`[Places] Found ${leads.length} results with websites`);
+    console.log(`[Places] Found ${leads.length} identity-established results`);
+    if (typeof traced.commitRecord === 'function') {
+      await traced.commitRecord({
+        businessesAccepted: leads.length,
+        candidatesCreated: leads.length,
+      });
+    }
     return leads;
   } catch (err) {
+    rethrowResearchProviderControl(err);
     console.error('[Places] Error:', err.response?.data || err.message);
     return [];
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// CLEANING-COMPANY ICP (client_id=10, scoring_profile='cleaning_buyer')
+// The buyer is a commercial-cleaning customer, NOT a lead-gen target. This
+// rubric is fully independent of the Pulseforge rubric below — it drops every
+// Pulseforge-specific signal (probate weighting, MSHI boosts, tech/web-presence
+// scoring) and scores the things that make an office worth a cleaning pitch.
+//
+// Components (max 100):
+//   vertical        0–35  approved immediate-cash buyer or partner. Highest weight.
+//   geography       0–25  Manchester NH + ring; out-of-area culled separately by service_area gate.
+//   contact         0–25  reachable owner/office-manager (name + email/phone). No contact = low.
+//   single_tenant   0–10  own space vs. a suite in a managed multi-tenant building. Heuristic — flagged.
+//   size            0–5   prefer small offices (walkable site visit). Thin data — flagged.
+//
+// Returns { total, components, flags } so the test harness and Scout logs can
+// show a per-lead breakdown for rubric tuning.
+function scoreCleaningLead(lead) {
+  const hay = (
+    (lead.company || '') + ' ' +
+    (lead.url     || '') + ' ' +
+    (lead.snippet || '')
+  ).toLowerCase();
+  const addr = (lead.address || '').toLowerCase();
+  const locHay = addr || hay;
+
+  // 1. Vertical match (0–35) — Anchor Phone Setter v1's six approved
+  // immediate-cash categories are the target.
+  const TARGET_VERTICAL = [
+    'commercial cleaning', 'janitorial', 'office cleaning',
+    'short term rental', 'short-term rental', 'airbnb management', 'vacation rental',
+    'property management', 'property manager',
+    'real estate agency', 'real estate broker', 'realtor', 'realty',
+    'water damage restoration', 'fire damage restoration', 'restoration company',
+    'remodeling contractor', 'remodeler',
+    'commercial office', 'office park', 'business center',
+  ];
+  // Future commercial-office subsegments are plausible, but not this contract.
+  const ADJACENT_VERTICAL = [
+    'insurance agency', 'financial advisor', 'wealth management', 'financial planning',
+    'title company', 'consulting', 'architect', 'engineering firm',
+    'law firm', 'law office', 'attorney', 'accounting', 'cpa', 'dental', 'dentist',
+    'medical office', 'physical therapy', 'chiropractic',
+  ];
+  let vertical = 0;
+  if (TARGET_VERTICAL.some(k => hay.includes(k)))        vertical = 35;
+  else if (ADJACENT_VERTICAL.some(k => hay.includes(k))) vertical = 18;
+
+  // 2. Geography (0–25) — in-area scores high, out-of-area is culled upstream
+  //    by the service_area gate in saveToDatabase.
+  let geography = 0;
+  if (locHay.includes('manchester')) {
+    geography = 25;
+  } else if (CLEANING_AREA_CITIES.some(c => c.toLowerCase() !== 'manchester' && locHay.includes(c.toLowerCase()))) {
+    geography = 20;
+  } else if (locHay.includes(' nh') || locHay.includes('new hampshire')) {
+    geography = 8;
+  }
+
+  // 3. Reachable decision-maker (0–25) — can we book a walkthrough?
+  //    For this cleaning client, phone is a primary outreach channel. Junk
+  //    placeholder emails are treated as absent so they never outrank a clean
+  //    phone-reachable office.
+  const hasEmail = !!validCleaningEmailOrNull(lead.email);
+  const hasPhone = hasValidCleaningPhone(lead.phone);
+  const contactName = (lead.contact && lead.contact !== '—') ? String(lead.contact).trim() : '';
+  const hasName = /[a-z]/i.test(contactName) && contactName.split(/\s+/).filter(Boolean).length >= 2;
+  let contact = 0;
+  let contactBasis = 'no valid phone or email';
+  if (hasEmail && hasPhone) {
+    contact = 25;
+    contactBasis = 'valid phone + valid email';
+  } else if (hasPhone) {
+    contact = 20;
+    contactBasis = 'valid phone only';
+  } else if (hasEmail) {
+    contact = 12;
+    contactBasis = 'valid email only';
+  }
+  if (hasName && contact < 25) {
+    contact = Math.min(25, contact + 5);
+    contactBasis += ' + named decision-maker';
+  }
+
+  // 4. Single-tenant signal (0–10) — HEURISTIC, address-derived only.
+  //    A suite/unit/floor token suggests a unit inside a larger managed
+  //    building (property-manager sale — wrong beachhead). A bare street
+  //    address suggests the firm occupies its own space. When no address is
+  //    available this is genuinely undetectable, so we stay neutral and flag it
+  //    rather than guess. This is a known limitation, not a confident signal.
+  const MULTI_TENANT = /\b(suite|ste\.?|unit|floor|fl\.?|#\s*\d|room|rm\.?)\b/i;
+  let singleTenant = 5;
+  let singleTenantBasis = 'undetectable (no address) — neutral';
+  if (lead.address) {
+    if (MULTI_TENANT.test(lead.address)) {
+      singleTenant = 0;
+      singleTenantBasis = 'suite/unit in address — likely multi-tenant';
+    } else {
+      singleTenant = 10;
+      singleTenantBasis = 'bare street address — likely single-tenant';
+    }
+  }
+
+  // 5. Size proxy (0–5) — prefer small offices; thin data defaults to neutral.
+  const SMALL_FIRM = [
+    'law office of', 'law offices of', 'solo', 'sole practitioner', 'pllc',
+    'attorney at law', '& associates', 'and associates', ' p.c.', ' pc',
+  ];
+  let size = 3;
+  let sizeBasis = 'thin data — neutral default';
+  if (SMALL_FIRM.some(k => hay.includes(k))) { size = 5; sizeBasis = 'small/solo-firm signals'; }
+
+  // 6. Disqualifier penalty (negative) — actively pushes the WRONG beachhead
+  //    below threshold instead of merely zero-awarding it. Two detectable
+  //    signals, both narrow on purpose so we don't cull good in-area firms:
+  //    (a) multi-office / national firm — they run their own facilities and
+  //        have incumbent vendors; not a walkthrough-to-close cleaning buyer.
+  //    (b) high-floor / large-suite address — a big managed multi-tenant tower
+  //        (property-manager sale). This is DISTINCT from a plain "Suite 3" in
+  //        a small building, which stays in the ambiguous middle and is handled
+  //        at walkthrough booking. We do NOT chase certainty the data can't give.
+  const MULTI_OFFICE = [
+    'nationwide', 'national law firm', 'multi-state', 'multistate',
+    'regional offices', 'am law', 'offices nationwide', 'offices across',
+  ];
+  const multiOfficeRe = /\b\d+\s+offices\b|offices\s+(in|across)\s+\d+\s+(states|cities|locations|offices)|\b\d+\s+locations\b|hundreds of (attorneys|lawyers|offices)/i;
+  const towerRe = /\bfloor\s+\d+\b|\bfl\.?\s*\d{1,2}\b|\b(suite|ste\.?)\s*\d{3,}\b/i;
+  let penalty = 0;
+  const penaltyBasis = [];
+  if (MULTI_OFFICE.some(k => hay.includes(k)) || multiOfficeRe.test(hay)) {
+    penalty += 25;
+    penaltyBasis.push('multi-office/national firm');
+    if (sizeBasis.startsWith('thin')) { size = 0; sizeBasis = 'large/multi-office signals'; }
+  }
+  if (lead.address && towerRe.test(lead.address)) {
+    penalty += 12;
+    penaltyBasis.push('high-floor/large-suite — multi-tenant tower');
+  }
+
+  const total = Math.min(100, Math.max(0, vertical + geography + contact + singleTenant + size - penalty));
+
+  const flags = [];
+  if (!lead.address)                         flags.push('no_address: geography + single-tenant precision limited');
+  if (!lead.address || singleTenant === 5)   flags.push('single_tenant_undetectable');
+  if (sizeBasis.startsWith('thin'))          flags.push('size_thin_data');
+  if (!hasName)                              flags.push('no_named_contact');
+  if (penalty)                               flags.push('disqualifier_penalty: ' + penaltyBasis.join(', '));
+
+  return {
+    total,
+    components: {
+      vertical, geography, contact, single_tenant: singleTenant, size, penalty,
+      single_tenant_basis: singleTenantBasis, size_basis: sizeBasis,
+      contact_basis: contactBasis,
+      penalty_basis: penaltyBasis.join('; ') || 'none',
+    },
+    flags,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -345,6 +1388,18 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
 // Factors: vertical (25) + location (20) + contact (20) + web (20) + size (15)
 // ─────────────────────────────────────────────────────────────────────
 function scoreLead(lead) {
+  const tier = resolveVerticalTier(CONFIG.vertical, CLIENT_CONFIG);
+  // Cleaning company uses a fully separate buyer rubric (see scoreCleaningLead).
+  if (CONFIG.scoringProfile === 'cleaning_buyer') {
+    const r = scoreCleaningLead(lead);
+    r.total = Math.min(r.total, tier.score_ceiling);
+    r.components.tier = tier.tier;
+    lead.scoreComponents = r.components;
+    lead.scoreFlags = r.flags;
+    console.log(`  ICP[cleaning] ${r.total} (vertical:${r.components.vertical} geo:${r.components.geography} contact:${r.components.contact} single_tenant:${r.components.single_tenant} size:${r.components.size} penalty:-${r.components.penalty})${r.flags.length ? ' flags:' + r.flags.join(';') : ''} — ${lead.company}`);
+    return r.total;
+  }
+
   const hay = (
     (lead.company || '') + ' ' +
     (lead.url     || '') + ' ' +
@@ -352,31 +1407,21 @@ function scoreLead(lead) {
   ).toLowerCase();
   const addr = (lead.address || '').toLowerCase();
 
-  // 1. Vertical (0–25)
-  const TARGET_VERTICAL = [
-    'clean','cleaning','cleaner','restaurant','cafe','diner','eatery',
-    'hvac','heating','cooling','air conditioning','salon','hair','spa',
-    'beauty','retail','shop','store','boutique','auto','automotive',
-    'mechanic','repair'
-  ];
-  const ADJACENT_VERTICAL = [
-    'landscap','lawn','property management','hotel','hospitality',
-    'motel','gym','fitness'
-  ];
-  let vertical = 5;
-  if (TARGET_VERTICAL.some(k => hay.includes(k)))    vertical = 25;
-  else if (ADJACENT_VERTICAL.some(k => hay.includes(k))) vertical = 15;
+  // 1. Vertical — only the client's persisted tier map can award points.
+  let vertical = tier.vertical_points;
 
   // 2. Location (0–20) — addr preferred, falls back to hay for SerpAPI leads
-  const NH_SUBURBS = [
-    'bedford','goffstown','hooksett','londonderry','auburn','candia',
-    'derry','merrimack','nashua','concord'
-  ];
   const locHay = addr || hay;
   let location = 0;
-  if (locHay.includes('manchester'))                      location = 20;
-  else if (NH_SUBURBS.some(c => locHay.includes(c)))     location = 15;
-  else if (locHay.includes(' nh') || locHay.includes('new hampshire')) location = 8;
+  if (CONFIG.clientId === 2) {
+    const wvCore = ['charleston', 'south charleston', 'st albans', 'dunbar', 'nitro', 'cross lanes', 'hurricane'];
+    const wvAdjacent = ['kanawha', 'putnam', 'cabell', 'logan', 'boone', 'lincoln', 'fayette', 'scott depot', 'teays valley', 'huntington', 'barboursville', 'madison', 'hamlin', 'fayetteville', 'beckley'];
+    if (wvCore.some(c => locHay.includes(c) || hay.includes(c))) location = 20;
+    else if (wvAdjacent.some(c => locHay.includes(c) || hay.includes(c))) location = 15;
+    else if (locHay.includes(' wv') || locHay.includes('west virginia')) location = 8;
+  } else {
+    location = scoreConfiguredLocation(locHay);
+  }
 
   // 3. Contact quality (0–20)
   const hasEmail = lead.email && lead.email !== '—' && lead.email.includes('@');
@@ -404,30 +1449,47 @@ function scoreLead(lead) {
 
   let clientBoost = 0;
   if (CONFIG.clientId === 2) {
-    const targetSignals = ['hoa', 'homeowners association', 'landlord', 'property management', 'property manager', 'bank', 'reo', 'foreclosure', 'real estate developer'];
-    const countySignals = ['kanawha', 'putnam', 'cabell'];
+    const targetSignals = [
+      'hoa', 'homeowners association', 'landlord', 'property management',
+      'property manager', 'probate', 'estate attorney', 'estate planning',
+      'trust and estate', 'estate sale', 'executor', 'mortgage broker',
+      'insurance agency', 'public adjuster', 'home inspector',
+      'real estate agent', 'realtor',
+    ];
+    const countySignals = ['kanawha', 'putnam', 'cabell', 'logan', 'boone', 'lincoln', 'fayette'];
     if (targetSignals.some(k => hay.includes(k))) clientBoost += 12;
     if (countySignals.some(k => locHay.includes(k) || hay.includes(k))) clientBoost += 8;
-    if (['charleston', 'dunbar', 'st albans', 'scott depot', 'teays valley', 'hurricane', 'huntington', 'barboursville'].some(k => locHay.includes(k) || hay.includes(k))) {
+    if (['charleston', 'south charleston', 'st albans', 'dunbar', 'nitro', 'cross lanes', 'scott depot', 'teays valley', 'hurricane', 'huntington', 'barboursville', 'logan', 'madison', 'hamlin', 'fayetteville', 'beckley'].some(k => locHay.includes(k) || hay.includes(k))) {
       clientBoost += 5;
     }
   }
 
-  const total = vertical + location + contact + web + size + clientBoost;
-  console.log(`  ICP Score: ${total} (vertical:${vertical} location:${location} contact:${contact} web:${web} size:${size} client:${clientBoost}) — ${lead.company}`);
-  return Math.min(total, 100);
-}
+  let probateAdjustment = 0;
+  if (CONFIG.clientId === 2 && CONFIG.vertical === 'probate_attorney') {
+    const siteSignals = Array.isArray(lead.websiteSignals) ? lead.websiteSignals : [];
+    const serviceSignals = ['probate', 'estate_sale', 'executor', 'estate_planning'];
+    const smallFirmSignals = [
+      'solo', 'sole practitioner', 'principal attorney', 'founding attorney',
+      'law office of', 'law offices of', 'attorney at law', 'pllc',
+    ];
+    const bigFirmSignals = [
+      'biglaw', 'national law firm', 'international law firm', 'multi-state',
+      'multistate', 'offices nationwide', 'nationwide', 'global law firm',
+      'am law', 'multiple offices', 'regional offices',
+    ];
 
-// ─────────────────────────────────────────────────────────────────────
-// STEP 4: Deduplicate by domain
-// ─────────────────────────────────────────────────────────────────────
-function deduplicate(leads) {
-  const seen = new Set();
-  return leads.filter(l => {
-    if (seen.has(l.url)) return false;
-    seen.add(l.url);
-    return true;
-  });
+    if (serviceSignals.some(signal => siteSignals.includes(signal))) probateAdjustment += 12;
+    if (smallFirmSignals.some(k => hay.includes(k))) probateAdjustment += 8;
+    if (bigFirmSignals.some(k => hay.includes(k))) probateAdjustment -= 20;
+    if (/\b(100|200|500)\+?\s+(attorneys|lawyers)\b/i.test(hay)) probateAdjustment -= 20;
+    if (/\b(offices|locations)\s+(in|across)\s+\d+\s+states\b/i.test(hay)) probateAdjustment -= 20;
+  }
+
+  const rawTotal = Math.max(0, vertical + location + contact + web + size + clientBoost + probateAdjustment);
+  const total = Math.min(rawTotal, tier.score_ceiling);
+  if (tier.tier === 'unknown') console.warn(`[Scout] Unknown vertical tier resolved: ${CONFIG.vertical || '(blank)'} -> unknown (ceiling 60)`);
+  console.log(`  ICP Score: ${total} (tier:${tier.tier} vertical:${vertical} location:${location} contact:${contact} web:${web} size:${size} client:${clientBoost} probate:${probateAdjustment}) — ${lead.company}`);
+  return Math.min(total, 100);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -507,7 +1569,9 @@ async function pushToGoogleSheets(leads, sheetId) {
 // ─────────────────────────────────────────────────────────────────────
 // MAIN
 // ─────────────────────────────────────────────────────────────────────
-async function main() {
+async function main({ runId = null } = {}) {
+  await ensureScoutSkipLogTable();
+  const preSaveStats = { skipped: 0, rejected: 0, skipped_breakdown: {} };
   console.log('\n🔷 Pulseforge Lead Engine');
   console.log('─────────────────────────────────────────');
   console.log(`  Industry : ${CONFIG.industry}`);
@@ -521,62 +1585,210 @@ async function main() {
     console.warn('[WARN] GOOGLE_PLACES_KEY is not set — Google Places search will be skipped');
   }
 
-  // Build search query
-  const query = `"${CONFIG.industry}" "${CONFIG.location}" "${CONFIG.jobTitle}" -indeed -ziprecruiter -thumbtack -glassdoor -yelp -yellowpages -mapquest -bbb -patch -avvo`;
-  console.log(`[Google] Searching: ${query}`);
+  const searchQueries = getSearchQueriesForTarget();
+  // Source strategy. Most clients run SerpAPI + Places additively. The cleaning
+  // client (cleaning_buyer) makes Google Places PRIMARY and skips SerpAPI:
+  // SerpAPI underperforms on professional offices and has been running dry.
+  const placesPrimary = usesPlacesPrimary();
+  const sourceStats = { places_found: 0, serpapi_found: 0 };
+  let leads = [];
 
-  // 1. SerpAPI search
-  let leads = await searchGoogle(query, CONFIG.maxResults);
-  console.log(`[SerpAPI] Found ${leads.length} raw results`);
+  for (const searchQuery of searchQueries) {
+    if (placesPrimary) {
+      // Places-primary: Google Places only.
+      console.log(`[Source] Places-primary — skipping SerpAPI for "${searchQuery}"`);
+      console.log(`[Places] Searching: "${searchQuery}"`);
+      const placesLeads = (await searchGooglePlaces(searchQuery, '', Math.min(CONFIG.maxResults, 20))).map(lead => ({ ...lead, search_query: searchQuery }));
+      console.log(`[Places] Found ${placesLeads.length} results for "${searchQuery}"`);
+      sourceStats.places_found += placesLeads.length;
+      leads = [...leads, ...placesLeads];
+      continue;
+    }
 
-  // 1b. Google Places search (additive — secondary local discovery)
-  console.log(`[Places] Searching: "${CONFIG.industry}" in ${CONFIG.location}`);
-  const placesLeads = await searchGooglePlaces(CONFIG.industry, CONFIG.location, 20);
-  if (placesLeads.length) {
-    leads = [...leads, ...placesLeads];
+    const googleQuery = `"${searchQuery}" -indeed -ziprecruiter -thumbtack -glassdoor -yelp -yellowpages -mapquest -bbb -patch -avvo`;
+    console.log(`[Google] Searching: ${googleQuery}`);
+
+    // 1. SerpAPI search
+    const serpLeads = (await searchGoogle(googleQuery, CONFIG.maxResults)).map(lead => ({ ...lead, search_query: searchQuery }));
+    console.log(`[SerpAPI] Found ${serpLeads.length} raw results for "${searchQuery}"`);
+    sourceStats.serpapi_found += serpLeads.length;
+    leads = [...leads, ...serpLeads];
+
+    // 1b. Google Places search (additive — secondary local discovery)
+    console.log(`[Places] Searching: "${searchQuery}"`);
+    const placesLeads = (await searchGooglePlaces(searchQuery, '', Math.min(CONFIG.maxResults, 20))).map(lead => ({ ...lead, search_query: searchQuery }));
+    sourceStats.places_found += placesLeads.length;
+    if (placesLeads.length) {
+      leads = [...leads, ...placesLeads];
+    }
   }
-  leads = deduplicate(leads);
-  console.log(`[Combined] ${leads.length} unique domains after SerpAPI + Places`);
 
-  // Pre-enrichment blacklist — strip junk domains before spending Prospeo/Hunter credits
-  leads = leads.filter(l => !DOMAIN_BLACKLIST.some(b => l.url && l.url.includes(b)));
-  console.log(`[Pre-enrichment blacklist] ${leads.length} leads after filtering`);
+  const uniqueLeads = [];
+  const seenDomains = new Set();
+  const seenIdentityKeys = new Set();
+  for (const lead of leads) {
+    const identity = establishBusinessIdentity(lead);
+    if (identity.identityKey && seenIdentityKeys.has(identity.identityKey)) {
+      incrementBreakdown(preSaveStats.skipped_breakdown, SCOUT_SKIP_REASONS.DUPLICATE);
+      preSaveStats.skipped++;
+      await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.DUPLICATE, {
+        match: 'within_run_identity',
+        identity_key: identity.identityKey,
+      });
+      continue;
+    }
+    const domain = normalizeDomain(lead.url);
+    if (domain && seenDomains.has(domain)) {
+      incrementBreakdown(preSaveStats.skipped_breakdown, SCOUT_SKIP_REASONS.DUPLICATE);
+      preSaveStats.skipped++;
+      await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.DUPLICATE, { match: 'within_run_domain', domain });
+      continue;
+    }
+    if (identity.identityKey) seenIdentityKeys.add(identity.identityKey);
+    if (domain) seenDomains.add(domain);
+    uniqueLeads.push(lead);
+  }
+  leads = uniqueLeads;
+  console.log(`[Combined] ${leads.length} unique candidates after SerpAPI + Places (identity-aware dedupe)`);
 
-  // 3. Enrich with Prospeo
-  console.log(`[Prospeo] Enriching ${leads.length} domains...`);
+  if (requiresB2BPlacesGate()) {
+    const b2bAccepted = [];
+    for (const lead of leads) {
+      if (!Array.isArray(lead.source) || !lead.source.includes('google_places')) {
+        b2bAccepted.push(lead);
+        continue;
+      }
+      const result = classifyPlacesB2B(lead);
+      lead.b2b_classification = result.classification;
+      if (result.classification === 'b2b') {
+        b2bAccepted.push(lead);
+        continue;
+      }
+      const skipReason = result.classification === 'b2c'
+        ? SCOUT_SKIP_REASONS.B2C_CLASSIFICATION
+        : SCOUT_SKIP_REASONS.LOW_CONFIDENCE_B2B;
+      incrementBreakdown(preSaveStats.skipped_breakdown, skipReason);
+      preSaveStats.skipped++;
+      preSaveStats.rejected++;
+      await persistScoutSkip(runId, lead, skipReason, {
+        stage: 'places_b2b_classification',
+        classification: result.classification,
+        vertical: CONFIG.vertical,
+        evidence: result.evidence.slice(0, 500),
+      });
+    }
+    leads = b2bAccepted;
+    console.log(`[Places B2B gate] ${leads.length} leads remain; low-confidence and B2C Places matches bucketed before enrichment`);
+  }
+
+  // Pre-enrichment blacklist — strip junk domains/names before spending Prospeo/Hunter credits
+  const beforePreEnrichment = leads.length;
+  const preEnrichmentAccepted = [];
+  for (const l of leads) {
+    const identity = establishBusinessIdentity(l);
+    if (!identity.established) {
+      incrementBreakdown(preSaveStats.skipped_breakdown, SCOUT_SKIP_REASONS.MISSING_REQUIRED_FIELD);
+      preSaveStats.skipped++;
+      await persistScoutSkip(runId, l, SCOUT_SKIP_REASONS.MISSING_REQUIRED_FIELD, {
+        missing_fields: ['identity'],
+        stage: 'pre_enrichment',
+        website_only: identity.websiteOnly,
+      });
+      continue;
+    }
+    const reason = preEnrichmentRejectReason(l);
+    if (reason) {
+      console.log(`[Pre-enrichment reject] ${l.company || l.url || 'unknown'}: ${reason}`);
+      incrementBreakdown(preSaveStats.skipped_breakdown, SCOUT_SKIP_REASONS.PRE_ENRICHMENT_REJECT);
+      preSaveStats.skipped++;
+      preSaveStats.rejected++;
+      await persistScoutSkip(runId, l, SCOUT_SKIP_REASONS.PRE_ENRICHMENT_REJECT, { reason });
+      continue;
+    }
+    preEnrichmentAccepted.push(l);
+  }
+  leads = preEnrichmentAccepted;
+  console.log(`[Pre-enrichment blacklist] ${leads.length} leads after filtering (${beforePreEnrichment - leads.length} removed)`);
+
+  // 3. Enrich with email waterfall
+  console.log(`[Enrichment] Running email waterfall for ${leads.length} domains...`);
   for (let i = 0; i < leads.length; i++) {
+    const stillActive = await getClientConfig(CONFIG.clientId);
+    if (!stillActive) {
+      throw new Error(`[Scout] Client ${CONFIG.clientId} deactivated mid-run — aborting at lead ${i+1}/${leads.length}`);
+    }
+
     const lead = leads[i];
+    const domain = normalizeDomain(lead.url);
+    if (!domain) {
+      process.stdout.write(`  [${i+1}/${leads.length}] ${lead.company || 'unknown'} (identity-only, no domain)... skipped enrichment\n`);
+      continue;
+    }
     process.stdout.write(`  [${i+1}/${leads.length}] ${lead.url}...`);
     const rootDomain = lead.url.replace(/^(?:[^.]+\.)+?([^.]+\.[^.]+)$/, (_, d) => d) || lead.url;
+    let enrichmentMethod = 'none';
     let enriched = await enrichWithProspeo(rootDomain);
     if (enriched) {
-      Object.assign(lead, enriched);
-      lead.source = [...(lead.source || []), 'prospeo'];
+      applyScoutEnrichment(lead, enriched, 'prospeo', CONFIG.clientId, domain);
+      enrichmentMethod = 'prospeo';
       process.stdout.write(` ✓ ${enriched.email || 'no email'}\n`);
     } else {
-      enriched = await enrichWithHunter(lead.url);
+      enriched = await enrichWithHunter(rootDomain);
       if (enriched) {
-        Object.assign(lead, enriched);
-        lead.source = [...(lead.source || []), 'hunter'];
+        applyScoutEnrichment(lead, enriched, 'hunter', CONFIG.clientId, domain);
+        enrichmentMethod = 'hunter';
         process.stdout.write(` ✓ [Hunter] ${enriched.email || 'no email'}\n`);
       } else {
-        // For Google Places leads, try scraping the website directly
-        if (lead.source?.includes('google_places')) {
-          const scraped = await scrapeWebsiteEmail(lead.url);
-          if (scraped) {
-            Object.assign(lead, scraped);
-            lead.source = [...(lead.source || []), 'scraped'];
-            process.stdout.write(` ✓ [Scraped] ${scraped.email}\n`);
-          } else {
-            process.stdout.write(' —\n');
-          }
+        const scraped = await scrapeWebsiteEmail(rootDomain, { ownerEvidence: Number(CONFIG.clientId) === 13 });
+        if (scraped) {
+          applyScoutEnrichment(lead, scraped, 'scraped', CONFIG.clientId, domain);
+          enrichmentMethod = 'scraped';
+          process.stdout.write(` ✓ [Scraped] ${scraped.email}\n`);
         } else {
           process.stdout.write(' —\n');
         }
       }
     }
+    await recordEmailEnrichmentMethod(rootDomain, enrichmentMethod, {
+      source: lead.source || [],
+      has_email: Boolean(lead.email),
+    });
     // Rate limit: 2 req/sec
     await new Promise(r => setTimeout(r, 1500));
+  }
+
+  if (CONFIG.vertical === 'probate_attorney') {
+    console.log(`[Probate] Checking website service-line signals for ${leads.length} domains...`);
+    for (const lead of leads) {
+      const domain = normalizeDomain(lead.url);
+      lead.websiteSignals = await fetchProbateWebsiteSignals(domain);
+      if (lead.websiteSignals.length) {
+        console.log(`  ${domain}: ${lead.websiteSignals.join(', ')}`);
+      }
+    }
+  }
+
+  if (isCleaningBuyerProfile()) {
+    let validEmailCount = 0;
+    let validPhoneCount = 0;
+    let reachableCount = 0;
+    let junkEmailIgnoredCount = 0;
+    leads = leads.map(l => {
+      const rawEmail = typeof l.email === 'string' ? l.email.trim() : '';
+      const emailRejectReason = rawEmail && rawEmail !== '—' ? cleaningEmailRejection(rawEmail) : null;
+      const email = emailRejectReason ? null : validCleaningEmailOrNull(rawEmail);
+      const validPhone = hasValidCleaningPhone(l.phone);
+      if (email) validEmailCount++;
+      if (validPhone) validPhoneCount++;
+      if (email || validPhone) reachableCount++;
+      if (emailRejectReason) junkEmailIgnoredCount++;
+      return {
+        ...l,
+        email: email || null,
+        cleaning_email_reject_reason: emailRejectReason,
+      };
+    });
+    console.log(`[Cleaning Contact] Reachable ${reachableCount}/${leads.length} (${validPhoneCount} valid phone, ${validEmailCount} valid email, ${junkEmailIgnoredCount} junk emails ignored)`);
   }
 
   // 4. Fill missing fields
@@ -589,14 +1801,40 @@ async function main() {
     type:    detectType(l),
     source:  l.source || ['google'],
     score:   scoreLead(l),
+    phone:   l.phone || null,
+    address: l.address || null,
+    google_rating:        l.google_rating ?? null,
+    google_review_count:  l.google_review_count ?? null,
+    facebook_url:         l.facebook_url || null,
+    instagram_url:        l.instagram_url || null,
+    websiteSignals:       l.websiteSignals || [],
+    search_query:          l.search_query || null,
+    cleaning_email_reject_reason: l.cleaning_email_reject_reason || null,
+    ...(Number(CONFIG.clientId) === 13 ? { scoutContactEvidence: l.scoutContactEvidence || null } : {}),
   }));
 
-  leads = leads.filter(l => !DOMAIN_BLACKLIST.some(b => l.url && l.url.includes(b)));
+  const postEnrichmentAccepted = [];
+  for (const l of leads) {
+    if (!isBlacklistedDomain(l.url)) { postEnrichmentAccepted.push(l); continue; }
+    incrementBreakdown(preSaveStats.skipped_breakdown, SCOUT_SKIP_REASONS.PRE_ENRICHMENT_REJECT);
+    preSaveStats.skipped++;
+    preSaveStats.rejected++;
+    await persistScoutSkip(runId, l, SCOUT_SKIP_REASONS.PRE_ENRICHMENT_REJECT, { reason: 'blocked domain after enrichment', domain: normalizeDomain(l.url) });
+  }
+  leads = postEnrichmentAccepted;
   console.log("[Blacklist] " + leads.length + " leads after blacklist filter");
 
   // 5. Filter by min score
   const before = leads.length;
-  leads = leads.filter(l => l.score >= CONFIG.minScore);
+  const scoredLeads = [];
+  for (const l of leads) {
+    if (l.score >= CONFIG.minScore) { scoredLeads.push(l); continue; }
+    incrementBreakdown(preSaveStats.skipped_breakdown, SCOUT_SKIP_REASONS.LOW_SCORE);
+    preSaveStats.skipped++;
+    preSaveStats.rejected++;
+    await persistScoutSkip(runId, l, SCOUT_SKIP_REASONS.LOW_SCORE, { score: l.score, minimum_score: CONFIG.minScore });
+  }
+  leads = scoredLeads;
   console.log(`\n[Score] Filtered to ${leads.length} leads (removed ${before - leads.length} below ${CONFIG.minScore}%)`);
 
   // 6. Sort by score desc
@@ -620,9 +1858,10 @@ async function main() {
   if (CONFIG.outputCSV) await exportToCSV(leads, csvFile);
   if (CONFIG.outputSheet) await pushToGoogleSheets(leads, CONFIG.sheetId);
 
-  const dbStats = await saveToDatabase(leads);
+  const dbStats = await saveToDatabase(leads, { runId, ...preSaveStats });
   console.log('\n✓ Done.\n');
-  return { leads_scored: leads.length, ...dbStats };
+  const deduped = Number(dbStats.skipped_breakdown?.[SCOUT_SKIP_REASONS.DUPLICATE] || 0);
+  return { leads_scored: leads.length, ...sourceStats, deduped, ...dbStats };
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -656,6 +1895,8 @@ function normalizeDomain(value) {
 }
 
 async function findOrCreateCompany({ name, domain, lead }) {
+  await ensureBusinessNameShortColumns(pool);
+  const shortName = deriveBusinessNameShort(name);
   const existing = await pool.query(
     `SELECT id
        FROM companies
@@ -669,22 +1910,74 @@ async function findOrCreateCompany({ name, domain, lead }) {
       `UPDATE companies
           SET domain = COALESCE(domain, $1),
               website = COALESCE(website, $2),
+              places_locality = COALESCE(places_locality, $3),
+              places_administrative_area_level_1 = COALESCE(places_administrative_area_level_1, $4),
+              places_postal_code = COALESCE(places_postal_code, $5),
+              business_name_short = COALESCE(NULLIF(business_name_short, ''), $6),
+              business_name_short_confidence = COALESCE(NULLIF(business_name_short_confidence, ''), $7),
+              business_name_short_flags = CASE
+                WHEN COALESCE(array_length(business_name_short_flags, 1), 0) = 0 THEN $8::text[]
+                ELSE business_name_short_flags
+              END,
               updated_at = NOW()
-        WHERE id = $3
-          AND client_id = $4`,
-      [domain, lead.url || null, existing.rows[0].id, CONFIG.clientId]
+        WHERE id = $9
+          AND client_id = $10`,
+      [
+        domain,
+        lead.url || null,
+        lead.places_locality || null,
+        lead.places_administrative_area_level_1 || null,
+        lead.places_postal_code || null,
+        shortName.business_name_short,
+        shortName.confidence,
+        shortName.flags,
+        existing.rows[0].id,
+        CONFIG.clientId,
+      ]
     );
     return existing.rows[0].id;
   }
 
   const inserted = await pool.query(
-    `INSERT INTO companies (name, domain, website, industry, location, client_id, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, NOW())
+    `INSERT INTO companies (
+       name, business_name_short, business_name_short_confidence, business_name_short_flags,
+       domain, website, industry, location, places_locality,
+       places_administrative_area_level_1, places_postal_code, client_id, created_at
+     )
+     VALUES ($1, $2, $3, $4::text[], $5, $6, $7, $8, $9, $10, $11, $12, NOW())
      ON CONFLICT DO NOTHING
      RETURNING id`,
-    [name, domain, lead.url || null, CONFIG.industry || null, lead.address || CONFIG.location || null, CONFIG.clientId]
+    [
+      name,
+      shortName.business_name_short,
+      shortName.confidence,
+      shortName.flags,
+      domain,
+      lead.url || null,
+      CONFIG.industry || null,
+      lead.address || CONFIG.location || null,
+      lead.places_locality || null,
+      lead.places_administrative_area_level_1 || null,
+      lead.places_postal_code || null,
+      CONFIG.clientId,
+    ]
   );
-  if (inserted.rows.length) return inserted.rows[0].id;
+  if (inserted.rows.length) {
+    const companyId = inserted.rows[0].id;
+    safeWriteCompany(
+      {
+        id: companyId,
+        client_id: CONFIG.clientId,
+        name,
+        industry: CONFIG.industry || null,
+        location: lead.address || CONFIG.location || null,
+        website: lead.url || null,
+        icp_score: lead.score || 0,
+      },
+      { source: 'scout', operationalEventType: OPERATIONAL_EVENTS.COMPANY_DISCOVERED }
+    );
+    return companyId;
+  }
 
   const fallback = await pool.query(
     `SELECT id
@@ -703,12 +1996,23 @@ function detectType(lead) {
   return techKeywords.some(k => d.includes(k)) ? 'tech' : 'smb';
 }
 
+function getScoutPreferredChannel() {
+  if (isCleaningBuyerProfile()) {
+    return 'phone';
+  }
+  if (CONFIG.clientId === 2 && ['property_management', 'probate_attorney'].includes(CONFIG.vertical)) {
+    return 'phone';
+  }
+  return null;
+}
+
 function parseArgs(argv) {
   const out = {};
   for (let i = 0; i < argv.length; i++) {
     if (argv[i].startsWith('--')) {
-      out[argv[i].slice(2)] = argv[i+1] || true;
-      i++;
+      const next = argv[i + 1];
+      out[argv[i].slice(2)] = next && !next.startsWith('--') ? next : true;
+      if (next && !next.startsWith('--')) i++;
     }
   }
   return out;
@@ -744,6 +2048,9 @@ function validateProspect(name) {
 
   const reject = (reason) => { console.log(`Rejected "${n}": ${reason}`); return false; };
 
+  const blockedNameReason = rejectedProspectNameReason(n);
+  if (blockedNameReason)
+    return reject(blockedNameReason);
   if (n.length < 4)
     return reject('too short');
   if (/^CONTACT:/i.test(n))
@@ -784,6 +2091,10 @@ function validateProspect(name) {
     return reject('page section title');
   if (n.includes('•'))
     return reject('bullet separator (web page title)');
+  if (n.includes('|'))
+    return reject('contains pipe separator (SEO-stuffed name)');
+  if (n.includes('—'))
+    return reject('contains em-dash (SEO-stuffed name)');
   if (/^Find\s/i.test(n))
     return reject('generic search prompt');
   if (/^Top Rated\b/i.test(n))
@@ -818,7 +2129,8 @@ function validateProspect(name) {
   // Two title-cased words with no business indicator = likely a person's name from a scraper
   // Only reject if neither word is a known business keyword
   if (/^[A-Z][a-z]{2,14}\s[A-Z][a-z]{2,14}$/.test(n)) {
-    const BIZ_WORDS = /\b(llc|inc|corp|co|company|group|services|solutions|studio|labs|works|consulting|cleaning|plumbing|hvac|landscaping|roofing|electric|construction|contracting|design|media|management|properties|realty|agency|associates|partners|industries|enterprise|foundation|center|institute|strength|fitness|performance|training|athletics|wellness|health|gym|salon|spa|club|team)\b/i;
+    if (CONFIG.clientId === 2 && CONFIG.vertical === 'listing_agent') return true;
+    const BIZ_WORDS = /\b(llc|inc|corp|co|company|group|services|solutions|studio|labs|works|consulting|cleaning|plumbing|hvac|landscaping|roofing|electric|construction|contracting|design|media|management|properties|realty|realtor|agency|associates|partners|industries|enterprise|foundation|center|institute|strength|fitness|performance|training|athletics|wellness|health|gym|salon|spa|club|team|law|legal|mortgage|lending|loans?|insurance|inspections?|inspector|estate|auctions?)\b/i;
     if (!BIZ_WORDS.test(n))
       return reject('likely a personal name, not a business');
   }
@@ -826,28 +2138,480 @@ function validateProspect(name) {
   return true;
 }
 
-async function saveToDatabase(leads) {
-  let saved = 0, skipped = 0, rejected = 0, setterQueued = 0, setterSkipped = 0, setterFailed = 0;
+// Returns a rejection reason string if the email is invalid, else null.
+// Empty/absent emails are not rejections — they just mean "no email".
+const EMAIL_PLACEHOLDER_DOMAINS = ['godaddy.com', 'example.com', 'test.com'];
+function emailRejection(email) {
+  if (typeof email !== 'string' || !email.trim()) return null;
+  const guardReason = invalidOutreachEmailReason(email);
+  if (guardReason) return guardReason;
+  const e = email.trim();
+  if (/\s/.test(e)) return 'contains spaces';
+  if (e.length < 6) return 'too short';
+  if ((e.match(/@/g) || []).length !== 1) return 'invalid @ count';
+  if (/\.(webp|png|jpg|gif|svg|pdf)$/i.test(e)) return 'file extension domain';
+  if (EMAIL_PLACEHOLDER_DOMAINS.includes(e.split('@')[1].toLowerCase())) return 'placeholder domain';
+  return null;
+}
+
+async function resolveEmailVerification(email, lead) {
+  const tenants = [lead?.client_id, lead?.clientId, lead?.tenantId].filter(value => value != null);
+  return withResearchProviderScope(tenants[0], () => {
+    for (const tenant of tenants) assertResearchProviderAllowed('verification', tenant);
+    return resolveEmailVerificationScoped(email, lead);
+  });
+}
+
+async function resolveEmailVerificationScoped(email, lead) {
+  const result = await verifyEmail(email);
+  const doNotContact = ['invalid', 'catchall', 'risky'].includes(result.status);
+
+  return {
+    emailVerified: result.valid,
+    emailVerificationMethod: result.method || result.vendor || 'mx_lookup',
+    verifiedAt: new Date(),
+    doNotContact,
+    emailStatus: result.status,
+    verifierResponse: result.raw,
+    verifierCheckedAt: new Date(),
+    note: doNotContact
+      ? `Email verifier marked ${result.status}${result.reason ? ` (${result.reason})` : ''}; outbound disabled.`
+      : null,
+    reject: false,
+  };
+}
+
+function resolveScoutEmailCandidate(lead) {
+  const JUNK_EMAILS = ['user@domain.com', 'info@example.com', 'test@test.com', 'admin@domain.com'];
+  const rawEmail = typeof lead.email === 'string' ? lead.email.trim() : '';
+
+  if (!rawEmail || rawEmail === '—') {
+    return { insertTarget: 'unenriched', reason: 'no_email', email: null };
+  }
+
+  const rejectReason = emailRejection(rawEmail) || (JUNK_EMAILS.includes(rawEmail.toLowerCase()) ? 'junk address' : null);
+  if (rejectReason) {
+    return { insertTarget: 'unenriched', reason: rejectReason, email: rawEmail };
+  }
+
+  return {
+    insertTarget: 'prospect',
+    email: rawEmail,
+  };
+}
+
+function resolveCleaningScoutContactCandidate(lead) {
+  const rawEmail = typeof lead.email === 'string' ? lead.email.trim() : '';
+  const emailRejectReason = rawEmail && rawEmail !== '—' ? cleaningEmailRejection(rawEmail) : null;
+  const email = emailRejectReason ? null : validCleaningEmailOrNull(rawEmail);
+  const hasPhone = hasValidCleaningPhone(lead.phone);
+
+  if (!email && !hasPhone) {
+    return {
+      insertTarget: 'unenriched',
+      reason: emailRejectReason || 'no_valid_phone_or_email',
+      email: emailRejectReason ? rawEmail : null,
+      phone: null,
+    };
+  }
+
+  return {
+    insertTarget: 'prospect',
+    email,
+    phone: hasPhone ? lead.phone : null,
+    emailRejectReason,
+  };
+}
+
+function resolveStudioSubstralScoutContactCandidate(lead) {
+  const emailCandidate = resolveScoutEmailCandidate(lead);
+  if (emailCandidate.insertTarget === 'prospect') return emailCandidate;
+  const hasPhone = !!(lead.phone && String(lead.phone).replace(/\D/g, '').length >= 10);
+  if (hasPhone) {
+    return {
+      insertTarget: 'prospect',
+      email: emailCandidate.email || null,
+      phone: lead.phone,
+      emailRejectReason: emailCandidate.reason,
+    };
+  }
+  return emailCandidate;
+}
+
+function resolveScoutContactCandidate(lead) {
+  if (isCleaningBuyerProfile()) return resolveCleaningScoutContactCandidate(lead);
+  if (isStudioSubstralScoutProfile()) return resolveStudioSubstralScoutContactCandidate(lead);
+  return resolveScoutEmailCandidate(lead);
+}
+
+async function resolveScoutEmail(lead, companyName) {
+  const candidate = resolveScoutEmailCandidate(lead);
+  if (candidate.insertTarget !== 'prospect') return candidate;
+
+  const rawEmail = candidate.email;
+  const verification = await resolveEmailVerification(rawEmail, lead);
+  if (verification.reject) {
+    return {
+      insertTarget: 'unenriched',
+      reason: verification.rejectReason || 'no_mx_record',
+      email: rawEmail,
+    };
+  }
+
+  return {
+    insertTarget: 'prospect',
+    email: rawEmail,
+    emailVerified: verification.emailVerified,
+    emailVerificationMethod: verification.emailVerificationMethod,
+    verifiedAt: verification.verifiedAt,
+    doNotContact: verification.doNotContact,
+    emailStatus: verification.emailStatus,
+    verifierResponse: verification.verifierResponse,
+    verifierCheckedAt: verification.verifierCheckedAt,
+    note: verification.note,
+  };
+}
+
+async function upsertScoutUnenriched({
+  companyName,
+  domain,
+  websiteUrl,
+  discoveryMethod,
+  reason,
+  email,
+}) {
+  const notes = [
+    reason ? `reason: ${reason}` : null,
+    email ? `last_email: ${email}` : null,
+  ].filter(Boolean).join(', ') || null;
+
+  if (domain) {
+    const existing = await pool.query(
+      `SELECT id FROM scout_unenriched
+       WHERE client_id = $1 AND LOWER(domain) = LOWER($2)
+       LIMIT 1`,
+      [CONFIG.clientId, domain]
+    );
+    if (existing.rows.length) {
+      await pool.query(`
+        UPDATE scout_unenriched
+        SET enrichment_attempts = enrichment_attempts + 1,
+            last_attempt_at = NOW(),
+            company = COALESCE($1, company),
+            website_url = COALESCE($2, website_url),
+            vertical = COALESCE($3, vertical),
+            location = COALESCE($4, location),
+            source = COALESCE($5, source),
+            notes = COALESCE($6, notes)
+        WHERE id = $7
+      `, [
+        companyName,
+        websiteUrl,
+        CONFIG.vertical,
+        CONFIG.location,
+        discoveryMethod,
+        notes,
+        existing.rows[0].id,
+      ]);
+      return 'updated';
+    }
+  }
+
+  await pool.query(`
+    INSERT INTO scout_unenriched (
+      client_id, company, website_url, domain, vertical, location, source, notes
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+  `, [
+    CONFIG.clientId,
+    companyName,
+    websiteUrl,
+    domain,
+    CONFIG.vertical,
+    CONFIG.location,
+    discoveryMethod,
+    notes,
+  ]);
+  return 'inserted';
+}
+
+async function findOrCreateLinkedInCompany(record) {
+  const companyName = String(record.company || '').trim();
+  if (!companyName) return null;
+  const existing = await pool.query(`
+    SELECT id
+    FROM companies
+    WHERE client_id = $1 AND LOWER(BTRIM(name)) = LOWER(BTRIM($2))
+    ORDER BY created_at ASC
+    LIMIT 1
+  `, [CONFIG.clientId, companyName]);
+  if (existing.rows[0]) return existing.rows[0].id;
+
+  const shortName = deriveBusinessNameShort(companyName);
+  const inserted = await pool.query(`
+    INSERT INTO companies (
+      name, business_name_short, business_name_short_confidence, business_name_short_flags,
+      industry, location, client_id, created_at
+    ) VALUES ($1, $2, $3, $4::text[], $5, $6, $7, NOW())
+    RETURNING id
+  `, [
+    companyName,
+    shortName.business_name_short,
+    shortName.confidence,
+    shortName.flags,
+    CONFIG.industry || null,
+    record.linkedin_location || CONFIG.location || null,
+    CONFIG.clientId,
+  ]);
+  return inserted.rows[0]?.id || null;
+}
+
+async function findExistingLinkedInProspect(record) {
+  const byUrl = await pool.query(`
+    SELECT p.id, p.first_name, p.last_name, p.job_title, p.linkedin_url,
+           p.linkedin_headline, p.linkedin_location, p.employee_count_estimate
+    FROM prospects p
+    WHERE p.client_id = $1 AND p.linkedin_url = $2
+    LIMIT 1
+  `, [CONFIG.clientId, record.linkedin_url]);
+  if (byUrl.rows[0]) return { match: 'linkedin_url', row: byUrl.rows[0] };
+
+  if (!record.name || !record.company) return null;
+  const byComposite = await pool.query(`
+    SELECT p.id, p.first_name, p.last_name, p.job_title, p.linkedin_url,
+           p.linkedin_headline, p.linkedin_location, p.employee_count_estimate
+    FROM prospects p
+    JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+    WHERE p.client_id = $1
+      AND LOWER(BTRIM(CONCAT_WS(' ', p.first_name, p.last_name))) = LOWER(BTRIM($2))
+      AND LOWER(BTRIM(c.name)) = LOWER(BTRIM($3))
+    ORDER BY p.created_at ASC
+    LIMIT 1
+  `, [CONFIG.clientId, record.name, record.company]);
+  return byComposite.rows[0] ? { match: 'name_company', row: byComposite.rows[0] } : null;
+}
+
+function hasLinkedInEnrichment(existing, record) {
+  return [
+    ['first_name', record.first_name],
+    ['last_name', record.last_name],
+    ['job_title', record.job_title],
+    ['linkedin_url', record.linkedin_url],
+    ['linkedin_headline', record.linkedin_headline],
+    ['linkedin_location', record.linkedin_location],
+    ['employee_count_estimate', record.employee_count_estimate],
+  ].some(([field, value]) => value && !existing[field]);
+}
+
+async function saveLinkedInProspect(record, { dryRun = false } = {}) {
+  const serviceAreaMatch = matchServiceAreaFromLocation(
+    record.linkedin_location,
+    configuredServiceAreas(CLIENT_CONFIG)
+  );
+  const existing = await findExistingLinkedInProspect(record);
+  if (existing) {
+    const enriched = hasLinkedInEnrichment(existing.row, record);
+    if (!dryRun && enriched) {
+      await pool.query(`
+        UPDATE prospects
+        SET first_name = COALESCE(NULLIF(first_name, ''), NULLIF($1, '')),
+            last_name = COALESCE(NULLIF(last_name, ''), NULLIF($2, '')),
+            job_title = COALESCE(NULLIF(job_title, ''), NULLIF($3, '')),
+            linkedin_url = COALESCE(NULLIF(linkedin_url, ''), NULLIF($4, '')),
+            linkedin_headline = COALESCE(NULLIF(linkedin_headline, ''), NULLIF($5, '')),
+            linkedin_location = COALESCE(NULLIF(linkedin_location, ''), NULLIF($6, '')),
+            service_area_match = COALESCE(service_area_match, $7),
+            employee_count_estimate = COALESCE(NULLIF(employee_count_estimate, ''), NULLIF($8, '')),
+            linkedin_source_query = $9::jsonb,
+            updated_at = NOW()
+        WHERE id = $10 AND client_id = $11
+      `, [
+        record.first_name, record.last_name, record.job_title, record.linkedin_url,
+        record.linkedin_headline, record.linkedin_location, serviceAreaMatch, record.employee_count_estimate,
+        JSON.stringify(record.linkedin_source_query), existing.row.id, CONFIG.clientId,
+      ]);
+    }
+    return { action: enriched ? 'enriched_existing' : 'deduped', match: existing.match, prospectId: existing.row.id };
+  }
+
+  if (dryRun) return { action: 'would_write', match: null, prospectId: null };
+  const companyId = await findOrCreateLinkedInCompany(record);
+  const inserted = await pool.query(`
+    INSERT INTO prospects (
+      company_id, first_name, last_name, job_title, linkedin_url, linkedin_headline,
+      linkedin_location, linkedin_source_query, employee_count_estimate, source, status,
+      vertical, client_id, service_area_match, discovery_method, preferred_channel, decision_maker
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, 'scout', 'cold', $10, $11, $12, 'linkedin_serpapi', 'linkedin', true)
+    ON CONFLICT DO NOTHING
+    RETURNING id
+  `, [
+    companyId, record.first_name, record.last_name, record.job_title, record.linkedin_url,
+    record.linkedin_headline, record.linkedin_location, JSON.stringify(record.linkedin_source_query),
+    record.employee_count_estimate, CONFIG.vertical, CONFIG.clientId, serviceAreaMatch,
+  ]);
+  if (inserted.rows[0]) {
+    await safeIngestScoutLifecycleSignal({
+      prospectId: inserted.rows[0].id,
+      clientId: CONFIG.clientId,
+      eventType: 'prospect_discovered',
+      sourceRecordId: `prospect:${inserted.rows[0].id}`,
+      metadata: { discovery_method: 'linkedin_serpapi', vertical: CONFIG.vertical },
+    });
+    // SPEC-014: Knowledge dual-write (fan-out; does not replace Max signals)
+    safeWriteProspect(
+      {
+        id: inserted.rows[0].id,
+        client_id: CONFIG.clientId,
+        company_id: companyId,
+        first_name: record.first_name,
+        last_name: record.last_name,
+        job_title: record.job_title,
+        source: 'scout',
+        vertical: CONFIG.vertical,
+      },
+      { source: 'scout', operationalEventType: OPERATIONAL_EVENTS.CONTACT_DISCOVERED }
+    );
+    return { action: 'written', match: null, prospectId: inserted.rows[0].id };
+  }
+  const raced = await findExistingLinkedInProspect(record);
+  return { action: 'deduped', match: raced?.match || 'insert_conflict', prospectId: raced?.row?.id || null };
+}
+
+async function runLinkedInSourcing({ runId = null } = {}) {
+  await ensureLinkedInScoutSchema();
+  await ensureBusinessNameShortColumns(pool);
+  const sourced = await sourceLinkedInProspects({
+    vertical: CONFIG.vertical,
+    geo: CONFIG.location,
+    titleFilter: CONFIG.titleFilter,
+    titleExclude: CONFIG.titleExclude,
+    sizeSignal: CONFIG.sizeSignal,
+    maxRequests: CONFIG.maxRequests,
+    pageDepth: CONFIG.pageDepth,
+    maxResults: CONFIG.linkedinMaxResults,
+  });
+
+  const persistence = {
+    written: 0,
+    deduped: sourced.withinRunDeduped,
+    enriched_existing: 0,
+    would_be_writes: 0,
+    would_be_dedupes: sourced.withinRunDeduped,
+    would_be_enrich_existing: 0,
+    errors: 0,
+  };
+  const outcomes = [];
+  for (const record of sourced.records) {
+    try {
+      const outcome = await saveLinkedInProspect(record, { dryRun: CONFIG.dryRun });
+      outcomes.push({ linkedin_url: record.linkedin_url, ...outcome });
+      if (outcome.action === 'written') persistence.written++;
+      if (outcome.action === 'deduped') persistence.deduped++;
+      if (outcome.action === 'enriched_existing') persistence.enriched_existing++;
+      if (CONFIG.dryRun && outcome.action === 'would_write') persistence.would_be_writes++;
+      if (CONFIG.dryRun && outcome.action === 'deduped') persistence.would_be_dedupes++;
+      if (CONFIG.dryRun && outcome.action === 'enriched_existing') persistence.would_be_enrich_existing++;
+      if (CONFIG.dryRun) console.log('[LinkedIn dry-run parse]', JSON.stringify({ record, outcome }));
+    } catch (err) {
+      rethrowResearchProviderControl(err);
+      persistence.errors++;
+      outcomes.push({ linkedin_url: record.linkedin_url, action: 'error', error: err.message });
+      console.error(`[LinkedIn] Persistence failed for ${record.linkedin_url}: ${err.message}`);
+    }
+  }
+  if (CONFIG.dryRun) {
+    for (const failure of sourced.parseFailures) console.log('[LinkedIn dry-run parse failure]', JSON.stringify(failure));
+  }
+
+  const parseSuccessRate = sourced.rawResultCount
+    ? Number((sourced.parsedCount / sourced.rawResultCount).toFixed(4))
+    : 0;
+  const summary = {
+    source_mode: 'linkedin',
+    dry_run: CONFIG.dryRun,
+    run_id: runId,
+    queries: sourced.queries,
+    total_serpapi_requests: sourced.requestCount,
+    request_cap: sourced.requestCap,
+    page_depth: sourced.pageDepth,
+    result_cap: sourced.resultCap,
+    results_omitted_by_cap: sourced.cappedCount,
+    raw_results: sourced.rawResultCount,
+    parsed_results: sourced.parsedCount,
+    unique_records: sourced.records.length,
+    unparseable_results: sourced.parseFailures.length,
+    parse_success_rate: parseSuccessRate,
+    ...persistence,
+  };
+  await logScoutRun(persistence.errors ? 'failed' : 'success', summary, 'linkedin_sourcing');
+  console.log('[LinkedIn] Run summary:', JSON.stringify(summary, null, 2));
+  return { ...summary, outcomes };
+}
+
+async function saveToDatabase(leads, {
+  runId = null, skipped: initialSkipped = 0, rejected: initialRejected = 0,
+  skipped_breakdown: initialBreakdown = {},
+} = {}) {
+  let saved = 0, skipped = initialSkipped, rejected = initialRejected, unenriched = 0;
+  const skippedBreakdown = { ...initialBreakdown };
+  let setterQueued = 0, setterSkipped = 0, setterFailed = 0;
   await ensureSetterQueueColumns(pool);
   await ensureCompanyColumns(pool);
+  await ensureEmailVerificationColumns();
+  await ensureScoutUnenrichedTable();
+  await ensureScoutSkipLogTable();
   for (const lead of leads) {
-    const companyName = lead.company.replace(/^CONTACT:\s*/i, '').trim();
+    let companyName = null;
+    try {
+      companyName = String(lead.company || '').replace(/^CONTACT:\s*/i, '').trim();
+      const domain = normalizeDomain(lead.url);
+      const discoveryMethod = scoutDiscoveryMethod(lead);
+      const websiteUrl = lead.url || null;
+      const identity = establishBusinessIdentity({ ...lead, company: companyName });
 
-    if (!validateProspect(companyName)) {
-      rejected++;
-      continue;
-    }
-    if ((lead.score || 0) < 40) {
-      console.log(`Score too low (${lead.score}): ${companyName}`);
-      rejected++;
-      continue;
-    }
+      if (!identity.established) {
+        incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.MISSING_REQUIRED_FIELD);
+        skipped++;
+        await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.MISSING_REQUIRED_FIELD, {
+          missing_fields: ['identity'],
+          website_only: identity.websiteOnly,
+        }, companyName);
+        continue;
+      }
+
+      if (!validateProspect(companyName)) {
+        incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.INVALID_PROSPECT);
+        skipped++; rejected++;
+        await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.INVALID_PROSPECT, { reason: 'validateProspect rejected candidate' }, companyName);
+        continue;
+      }
+      if ((lead.score || 0) < 40) {
+        console.log(`Score too low (${lead.score}): ${companyName}`);
+        incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.LOW_SCORE);
+        skipped++; rejected++;
+        await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.LOW_SCORE, { score: lead.score || 0, minimum_score: 40 }, companyName);
+        continue;
+      }
+
+      const allowedServiceAreas = configuredServiceAreas(CLIENT_CONFIG);
+      const isPlacesLead = Array.isArray(lead.source) && lead.source.includes('google_places');
+      const rejectedLocality = isPlacesLead ? lead.places_locality || null : null;
+      const serviceArea = isPlacesLead
+        ? (
+          matchServiceAreaLocality(lead.places_locality, allowedServiceAreas)
+          || matchServiceAreaFromLocation(lead.address, allowedServiceAreas)
+        )
+        : matchServiceAreaFromLocation(lead.address, allowedServiceAreas);
+      // Persist structured Places geography before any dedupe or location
+      // guard can discard this candidate.
+      let companyId = isPlacesLead
+        ? await findOrCreateCompany({ name: companyName, domain, lead })
+        : null;
 
     // Dedup: skip if a prospect with the same business name already exists in the same city.
     // City is taken from the first token of CONFIG.location (e.g., "Manchester NH" -> "Manchester").
     // If the existing prospect has no city info recorded, fall back to a name-only match within the client.
-    const cityScope = String(CONFIG.location || '').split(/\s+/)[0] || '';
-    const dupCheck = await pool.query(
+      const cityScope = String(CONFIG.location || '').split(/\s+/)[0] || '';
+      const dupCheck = await pool.query(
       `SELECT p.id
          FROM prospects p
          LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
@@ -864,71 +2628,293 @@ async function saveToDatabase(leads) {
            )`,
       [companyName, CONFIG.clientId, cityScope]
     );
-    if (dupCheck.rows.length > 0) {
-      console.log(`Duplicate skipped: ${companyName} (${cityScope || 'any city'})`);
-      skipped++;
-      continue;
-    }
+      if (dupCheck.rows.length > 0) {
+        console.log(`Duplicate skipped: ${companyName} (${cityScope || 'any city'})`);
+        incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.DUPLICATE);
+        skipped++;
+        await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.DUPLICATE, { match: 'company_name_and_city', city_scope: cityScope || null, existing_prospect_id: dupCheck.rows[0].id }, companyName);
+        continue;
+      }
 
-    try {
-      const JUNK_EMAILS = ['user@domain.com', 'info@example.com', 'test@test.com', 'admin@domain.com'];
-      const email = typeof lead.email === 'string' && lead.email.includes('@') && !JUNK_EMAILS.includes(lead.email.toLowerCase()) ? lead.email : null;
-      const nameParts = (lead.contact && lead.contact !== '—' ? lead.contact : '').trim().split(/\s+/).filter(Boolean);
+      if (serviceArea === null && allowedServiceAreas.length > 0) {
+        console.log(`[Scout] Out-of-area prospect skipped: ${companyName} (${lead.address || 'no address'})`);
+        incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.OUT_OF_AREA);
+        skipped++;
+        await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.OUT_OF_AREA, {
+          address: lead.address || null,
+          rejected_locality: rejectedLocality,
+          rejected_state: isPlacesLead ? lead.places_administrative_area_level_1 || null : null,
+          allowed_service_area: allowedServiceAreas,
+        }, companyName);
+        continue;
+      }
+
+      const contactCandidate = resolveScoutContactCandidate(lead);
+      if (contactCandidate.insertTarget === 'unenriched') {
+        await upsertScoutUnenriched({
+          companyName,
+          domain,
+          websiteUrl,
+          discoveryMethod,
+          reason: contactCandidate.reason,
+          email: contactCandidate.email,
+        });
+        await logScoutRun('skipped', {
+          company: companyName,
+          domain,
+          reason: contactCandidate.reason,
+          discovery_method: discoveryMethod,
+        }, isCleaningBuyerProfile() ? 'scout_skipped_no_reachable_contact' : 'scout_skipped_no_email');
+        incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.NO_EMAIL);
+        skipped++;
+        await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.NO_EMAIL, { reason: contactCandidate.reason, email: contactCandidate.email, unenriched_action: 'upserted' }, companyName);
+        unenriched++;
+        continue;
+      }
+
+      const email = contactCandidate.email || null;
+
+      if (email) {
+        const exclusion = await shouldExcludeProspect({
+          email,
+          websiteUrl,
+          source: discoveryMethod,
+        });
+        if (exclusion.excluded) {
+          await logExcludedProspect({ email, source: discoveryMethod, exclusion });
+          await logScoutRun('skipped', {
+            company: companyName,
+            email,
+            domain: extractEmailDomain(email),
+            website_url: websiteUrl,
+            discovery_method: discoveryMethod,
+            exclusion_reason: exclusion.reason,
+            exclusion_detail: exclusion.detail || {},
+          }, 'prospect_excluded');
+          console.log(`[Scout] Excluded prospect ${email}: ${exclusion.reason}`);
+          incrementBreakdown(skippedBreakdown, 'excluded_filter');
+          skipped++;
+          continue;
+        }
+      }
+
+      const verification = email ? await resolveEmailVerification(email, lead) : null;
+      const emailVerified = verification?.emailVerified || false;
+      const emailVerificationMethod = verification?.emailVerificationMethod || null;
+      const verifiedAt = verification?.verifiedAt || null;
+      const doNotContact = verification?.doNotContact || false;
+      const emailStatus = verification?.emailStatus || null;
+      const verifierResponse = verification?.verifierResponse || null;
+      const verifierCheckedAt = verification?.verifierCheckedAt || null;
+      const prospectNote = [
+        verification?.note || null,
+        contactCandidate.emailRejectReason ? `Ignored scraped email: ${contactCandidate.emailRejectReason}` : null,
+      ].filter(Boolean).join(' ') || null;
+
+      const babrunEvidence = Number(CONFIG.clientId) === 13
+        ? babrunScoutContactEvidence({ lead, email, verification, officialDomain: domain })
+        : null;
+      const contactName = babrunEvidence ? babrunEvidence.contactName : lead.contact;
+      const nameParts = (contactName && contactName !== '—' ? contactName : '').trim().split(/\s+/).filter(Boolean);
 
       // Use contact first name if available and looks like a real person name.
       // Keep generic inbox names null so downstream copy can use company/name fallbacks.
       const looksLikePerson = nameParts.length >= 2 || (nameParts.length === 1 && /^[A-Z][a-z]{2,}$/.test(nameParts[0]));
       const firstName = sanitizeFirstName(looksLikePerson ? nameParts[0] : null);
       const lastName  = firstName ? nameParts.slice(1).join(' ') || null : null;
-      const domain = normalizeDomain(lead.url);
-      const phone = lead.phone || null;
-      const serviceArea = (CLIENT_CONFIG?.service_area || []).find(area => {
-        const needle = String(area).toLowerCase();
-        return (lead.address || '').toLowerCase().includes(needle) || (domain || '').includes(needle);
-      }) || null;
-      const discoveryMethod = Array.isArray(lead.source) && lead.source.includes('google_places') ? 'google_places' : 'serpapi';
-      const companyId = await findOrCreateCompany({ name: companyName, domain, lead });
+      const phone = isCleaningBuyerProfile() ? contactCandidate.phone : lead.phone || null;
+      const hasWebsite = !!(domain || websiteUrl);
+      const facebookUrl = lead.facebook_url || null;
+      const instagramUrl = lead.instagram_url || null;
+      const hasFacebook = !!facebookUrl;
+      const hasInstagram = !!instagramUrl;
+      const googleRating = lead.google_rating ?? null;
+      const googleReviewCount = lead.google_review_count ?? null;
+      const preferredChannel = getScoutPreferredChannel();
+      companyId = companyId || await findOrCreateCompany({ name: companyName, domain, lead });
       if (!companyId) throw new Error(`Unable to link company for ${companyName}`);
       const insert = await pool.query(
-      'INSERT INTO prospects (company_id, first_name, last_name, email, phone, status, source, icp_score, notes, vertical, client_id, service_area_match, discovery_method) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT (email) DO NOTHING RETURNING id',
-      [companyId, firstName, lastName, email, phone, 'cold', 'scout', lead.score, null, CONFIG.industry, CONFIG.clientId, serviceArea, discoveryMethod]
+      `INSERT INTO prospects (
+        company_id, first_name, last_name, email, phone, status, source, icp_score, notes, vertical,
+        client_id, service_area_match, discovery_method, has_website, google_review_count, google_rating,
+        has_facebook, has_instagram, facebook_url, instagram_url, website_url,
+        email_verified, email_verification_method, verified_at, do_not_contact, preferred_channel,
+        email_status, verifier_response, verifier_checked_at${babrunEvidence ? ', job_title, acquisition_metadata, enrichment_provenance' : ''}
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28::jsonb, $29${babrunEvidence ? ', $30, $31::jsonb, $32::jsonb' : ''})
+      ON CONFLICT (email) DO NOTHING RETURNING id`,
+      [companyId, firstName, lastName, email, phone, 'cold', 'scout', lead.score, prospectNote, CONFIG.vertical, CONFIG.clientId, serviceArea, discoveryMethod, hasWebsite, googleReviewCount, googleRating, hasFacebook, hasInstagram, facebookUrl, instagramUrl, websiteUrl, emailVerified, emailVerificationMethod, verifiedAt, doNotContact, preferredChannel, emailStatus, JSON.stringify(verifierResponse || null), verifierCheckedAt,
+        ...(babrunEvidence ? [babrunEvidence.jobTitle, JSON.stringify(babrunEvidence.acquisitionMetadata), JSON.stringify(babrunEvidence.enrichmentProvenance)] : [])]
     );
       if (!insert.rows.length) {
+        incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.INSERT_CONFLICT);
         skipped++;
+        await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.INSERT_CONFLICT, { conflict_target: 'prospects.email', email }, companyName);
         continue;
       }
       saved++;
       const prospectId = insert.rows[0].id;
 
+      if (isCleaningBuyerProfile()) {
+        try {
+          const scoutPersonalization = await collectScoutPersonalizationEvidence({
+            ...lead,
+            vertical: CONFIG.vertical,
+            company: companyName,
+          });
+          lead.scoutPersonalization = scoutPersonalization;
+          await persistScoutPersonalizationEvidence(
+            pool,
+            prospectId,
+            scoutPersonalization,
+            CONFIG.clientId
+          );
+        } catch (personalizationErr) {
+          console.error(`[Scout] Personalization evidence failed for ${companyName}: ${personalizationErr.message}`);
+        }
+      }
+
+      if (isWebDesignProfile() && domain) {
+        try {
+          const { assessDiscoveredBusiness, mapOpportunityScoreToIcp } = require('./services/webDesignScout');
+          const webAssessment = await assessDiscoveredBusiness({
+            client_id: CONFIG.clientId,
+            prospect_id: prospectId,
+            company: companyName,
+            domain,
+            url: websiteUrl,
+            industry: CONFIG.vertical,
+            location: lead.address || CONFIG.location,
+            email,
+            phone,
+            contact: lead.contact,
+            google_rating: googleRating,
+            google_review_count: googleReviewCount,
+            skipPuppeteer: !isStudioSubstralScoutProfile(),
+          }, { pool, skipPuppeteer: !isStudioSubstralScoutProfile() });
+
+          if (isStudioSubstralScoutProfile()) {
+            const { evaluateStudioSubstralScoutProspect } = require('./services/studioSubstralScoutIntelligence');
+            const { persistStudioSubstralScoutProspect } = require('./services/studioSubstralScoutPersistence');
+            const { intelligence, outreachStatus } = evaluateStudioSubstralScoutProspect({
+              lead: {
+                ...lead,
+                company: companyName,
+                email,
+                phone,
+                url: websiteUrl,
+                vertical: CONFIG.vertical,
+              },
+              assessment: webAssessment?.assessment || webAssessment,
+              vertical: CONFIG.vertical,
+              location: lead.address || CONFIG.location,
+              rawDiscovery: CONFIG.rawDiscovery,
+            });
+            await persistStudioSubstralScoutProspect(pool, prospectId, CONFIG.clientId, {
+              intelligence,
+              outreachStatus,
+            });
+            if (!intelligence.accepted) {
+              saved--;
+              rejected++;
+              incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.LOW_SCORE);
+              skipped++;
+              await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.LOW_SCORE, {
+                studio_fit_score: intelligence.studio_fit_score,
+                studio_reject_reason: intelligence.reject_reason,
+                minimum_studio_fit_score: 65,
+              }, companyName);
+              continue;
+            }
+          } else if (webAssessment?.opportunity_score != null) {
+            const mapped = mapOpportunityScoreToIcp(
+              webAssessment.opportunity_score,
+              webAssessment.recommended_action
+            );
+            await pool.query(
+              `UPDATE prospects SET icp_score = $1 WHERE id = $2 AND client_id = $3`,
+              [mapped, prospectId, CONFIG.clientId]
+            );
+          }
+        } catch (webErr) {
+          console.error(`[Scout] Website opportunity assessment failed for ${companyName}: ${webErr.message}`);
+        }
+      }
+
+      await safeIngestScoutLifecycleSignal({
+        prospectId,
+        clientId: CONFIG.clientId,
+        eventType: 'prospect_discovered',
+        sourceRecordId: `prospect:${prospectId}`,
+        metadata: { discovery_method: discoveryMethod, vertical: CONFIG.vertical },
+      });
+
+      // SPEC-014: Knowledge dual-write (fan-out alongside Max orchestration signals)
+      safeWriteProspect(
+        {
+          id: prospectId,
+          client_id: CONFIG.clientId,
+          company_id: companyId,
+          first_name: firstName,
+          last_name: lastName,
+          email,
+          phone,
+          source: 'scout',
+          icp_score: lead.score,
+          vertical: CONFIG.vertical,
+        },
+        { source: 'scout', operationalEventType: OPERATIONAL_EVENTS.CONTACT_DISCOVERED }
+      );
+
+      // Seed icp_score_history with Scout's initial score so dynamic ICP
+      // recalculation has a baseline to diff future engagement changes against.
+      await recordScoutBaseline(prospectId, lead.score, 'scout_initial').catch(err =>
+        console.error(`[Scout] recordScoutBaseline failed for ${companyName}: ${err.message}`)
+      );
+
       try {
-        await pool.query(`
-          UPDATE prospects
-          SET setter_status = 'new',
-              setter_visible = true,
-              setter_updated_at = NOW()
-          WHERE id = $1
-            AND client_id = $2
-            AND COALESCE(icp_score, 0) >= $3
-            AND COALESCE(do_not_contact, false) = false
-        `, [prospectId, CONFIG.clientId, SETTER_ICP_THRESHOLD]);
-        if (CONFIG.clientId === 1 && (lead.score || 0) >= SETTER_ICP_THRESHOLD) {
-          const handoff = await appendQualifiedScoutLead(lead, CONFIG.industry);
-          if (handoff.appended) setterQueued++;
-          else setterSkipped++;
-        } else {
-          setterSkipped++;
+        if (!isStudioSubstralScoutProfile()) {
+          await pool.query(`
+            UPDATE prospects
+            SET setter_status = 'new', setter_updated_at = NOW()
+            WHERE id = $1 AND client_id = $2
+          `, [prospectId, CONFIG.clientId]);
+          const setterUpdate = await setSetterVisibility(pool, prospectId, {
+            reason: 'scout',
+            clientId: CONFIG.clientId,
+            source: 'scout',
+          });
+          if (setterUpdate?.setter_visible) {
+            await safeIngestScoutLifecycleSignal({
+              prospectId,
+              clientId: CONFIG.clientId,
+              eventType: 'prospect_qualified',
+              sourceRecordId: `setter-visibility:${prospectId}`,
+              metadata: { icp_score: lead.score, qualification_source: 'scout_setter_gate' },
+            });
+          }
+          if (CONFIG.clientId === 1 && setterUpdate?.setter_visible) {
+            const handoff = await appendQualifiedScoutLead(lead, CONFIG.industry);
+            if (handoff.appended) setterQueued++;
+            else setterSkipped++;
+          } else {
+            setterSkipped++;
+          }
         }
       } catch (err) {
         setterFailed++;
         console.error(`[Setter] Handoff failed for ${companyName}: ${err.message}`);
       }
     } catch (err) {
+      rethrowResearchProviderControl(err);
+      incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.DB_ERROR);
       skipped++;
+      await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.DB_ERROR, { error: err.message, code: err.code || null, constraint: err.constraint || null }, companyName);
+      console.error(`[Scout] Database save failed for ${companyName || scoutCandidateIdentifier(lead)}: ${err.message}`);
     }
   }
-  console.log(`[DB] Saved ${saved} prospects, rejected ${rejected} (junk), skipped ${skipped} (errors/dupes)`);
+  console.log(`[DB] Saved ${saved} prospects, ${unenriched} unreachable (scout_unenriched), rejected ${rejected} (junk), skipped ${skipped} (errors/dupes)`);
   console.log(`[Setter] Queued ${setterQueued}, skipped ${setterSkipped}, failed ${setterFailed}`);
-  return { saved, skipped, rejected, setter_queued: setterQueued, setter_skipped: setterSkipped, setter_failed: setterFailed };
+  return { saved, skipped, skipped_breakdown: skippedBreakdown, rejected, unenriched, setter_queued: setterQueued, setter_skipped: setterSkipped, setter_failed: setterFailed };
 }
 
 async function ensureSetterQueueColumns(pool) {
@@ -938,53 +2924,715 @@ async function ensureSetterQueueColumns(pool) {
     ADD COLUMN IF NOT EXISTS setter_visible BOOLEAN DEFAULT false,
     ADD COLUMN IF NOT EXISTS setter_updated_at TIMESTAMPTZ DEFAULT NOW(),
     ADD COLUMN IF NOT EXISTS service_area_match TEXT,
-    ADD COLUMN IF NOT EXISTS discovery_method TEXT
+    ADD COLUMN IF NOT EXISTS discovery_method TEXT,
+    ADD COLUMN IF NOT EXISTS has_website BOOLEAN,
+    ADD COLUMN IF NOT EXISTS google_review_count INTEGER,
+    ADD COLUMN IF NOT EXISTS google_rating NUMERIC,
+    ADD COLUMN IF NOT EXISTS has_facebook BOOLEAN,
+    ADD COLUMN IF NOT EXISTS has_instagram BOOLEAN,
+    ADD COLUMN IF NOT EXISTS facebook_url TEXT,
+    ADD COLUMN IF NOT EXISTS instagram_url TEXT,
+    ADD COLUMN IF NOT EXISTS website_url TEXT,
+    ADD COLUMN IF NOT EXISTS preferred_channel TEXT,
+    ADD COLUMN IF NOT EXISTS employee_count_estimate TEXT
   `);
 }
 
 async function ensureCompanyColumns(pool) {
   await pool.query(`
     ALTER TABLE companies
-    ADD COLUMN IF NOT EXISTS domain TEXT
+    ADD COLUMN IF NOT EXISTS domain TEXT,
+    ADD COLUMN IF NOT EXISTS places_locality TEXT,
+    ADD COLUMN IF NOT EXISTS places_administrative_area_level_1 TEXT,
+    ADD COLUMN IF NOT EXISTS places_postal_code TEXT
   `);
 }
 
+// scout_queue tracks, per client + vertical + location, how many prospects
+// have accumulated and whether the vertical is saturated. It drives the
+// queue rotation: when a requested vertical is saturated, Scout pulls the
+// next least-saturated queued item instead.
+async function ensureScoutQueue(pool) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS scout_queue (
+      id             SERIAL PRIMARY KEY,
+      client_id      INTEGER NOT NULL DEFAULT 1 REFERENCES clients(id),
+      industry       TEXT NOT NULL DEFAULT '',
+      vertical       TEXT NOT NULL,
+      location       TEXT NOT NULL DEFAULT '',
+      prospect_count INTEGER NOT NULL DEFAULT 0,
+      threshold      INTEGER NOT NULL DEFAULT ${SATURATION_THRESHOLDS.default},
+      saturated      BOOLEAN NOT NULL DEFAULT false,
+      status         TEXT NOT NULL DEFAULT 'queued',
+      last_run_at    TIMESTAMPTZ,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE scout_queue
+    ADD COLUMN IF NOT EXISTS parked_at TIMESTAMPTZ
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS scout_queue_client_vertical_location_idx
+    ON scout_queue (client_id, vertical, location)
+  `);
+  await pool.query(`
+    WITH normalized AS (
+      SELECT id,
+             client_id,
+             LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')) AS clean_vertical,
+             TRIM(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(location, 'https?://\\S*', '', 'gi'), '\\mwww\\.\\S*', '', 'gi'), '[^[:alnum:] ]+', ' ', 'g')) AS clean_location
+      FROM scout_queue
+    ),
+    ranked AS (
+      SELECT id,
+             clean_location,
+             ROW_NUMBER() OVER (PARTITION BY client_id, clean_vertical, clean_location ORDER BY id) AS rn
+      FROM normalized
+      WHERE clean_vertical <> ''
+        AND clean_location <> ''
+    )
+    DELETE FROM scout_queue sq
+    USING ranked r
+    WHERE sq.id = r.id
+      AND r.rn > 1
+  `);
+  await pool.query(`
+    UPDATE scout_queue
+    SET vertical = LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')),
+        location = TRIM(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(location, 'https?://\\S*', '', 'gi'), '\\mwww\\.\\S*', '', 'gi'), '[^[:alnum:] ]+', ' ', 'g')),
+        updated_at = NOW()
+    WHERE location ~* 'https?://|www\\.|[^[:alnum:] ]'
+       OR location <> TRIM(location)
+       OR vertical <> LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g'))
+  `);
+  await pool.query(`
+    UPDATE scout_queue
+    SET threshold = CASE
+          WHEN vertical = 'auto' THEN 50
+          WHEN vertical = 'cleaning' THEN 50
+          WHEN vertical = 'restaurant' THEN 60
+          WHEN vertical = 'fitness' THEN 40
+          WHEN vertical = 'salon' THEN 40
+          WHEN vertical = 'med_spa' THEN 30
+          WHEN vertical = 'landscaping' THEN 30
+          WHEN vertical = 'property_management' THEN 40
+          WHEN vertical = 'probate_attorney' THEN 40
+          WHEN vertical = 'home_services' THEN 30
+          ELSE 40
+        END,
+        updated_at = NOW()
+    WHERE threshold <> CASE
+          WHEN vertical = 'auto' THEN 50
+          WHEN vertical = 'cleaning' THEN 50
+          WHEN vertical = 'restaurant' THEN 60
+          WHEN vertical = 'fitness' THEN 40
+          WHEN vertical = 'salon' THEN 40
+          WHEN vertical = 'med_spa' THEN 30
+          WHEN vertical = 'landscaping' THEN 30
+          WHEN vertical = 'property_management' THEN 40
+          WHEN vertical = 'probate_attorney' THEN 40
+          WHEN vertical = 'home_services' THEN 30
+          ELSE 40
+        END
+  `);
+}
+
+// One-time-safe migration: rewrite any non-snake_case vertical values
+// (e.g. "home services", "auto repair", NULL) to the normalized form.
+async function normalizeExistingVerticals(pool) {
+  await pool.query(`
+    UPDATE prospects
+    SET vertical = LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g'))
+    WHERE vertical IS NOT NULL
+      AND TRIM(vertical) <> ''
+      AND vertical <> LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g'))
+  `);
+  await pool.query(`
+    UPDATE prospects
+    SET vertical = 'unknown'
+    WHERE vertical IS NULL OR TRIM(vertical) = ''
+  `);
+}
+
+async function getProspectCount(clientId, vertical, location) {
+  const res = await pool.query(
+    `SELECT COUNT(*)::int AS count
+       FROM prospects p
+       LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+      WHERE p.client_id = $1
+        AND p.vertical = $2
+        AND COALESCE(p.service_area_match, c.location, '') ILIKE $3`,
+    [clientId, vertical, locationToIlikePattern(location)]
+  );
+  return res.rows[0]?.count || 0;
+}
+
+// Recompute prospect_count + saturated + status for EVERY queued vertical of a
+// client (including zero-count rows) from the live prospects table, so rotation
+// picks an accurate "lowest count" item and saturated/status never drift apart.
+async function refreshQueueCounts(clientId) {
+  await pool.query(`
+    UPDATE scout_queue sq
+    SET prospect_count = calc.cnt,
+        saturated = (calc.cnt >= sq.threshold),
+        status = CASE WHEN calc.cnt >= sq.threshold THEN 'saturated' ELSE 'queued' END,
+        updated_at = NOW()
+    FROM (
+      SELECT sq2.id, COALESCE(p.cnt, 0) AS cnt
+      FROM scout_queue sq2
+      LEFT JOIN (
+        SELECT sq3.id,
+               COUNT(p.id) FILTER (
+                 WHERE COALESCE(p.service_area_match, c.location, '') ILIKE (
+                   '%' || REGEXP_REPLACE(REGEXP_REPLACE(TRIM(sq3.location), '\\s+[A-Z]{2}$', ''), '\\s+', '%', 'g') || '%'
+                 )
+               )::int AS cnt
+        FROM scout_queue sq3
+        LEFT JOIN prospects p
+          ON p.client_id = sq3.client_id
+         AND p.vertical = sq3.vertical
+        LEFT JOIN companies c
+          ON c.id = p.company_id
+         AND c.client_id = p.client_id
+        WHERE sq3.client_id = $1
+        GROUP BY sq3.id
+      ) p ON p.id = sq2.id
+      WHERE sq2.client_id = $1
+        AND sq2.status <> 'parked'
+    ) calc
+    WHERE sq.id = calc.id
+  `, [clientId]);
+}
+
+async function seedExpansionQueueMarkets(clientId) {
+  const exists = await pool.query(`SELECT to_regclass('public.scout_expansion_queue') AS table_name`);
+  if (!exists.rows[0]?.table_name) return;
+
+  await pool.query(`
+    INSERT INTO scout_queue (client_id, industry, vertical, location, prospect_count, threshold, saturated, status, updated_at)
+    SELECT DISTINCT
+      q.client_id,
+      q.vertical,
+      LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(q.vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')),
+      TRIM(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(q.location, 'https?://\\S*', '', 'gi'), '\\mwww\\.\\S*', '', 'gi'), '[^[:alnum:] ]+', ' ', 'g')) AS clean_location,
+      0,
+      CASE
+        WHEN LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(q.vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')) = 'auto' THEN 50
+        WHEN LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(q.vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')) = 'cleaning' THEN 50
+        WHEN LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(q.vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')) = 'restaurant' THEN 60
+        WHEN LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(q.vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')) = 'fitness' THEN 40
+        WHEN LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(q.vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')) = 'salon' THEN 40
+        WHEN LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(q.vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')) = 'med_spa' THEN 30
+        WHEN LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(q.vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')) = 'landscaping' THEN 30
+        WHEN LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(q.vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')) = 'property_management' THEN 40
+        WHEN LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(q.vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')) = 'probate_attorney' THEN 40
+        WHEN LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(q.vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')) = 'home_services' THEN 30
+        ELSE 40
+      END,
+      false,
+      'queued',
+      NOW()
+    FROM scout_expansion_queue q
+    WHERE q.client_id = $1
+      AND q.status = 'pending'
+      AND q.vertical IS NOT NULL
+      AND LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(q.vertical), '[[:space:].-]+', '_', 'g'), '[^a-zA-Z0-9_]', '', 'g')) <> 'unknown'
+      AND TRIM(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(q.location, 'https?://\\S*', '', 'gi'), '\\mwww\\.\\S*', '', 'gi'), '[^[:alnum:] ]+', ' ', 'g')) <> ''
+    ON CONFLICT (client_id, vertical, location) DO NOTHING
+  `, [clientId]);
+}
+
+async function setScoutQueueParked(row, reason, parked = true) {
+  if (!row?.id) return false;
+  const parkedAtSql = parked ? 'NOW()' : 'NULL';
+  await pool.query(`
+    UPDATE scout_queue
+    SET parked_at = ${parkedAtSql}, updated_at = NOW()
+    WHERE id = $1
+  `, [row.id]);
+  console.log(
+    `[Scout] ${parked ? 'Parked' : 'Unparked'} queue row client_id=${row.client_id} vertical=${row.vertical} location="${row.location}" reason=${reason}`
+  );
+  return true;
+}
+
+async function reconcileScoutQueueForClient(clientId) {
+  if (!hasClientScoutPlan(clientId)) return { parked: 0, unparked: 0, checked: 0 };
+
+  const { rows } = await pool.query(`
+    SELECT id, client_id, vertical, location, parked_at
+    FROM scout_queue
+    WHERE client_id = $1
+    ORDER BY vertical ASC, location ASC, id ASC
+  `, [clientId]);
+
+  const stats = { parked: 0, unparked: 0, checked: rows.length };
+  for (const row of rows) {
+    const valid = isQueueLocationValidForPlan(clientId, row.vertical, row.location);
+    if (!valid && !row.parked_at) {
+      await setScoutQueueParked(row, 'location_not_in_current_client_plan', true);
+      stats.parked++;
+    } else if (valid && row.parked_at) {
+      await setScoutQueueParked(row, 'location_now_matches_current_client_plan', false);
+      stats.unparked++;
+    }
+  }
+  return stats;
+}
+
+// Seed a row for every active vertical declared on the client so the queue is
+// complete before selection/rotation. Existing rows are left untouched.
+async function seedClientVerticals(clientId, verticals, location) {
+  const list = Array.isArray(verticals) ? verticals : [];
+  const seen = new Set();
+  for (const raw of list) {
+    const vertical = normalizeVertical(raw);
+    if (!vertical || vertical === 'unknown' || seen.has(vertical)) continue;
+    seen.add(vertical);
+    const cleanLocations = getPlannedLocations(clientId, location, vertical);
+    const threshold = getSaturationThreshold(vertical);
+    for (const cleanLocation of cleanLocations) {
+      await pool.query(`
+        INSERT INTO scout_queue (client_id, industry, vertical, location, prospect_count, threshold, saturated, status, updated_at)
+        VALUES ($1, $2, $3, $4, 0, $5, false, 'queued', NOW())
+        ON CONFLICT (client_id, vertical, location) DO NOTHING
+      `, [clientId, vertical, vertical, cleanLocation, threshold]);
+    }
+  }
+}
+
+async function upsertQueueItem({ clientId, industry, vertical, location, count, threshold, saturated }) {
+  const status = saturated ? 'saturated' : 'queued';
+  const cleanLocation = sanitizeQueueLocation(location);
+  await pool.query(`
+    INSERT INTO scout_queue (client_id, industry, vertical, location, prospect_count, threshold, saturated, status, updated_at)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+    ON CONFLICT (client_id, vertical, location) DO UPDATE SET
+      industry = EXCLUDED.industry,
+      prospect_count = EXCLUDED.prospect_count,
+      threshold = EXCLUDED.threshold,
+      saturated = EXCLUDED.saturated,
+      status = EXCLUDED.status,
+      updated_at = NOW()
+  `, [clientId, industry || vertical, vertical, cleanLocation, count, threshold, saturated, status]);
+}
+
+// Next item to scrape: the unsaturated queued vertical with the fewest prospects.
+async function pickNextQueueItem(clientId, allowedVerticals = []) {
+  const allowed = Array.isArray(allowedVerticals)
+    ? allowedVerticals.map(normalizeVertical).filter(v => v && v !== 'unknown')
+    : [];
+  const params = [clientId];
+  let allowedClause = '';
+  if (allowed.length) {
+    params.push(allowed);
+    allowedClause = ` AND vertical = ANY($${params.length})`;
+  }
+  const res = await pool.query(`
+    SELECT id, client_id, industry, vertical, location, prospect_count, parked_at
+    FROM scout_queue
+    WHERE client_id = $1 AND saturated = false AND status = 'queued'${allowedClause}
+    ORDER BY prospect_count ASC, id ASC
+  `, params);
+  let parkedRowsSkipped = 0;
+  let invalidRowsSkipped = 0;
+  for (const row of res.rows) {
+    if (row.parked_at) {
+      parkedRowsSkipped++;
+      continue;
+    }
+    if (!isQueueLocationValidForPlan(clientId, row.vertical, row.location)) {
+      await setScoutQueueParked(row, 'invalid_queue_location_selection_guard', true);
+      invalidRowsSkipped++;
+      parkedRowsSkipped++;
+      continue;
+    }
+    return {
+      ...row,
+      parked_rows_skipped: parkedRowsSkipped,
+      invalid_rows_skipped: invalidRowsSkipped,
+      newly_parked_rows: invalidRowsSkipped,
+    };
+  }
+
+  console.warn(
+    `[Scout] No valid queue items for client ${clientId}; skipped ${invalidRowsSkipped} invalid rows and ${parkedRowsSkipped} parked rows`
+  );
+  return null;
+}
+
+// Decide what Scout should actually scrape this run. Records the requested
+// target in the queue; if it is saturated, logs vertical_saturated and rotates
+// to the least-saturated queued item. Returns { skip: true } when nothing is
+// left to scrape.
+function resolveScoutPlanVertical({ industry, vertical: explicitVertical }) {
+  return explicitVertical
+    ? normalizeVertical(explicitVertical)
+    : (normalizeVertical(industry) || 'unknown');
+}
+
+async function resolveScoutTarget({ clientId, industry, location, verticals, vertical: explicitVertical }) {
+  await ensureScoutQueue(pool);
+  await normalizeExistingVerticals(pool);
+  const cleanLocation = sanitizeQueueLocation(location);
+  const plannedVerticals = getPlannedVerticals(clientId);
+  const activeVerticals = plannedVerticals.length ? plannedVerticals : verticals;
+  const reconciliation = await reconcileScoutQueueForClient(clientId);
+  if (reconciliation.parked || reconciliation.unparked) {
+    console.log(`[Scout] Queue reconciliation client=${clientId} parked=${reconciliation.parked} unparked=${reconciliation.unparked} checked=${reconciliation.checked}`);
+  }
+  CONFIG.parkedRowsSkipped = reconciliation.parked || 0;
+  // Ensure every active vertical for this client exists in the queue before we
+  // select/rotate. Client-specific plans are authoritative; other clients keep
+  // the requested industry as a fallback.
+  await seedClientVerticals(
+    clientId,
+    plannedVerticals.length ? activeVerticals : [...(activeVerticals || []), industry],
+    cleanLocation
+  );
+  await seedExpansionQueueMarkets(clientId);
+  await refreshQueueCounts(clientId);
+
+  const vertical = resolveScoutPlanVertical({ industry, vertical: explicitVertical });
+
+  if (plannedVerticals.length && !plannedVerticals.includes(vertical)) {
+    console.log(`[Scout] "${vertical}" is not in client ${clientId}'s Scout plan — rotating to planned queue`);
+    await logScoutRun('skipped', { vertical, industry, location: cleanLocation }, 'vertical_not_in_scout_plan');
+    const next = await pickNextQueueItem(clientId, plannedVerticals);
+    if (!next) {
+      console.log('[Scout] No planned queue items remain — skipping run');
+      return { skip: true, vertical, saturated: true };
+    }
+    CONFIG.parkedRowsSkipped += Number(next.newly_parked_rows || 0);
+    return {
+      industry: next.industry || next.vertical,
+      location: next.location || cleanLocation,
+      vertical: next.vertical,
+      saturated: false,
+      rotatedFrom: vertical,
+    };
+  }
+
+  if (plannedVerticals.length && !isQueueLocationValidForPlan(clientId, vertical, cleanLocation)) {
+    console.warn(`[Scout] Requested queue location is not valid for client ${clientId}: ${vertical}/${cleanLocation} — rotating to planned queue`);
+    await logScoutRun('skipped', { vertical, industry, location: cleanLocation }, 'invalid_requested_queue_location');
+    const next = await pickNextQueueItem(clientId, plannedVerticals);
+    if (!next) {
+      console.log('[Scout] No valid planned queue items remain — skipping run');
+      return { skip: true, vertical, saturated: true };
+    }
+    CONFIG.parkedRowsSkipped += Number(next.newly_parked_rows || 0);
+    return {
+      industry: next.industry || next.vertical,
+      location: next.location || cleanLocation,
+      vertical: next.vertical,
+      saturated: false,
+      rotatedFrom: vertical,
+    };
+  }
+
+  const threshold = getSaturationThreshold(vertical);
+  const count = await getProspectCount(clientId, vertical, cleanLocation);
+  const saturated = count >= threshold;
+
+  await upsertQueueItem({ clientId, industry, vertical, location: cleanLocation, count, threshold, saturated });
+
+  if (!saturated) {
+    return { industry, location: cleanLocation, vertical, saturated: false };
+  }
+
+  console.log(`[Scout] "${vertical}" saturated for client ${clientId}: ${count}/${threshold} prospects — rotating queue`);
+  await logScoutRun('skipped', { vertical, industry, location: cleanLocation, prospect_count: count, threshold }, 'vertical_saturated');
+
+  const next = await pickNextQueueItem(clientId, plannedVerticals);
+  if (!next) {
+    console.log('[Scout] No unsaturated queue items remain — skipping run');
+    return { skip: true, vertical, saturated: true };
+  }
+
+  console.log(`[Scout] Rotated to "${next.vertical}" (${next.prospect_count} prospects, lowest in queue)`);
+  CONFIG.parkedRowsSkipped += Number(next.newly_parked_rows || 0);
+  return {
+    industry: next.industry || next.vertical,
+    location: next.location || cleanLocation,
+    vertical: next.vertical,
+    saturated: false,
+    rotatedFrom: vertical,
+  };
+}
+
 async function run(params = {}) {
+  return withResearchProviderScope(params.client_id ?? params.clientId, () => {
+    if (params.client_id != null && params.clientId != null) assertResearchProviderAllowed('research', params.clientId);
+    return runResearchScoped(params);
+  });
+}
+
+async function runResearchScoped(params = {}) {
+  const triggerMode = params.cron || params.secret ? TRIGGER_MODES.CRON : TRIGGER_MODES.MANUAL;
+  return withPlacesContext(
+    {
+      caller: 'leadgen.js',
+      feature: PLACES_FEATURES.LEADGEN,
+      tenantId: params.client_id || params.clientId || process.env.ACTIVE_CLIENT_ID || null,
+      executionId: params.runId || params.run_id || null,
+      triggerMode,
+    },
+    () => runWithAttribution(params)
+  );
+}
+
+async function runWithAttribution(params = {}) {
   CONFIG.clientId = getRuntimeClientId(params);
+  CONFIG.parkedRowsSkipped = 0;
+  const observabilityRunId = makeScoutObservabilityRunId();
   process.env.ACTIVE_CLIENT_ID = String(CONFIG.clientId);
   CLIENT_CONFIG = await getClientConfig(CONFIG.clientId);
   if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CONFIG.clientId}`);
+  // Per-client ICP rubric selector (e.g. 'cleaning_buyer'). Drives scoreLead()
+  // dispatch and Scout source strategy. Defaults to the Pulseforge rubric.
+  CONFIG.scoringProfile = CLIENT_CONFIG.scoring_profile || null;
+  CONFIG.sourceMode = normalizeSourceMode(params.sourceMode ?? params.source_mode ?? CONFIG.sourceMode);
   if (params.industry) CONFIG.industry = params.industry;
-  if (params.location) CONFIG.location = params.location;
+  if (params.location) CONFIG.location = sanitizeQueueLocation(params.location);
   if (params.jobTitle) CONFIG.jobTitle = params.jobTitle;
   if (params.maxResults) CONFIG.maxResults = parseInt(params.maxResults);
+  if (params.maxResults) CONFIG.linkedinMaxResults = positiveInteger(params.maxResults, 30, 100);
+  if (params.titleFilter != null) CONFIG.titleFilter = params.titleFilter;
+  if (params.titleExclude != null) CONFIG.titleExclude = params.titleExclude;
+  if (params.sizeSignal != null) CONFIG.sizeSignal = params.sizeSignal;
+  if (params.dryRun != null) CONFIG.dryRun = booleanValue(params.dryRun);
+  if (params.raw_discovery != null || params.rawDiscovery != null) {
+    CONFIG.rawDiscovery = booleanValue(params.raw_discovery ?? params.rawDiscovery);
+  }
+  if (params.maxRequests != null) CONFIG.maxRequests = positiveInteger(params.maxRequests, 20, 100);
+  if (params.pageDepth != null) CONFIG.pageDepth = positiveInteger(params.pageDepth, 1, 10);
+
+  // LinkedIn sourcing intentionally bypasses Scout's saturation queue so
+  // campaign-specific verticals are never silently rotated to the client plan.
+  const target = CONFIG.sourceMode === 'linkedin'
+    ? {
+        industry: CONFIG.industry,
+        location: CONFIG.location,
+        vertical: normalizeVertical(params.vertical || CONFIG.industry) || 'unknown',
+        saturated: false,
+      }
+    : await resolveScoutTarget({
+        clientId: CONFIG.clientId,
+        industry: CONFIG.industry,
+        location: CONFIG.location,
+        verticals: CLIENT_CONFIG.verticals,
+        vertical: params.vertical,
+      });
+  if (target.skip) {
+    const result = { attempts: 0, successes: 0, skipped: 0, errorSample: null, skipped_run: true, reason: 'saturated', vertical: target.vertical };
+    logScoutCompletionSummary({ saved: 0, skipped_breakdown: {} });
+    await reportScoutRun({ runId: observabilityRunId, ...result });
+    return result;
+  }
+  CONFIG.industry = target.industry;
+  CONFIG.location = target.location;
+  CONFIG.vertical = target.vertical;
 
   const startedAt = Date.now();
   const runContext = {
+    source_mode: CONFIG.sourceMode,
     industry: CONFIG.industry,
     location: CONFIG.location,
+    vertical: CONFIG.vertical,
     job_title: CONFIG.jobTitle,
     max_results: CONFIG.maxResults,
+    ...(CONFIG.sourceMode === 'linkedin' ? {
+      title_filter: CONFIG.titleFilter,
+      title_exclude: CONFIG.titleExclude || null,
+      size_signal: CONFIG.sizeSignal || null,
+      dry_run: CONFIG.dryRun,
+      max_requests: CONFIG.maxRequests,
+      page_depth: CONFIG.pageDepth,
+    } : {}),
+    ...(target.rotatedFrom ? { rotated_from: target.rotatedFrom } : {}),
   };
-  await logScoutRun('running', runContext);
+
+  const lockMeta = {
+    clientId: CONFIG.clientId,
+    industry: CONFIG.industry,
+    vertical: CONFIG.vertical,
+    location: CONFIG.location,
+  };
+
+  const lockHolder = await acquireScoutLockWithWait(lockMeta);
+  if (!lockHolder) {
+    const active = await getActiveScoutLock();
+    await logScoutRun('skipped', {
+      ...runContext,
+      reason: 'scout_lock_timeout',
+      wait_ms: 5 * 60 * 1000,
+      active_lock: active || null,
+    }, 'scout_lock_timeout');
+    console.log('[Scout] Global lock timeout — another Scout run is still active');
+    const result = { attempts: 0, successes: 0, skipped: 0, errorSample: null, skipped_run: true, reason: 'scout_lock_timeout' };
+    await reportScoutRun({ runId: observabilityRunId, ...result });
+    return result;
+  }
+
+  await logScoutRun('success', {
+    ...runContext,
+    holder_id: lockHolder,
+  }, 'scout_lock_acquired');
+
   try {
-    const stats = await main();
+    const runId = await logScoutRun('pending', runContext);
+    const stats = CONFIG.sourceMode === 'linkedin'
+      ? await runLinkedInSourcing({ runId })
+      : await main({ runId });
+    logScoutCompletionSummary(CONFIG.sourceMode === 'linkedin' ? { saved: 0, skipped_breakdown: {} } : stats);
+    const observability = CONFIG.sourceMode === 'linkedin'
+      ? {
+          attempts: Number(stats.parsed_results || 0),
+          successes: Number(CONFIG.dryRun ? stats.would_be_writes + stats.would_be_enrich_existing : stats.written + stats.enriched_existing),
+          skipped: Number(stats.deduped || stats.would_be_dedupes || 0),
+          errorSample: stats.errors ? { persistence_errors: stats.errors } : null,
+        }
+      : await resolveScoutObservabilityStats(stats, runId);
+    if (CONFIG.sourceMode !== 'linkedin') {
+      await pool.query(
+        `UPDATE scout_queue SET last_run_at = NOW(), updated_at = NOW()
+         WHERE client_id = $1 AND vertical = $2 AND location = $3`,
+        [CONFIG.clientId, CONFIG.vertical, CONFIG.location || '']
+      );
+      await refreshQueueCounts(CONFIG.clientId);
+    }
     await logScoutRun('success', {
       ...runContext,
       duration_ms: Date.now() - startedAt,
       ...(stats || {}),
+      observability,
     });
+    await reportScoutRun({ runId: observabilityRunId, ...observability });
+    return { ...(stats || {}), ...observability };
   } catch (err) {
+    rethrowResearchProviderControl(err);
     await logScoutRun('failed', {
       ...runContext,
       duration_ms: Date.now() - startedAt,
       error: err.message,
     });
-    throw err;
+    const result = {
+      attempts: 1,
+      successes: 0,
+      skipped: 0,
+      errorSample: { error: err.message },
+      failed: true,
+    };
+    await reportScoutRun({ runId: observabilityRunId, ...result });
+    return result;
+  } finally {
+    const released = await releaseScoutLock(lockHolder);
+    await logScoutRun(released ? 'success' : 'skipped', {
+      ...runContext,
+      holder_id: lockHolder,
+      released,
+    }, 'scout_lock_released');
   }
 }
 
-module.exports = { run };
+async function configureScoringContext(params = {}) {
+  CONFIG.clientId = getRuntimeClientId(params);
+  process.env.ACTIVE_CLIENT_ID = String(CONFIG.clientId);
+  CLIENT_CONFIG = await getClientConfig(CONFIG.clientId);
+  if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CONFIG.clientId}`);
+
+  CONFIG.scoringProfile = CLIENT_CONFIG.scoring_profile || null;
+  if (params.industry) CONFIG.industry = params.industry;
+  if (params.location) CONFIG.location = sanitizeQueueLocation(params.location);
+  if (params.vertical) CONFIG.vertical = normalizeVertical(params.vertical) || 'unknown';
+  else if (params.industry) CONFIG.vertical = normalizeVertical(params.industry) || 'unknown';
+
+  return {
+    clientId: CONFIG.clientId,
+    vertical: CONFIG.vertical,
+    scoringProfile: CONFIG.scoringProfile,
+    city: CLIENT_CONFIG.city || null,
+    state: CLIENT_CONFIG.state || null,
+    serviceArea: CLIENT_CONFIG.service_area || [],
+  };
+}
+
+async function runEnrichmentChain(domain, jobTitle = 'owner', options = {}) {
+  const tenants = [options.tenantId, options.clientId, options.client_id].filter(value => value != null);
+  return withResearchProviderScope(tenants[0], () => {
+    for (const tenant of tenants) assertResearchProviderAllowed('enrichment', tenant);
+    return runEnrichmentChainScoped(domain, jobTitle, options);
+  });
+}
+
+async function runEnrichmentChainScoped(domain, jobTitle = 'owner', options = {}) {
+  const savedTitle = CONFIG.jobTitle;
+  CONFIG.jobTitle = jobTitle;
+  try {
+    let enriched = await enrichWithProspeo(domain);
+    if (enriched) {
+      enriched.source = ['prospeo'];
+      await recordEmailEnrichmentMethod(domain, 'prospeo', { source: enriched.source, has_email: Boolean(enriched.email) });
+      return enriched;
+    }
+    enriched = await enrichWithHunter(domain);
+    if (enriched) {
+      enriched.source = ['hunter'];
+      await recordEmailEnrichmentMethod(domain, 'hunter', { source: enriched.source, has_email: Boolean(enriched.email) });
+      return enriched;
+    }
+    enriched = await scrapeWebsiteEmail(domain, options);
+    if (enriched) {
+      enriched.source = ['scraped'];
+      await recordEmailEnrichmentMethod(domain, 'scraped', { source: enriched.source, has_email: Boolean(enriched.email) });
+      return enriched;
+    }
+    await recordEmailEnrichmentMethod(domain, 'none');
+    return null;
+  } finally {
+    CONFIG.jobTitle = savedTitle;
+  }
+}
+
+module.exports = {
+  run,
+  enrichWithProspeo,
+  enrichWithHunter,
+  scrapeWebsiteEmail,
+  filterScrapedWebsiteEmails,
+  normalizeDomain,
+  resolveEmailVerification,
+  runEnrichmentChain,
+  listProspeoContactsForDomain,
+  searchProspeoContactsForDomain,
+  normalizeVertical,
+  scoreCleaningLead,
+  scoreLead,
+  configureScoringContext,
+  getSearchQueriesForTarget,
+  searchGooglePlaces,
+  _test: {
+    searchGoogle,
+    normalizeSourceMode,
+    saveLinkedInProspect,
+    pickNextQueueItem,
+    reconcileScoutQueueForClient,
+    getPlannedLocations,
+    isQueueLocationValidForPlan,
+    classifyPlacesB2B,
+    requiresB2BPlacesGate,
+    searchGooglePlaces,
+    saveToDatabase,
+    CLIENT_SCOUT_PLANS,
+    CLIENT_SCOUT_CITY_STATE_OVERRIDES,
+    filterScrapedWebsiteEmails,
+    resolveScoutPlanVertical,
+    resolveScoutContactCandidate,
+  },
+};
 
 if (require.main === module) {
   run({ client_id: CONFIG.clientId }).catch(err => {

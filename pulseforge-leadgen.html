@@ -919,7 +919,6 @@ const state = {
   running: false
 };
 
-
 // ── CONFIG ──────────────────────────────────────────────────────────
 function openConfig() {
   document.getElementById('cfg-google-key').value = state.config.googleKey;
@@ -1044,7 +1043,7 @@ async function runSearch() {
     es.close();
     return;
   }
-    log('error', 'Search API connection failed. No fallback data loaded.');
+    log('error', 'Search API connection failed — no leads loaded');
     state.leads = [];
     renderTable();
     updateStats([], 0);
@@ -1056,7 +1055,7 @@ async function runSearch() {
   };
 
   } catch (err) {
-    log('error', 'Could not connect to search API. No fallback data loaded.');
+    log('error', 'Could not connect to search API — no leads loaded');
     state.leads = [];
     renderTable();
     updateStats([], 0);
@@ -1066,7 +1065,6 @@ async function runSearch() {
     state.running = false;
   }
 }
-
 
 function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
 

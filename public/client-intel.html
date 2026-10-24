@@ -1,0 +1,5013 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pulseforge — My Business</title>
+  <link rel="icon" href="/favicon.ico">
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/shared/tokens.css">
+  <link rel="stylesheet" href="/shared/shell.css">
+  <style>
+    /* SPEC-099 — CIE visual convergence with Max Intelligence Workspace.
+       Reuse Phase B tokens: cream surface, navy type, muted gold, Max serif. */
+    :root {
+      --cie-bg: var(--pf-bg);
+      --cie-panel: var(--pf-bg-card);
+      --cie-panel-elevated: var(--pf-bg-raised);
+      --cie-border: var(--pf-border);
+      --cie-border-soft: var(--pf-border);
+      --cie-text: var(--pf-text);
+      --cie-muted: var(--pf-text-muted);
+      --cie-accent: var(--pf-gold);
+      --cie-accent-soft: var(--pf-gold-glow);
+      --cie-ok: var(--pf-green);
+      --cie-warn: var(--pf-amber);
+      --cie-bad: var(--pf-red);
+      --cie-assistant: color-mix(in srgb, var(--pf-bg-card) 88%, var(--pf-navy));
+      --cie-client: color-mix(in srgb, var(--pf-bg-raised) 70%, #fff);
+      --cie-header-h: 3.5rem;
+      --cie-serif: 'Newsreader', Georgia, serif;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+    }
+    body {
+      font-family: var(--pf-font-body);
+      background:
+        radial-gradient(900px 480px at 8% -8%, color-mix(in srgb, var(--pf-gold) 12%, transparent), transparent 60%),
+        radial-gradient(700px 400px at 92% 0%, color-mix(in srgb, var(--pf-navy) 8%, transparent), transparent 55%),
+        var(--cie-bg);
+      color: var(--cie-text);
+      display: flex;
+      flex-direction: column;
+    }
+    body > .pf-shell-nav { flex: 0 0 auto; }
+    header.cie-page-header {
+      flex: 0 0 auto;
+      height: var(--cie-header-h);
+      padding: 0 1.5rem;
+      border-bottom: 1px solid var(--cie-border);
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+      background: color-mix(in srgb, var(--pf-bg-card) 90%, transparent);
+    }
+    header.cie-page-header h1 {
+      margin: 0;
+      font-family: var(--cie-serif);
+      font-size: 1.35rem;
+      font-weight: 500;
+      letter-spacing: -0.02em;
+      color: var(--pf-navy);
+    }
+    header.cie-page-header p {
+      margin: 0;
+      color: var(--cie-muted);
+      font-size: 0.85rem;
+      font-family: var(--pf-font-mono);
+      letter-spacing: 0.04em;
+    }
+    .workspace {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.25rem;
+      padding: 1.15rem 1.5rem 1.25rem;
+      max-width: 1280px;
+      width: 100%;
+      margin: 0 auto;
+      height: calc(100vh - var(--cie-header-h) - 48px);
+      max-height: calc(100vh - var(--cie-header-h) - 48px);
+    }
+    @media (max-width: 900px) {
+      html, body { overflow: auto; height: auto; }
+      body { display: block; }
+      .workspace {
+        grid-template-columns: 1fr;
+        height: auto;
+        max-height: none;
+        min-height: calc(100vh - var(--cie-header-h));
+      }
+      .panel { min-height: 70vh; max-height: 80vh; }
+    }
+    .panel {
+      background: var(--cie-panel);
+      border: 1px solid var(--cie-border);
+      border-radius: var(--pf-radius-lg);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      height: 100%;
+      overflow: hidden;
+      box-shadow: var(--pf-shadow);
+    }
+    .panel-head {
+      flex: 0 0 auto;
+      padding: 1rem 1.25rem 0.9rem;
+      border-bottom: 1px solid var(--cie-border);
+    }
+    .panel-head h2 {
+      margin: 0;
+      font-family: var(--cie-serif);
+      font-size: 1.05rem;
+      font-weight: 500;
+      letter-spacing: -0.01em;
+      color: var(--pf-navy);
+    }
+    .panel-head .sub {
+      margin: 0.35rem 0 0;
+      color: var(--cie-muted);
+      font-size: 0.8rem;
+      line-height: 1.4;
+    }
+    .progress-block { margin-top: 0.85rem; }
+    .progress-label {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.75rem;
+      margin-bottom: 0.4rem;
+      font-size: 0.78rem;
+      color: var(--cie-muted);
+    }
+    .progress-label strong { color: var(--cie-text); font-weight: 500; }
+    .progress-pct {
+      font-family: var(--pf-font-mono);
+      color: var(--cie-accent);
+    }
+    .progress-track {
+      height: 0.4rem;
+      border-radius: 999px;
+      background: var(--cie-panel-elevated);
+      border: 1px solid var(--cie-border-soft);
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--pf-gold-strong), var(--cie-accent));
+      transition: width 280ms ease;
+    }
+    .controls {
+      flex: 0 0 auto;
+      display: flex;
+      gap: 0.5rem;
+      padding: 0.65rem 1.15rem;
+      border-bottom: 1px solid var(--cie-border);
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .controls.soft {
+      opacity: 0.72;
+      font-size: 0.82rem;
+    }
+    input, textarea, button { font: inherit; }
+    input, textarea {
+      background: color-mix(in srgb, var(--pf-bg-card) 88%, transparent);
+      border: 1px solid var(--cie-border);
+      color: var(--cie-text);
+      border-radius: 12px;
+      padding: 0.55rem 0.7rem;
+    }
+    input { width: 5.5rem; }
+    button {
+      background: var(--pf-navy);
+      color: var(--pf-nav-text);
+      border: none;
+      border-radius: 999px;
+      padding: 0.55rem 0.95rem;
+      font-family: var(--pf-font-mono);
+      font-size: 0.68rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      font-weight: 600;
+      cursor: pointer;
+      min-height: 40px;
+    }
+    button.secondary {
+      background: transparent;
+      color: var(--cie-text);
+      border: 1px solid var(--cie-border);
+    }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    #chatLog {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 1.25rem 1.3rem 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.05rem;
+      scroll-behavior: smooth;
+    }
+    .bubble {
+      max-width: 88%;
+      padding: 0.95rem 1.05rem;
+      border-radius: 16px;
+      font-size: 0.96rem;
+      line-height: 1.6;
+      letter-spacing: 0.005em;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .bubble.assistant {
+      align-self: flex-start;
+      background: var(--cie-assistant);
+      border: 1px solid var(--cie-border-soft);
+      border-bottom-left-radius: 6px;
+      font-family: var(--cie-serif);
+      font-size: 1.02rem;
+      line-height: 1.55;
+      color: var(--pf-navy);
+    }
+    .bubble.client {
+      align-self: flex-end;
+      background: var(--cie-client);
+      border: 1px solid color-mix(in srgb, var(--pf-gold) 28%, var(--cie-border));
+      border-bottom-right-radius: 6px;
+    }
+    .bubble.reflection {
+      align-self: flex-start;
+      background: var(--cie-accent-soft);
+      border: 1px solid color-mix(in srgb, var(--pf-gold) 35%, var(--cie-border));
+      color: var(--pf-navy);
+      font-style: italic;
+      border-bottom-left-radius: 6px;
+    }
+    .bubble.meta {
+      align-self: center;
+      color: var(--cie-muted);
+      font-size: 0.8rem;
+      font-family: var(--pf-font-mono);
+      letter-spacing: 0.04em;
+      background: transparent;
+      border: none;
+      padding: 0.35rem 0.5rem;
+      max-width: 100%;
+    }
+    .bubble.trust {
+      align-self: flex-start;
+      max-width: 94%;
+      background: linear-gradient(160deg, var(--cie-accent-soft), var(--cie-panel));
+      border: 1px solid color-mix(in srgb, var(--pf-gold) 40%, var(--cie-border));
+      font-family: var(--cie-serif);
+      font-size: 1.05rem;
+      line-height: 1.65;
+    }
+    .bubble.thinking {
+      align-self: flex-start;
+      background: transparent;
+      border: none;
+      color: var(--cie-muted);
+      font-family: var(--cie-serif);
+      font-size: 0.95rem;
+      font-style: italic;
+      padding: 0.35rem 0.15rem;
+      max-width: 94%;
+      opacity: 0.85;
+    }
+    .bubble.thinking[data-max-thinking="1"]::before {
+      content: '';
+      display: inline-block;
+      width: 0.45rem;
+      height: 0.45rem;
+      margin-right: 0.45rem;
+      border-radius: 50%;
+      background: var(--cie-accent);
+      vertical-align: middle;
+      opacity: 0.7;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #chatLog { scroll-behavior: auto; }
+      .bubble.thinking { font-style: normal; }
+    }
+    .composer {
+      flex: 0 0 auto;
+      display: flex;
+      gap: 0.6rem;
+      padding: 0.9rem 1.15rem;
+      border-top: 1px solid var(--cie-border);
+      background: var(--cie-panel-elevated);
+    }
+    .composer[hidden], .controls[hidden], .actions[hidden] { display: none !important; }
+    .composer textarea {
+      flex: 1;
+      min-height: 3.4rem;
+      max-height: 7rem;
+      resize: none;
+      line-height: 1.45;
+    }
+    #sidePanel {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 1.15rem 1.2rem 1.4rem;
+    }
+    .blueprint-empty {
+      color: var(--cie-muted);
+      font-size: 0.92rem;
+      line-height: 1.55;
+      margin: 0.35rem 0;
+    }
+    .understanding-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+    }
+    .understanding-row {
+      position: relative;
+      padding: 0.85rem 0.95rem;
+      border-radius: 12px;
+      border: 1px solid var(--cie-border-soft);
+      background: color-mix(in srgb, var(--pf-bg-raised) 55%, transparent);
+    }
+    .understanding-row-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.75rem;
+      align-items: baseline;
+    }
+    .understanding-title {
+      font-size: 0.9rem;
+      font-weight: 600;
+    }
+    .understanding-title.ready::before {
+      content: '✓ ';
+      color: var(--cie-ok);
+    }
+    .conf-pct {
+      font-family: var(--pf-font-mono);
+      font-size: 0.82rem;
+    }
+    .conf-pct.bad { color: var(--cie-bad); }
+    .conf-pct.warn { color: var(--cie-warn); }
+    .conf-pct.ok { color: var(--cie-ok); }
+    .conf-bar {
+      margin-top: 0.55rem;
+      height: 0.28rem;
+      border-radius: 999px;
+      background: var(--cie-panel-elevated);
+      overflow: hidden;
+    }
+    .conf-bar > span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      transition: width 280ms ease;
+    }
+    .conf-bar > span.bad { background: var(--cie-bad); }
+    .conf-bar > span.warn { background: var(--cie-warn); }
+    .conf-bar > span.ok { background: var(--cie-ok); }
+    .understanding-status {
+      margin-top: 0.45rem;
+      font-size: 0.78rem;
+      color: var(--cie-muted);
+    }
+    .conf-tip {
+      display: none;
+      position: absolute;
+      left: 0.75rem;
+      right: 0.75rem;
+      top: calc(100% - 0.35rem);
+      z-index: 5;
+      padding: 0.7rem 0.8rem;
+      border-radius: 10px;
+      background: var(--cie-panel);
+      border: 1px solid var(--cie-border);
+      box-shadow: var(--pf-shadow);
+      font-size: 0.78rem;
+      line-height: 1.45;
+      color: var(--cie-text);
+    }
+    .understanding-row:hover .conf-tip,
+    .understanding-row:focus-within .conf-tip {
+      display: block;
+    }
+    .section {
+      padding: 1.1rem 0 1.2rem;
+      border-bottom: 1px solid var(--cie-border-soft);
+    }
+    .section:last-child { border-bottom: none; }
+    .section-title {
+      margin: 0 0 0.55rem;
+      font-size: 0.78rem;
+      font-weight: 600;
+      font-family: var(--pf-font-mono);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--cie-muted);
+    }
+    .section-summary {
+      margin: 0 0 0.8rem;
+      font-size: 0.94rem;
+      line-height: 1.6;
+      color: var(--cie-text);
+    }
+    .section-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.65rem 1rem;
+      align-items: center;
+      margin-bottom: 0.55rem;
+    }
+    .evidence-count {
+      color: var(--cie-muted);
+      font-size: 0.78rem;
+    }
+    .unknowns {
+      color: var(--cie-warn);
+      font-size: 0.8rem;
+      line-height: 1.45;
+      margin: 0 0 0.55rem;
+      padding: 0.55rem 0.7rem;
+      border-radius: 8px;
+      background: rgba(230, 184, 77, 0.08);
+      border: 1px solid rgba(230, 184, 77, 0.22);
+    }
+    .section textarea {
+      width: 100%;
+      min-height: 4.2rem;
+      margin-top: 0.15rem;
+      line-height: 1.5;
+      resize: vertical;
+    }
+    .exec-card {
+      padding: 0.55rem 0.15rem 1rem;
+      animation: briefReveal 640ms ease both;
+    }
+    @keyframes briefReveal {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .exec-card h3 {
+      margin: 0 0 0.4rem;
+      font-size: 1.35rem;
+      font-weight: 600;
+      letter-spacing: 0.015em;
+      line-height: 1.25;
+    }
+    .exec-card .exec-sub {
+      margin: 0;
+      color: var(--cie-muted);
+      font-size: 0.88rem;
+      line-height: 1.45;
+    }
+    .exec-card .exec-tagline {
+      margin: 0.2rem 0 1.55rem;
+      color: var(--cie-muted);
+      font-size: 0.8rem;
+      opacity: 0.9;
+    }
+    .exec-section {
+      margin: 0 0 1.55rem;
+      padding-bottom: 0.15rem;
+    }
+    .exec-section h4 {
+      margin: 0 0 0.55rem;
+      font-size: 0.78rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--cie-muted);
+    }
+    .exec-section p {
+      margin: 0;
+      font-size: 0.98rem;
+      line-height: 1.68;
+      white-space: pre-wrap;
+    }
+    .exec-section p + p { margin-top: 0.65rem; }
+    .exec-list {
+      margin: 0.55rem 0 0;
+      padding: 0 0 0 1.1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.55rem;
+    }
+    .exec-list li {
+      font-size: 0.95rem;
+      line-height: 1.55;
+      color: var(--cie-text);
+    }
+    .assessment-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+      margin: 0.35rem 0 0.85rem;
+    }
+    .assessment-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 0.35rem 1rem;
+      align-items: baseline;
+    }
+    .assessment-label {
+      font-size: 0.95rem;
+      font-weight: 500;
+    }
+    .assessment-stars {
+      font-size: 0.95rem;
+      letter-spacing: 0.08em;
+      color: var(--cie-warn);
+      font-variant-emoji: text;
+    }
+    .assessment-explain {
+      grid-column: 1 / -1;
+      margin: 0;
+      font-size: 0.82rem;
+      line-height: 1.45;
+      color: var(--cie-muted);
+    }
+    .assessment-confidence {
+      margin-top: 0.35rem;
+      font-size: 1.05rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    .assessment-confidence span {
+      color: var(--cie-accent);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .checklist {
+      display: flex;
+      flex-direction: column;
+      gap: 0.7rem;
+      padding: 0.35rem 0;
+    }
+    .checklist-item {
+      display: flex;
+      gap: 0.65rem;
+      align-items: flex-start;
+      color: var(--cie-muted);
+      font-size: 0.92rem;
+      line-height: 1.45;
+      transition: color 220ms ease;
+    }
+    .checklist-item.done { color: var(--cie-text); }
+    .checklist-mark {
+      font-family: 'JetBrains Mono', monospace;
+      width: 1.1rem;
+      color: var(--cie-border);
+    }
+    .checklist-item.done .checklist-mark { color: var(--cie-ok); }
+    .checklist-item.active .checklist-mark { color: var(--cie-accent); }
+    .status-bar {
+      flex: 0 0 auto;
+      padding: 0.55rem 1.15rem;
+      font-size: 0.78rem;
+      color: var(--cie-muted);
+      border-top: 1px solid var(--cie-border);
+    }
+    .actions {
+      flex: 0 0 auto;
+      display: flex;
+      gap: 0.5rem;
+      padding: 0.85rem 1.15rem;
+      border-top: 1px solid var(--cie-border);
+      background: var(--cie-panel-elevated);
+      flex-wrap: wrap;
+    }
+    .completion-card h3 {
+      margin: 0 0 0.75rem;
+      font-size: 1.2rem;
+    }
+    .completion-card p {
+      margin: 0 0 0.85rem;
+      line-height: 1.6;
+      font-size: 0.95rem;
+    }
+    .completion-checks {
+      list-style: none;
+      padding: 0;
+      margin: 0 0 1.15rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+    }
+    .completion-checks li {
+      font-size: 0.92rem;
+      color: var(--cie-text);
+    }
+    .completion-checks li::before {
+      content: '✓ ';
+      color: var(--cie-ok);
+    }
+    .growth-direction {
+      margin-top: 1.35rem;
+      padding-top: 1.15rem;
+      border-top: 1px solid var(--cie-border-soft);
+      animation: briefReveal 640ms ease both;
+    }
+    .growth-direction .growth-kicker {
+      margin: 0 0 0.45rem;
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--cie-accent);
+    }
+    .growth-direction h4 {
+      margin: 0 0 0.85rem;
+      font-size: 1.08rem;
+      font-weight: 600;
+      line-height: 1.35;
+    }
+    .growth-direction p {
+      margin: 0 0 0.75rem;
+      line-height: 1.6;
+      font-size: 0.94rem;
+    }
+    .growth-direction .growth-disclaimer {
+      margin: 0.9rem 0 0;
+      padding: 0.65rem 0.75rem;
+      border-radius: 8px;
+      background: rgba(230, 184, 77, 0.08);
+      border: 1px solid rgba(230, 184, 77, 0.22);
+      color: var(--cie-warn);
+      font-size: 0.8rem;
+      line-height: 1.45;
+    }
+    .scout-handoff-status {
+      display: inline-block;
+      margin: 0.15rem 0 0.85rem;
+      padding: 0.28rem 0.55rem;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 6px;
+      font-size: 0.78rem;
+      letter-spacing: 0.02em;
+      background: rgba(255, 255, 255, 0.05);
+    }
+    .scout-handoff-status.is-unavailable {
+      border-color: rgba(230, 184, 77, 0.45);
+      background: rgba(230, 184, 77, 0.12);
+      color: var(--cie-warn);
+    }
+    .scout-handoff-status.is-ready {
+      border-color: rgba(110, 231, 183, 0.4);
+      background: rgba(110, 231, 183, 0.12);
+      color: #bbf7d0;
+    }
+    .scout-handoff-meta {
+      font-size: 0.78rem;
+      opacity: 0.8;
+      margin-bottom: 0.75rem;
+    }
+    .scout-candidate-row {
+      margin: 0.35rem 0;
+    }
+    .scout-candidate-row a {
+      color: inherit;
+      text-decoration: underline;
+    }
+    .error {
+      position: fixed;
+      left: 1.5rem;
+      right: 1.5rem;
+      bottom: 1rem;
+      z-index: 20;
+      color: #ffb4b4;
+      background: rgba(40, 16, 16, 0.92);
+      border: 1px solid rgba(255, 123, 123, 0.35);
+      border-radius: 10px;
+      padding: 0.65rem 0.9rem;
+      font-size: 0.85rem;
+      max-width: 1280px;
+      margin: 0 auto;
+    }
+    .fade-out {
+      opacity: 0;
+      transition: opacity 480ms ease;
+    }
+    .session-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+      margin-top: 0.85rem;
+    }
+    .session-card {
+      border: 1px solid var(--cie-border);
+      border-radius: 12px;
+      background: var(--cie-panel-elevated);
+      padding: 0.85rem 0.95rem;
+      text-align: left;
+    }
+    .session-card.sample {
+      border-color: rgba(230, 184, 77, 0.45);
+      background: rgba(230, 184, 77, 0.08);
+    }
+    .session-card-title {
+      margin: 0;
+      font-size: 0.92rem;
+      font-weight: 600;
+    }
+    .session-card-meta {
+      margin: 0.3rem 0 0.7rem;
+      color: var(--cie-muted);
+      font-size: 0.78rem;
+      line-height: 1.4;
+    }
+    .session-card-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+    }
+    .session-card-actions button {
+      font-size: 0.78rem;
+      padding: 0.4rem 0.7rem;
+    }
+    .sample-badge {
+      display: inline-block;
+      margin-left: 0.4rem;
+      padding: 0.1rem 0.4rem;
+      border-radius: 4px;
+      font-size: 0.68rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #1a1408;
+      background: var(--cie-warn);
+    }
+    .fixture-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: center;
+      margin-top: 0.75rem;
+    }
+    .workspace-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin-top: 0.75rem;
+    }
+    .workspace-tabs button {
+      background: transparent;
+      color: var(--cie-muted);
+      border: 1px solid transparent;
+      border-radius: 8px;
+      padding: 0.35rem 0.65rem;
+      font-size: 0.78rem;
+      font-weight: 500;
+    }
+    .workspace-tabs button.active {
+      color: var(--cie-text);
+      border-color: var(--cie-border);
+      background: var(--cie-accent-soft);
+    }
+    .current-task-card {
+      position: static;
+      height: auto;
+      max-height: none;
+      overflow: visible;
+      border: 1px solid var(--cie-border);
+      border-radius: 14px;
+      background: linear-gradient(180deg, rgba(61, 156, 253, 0.08), transparent 70%),
+        var(--cie-panel-elevated);
+      padding: 1.1rem 1.15rem 1.15rem;
+      margin-bottom: 0.85rem;
+    }
+    .current-task-card .kicker {
+      margin: 0 0 0.35rem;
+      font-size: 0.7rem;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--cie-accent);
+      font-weight: 600;
+    }
+    .current-task-card h3 {
+      margin: 0 0 0.55rem;
+      font-size: 1.15rem;
+      font-weight: 600;
+      line-height: 1.3;
+    }
+    .current-task-card .task-meta {
+      margin: 0 0 0.85rem;
+      color: var(--cie-muted);
+      font-size: 0.84rem;
+      line-height: 1.45;
+    }
+    .current-task-card .task-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+    }
+    .task-guidance-card {
+      position: static;
+      height: auto;
+      max-height: none;
+      overflow: visible;
+      margin-top: 0.75rem;
+    }
+    .task-guidance-body {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .task-guidance-block h4 {
+      margin: 0 0 0.3rem;
+      font-size: 0.78rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--cie-accent);
+      font-weight: 600;
+    }
+    .task-guidance-block p {
+      margin: 0;
+      color: var(--cie-text);
+      font-size: 0.88rem;
+      line-height: 1.5;
+    }
+    .task-guidance-list {
+      margin: 0;
+      padding-left: 1.1rem;
+      color: var(--cie-text);
+      font-size: 0.88rem;
+      line-height: 1.5;
+    }
+    .task-guidance-list li { margin: 0.2rem 0; }
+    .task-queue {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+    }
+    .task-queue li {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.65rem 0.75rem;
+      border: 1px solid var(--cie-border-soft);
+      border-radius: 10px;
+      font-size: 0.86rem;
+    }
+    .task-queue li.complete { opacity: 0.55; }
+    .task-queue li.current {
+      border-color: rgba(61, 156, 253, 0.45);
+      background: var(--cie-accent-soft);
+    }
+    .task-queue .task-status {
+      color: var(--cie-muted);
+      font-size: 0.72rem;
+      white-space: nowrap;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .completion-options {
+      display: grid;
+      gap: 0.5rem;
+      margin-top: 0.85rem;
+    }
+    .completion-options button {
+      width: 100%;
+      text-align: left;
+    }
+    .previous-plans {
+      margin-top: 0.85rem;
+      border-top: 1px solid var(--cie-border-soft);
+      padding-top: 0.75rem;
+    }
+    .previous-plans summary {
+      cursor: pointer;
+      color: var(--cie-muted);
+      font-size: 0.82rem;
+      font-weight: 500;
+      list-style: none;
+    }
+    .previous-plans summary::-webkit-details-marker { display: none; }
+    .previous-plans .session-list { margin-top: 0.65rem; }
+    .operator-review-digest .ord-digest {
+      display: grid;
+      gap: 0.35rem;
+    }
+    .operator-review-digest .ord-list {
+      margin: 0.15rem 0 0.55rem 1.1rem;
+      padding: 0;
+    }
+    .operator-review-digest .ord-list li { margin: 0.2rem 0; }
+    .operator-review-digest .ord-primary-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin: 0.85rem 0 0.75rem;
+    }
+    .operator-review-digest .ord-evidence-drawer {
+      margin-top: 0.65rem;
+      border-top: 1px solid var(--cie-border-soft);
+      padding-top: 0.65rem;
+    }
+    .operator-review-digest .ord-evidence-drawer > summary {
+      cursor: pointer;
+      color: var(--cie-muted);
+      font-size: 0.88rem;
+      font-weight: 600;
+      list-style: none;
+    }
+    .operator-review-digest .ord-evidence-drawer > summary::-webkit-details-marker {
+      display: none;
+    }
+    .operator-review-digest .ord-evidence-body {
+      margin-top: 0.75rem;
+      display: grid;
+      gap: 0.85rem;
+    }
+    .operator-review-digest .ord-evidence-record {
+      border: 1px solid var(--cie-border-soft);
+      border-radius: 8px;
+      padding: 0.65rem 0.75rem;
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .operator-review-digest .ord-evidence-record h5 {
+      margin: 0 0 0.45rem;
+      font-size: 0.92rem;
+    }
+    .operator-review-digest .ord-evidence-dl {
+      margin: 0;
+      display: grid;
+      gap: 0.35rem;
+    }
+    .operator-review-digest .ord-evidence-dl div {
+      display: grid;
+      grid-template-columns: 8.5rem 1fr;
+      gap: 0.4rem;
+      font-size: 0.82rem;
+    }
+    .operator-review-digest .ord-evidence-dl dt {
+      color: var(--cie-muted);
+      margin: 0;
+      font-weight: 500;
+    }
+    .operator-review-digest .ord-evidence-dl dd {
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+    .operator-review-digest .ord-closing {
+      margin-top: 0.75rem;
+      font-weight: 500;
+    }
+    .gw-left-section {
+      position: static;
+      margin: 0;
+      height: auto;
+      overflow: visible;
+    }
+    .gw-section-label {
+      font-size: 0.78rem;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      color: var(--cie-muted);
+    }
+    #savedSessions.workspace-left-nav {
+      position: static;
+      flex: 0 1 auto;
+      height: auto;
+      max-height: 58%;
+      overflow-x: hidden;
+      overflow-y: auto;
+      padding: 0.75rem 1.15rem 0.85rem;
+      border-bottom: 1px solid var(--cie-border);
+      margin-top: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+    #savedSessions.workspace-left-nav.session-list {
+      /* Avoid session-list gap stacking that looked like overlapping cards. */
+      gap: 0.35rem;
+      margin-top: 0;
+    }
+    /* Guidance open: left nav is the ONLY scroll owner above the sticky footer. */
+    .panel[data-workspace="growth"] {
+      --gw-sticky-footer-clearance: calc(7.5rem + 24px);
+    }
+    .panel[data-workspace="growth"] #savedSessions.workspace-left-nav.guidance-open {
+      /* flex-basis 0 so this takes remaining space and scrolls internally */
+      flex: 1 1 0;
+      min-height: 0;
+      max-height: none;
+      height: auto;
+      /* Block layout: flex scroll containers often ignore padding-bottom overflow */
+      display: block;
+      overflow-x: hidden;
+      overflow-y: auto;
+      padding-bottom: 0 !important; /* spacer owns clearance, not padding */
+      border-bottom: none;
+      scroll-padding-bottom: var(--gw-sticky-footer-clearance);
+    }
+    .panel[data-workspace="growth"] #savedSessions.workspace-left-nav.guidance-open > .gw-left-section,
+    .panel[data-workspace="growth"] #savedSessions.workspace-left-nav.guidance-open > .previous-plans {
+      display: block;
+    }
+    /* Explicit end spacer inside the scroll container (footer height + 24px). */
+    .gw-guidance-scroll-spacer {
+      display: block;
+      width: 100%;
+      height: var(--gw-sticky-footer-clearance);
+      min-height: var(--gw-sticky-footer-clearance);
+      flex: 0 0 auto;
+      pointer-events: none;
+    }
+    .panel[data-workspace="growth"] #chatLog.guidance-suppressed {
+      display: none !important;
+      height: 0 !important;
+      max-height: 0 !important;
+      min-height: 0 !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      overflow: hidden !important;
+      border: 0 !important;
+      flex: 0 0 0 !important;
+    }
+    .panel[data-workspace="growth"] #growthWorkspaceActions,
+    .panel[data-workspace="growth"] #sessionStatus {
+      flex: 0 0 auto;
+      position: relative;
+      z-index: 3;
+      background: var(--cie-panel-elevated);
+    }
+    .panel[data-workspace="growth"] #sessionStatus {
+      background: var(--cie-panel);
+    }
+    #savedSessions .task-guidance-card,
+    #savedSessions .task-guidance-card .task-guidance-body,
+    #savedSessions .task-guidance-card .task-guidance-block {
+      position: static;
+      height: auto;
+      max-height: none;
+      overflow: visible;
+    }
+    #savedSessions .task-guidance-card {
+      margin-top: 0.35rem;
+      margin-bottom: 0.75rem;
+      flex: 0 0 auto;
+    }
+    /* Never show a compact/simple task card inside the left guidance column. */
+    #savedSessions [data-role="simple-task"] {
+      display: none !important;
+    }
+    .plan-progress-label {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.75rem;
+      margin-bottom: 0.35rem;
+      font-size: 0.8rem;
+      color: var(--cie-muted);
+    }
+  </style>
+</head>
+<body>
+  <header class="cie-page-header">
+    <h1 id="ciePageTitle">Client Intelligence</h1>
+    <p id="ciePageSub">A conversation with Max about how your business works</p>
+  </header>
+
+  <div class="workspace">
+    <section class="panel" aria-label="Interview chat">
+      <div class="panel-head">
+        <h2 id="chatPanelTitle">Conversation</h2>
+        <div class="progress-block" id="progressBlock" hidden>
+          <div class="progress-label">
+            <strong id="progressLabel">Business Understanding</strong>
+            <span class="progress-pct" id="progressPct">0%</span>
+          </div>
+          <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progressTrack">
+            <div class="progress-fill" id="progressFill"></div>
+          </div>
+        </div>
+      </div>
+      <div class="controls soft" id="operatorControls">
+        <label id="clientIdLabel">Client ID <input id="clientId" value="" inputmode="numeric" placeholder="from tenant selector"></label>
+        <p id="clientScopeLabel" class="sub" hidden></p>
+        <button type="button" id="startBtn">Begin</button>
+        <button type="button" id="notesBtn" class="secondary">Start from notes</button>
+        <button type="button" id="newInterviewBtn" class="secondary" hidden>Start New Interview</button>
+        <button type="button" id="loadAnchorFixtureBtn" class="secondary" hidden>Load Anchor sample Blueprint</button>
+      </div>
+      <div id="savedSessions" class="session-list" hidden></div>
+      <div id="chatLog" aria-live="polite"></div>
+      <div class="composer" id="composer" hidden>
+        <textarea id="messageInput" placeholder="Share your thoughts…" rows="2"></textarea>
+        <button type="button" id="sendBtn" disabled>Send</button>
+      </div>
+      <div class="actions" id="execActions" hidden>
+        <button type="button" id="accurateBtn">✓ Yes, this reflects my business.</button>
+        <button type="button" id="refineBtn" class="secondary">✏️ I'd like to refine this.</button>
+        <button type="button" id="keepTalkingBtn" class="secondary">💬 Let's keep talking.</button>
+      </div>
+      <div class="actions" id="completeActions" hidden>
+        <button type="button" id="growthBtn">Resume Growth Plan</button>
+        <button type="button" id="readinessBtn" class="secondary">Check Growth Infrastructure</button>
+        <button type="button" id="dashboardBtn" class="secondary">Return to Dashboard</button>
+      </div>
+      <div class="actions" id="growthPreviewActions" hidden>
+        <button type="button" id="useFocusBtn">Use this focus</button>
+        <button type="button" id="refineSegmentBtn" class="secondary">Refine first segment</button>
+        <button type="button" id="checkInfraFromGrowthBtn" class="secondary">Check Growth Infrastructure</button>
+        <button type="button" id="growthDashboardBtn" class="secondary">Return to Dashboard</button>
+      </div>
+      <div class="actions" id="growthWorkspaceActions" hidden>
+        <button type="button" id="continueTaskBtn">Continue Task</button>
+        <button type="button" id="completeTaskBtn" class="secondary">Mark Complete</button>
+        <button type="button" id="workspaceDashboardBtn" class="secondary">Return to Dashboard</button>
+      </div>
+      <div class="status-bar" id="sessionStatus">Welcome</div>
+    </section>
+
+    <section class="panel" aria-label="Business understanding">
+      <div class="panel-head">
+        <h2 id="sidePanelTitle">Business Understanding</h2>
+        <p class="sub" id="sidePanelSub">Progress builds as we talk. Narratives appear after Max shares his understanding.</p>
+        <div class="workspace-tabs" id="workspaceTabs" hidden>
+          <button type="button" data-tab="overview" class="active">Overview</button>
+          <button type="button" data-tab="tasks">Tasks</button>
+          <button type="button" data-tab="readiness">Readiness Report</button>
+          <button type="button" data-tab="blueprint">Blueprint</button>
+          <button type="button" data-tab="history">History</button>
+        </div>
+      </div>
+      <div id="sidePanel"><p class="blueprint-empty">When you're ready, begin the conversation.</p></div>
+      <div class="actions" id="blueprintActions" hidden>
+        <button type="button" id="regenerateBlueprintBtn" class="secondary" disabled>Regenerate Blueprint</button>
+        <button type="button" id="reviseBtn" class="secondary" disabled>Save edits</button>
+        <button type="button" id="refineWithMaxBtn" class="secondary" disabled>Refine with Max</button>
+        <button type="button" id="approveBtn" disabled>Approve Blueprint</button>
+      </div>
+      <div class="status-bar" id="blueprintStatus"></div>
+    </section>
+  </div>
+  <div class="error" id="errorBox" hidden></div>
+
+  <script src="/shared/tenantCoordinator.js"></script>
+  <script src="/shared/shell.js"></script>
+  <script src="/shared/growth-workspace-panel.js"></script>
+  <script src="/shared/operator-review-digest.js"></script>
+  <script src="/shared/maxInteractionCadence.js"></script>
+  <script>
+    const GrowthWorkspacePanel =
+      (typeof window !== 'undefined' && window.PulseforgeGrowthWorkspacePanel) || {};
+    const OperatorReviewDigest =
+      (typeof window !== 'undefined' && window.PulseforgeOperatorReviewDigest) || {};
+    const MaxCadence =
+      (typeof window !== 'undefined' && window.MaxInteractionCadence) || null;
+
+    const SECTION_TITLES = {
+      identity: 'Identity',
+      services: 'Services',
+      idealCustomers: 'Ideal Customers',
+      avoidCustomers: 'Customers to Avoid',
+      targetMarkets: 'Target Markets',
+      competitiveAdvantages: 'Competitive Advantages',
+      brandVoice: 'Brand Voice',
+      campaignGoals: 'Campaign Goals',
+      successMetrics: 'Success Metrics',
+    };
+
+    const LOAD_STEPS = [
+      'Reviewing interview',
+      'Organizing evidence',
+      'Connecting themes',
+      'Measuring confidence',
+      'Identifying opportunities',
+      'Preparing Executive Business Brief',
+    ];
+
+    const PLAYBOOK_STEPS = [
+      'Translating business understanding',
+      'Building operational strategy',
+      'Ready',
+    ];
+
+    const TRUST_BRIDGE =
+      "One last thing.\n\nBefore I ask you to trust my recommendations, I want to make sure I've earned your trust by showing you that I understood your business.";
+
+    const PREMIUM_LOAD_MS = 3000;
+
+    const state = {
+      phase: 'welcome',
+      interviewId: null,
+      sessionStatus: null,
+      blueprint: null,
+      executiveSummary: null,
+      understanding: null,
+      stickToBottom: true,
+      pendingCompletion: null,
+      approveInFlight: false,
+      regenerateInFlight: false,
+      turnInFlight: false,
+      revealAbort: null,
+      initialGrowthDirection: null,
+      growthConversationActive: false,
+      readinessConversationActive: false,
+      campaignPlanningConversationActive: false,
+      growthInfrastructureReadinessReport: null,
+      firstGrowthPlanPreview: null,
+      firstCampaignPlanPreview: null,
+      prospectListCriteriaPreview: null,
+      prospectListBuildProposal: null,
+      scoutHandoffBrief: null,
+      scoutHandoff: null,
+      scoutWorkRequest: null,
+      scoutCandidateBatch: null,
+      prospectBatchReview: null,
+      outreachStrategyPreview: null,
+      outreachCopyPlan: null,
+      growthPlan: null,
+      workspaceTab: 'overview',
+      isSample: false,
+      savedSessions: [],
+      fixturesAllowed: false,
+      taskGuidanceOpen: false,
+      authRole: null,
+      authClientId: null,
+      activeClientId: null,
+      clientDisplayName: null,
+      isClientRole: false,
+      onboardingState: 'none',
+      hasUnapprovedOnboarding: false,
+      interviewStartInFlight: false,
+    };
+
+    const els = {
+      clientId: document.getElementById('clientId'),
+      clientIdLabel: document.getElementById('clientIdLabel'),
+      clientScopeLabel: document.getElementById('clientScopeLabel'),
+      chatLog: document.getElementById('chatLog'),
+      messageInput: document.getElementById('messageInput'),
+      sendBtn: document.getElementById('sendBtn'),
+      startBtn: document.getElementById('startBtn'),
+      notesBtn: document.getElementById('notesBtn'),
+      newInterviewBtn: document.getElementById('newInterviewBtn'),
+      loadAnchorFixtureBtn: document.getElementById('loadAnchorFixtureBtn'),
+      savedSessions: document.getElementById('savedSessions'),
+      sessionStatus: document.getElementById('sessionStatus'),
+      sidePanel: document.getElementById('sidePanel'),
+      sidePanelTitle: document.getElementById('sidePanelTitle'),
+      sidePanelSub: document.getElementById('sidePanelSub'),
+      regenerateBlueprintBtn: document.getElementById('regenerateBlueprintBtn'),
+      reviseBtn: document.getElementById('reviseBtn'),
+      refineWithMaxBtn: document.getElementById('refineWithMaxBtn'),
+      approveBtn: document.getElementById('approveBtn'),
+      blueprintStatus: document.getElementById('blueprintStatus'),
+      blueprintActions: document.getElementById('blueprintActions'),
+      errorBox: document.getElementById('errorBox'),
+      progressBlock: document.getElementById('progressBlock'),
+      progressLabel: document.getElementById('progressLabel'),
+      progressPct: document.getElementById('progressPct'),
+      progressFill: document.getElementById('progressFill'),
+      progressTrack: document.getElementById('progressTrack'),
+      composer: document.getElementById('composer'),
+      operatorControls: document.getElementById('operatorControls'),
+      execActions: document.getElementById('execActions'),
+      completeActions: document.getElementById('completeActions'),
+      growthPreviewActions: document.getElementById('growthPreviewActions'),
+      useFocusBtn: document.getElementById('useFocusBtn'),
+      refineSegmentBtn: document.getElementById('refineSegmentBtn'),
+      checkInfraFromGrowthBtn: document.getElementById('checkInfraFromGrowthBtn'),
+      growthDashboardBtn: document.getElementById('growthDashboardBtn'),
+      accurateBtn: document.getElementById('accurateBtn'),
+      refineBtn: document.getElementById('refineBtn'),
+      keepTalkingBtn: document.getElementById('keepTalkingBtn'),
+      growthBtn: document.getElementById('growthBtn'),
+      readinessBtn: document.getElementById('readinessBtn'),
+      dashboardBtn: document.getElementById('dashboardBtn'),
+      chatPanelTitle: document.getElementById('chatPanelTitle'),
+      growthWorkspaceActions: document.getElementById('growthWorkspaceActions'),
+      continueTaskBtn: document.getElementById('continueTaskBtn'),
+      completeTaskBtn: document.getElementById('completeTaskBtn'),
+      workspaceDashboardBtn: document.getElementById('workspaceDashboardBtn'),
+      workspaceTabs: document.getElementById('workspaceTabs'),
+    };
+
+    function showError(err) {
+      els.errorBox.hidden = !err;
+      els.errorBox.textContent = err || '';
+    }
+
+    function isNearBottom(el, threshold) {
+      return el.scrollHeight - el.scrollTop - el.clientHeight <= (threshold || 80);
+    }
+
+    function maybeScrollChat() {
+      if (state.stickToBottom) {
+        els.chatLog.scrollTop = els.chatLog.scrollHeight;
+      }
+    }
+
+    els.chatLog.addEventListener('scroll', () => {
+      state.stickToBottom = isNearBottom(els.chatLog);
+    });
+
+    function addBubble(role, text) {
+      const div = document.createElement('div');
+      div.className = 'bubble ' + role;
+      div.textContent = text;
+      els.chatLog.appendChild(div);
+      maybeScrollChat();
+      return div;
+    }
+
+    function resolveClientDisplayName() {
+      return (
+        state.clientDisplayName ||
+        (state.blueprint && state.blueprint.businessName) ||
+        (state.growthPlan && state.growthPlan.businessName) ||
+        (state.executiveSummary && state.executiveSummary.businessName) ||
+        null
+      );
+    }
+
+    function mountThinkingBubble(label) {
+      if (!MaxCadence) {
+        return addBubble('thinking', label || 'Considering your question…');
+      }
+      const el = MaxCadence.createThinkingElement(
+        document,
+        label || 'Considering your question…',
+        'bubble thinking'
+      );
+      els.chatLog.appendChild(el);
+      maybeScrollChat();
+      return el;
+    }
+
+    /**
+     * SPEC-102 — reveal Max prose with cadence; actions deferred via onComplete.
+     */
+    async function presentCieAssistantMessage(text, meta) {
+      const full = String(text || '');
+      if (!full) return null;
+      const options = meta || {};
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble assistant';
+      bubble.setAttribute('aria-busy', 'true');
+      bubble.setAttribute('data-max-reveal', '1');
+
+      const sr = document.createElement('span');
+      sr.className = 'pf-sr-only';
+      sr.textContent = full;
+      const visual = document.createElement('span');
+      visual.setAttribute('aria-hidden', 'true');
+      visual.textContent = '';
+      bubble.appendChild(sr);
+      bubble.appendChild(visual);
+      els.chatLog.appendChild(bubble);
+      maybeScrollChat();
+
+      if (!MaxCadence) {
+        bubble.textContent = full;
+        bubble.removeAttribute('aria-busy');
+        if (typeof options.clearThinking === 'function') options.clearThinking();
+        if (typeof options.onComplete === 'function') await options.onComplete();
+        return bubble;
+      }
+
+      const reduced = MaxCadence.prefersReducedMotion();
+      await MaxCadence.presentCompletedResponse({
+        startedAtMs: options.startedAtMs,
+        prose: full,
+        operatorText: options.operatorText,
+        answerDisposition: options.answerDisposition,
+        nextAction: options.nextAction,
+        provisionalWeight: options.provisionalWeight,
+        surface: 'cie',
+        phase: state.phase,
+        clientName: resolveClientDisplayName(),
+        hasEvidencePath: Boolean(options.hasEvidencePath),
+        synthesis: Boolean(options.synthesis),
+        reducedMotion: reduced,
+        jitterSeed: options.jitterSeed,
+        labelSeed: options.labelSeed,
+        clearThinking: options.clearThinking,
+        setText: (partial) => {
+          visual.textContent = partial;
+          maybeScrollChat();
+        },
+        onComplete: async () => {
+          bubble.textContent = full;
+          bubble.removeAttribute('aria-busy');
+          bubble.removeAttribute('data-max-reveal');
+          maybeScrollChat();
+          if (typeof options.onComplete === 'function') await options.onComplete();
+        },
+      });
+      return bubble;
+    }
+
+    async function runCieTurn(operatorText, requestFactory, afterData) {
+      const startedAtMs = Date.now();
+      const provisionalWeight = MaxCadence
+        ? MaxCadence.classifyInteractionWeight({
+            surface: 'cie',
+            phase: state.phase,
+            operatorText,
+          })
+        : 'standard';
+      const provisionalProfile = MaxCadence
+        ? MaxCadence.buildInteractionProfile(provisionalWeight, {
+            reducedMotion: MaxCadence.prefersReducedMotion(),
+            clientName: resolveClientDisplayName(),
+          })
+        : { thinkingAppearMs: 300, thinkingLabel: 'Considering your question…' };
+
+      const thinking = MaxCadence
+        ? MaxCadence.scheduleThinking({
+            delayMs: provisionalProfile.thinkingAppearMs,
+            label: provisionalProfile.thinkingLabel,
+            mount: mountThinkingBubble,
+          })
+        : {
+            clear: () => {},
+            getElement: () => null,
+          };
+
+      try {
+        const data = await requestFactory();
+        if (typeof afterData === 'function') {
+          return await afterData(data, {
+            startedAtMs,
+            provisionalWeight,
+            clearThinking: () => thinking.clear(),
+            operatorText,
+          });
+        }
+        thinking.clear();
+        return data;
+      } catch (err) {
+        thinking.clear();
+        throw err;
+      }
+    }
+
+    function escapeHtml(value) {
+      return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function confBand(pct) {
+      if (pct <= 50) return 'bad';
+      if (pct <= 80) return 'warn';
+      return 'ok';
+    }
+
+    function renderProgress(progress) {
+      if (!progress) {
+        els.progressBlock.hidden = true;
+        return;
+      }
+      const pct = Math.max(0, Math.min(100, Number(progress.percent) || 0));
+      els.progressBlock.hidden = false;
+      els.progressLabel.textContent = progress.label || 'Business Understanding';
+      els.progressPct.textContent = pct + '%';
+      els.progressFill.style.width = pct + '%';
+      els.progressTrack.setAttribute('aria-valuenow', String(pct));
+    }
+
+    function renderUnderstanding(understanding) {
+      state.understanding = understanding;
+      if (!understanding || !understanding.sections || !understanding.sections.length) {
+        els.sidePanel.innerHTML = '<p class="blueprint-empty">Understanding will grow as you answer.</p>';
+        return;
+      }
+      const html = '<div class="understanding-list">' + understanding.sections.map((row) => {
+        const pct = Math.max(0, Math.min(100, Number(row.confidencePercent != null
+          ? row.confidencePercent
+          : Math.round((Number(row.confidence) || 0) * 100))));
+        const band = confBand(pct);
+        const unknowns = (row.unknowns || []).filter(Boolean);
+        const tipSupported = [
+          'Interview responses',
+          row.evidenceCount > 1 ? 'Consistency across answers' : null,
+        ].filter(Boolean);
+        const tipMissing = unknowns.length ? unknowns : ['Nothing flagged yet'];
+        return (
+          '<article class="understanding-row" tabindex="0">' +
+            '<div class="understanding-row-top">' +
+              '<div class="understanding-title ' + escapeHtml(row.status || '') + '">' +
+                escapeHtml(row.title) +
+              '</div>' +
+              '<div class="conf-pct ' + band + '">' + pct + '%</div>' +
+            '</div>' +
+            '<div class="conf-bar" aria-hidden="true"><span class="' + band + '" style="width:' + pct + '%"></span></div>' +
+            '<div class="understanding-status">' + escapeHtml(row.statusLabel || '') + '</div>' +
+            '<div class="conf-tip" role="tooltip">' +
+              '<strong>Confidence ' + pct + '%</strong><br>' +
+              'Supported by:<br>' + tipSupported.map((t) => '✓ ' + escapeHtml(t)).join('<br>') +
+              (unknowns.length
+                ? '<br><br>Missing:<br>' + tipMissing.map((t) => '• ' + escapeHtml(t)).join('<br>')
+                : '') +
+            '</div>' +
+          '</article>'
+        );
+      }).join('') + '</div>';
+      els.sidePanel.innerHTML = html;
+      els.sidePanelTitle.textContent = 'Business Understanding';
+      els.sidePanelSub.textContent = 'Titles, confidence, and gaps — narratives come after Max shares his understanding.';
+      els.blueprintActions.hidden = true;
+      els.blueprintStatus.textContent = '';
+    }
+
+    function renderStars(count) {
+      const n = Math.max(1, Math.min(5, Number(count) || 1));
+      return '★'.repeat(n) + '☆'.repeat(5 - n);
+    }
+
+    function renderBriefSection(section) {
+      const kind = section.kind || (section.items ? 'list' : section.ratings ? 'assessment' : 'prose');
+      let inner = '';
+      if (kind === 'assessment') {
+        const rows = (section.ratings || []).map((row) =>
+          '<div class="assessment-row">' +
+            '<div class="assessment-label">' + escapeHtml(row.label || '') + '</div>' +
+            '<div class="assessment-stars" aria-label="' + escapeHtml(String(row.stars || 0)) + ' of 5">' +
+              escapeHtml(renderStars(row.stars)) +
+            '</div>' +
+            (row.explanation
+              ? '<p class="assessment-explain">' + escapeHtml(row.explanation) + '</p>'
+              : '') +
+          '</div>'
+        ).join('');
+        inner =
+          '<div class="assessment-grid">' + rows + '</div>' +
+          (section.confidencePercent != null
+            ? '<div class="assessment-confidence">Confidence <span>' +
+                escapeHtml(String(section.confidencePercent)) + '%</span></div>'
+            : '') +
+          (section.body ? '<p style="margin-top:0.65rem">' + escapeHtml(section.body) + '</p>' : '');
+      } else if (kind === 'list') {
+          inner =
+          (section.body ? '<p>' + escapeHtml(section.body) + '</p>' : '') +
+          '<ul class="exec-list">' +
+            (section.items || []).map((item) => {
+              if (item && typeof item === 'object') {
+                return '<li><strong>' + escapeHtml(item.name || item.label || '') + '</strong>' +
+                  (item.reason ? ' — ' + escapeHtml(item.reason) : '') +
+                  (item.businessOutcome ? ' Supports ' + escapeHtml(item.businessOutcome) + '.' : '') +
+                  (item.confidencePercent != null ? ' Confidence ' + escapeHtml(String(item.confidencePercent)) + '%.' : '') +
+                  '</li>';
+              }
+              return '<li>' + escapeHtml(item) + '</li>';
+            }).join('') +
+          '</ul>';
+      } else if (kind === 'scorecard') {
+        inner =
+          (section.body ? '<p>' + escapeHtml(section.body) + '</p>' : '') +
+          '<ul class="exec-list scorecard-list">' +
+            (section.items || []).map((item) => {
+              if (!item || typeof item !== 'object') {
+                return '<li>' + escapeHtml(item) + '</li>';
+              }
+              return '<li class="scorecard-metric">' +
+                '<strong>' + escapeHtml(item.name || '') + '</strong>' +
+                (item.reason ? '<div>' + escapeHtml(item.reason) + '</div>' : '') +
+                (item.businessOutcome ? '<div>Supports ' + escapeHtml(item.businessOutcome) + '</div>' : '') +
+                '<div class="assessment-explain">' +
+                  escapeHtml(
+                    [item.category, item.indicator, item.confidencePercent != null ? item.confidencePercent + '%' : '']
+                      .filter(Boolean)
+                      .join(' · ')
+                  ) +
+                '</div></li>';
+            }).join('') +
+          '</ul>';
+      } else {
+        inner = '<p>' + escapeHtml(section.body || '') + '</p>';
+      }
+      return (
+        '<section class="exec-section">' +
+          '<h4>' + escapeHtml(section.title || '') + '</h4>' +
+          inner +
+        '</section>'
+      );
+    }
+
+    function renderExecutiveSummary(summary) {
+      if (!summary) return;
+      state.executiveSummary = summary;
+      const sections = summary.sections || [];
+      els.sidePanel.innerHTML =
+        '<div class="exec-card">' +
+          '<h3>' + escapeHtml(summary.title || 'Executive Business Brief') + '</h3>' +
+          '<p class="exec-sub">' + escapeHtml(summary.subtitle || 'Prepared by Max') + '</p>' +
+          '<p class="exec-tagline">' +
+            escapeHtml(summary.tagline || 'A working picture for leadership review') +
+          '</p>' +
+          sections.map(renderBriefSection).join('') +
+        '</div>';
+      els.sidePanelTitle.textContent = 'Executive Business Brief';
+      els.sidePanelSub.textContent = 'A consultant-quality synthesis from Max — confirm before reviewing the Business Blueprint.';
+      els.blueprintActions.hidden = true;
+      els.blueprintStatus.textContent = 'Executive Business Brief · read only';
+    }
+
+    function isBlueprintApproved(bp) {
+      // Document status is authoritative — never infer approval from UI phase.
+      return !!(bp && String(bp.status || '').toLowerCase() === 'approved');
+    }
+
+    function blueprintStatusOf(bp) {
+      return String((bp && bp.status) || '').toLowerCase();
+    }
+
+    function isBlueprintAwaitingApproval(bp) {
+      const status = blueprintStatusOf(bp);
+      return status === 'in_review' || status === 'draft';
+    }
+
+    function blueprintStatusLabel(bp) {
+      const status = blueprintStatusOf(bp);
+      if (status === 'approved') return 'Approved';
+      if (status === 'in_review' || status === 'draft') return 'Awaiting approval';
+      if (status === 'superseded') return 'Superseded';
+      return status ? status.replace(/_/g, ' ') : 'Unknown';
+    }
+
+    function setApproveButtonState(bp, { editable } = { editable: true }) {
+      const approved = isBlueprintApproved(bp);
+      const status = blueprintStatusOf(bp);
+      if (approved) {
+        els.blueprintActions.hidden = true;
+        els.regenerateBlueprintBtn.disabled = true;
+        els.reviseBtn.disabled = true;
+        els.refineWithMaxBtn.disabled = true;
+        els.approveBtn.disabled = true;
+        els.approveBtn.textContent = 'Blueprint approved';
+        return;
+      }
+      // Superseded / historical rows are never approvable and must not look current.
+      if (status === 'superseded' || !bp) {
+        els.blueprintActions.hidden = true;
+        els.regenerateBlueprintBtn.disabled = true;
+        els.reviseBtn.disabled = true;
+        els.refineWithMaxBtn.disabled = true;
+        els.approveBtn.disabled = true;
+        els.approveBtn.textContent = 'Approve Blueprint';
+        return;
+      }
+      const canEdit = editable && isBlueprintAwaitingApproval(bp);
+      els.blueprintActions.hidden = !editable || !canEdit;
+      const regenBusy = state.regenerateInFlight || state.approveInFlight;
+      els.regenerateBlueprintBtn.disabled = !canEdit || regenBusy;
+      els.regenerateBlueprintBtn.textContent = state.regenerateInFlight
+        ? 'Regenerating…'
+        : 'Regenerate Blueprint';
+      els.reviseBtn.disabled = !canEdit || regenBusy;
+      els.refineWithMaxBtn.disabled = !canEdit || !state.interviewId || regenBusy;
+      els.approveBtn.disabled = !canEdit || regenBusy;
+      els.approveBtn.textContent = state.approveInFlight ? 'Approving…' : 'Approve Blueprint';
+    }
+
+    /**
+     * Render the durable Business Blueprint document in the right panel.
+     * Always shows structured sections — never replaces content with an
+     * approval-ceremony card. View Blueprint + BLUEPRINT tab share this path.
+     */
+    function renderBlueprint(bp, { editable } = { editable: true }) {
+      state.blueprint = bp;
+      if (!bp) {
+        els.sidePanel.innerHTML = '<p class="blueprint-empty">No blueprint yet.</p>';
+        els.reviseBtn.disabled = true;
+        els.approveBtn.disabled = true;
+        els.approveBtn.textContent = 'Approve Blueprint';
+        return;
+      }
+      const approved = isBlueprintApproved(bp);
+      const canEdit = Boolean(editable) && !approved;
+      const sections = bp.sections || {};
+      const order = Object.keys(SECTION_TITLES);
+      const keys = order.filter((k) => sections[k]).concat(
+        Object.keys(sections).filter((k) => !SECTION_TITLES[k])
+      );
+      const statusLabel = blueprintStatusLabel(bp);
+      const headerHtml =
+        '<header class="blueprint-doc-header" data-blueprint-id="' +
+        escapeHtml(String(bp.id || '')) +
+        '" data-blueprint-version="' +
+        escapeHtml(String(bp.version || '')) +
+        '" data-blueprint-status="' +
+        escapeHtml(String(bp.status || '')) +
+        '">' +
+        '<p class="growth-kicker">Business Blueprint</p>' +
+        '<p class="blueprint-empty" style="margin:0">' +
+          'Version ' +
+          escapeHtml(String(bp.version || '1')) +
+          ' · ' +
+          escapeHtml(statusLabel) +
+        '</p>' +
+        '</header>';
+      const bodyHtml = keys.map((key) => {
+        const s = sections[key] || {};
+        const conf = Number(s.confidence || 0);
+        const pct = Math.round(conf * 100);
+        const band = confBand(pct);
+        const unknowns = (s.unknowns || []).filter(Boolean);
+        const count = (s.evidenceIds || []).length;
+        const title = SECTION_TITLES[key] || key;
+        const summary = s.summary || '';
+        return (
+          '<article class="section" data-section="' + escapeHtml(key) + '">' +
+            '<h3 class="section-title">' + escapeHtml(title) + '</h3>' +
+            (summary
+              ? '<p class="section-summary">' + escapeHtml(summary) + '</p>'
+              : '<p class="section-summary blueprint-empty">No summary yet.</p>') +
+            '<div class="section-meta">' +
+              '<span class="conf-pct ' + band + '">Confidence ' + pct + '%</span>' +
+              '<span class="evidence-count">Evidence ' + count + '</span>' +
+            '</div>' +
+            '<div class="conf-bar" aria-hidden="true"><span class="' + band + '" style="width:' + pct + '%"></span></div>' +
+            (unknowns.length
+              ? '<div class="unknowns">Unknowns: ' + escapeHtml(unknowns.join('; ')) + '</div>'
+              : '') +
+            (canEdit
+              ? '<textarea data-key="' + escapeHtml(key) + '">' + escapeHtml(summary) + '</textarea>'
+              : '') +
+          '</article>'
+        );
+      }).join('');
+      els.sidePanel.innerHTML =
+        '<div class="blueprint-document" data-role="blueprint-document">' +
+        headerHtml +
+        (bodyHtml || '<p class="blueprint-empty">No Blueprint sections yet.</p>') +
+        '</div>';
+      els.sidePanelTitle.textContent = 'Business Blueprint';
+      els.sidePanelSub.textContent = canEdit
+        ? 'Editable artifact of Max\'s understanding. Adjust anything that needs sharpening.'
+        : approved
+          ? 'Approved foundation for future recommendations.'
+          : 'Current Business Blueprint for this client.';
+      setApproveButtonState(bp, { editable: canEdit });
+      els.blueprintStatus.textContent =
+        statusLabel +
+        ' · v' +
+        bp.version +
+        (state.lastRegeneratedBlueprintVersion &&
+        String(state.lastRegeneratedBlueprintVersion) === String(bp.version)
+          ? ' · regenerated just now'
+          : '') +
+        (bp.playbookId
+          ? ' · playbook ' + bp.playbookId + '@' + bp.playbookVersion
+          : '');
+    }
+
+    /**
+     * Single entry for View Blueprint action and BLUEPRINT tab.
+     * Does not mutate approval state (GET / view only).
+     */
+    function showCurrentBlueprintView({ editable } = {}) {
+      const bp = state.blueprint;
+      state.workspaceTab = 'blueprint';
+      const serverApproved =
+        isBlueprintApproved(bp) ||
+        String(state.sessionStatus || '').toUpperCase() === 'APPROVED';
+      const awaiting = isBlueprintAwaitingApproval(bp);
+      const canEdit =
+        editable == null ? awaiting : Boolean(editable) && awaiting;
+      if (serverApproved) {
+        if (state.phase !== 'growth_workspace') {
+          setPhase('growth_workspace');
+          renderWorkspaceLeftNav();
+        }
+        if (els.workspaceTabs) els.workspaceTabs.hidden = false;
+        setWorkspaceTab('blueprint');
+      } else {
+        setPhase('blueprint');
+        renderBlueprint(bp, { editable: canEdit });
+      }
+      return bp;
+    }
+
+    function renderGrowthDirection(gd) {
+      if (!gd) return '';
+      const paras = (gd.paragraphs || []).filter(Boolean).slice(0, 5);
+      return (
+        '<div class="growth-direction" id="initialGrowthDirection">' +
+          '<p class="growth-kicker">Initial Growth Direction</p>' +
+          '<h4>' + escapeHtml(gd.heading || gd.title || 'First growth focus') + '</h4>' +
+          paras.map((p) => '<p>' + escapeHtml(p) + '</p>').join('') +
+          '<p class="growth-disclaimer">' +
+            escapeHtml(gd.disclaimer || 'Directional only — not final strategy.') +
+          '</p>' +
+        '</div>'
+      );
+    }
+
+    function formatOwnerLabel(owner) {
+      if (GrowthWorkspacePanel.formatOwnerLabel) {
+        return GrowthWorkspacePanel.formatOwnerLabel(owner);
+      }
+      const labels = {
+        client_required: 'Client/operator',
+        operator_guided: 'Operator guided',
+        max_can_check: 'Max can check',
+      };
+      return labels[owner] || String(owner || '');
+    }
+
+    function renderGapList(items, emptyLabel) {
+      const list = (items || []).slice(0, 8);
+      if (!list.length) return '<p class="blueprint-empty">' + escapeHtml(emptyLabel) + '</p>';
+      return (
+        '<ul class="completion-checks">' +
+        list.map((g) =>
+          '<li><strong>' + escapeHtml(g.areaLabel || '') + ':</strong> ' +
+          escapeHtml(g.label || '') +
+          ' <span class="conf-pct">(' + escapeHtml(g.statusLabel || g.status || 'needs verification') +
+          (g.owner ? ' · ' + escapeHtml(formatOwnerLabel(g.owner)) : '') +
+          ')</span></li>'
+        ).join('') +
+        '</ul>'
+      );
+    }
+
+    function renderReadinessReport(report) {
+      if (!report) return '';
+      const titles = report.sectionTitles || {};
+      const priorities = report.topSetupPriorities || [
+        'Confirm domain + website connection',
+        'Confirm branded email + SPF/DKIM/DMARC',
+        'Confirm website phone/email/form + clear estimate/walkthrough CTA',
+        'Confirm GBP, reviews, and photos',
+        'Confirm lead tracking and follow-up process',
+      ];
+      const priorityHtml =
+        '<ul class="completion-checks">' +
+        priorities
+          .map((p) => '<li>' + escapeHtml(p) + '</li>')
+          .join('') +
+        '</ul>';
+      const seq = (report.recommendedSetupSequence || []).slice(0, 8);
+      const seqHtml = seq.length
+        ? '<ol class="completion-checks">' +
+          seq.map((s) =>
+            '<li>' + escapeHtml(String(s.order || '') + '. ' + (s.label || '')) +
+            ' — ' + escapeHtml(s.action || '') +
+            ' <span class="conf-pct">(' + escapeHtml(s.statusLabel || s.status || '') +
+            (s.owner ? ' · ' + escapeHtml(formatOwnerLabel(s.owner)) : '') + ')</span></li>'
+          ).join('') +
+          '</ol>'
+        : '<p class="blueprint-empty">Answer more questions to build the setup sequence.</p>';
+      const summary =
+        report.executiveSummary ||
+        'Before outreach, the business should confirm three things: prospects can reach the business, trust signals are visible, and every inquiry can be tracked and followed up.';
+      return (
+        '<div class="growth-direction" id="growthInfrastructureReadinessReport">' +
+          '<p class="growth-kicker">Growth Infrastructure Readiness Report</p>' +
+          '<h4>Overall readiness: ' + escapeHtml(report.overallStatus || 'unknown') + '</h4>' +
+          '<p class="growth-exec-summary">' + escapeHtml(summary) + '</p>' +
+          '<p><strong>' + escapeHtml(titles.topSetupPriorities || 'Top Setup Priorities') + '</strong></p>' +
+          priorityHtml +
+          '<p><strong>' + escapeHtml(titles.demandCaptureRisks || 'Can prospects reach you?') + '</strong></p>' +
+          renderGapList(report.demandCaptureRisks, 'Nothing blocking reachability from answers so far.') +
+          '<p><strong>' + escapeHtml(titles.trustDiscoverabilityGaps || 'Can prospects trust you?') + '</strong></p>' +
+          renderGapList(report.trustDiscoverabilityGaps, 'Nothing flagged yet — or still needs verification.') +
+          '<p><strong>' + escapeHtml(titles.trackingGaps || 'Can we measure what works?') + '</strong></p>' +
+          renderGapList(report.trackingGaps, 'Nothing flagged yet — or still needs verification.') +
+          '<p><strong>' + escapeHtml(titles.conversionFollowUpGaps || 'Can inquiries become booked opportunities?') + '</strong></p>' +
+          renderGapList(report.conversionFollowUpGaps, 'Nothing flagged yet from answers so far.') +
+          '<p><strong>' + escapeHtml(titles.maxCanCheck || 'What Max can check automatically') + '</strong></p>' +
+          renderGapList(report.maxCanCheck, 'No outstanding Max-checkable items.') +
+          '<p><strong>' + escapeHtml(titles.operatorClientMustComplete || 'What the operator/client must complete') + '</strong></p>' +
+          renderGapList(report.operatorClientMustComplete, 'No outstanding operator/client items.') +
+          '<p><strong>' + escapeHtml(titles.recommendedSetupSequence || 'Recommended setup sequence') + '</strong></p>' +
+          seqHtml +
+          '<p class="growth-disclaimer">' +
+            escapeHtml(report.disclaimer || 'Assessment only — no DNS, GBP, social, or tracking changes without explicit approval. No passwords requested. No campaigns or prospect lists generated.') +
+          '</p>' +
+        '</div>'
+      );
+    }
+
+    function renderListBlock(items, empty) {
+      if (!items || !items.length) {
+        return '<p class="blueprint-empty">' + escapeHtml(empty || '—') + '</p>';
+      }
+      return (
+        '<ul class="completion-checks">' +
+        items.map((item) => '<li>' + escapeHtml(item) + '</li>').join('') +
+        '</ul>'
+      );
+    }
+
+    function renderParagraphBlock(text) {
+      const parts = String(text || '—')
+        .split(/\n\s*\n/)
+        .map((p) => p.trim())
+        .filter(Boolean);
+      if (!parts.length) return '<p>—</p>';
+      return parts
+        .map((part) => {
+          const html = escapeHtml(part).replace(/\n/g, '<br>');
+          return '<p>' + html + '</p>';
+        })
+        .join('');
+    }
+
+    function renderLabeledListBlock(label, items, empty) {
+      return (
+        '<p>' + escapeHtml(label) + '</p>' +
+        renderListBlock(items, empty || '—')
+      );
+    }
+
+    function renderFirstCampaignPlanPreview(preview) {
+      if (!preview) return '';
+      const titles = preview.sectionTitles || {};
+      // Structured fields only — do not render raw transcript text here.
+      const objective = preview.campaignObjective || preview.objective || '—';
+      const coreQ = preview.coreValidationQuestion || '';
+      const hypothesis =
+        preview.campaignHypothesis || preview.hypothesis || '—';
+      const risks = preview.risks || preview.risksCautions || [];
+      const beforeList =
+        preview.approvalCheckpointsBeforeList ||
+        preview.approvalCheckpointsBeforeListBuilding ||
+        [];
+      const beforeLaunch = preview.approvalCheckpointsBeforeLaunch || [];
+      const pmFocus = /property manager/i.test(
+        String(
+          (preview.context && preview.context.primarySegment) ||
+            preview.targetSegment ||
+            ''
+        )
+      );
+      const includeLabel = pmFocus
+        ? 'Include property managers who:'
+        : 'Include accounts who:';
+      const excludeLabel = pmFocus
+        ? 'Exclude property managers who:'
+        : 'Exclude accounts who:';
+      return (
+        '<div class="growth-direction" id="firstCampaignPlanPreview">' +
+          '<p class="growth-kicker">First Campaign Plan Preview</p>' +
+          '<p><strong>1. ' +
+            escapeHtml(titles.campaignObjective || 'Campaign objective') +
+          '</strong></p>' +
+          renderParagraphBlock(objective) +
+          (coreQ
+            ? '<p><strong>Core validation question</strong></p>' +
+              '<p>' + escapeHtml(coreQ) + '</p>'
+            : '') +
+          '<p><strong>2. ' +
+            escapeHtml(titles.targetSegment || 'Target segment') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(preview.targetSegment || '—') + '</p>' +
+          (preview.targetSubtype
+            ? '<p>Subtype: ' + escapeHtml(preview.targetSubtype) + '</p>'
+            : '') +
+          renderLabeledListBlock(
+            includeLabel,
+            preview.inclusionCriteria,
+            'No inclusion criteria listed yet.'
+          ) +
+          renderLabeledListBlock(
+            excludeLabel,
+            preview.exclusionCriteria,
+            'No exclusion criteria listed yet.'
+          ) +
+          '<p><strong>3. ' +
+            escapeHtml(titles.marketBound || 'Market bound') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(preview.marketBound || '—') + '</p>' +
+          '<p><strong>4. ' +
+            escapeHtml(titles.hypothesis || 'Campaign hypothesis') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(hypothesis) + '</p>' +
+          '<p><strong>5. ' +
+            escapeHtml(
+              titles.proofAssets || titles.proofAssetsNeeded || 'Proof assets'
+            ) +
+          '</strong></p>' +
+          renderLabeledListBlock(
+            'Available or close to ready:',
+            preview.proofAssetsAvailable,
+            'No available proof assets listed yet.'
+          ) +
+          renderLabeledListBlock(
+            'Still needed or should be packaged:',
+            preview.proofAssetsMissing || preview.proofAssetsNeeded,
+            'No missing proof assets listed yet.'
+          ) +
+          '<p><strong>6. ' +
+            escapeHtml(titles.validationMetrics || 'Validation metrics') +
+          '</strong></p>' +
+          renderLabeledListBlock(
+            'Primary signals:',
+            preview.validationMetricsPrimary,
+            'No primary metrics listed yet.'
+          ) +
+          renderLabeledListBlock(
+            'Secondary signals:',
+            preview.validationMetricsSecondary,
+            'No secondary metrics listed yet.'
+          ) +
+          '<p>' +
+            escapeHtml(
+              preview.validationSuccessStatement ||
+                'A successful first 30 days means a small number of qualified conversations and at least one walkthrough or estimate request.'
+            ) +
+          '</p>' +
+          '<p><strong>7. ' +
+            escapeHtml(titles.risksCautions || 'Risks and cautions') +
+          '</strong></p>' +
+          renderListBlock(risks, 'No risks listed yet.') +
+          '<p><strong>8. ' +
+            escapeHtml(titles.approvalCheckpoints || 'Approval checkpoints') +
+          '</strong></p>' +
+          renderLabeledListBlock(
+            'Before list-building:',
+            beforeList,
+            'No list-building checkpoints listed yet.'
+          ) +
+          renderLabeledListBlock(
+            'Before launch:',
+            beforeLaunch,
+            'No launch checkpoints listed yet.'
+          ) +
+          '<p><strong>9. ' +
+            escapeHtml(titles.recommendedNextStep || 'Recommended next step') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(preview.recommendedNextStep || '—') + '</p>' +
+          (preview.notes
+            ? '<p><strong>Notes</strong></p>' +
+              renderParagraphBlock(preview.notes)
+            : '') +
+          '<p class="growth-disclaimer">' +
+            escapeHtml(
+              preview.disclaimer ||
+                'Planning preview only. No prospect list, outreach copy, sends, CRM writes, or account changes have been created or launched.'
+            ) +
+          '</p>' +
+        '</div>'
+      );
+    }
+
+    function isTruncatedCriteriaText(value) {
+      const s = String(value || '').trim();
+      if (!s) return true;
+      if (/\b-\s*[A-Z]?[a-z]{0,2}$/.test(s)) return true; // e.g. "- Li"
+      if (/\b(clea|manag|propert|conversat)$/i.test(s)) return true;
+      // Market bound that swallowed objective prose.
+      if (
+        /^(greater\s+)?manchester\b/i.test(s) &&
+        /will engage in qualified conversations/i.test(s)
+      ) {
+        return true;
+      }
+      if (/inclusion\s*:|exclusion\s*:/i.test(s)) return true;
+      if (/each prospect record should include/i.test(s)) return true;
+      return false;
+    }
+
+    function criteriaPlainText(value) {
+      const s = String(value || '').trim();
+      if (!s || isTruncatedCriteriaText(s)) return '—';
+      return s;
+    }
+
+    function criteriaListItems(items) {
+      if (!Array.isArray(items) || !items.length) return [];
+      const towns = /^(bedford|hooksett|londonderry|auburn|goffstown|manchester)\.?$/i;
+      return items
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+        .filter((item) => !towns.test(item))
+        .filter((item) => !isTruncatedCriteriaText(item))
+        .filter((item) => !/\s[-–—]\s+located in\b/i.test(item))
+        .filter((item) => !/each prospect record|review gate/i.test(item))
+        .filter(
+          (item) =>
+            !/\b(questions about|recurring service|reliability|responsiveness|scheduling|cleaning frustrations|vague interest|no next step)\b/i.test(
+              item
+            )
+        );
+    }
+
+    function renderProspectListCriteriaPreview(preview) {
+      if (!preview) return '';
+      const titles = preview.sectionTitles || {};
+      // Structured fields only — never stitch/split raw transcript prose here.
+      const inclusion = criteriaListItems(preview.inclusionCriteria);
+      const exclusion = criteriaListItems(preview.exclusionCriteria);
+      const requiredFields = criteriaListItems(preview.requiredProspectFields);
+      return (
+        '<div class="growth-direction" id="prospectListCriteriaPreview">' +
+          '<p class="growth-kicker">Prospect List Criteria Preview</p>' +
+          '<p><strong>1. ' +
+            escapeHtml(titles.campaignObjective || 'Campaign objective') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(criteriaPlainText(preview.campaignObjective)) + '</p>' +
+          '<p><strong>2. ' +
+            escapeHtml(titles.targetSegment || 'Target segment') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(criteriaPlainText(preview.targetSegment)) + '</p>' +
+          '<p><strong>3. ' +
+            escapeHtml(titles.targetSubtype || 'Target subtype') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(criteriaPlainText(preview.targetSubtype)) + '</p>' +
+          '<p><strong>4. ' +
+            escapeHtml(titles.marketBound || 'Market bound') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(criteriaPlainText(preview.marketBound)) + '</p>' +
+          '<p><strong>5. ' +
+            escapeHtml(titles.inclusionCriteria || 'Inclusion criteria') +
+          '</strong></p>' +
+          renderListBlock(inclusion, 'No inclusion criteria listed yet.') +
+          '<p><strong>6. ' +
+            escapeHtml(titles.exclusionCriteria || 'Exclusion criteria') +
+          '</strong></p>' +
+          renderListBlock(exclusion, 'No exclusion criteria listed yet.') +
+          '<p><strong>7. ' +
+            escapeHtml(
+              titles.requiredProspectFields || 'Required prospect record fields'
+            ) +
+          '</strong></p>' +
+          renderListBlock(
+            requiredFields,
+            'No required prospect record fields listed yet.'
+          ) +
+          '<p><strong>8. ' +
+            escapeHtml(titles.reviewGate || 'Review gate') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(criteriaPlainText(preview.reviewGate)) + '</p>' +
+          '<p><strong>9. ' +
+            escapeHtml(titles.recommendedNextStep || 'Recommended next step') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(criteriaPlainText(preview.recommendedNextStep)) + '</p>' +
+          '<p class="growth-disclaimer">' +
+            escapeHtml(
+              preview.disclaimer ||
+                'Criteria preview only. No prospect list has been built, and no outreach copy, sends, CRM writes, or account changes have been created or launched.'
+            ) +
+          '</p>' +
+        '</div>'
+      );
+    }
+
+    function renderProspectListBuildProposal(proposal) {
+      if (!proposal) return '';
+      const titles = proposal.sectionTitles || {};
+      const batch = proposal.firstBatchPlan || {};
+      return (
+        '<div class="growth-direction" id="prospectListBuildProposal">' +
+          '<p class="growth-kicker">Prospect List Build Proposal</p>' +
+          '<p><strong>1. ' +
+            escapeHtml(titles.approachSummary || 'Approach summary') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(criteriaPlainText(proposal.approachSummary)) + '</p>' +
+          '<p><strong>2. ' +
+            escapeHtml(titles.sourcingStrategy || 'Sourcing strategy') +
+          '</strong></p>' +
+          renderListBlock(
+            criteriaListItems(proposal.sourcingStrategy),
+            'No sourcing steps listed yet.'
+          ) +
+          '<p><strong>3. ' +
+            escapeHtml(titles.enrichmentPlan || 'Enrichment plan') +
+          '</strong></p>' +
+          renderListBlock(
+            criteriaListItems(proposal.enrichmentPlan),
+            'No enrichment steps listed yet.'
+          ) +
+          '<p><strong>4. ' +
+            escapeHtml(titles.qualityGates || 'Quality gates') +
+          '</strong></p>' +
+          renderListBlock(
+            criteriaListItems(proposal.qualityGates),
+            'No quality gates listed yet.'
+          ) +
+          '<p><strong>5. ' +
+            escapeHtml(titles.firstBatchPlan || 'First batch plan') +
+          '</strong></p>' +
+          renderListBlock(
+            [
+              batch.size ? 'Size: ' + batch.size : null,
+              batch.marketFocus ? 'Market focus: ' + batch.marketFocus : null,
+              batch.segmentFocus ? 'Segment focus: ' + batch.segmentFocus : null,
+              batch.successSignal ? 'Success signal: ' + batch.successSignal : null,
+            ].filter(Boolean),
+            'No first-batch plan listed yet.'
+          ) +
+          '<p><strong>6. ' +
+            escapeHtml(titles.reviewCheckpoints || 'Review checkpoints before build') +
+          '</strong></p>' +
+          renderListBlock(
+            criteriaListItems(proposal.reviewCheckpoints),
+            'No review checkpoints listed yet.'
+          ) +
+          '<p><strong>7. ' +
+            escapeHtml(titles.whatWeWillNotDo || 'What we will not do yet') +
+          '</strong></p>' +
+          renderListBlock(
+            criteriaListItems(proposal.whatWeWillNotDo),
+            'No guardrails listed yet.'
+          ) +
+          '<p><strong>8. ' +
+            escapeHtml(titles.recommendedNextStep || 'Recommended next step') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(criteriaPlainText(proposal.recommendedNextStep)) + '</p>' +
+          '<p class="growth-disclaimer">' +
+            escapeHtml(
+              proposal.disclaimer ||
+                'Build proposal only. No prospect list has been built, and no outreach copy, sends, CRM writes, or account changes have been created or launched.'
+            ) +
+          '</p>' +
+        '</div>'
+      );
+    }
+
+    function scoutHandoffStatusClass(uiStatus) {
+      const s = String(uiStatus || '');
+      if (/unavailable|not wired/i.test(s)) return ' is-unavailable';
+      if (/results ready/i.test(s)) return ' is-ready';
+      if (/failed quality gate|scout failed/i.test(s)) return ' is-unavailable';
+      return '';
+    }
+
+    function renderScoutHandoffBrief(brief) {
+      if (!brief) return '';
+      const titles = brief.sectionTitles || {};
+      const handoff = brief.scoutHandoff || state.scoutHandoff || null;
+      const uiStatus =
+        brief.uiStatus ||
+        (handoff && handoff.uiStatus) ||
+        'Brief created';
+      const workRequest =
+        (handoff && handoff.workRequest) ||
+        state.scoutWorkRequest ||
+        null;
+      const batch =
+        (handoff && handoff.candidateBatch) ||
+        state.scoutCandidateBatch ||
+        null;
+      const groups = (batch && batch.groups) || null;
+      const candidates = (batch && batch.candidates) || [];
+      const rejected =
+        (groups && groups.rejected) || (batch && batch.rejected) || [];
+      const scoutCompleted = Boolean(
+        (handoff &&
+          (handoff.status === 'completed' ||
+            handoff.status === 'failed' ||
+            handoff.status === 'failed_quality_gate')) ||
+          (brief && brief.scoutRan) ||
+          (batch && (batch.candidates || batch.rejected))
+      );
+      const completedGuardrailsFallback = [
+        'Review-only — no CRM writes',
+        'No outreach copy',
+        'No sends',
+        'No account, DNS, GBP, social, or tracking changes',
+        'Operator must approve before Composer / CRM / export use',
+        'Rejected and review_required rows are not outreach-ready',
+      ];
+      function stripDraftHandoffGuardrails(list) {
+        const arr = Array.isArray(list) ? list : [];
+        const cleaned = arr.filter(function (g) {
+          return !/Creating this brief does not hand|when sourcing execution is wired|in this step/i.test(
+            String(g || '')
+          );
+        });
+        return cleaned.length ? cleaned : completedGuardrailsFallback;
+      }
+      const guardrailsForDisplay = scoutCompleted
+        ? stripDraftHandoffGuardrails(
+            (handoff && handoff.guardrails) ||
+              (batch && batch.guardrails) ||
+              brief.guardrails
+          )
+        : brief.guardrails;
+      function renderCandidateGroup(label, rows, opts) {
+        const list = Array.isArray(rows) ? rows : [];
+        if (!list.length) return '';
+        const showRejection = opts && opts.showRejection;
+        return (
+          '<p><strong>' +
+          escapeHtml(label) +
+          ' (' +
+          list.length +
+          ')</strong></p><ul class="completion-checks">' +
+          list
+            .map(function (row) {
+              const url = row.sourceUrl || row.website || '';
+              const link = url
+                ? '<a href="' +
+                  escapeHtml(url) +
+                  '" target="_blank" rel="noopener noreferrer">' +
+                  escapeHtml(url) +
+                  '</a>'
+                : '—';
+              return (
+                '<li class="scout-candidate-row">' +
+                escapeHtml(row.companyName || 'Unknown') +
+                ' · ' +
+                escapeHtml(row.location || '—') +
+                ' · ' +
+                escapeHtml(row.status || 'review_required') +
+                ' · ' +
+                link +
+                '<br>Fit: ' +
+                escapeHtml(row.fitRationale || row.fitReason || '—') +
+                '<br>Role: ' +
+                escapeHtml(row.suggestedContactRole || row.contactRole || '—') +
+                ' · Risks: ' +
+                escapeHtml(row.risks || '—') +
+                ' · Confidence: ' +
+                escapeHtml(row.confidence || '—') +
+                (row.statusReason
+                  ? '<br>Reason: ' + escapeHtml(row.statusReason)
+                  : '') +
+                (showRejection && (row.rejectionReason || row.statusReason)
+                  ? '<br>Rejection: ' +
+                    escapeHtml(row.rejectionReason || row.statusReason)
+                  : '') +
+                '</li>'
+              );
+            })
+            .join('') +
+          '</ul>'
+        );
+      }
+      const candidateHtml = batch
+        ? renderCandidateGroup(
+            'Accepted (review-only)',
+            (groups && groups.accepted) ||
+              candidates.filter(function (r) {
+                return r.status === 'accepted';
+              })
+          ) +
+            renderCandidateGroup(
+              'Review required',
+              (groups && groups.review_required) ||
+                candidates.filter(function (r) {
+                  return r.status !== 'accepted' && r.status !== 'rejected';
+                })
+            ) +
+            renderCandidateGroup('Rejected', rejected, { showRejection: true })
+        : '';
+      return (
+        '<div class="growth-direction" id="scoutHandoffBrief">' +
+          '<p class="growth-kicker">Scout Handoff Brief</p>' +
+          '<div class="scout-handoff-status' +
+            scoutHandoffStatusClass(uiStatus) +
+          '">' +
+            escapeHtml(uiStatus) +
+          '</div>' +
+          (brief.handoffId || (handoff && handoff.handoffId)
+            ? '<p class="scout-handoff-meta">handoffId: ' +
+              escapeHtml(brief.handoffId || handoff.handoffId) +
+              '</p>'
+            : '') +
+          (workRequest && workRequest.workRequestId
+            ? '<p class="scout-handoff-meta">workRequestId: ' +
+              escapeHtml(workRequest.workRequestId) +
+              (workRequest.sourcingUnavailable
+                ? ' · Scout sourcing not wired'
+                : workRequest.status
+                  ? ' · status: ' + escapeHtml(workRequest.status)
+                  : '') +
+              '</p>'
+            : '') +
+          '<p><strong>1. ' +
+            escapeHtml(titles.campaignObjective || 'Campaign objective') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(criteriaPlainText(brief.campaignObjective)) + '</p>' +
+          '<p><strong>2. ' +
+            escapeHtml(titles.targetSegmentSubtype || 'Target segment / subtype') +
+          '</strong></p>' +
+          '<p>' +
+            escapeHtml(
+              criteriaPlainText(
+                brief.targetSegmentSubtype ||
+                  [brief.targetSegment, brief.targetSubtype]
+                    .filter(Boolean)
+                    .join(' — ')
+              )
+            ) +
+          '</p>' +
+          '<p><strong>3. ' +
+            escapeHtml(titles.marketBounds || 'Market bounds') +
+          '</strong></p>' +
+          '<p>' +
+            escapeHtml(
+              criteriaPlainText(brief.marketBounds || brief.marketBound)
+            ) +
+          '</p>' +
+          '<p><strong>4. ' +
+            escapeHtml(titles.inclusionCriteria || 'Inclusion criteria') +
+          '</strong></p>' +
+          renderListBlock(
+            criteriaListItems(brief.inclusionCriteria),
+            'No inclusion criteria listed yet.'
+          ) +
+          '<p><strong>5. ' +
+            escapeHtml(titles.exclusionCriteria || 'Exclusion criteria') +
+          '</strong></p>' +
+          renderListBlock(
+            criteriaListItems(brief.exclusionCriteria),
+            'No exclusion criteria listed yet.'
+          ) +
+          '<p><strong>6. ' +
+            escapeHtml(titles.requiredProspectFields || 'Required prospect fields') +
+          '</strong></p>' +
+          renderListBlock(
+            criteriaListItems(brief.requiredProspectFields || brief.requiredFields),
+            'No required fields listed yet.'
+          ) +
+          '<p><strong>7. ' +
+            escapeHtml(titles.sourceTypes || 'Source types Scout should inspect') +
+          '</strong></p>' +
+          renderListBlock(
+            criteriaListItems(brief.sourceTypes),
+            'No source types listed yet.'
+          ) +
+          '<p><strong>8. ' +
+            escapeHtml(titles.evidenceRequired || 'Evidence Scout must attach') +
+          '</strong></p>' +
+          renderListBlock(
+            criteriaListItems(
+              brief.evidenceRequired || brief.evidenceRequirements
+            ),
+            'No evidence requirements listed yet.'
+          ) +
+          '<p><strong>9. ' +
+            escapeHtml(titles.confidenceRules || 'Confidence rules') +
+          '</strong></p>' +
+          renderListBlock(
+            criteriaListItems(brief.confidenceRules),
+            'No confidence rules listed yet.'
+          ) +
+          '<p><strong>10. ' +
+            escapeHtml(titles.reviewGate || 'Review gate') +
+          '</strong></p>' +
+          '<p>' + escapeHtml(criteriaPlainText(brief.reviewGate)) + '</p>' +
+          '<p><strong>11. ' +
+            escapeHtml(titles.guardrails || 'Guardrails') +
+          '</strong></p>' +
+          renderListBlock(
+            criteriaListItems(guardrailsForDisplay),
+            'No guardrails listed yet.'
+          ) +
+          candidateHtml +
+          '<p><strong>Recommended next step</strong></p>' +
+          '<p>' + escapeHtml(criteriaPlainText(brief.recommendedNextStep)) + '</p>' +
+          '<p class="growth-disclaimer">' +
+            escapeHtml(
+              brief.disclaimer ||
+                (scoutCompleted
+                  ? 'Scout handoff results are review-only. No outreach copy, sends, CRM writes, or account changes have been made.'
+                  : 'Scout Handoff Brief only. Creating this brief does not hand it to Scout.')
+            ) +
+          '</p>' +
+        '</div>'
+      );
+    }
+
+    function renderProspectBatchReview(review) {
+      if (!review) return '';
+      const digest =
+        review.operatorDigest ||
+        (OperatorReviewDigest.buildFromReview
+          ? OperatorReviewDigest.buildFromReview(review)
+          : null);
+      if (
+        digest &&
+        typeof OperatorReviewDigest.renderOperatorReviewDigest === 'function'
+      ) {
+        return OperatorReviewDigest.renderOperatorReviewDigest(
+          {
+            ...digest,
+            closingQuestion: review.closingQuestion || digest.closingQuestion,
+            disclaimer: review.disclaimer || digest.disclaimer,
+          },
+          {
+            elementId: 'prospectBatchReview',
+            kicker: review.title || 'Prospect Batch Review',
+            closingQuestion: review.closingQuestion || null,
+            evidenceOpen: false,
+            actionsDisabled: Boolean(review.batch1Approved),
+          }
+        );
+      }
+      // Fallback if shared renderer missing — still digest-first, no evidence dump.
+      const included = (review.acceptedFirstPass || [])
+        .map((r) => r.companyName || r.company)
+        .filter(Boolean);
+      return (
+        '<div class="growth-direction operator-review-digest" id="prospectBatchReview">' +
+          '<p class="growth-kicker">Prospect Batch Review</p>' +
+          '<p><strong>Recommended decision</strong></p>' +
+          '<p>Approve ' +
+          escapeHtml(String(included.length)) +
+          ' cold prospects as Batch 1.</p>' +
+          '<p><strong>What is included</strong></p>' +
+          renderListBlock(included, 'None included.') +
+          '<p><strong>Next step after approval</strong></p>' +
+          '<p>Outreach Strategy Preview</p>' +
+          '<p class="growth-disclaimer">' +
+          escapeHtml(
+            review.disclaimer ||
+              'Prospect Batch Review only — no outreach copy, sends, CRM writes, exports, or account changes.'
+          ) +
+          '</p>' +
+        '</div>'
+      );
+    }
+
+    function bindProspectBatchReviewActions(root) {
+      if (!root) return;
+      root.querySelectorAll('[data-ord-action]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const action = btn.getAttribute('data-ord-action');
+          if (action === 'view_evidence') {
+            const drawer = root.querySelector(
+              'details[data-role="view-evidence"]'
+            );
+            if (drawer) {
+              drawer.open = true;
+              drawer.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
+            return;
+          }
+          if (action === 'request_changes') {
+            els.messageInput.value =
+              'I want to correct the Prospect Batch Review before approving Batch 1.';
+            els.messageInput.focus();
+            return;
+          }
+          if (action === 'approve_batch_1') {
+            const msg =
+              btn.getAttribute('data-ord-message') ||
+              'Approve the accepted cold first-pass candidates as Batch 1.';
+            els.messageInput.value = msg;
+            sendMessage();
+          }
+        });
+      });
+    }
+
+    function renderCompletion(result) {
+      const bp = (result && result.blueprint) || state.blueprint;
+      const playbook = (result && result.playbook) || null;
+      const gd =
+        (result && result.initialGrowthDirection) ||
+        state.initialGrowthDirection ||
+        null;
+      if (gd) state.initialGrowthDirection = gd;
+      const version = (bp && bp.version) || '1';
+      const playbookReady = !!(playbook && playbook.id);
+      const playbookLabel = playbookReady
+        ? escapeHtml(String(playbook.id)) +
+          (playbook.version ? '@' + escapeHtml(String(playbook.version)) : '')
+        : null;
+      const checks =
+        '<li>Version ' +
+        escapeHtml(String(version)) +
+        ' approved</li>' +
+        (playbookReady
+          ? '<li>Client Playbook ready · ' + playbookLabel + '</li>'
+          : '<li>Client Playbook handoff pending</li>') +
+        '<li>Strategy and execution stay review-controlled</li>' +
+        '<li>Max is your next primary interface</li>';
+      els.sidePanel.innerHTML =
+        '<div class="completion-card" id="approvalSuccess">' +
+          '<h3>Blueprint approved</h3>' +
+          '<p>Pulseforge has learned your business. This approved Blueprint is the foundation Max will use going forward.</p>' +
+          '<ul class="completion-checks">' +
+            checks +
+          '</ul>' +
+          renderGrowthDirection(gd) +
+        '</div>';
+      els.sidePanelTitle.textContent = gd ? 'Initial Growth Direction' : 'Client Playbook';
+      els.sidePanelSub.textContent = gd
+        ? 'Blueprint approved · directional first-focus preview'
+        : 'Blueprint approved. Ask Max — you do not need to restate onboarding.';
+      els.blueprintActions.hidden = true;
+      els.approveBtn.disabled = true;
+      els.approveBtn.textContent = 'Blueprint approved';
+      els.reviseBtn.disabled = true;
+      els.blueprintStatus.textContent = playbookReady
+        ? 'APPROVED · Client Playbook ready'
+        : 'APPROVED';
+    }
+
+    function applyApprovedState(result, { alreadyApproved } = {}) {
+      // Only called after an explicit approve response (or idempotent re-approve).
+      // Never use this path for View Blueprint / recovery / GET.
+      state.sessionStatus = 'APPROVED';
+      state.approveInFlight = false;
+      state.pendingCompletion = result || state.pendingCompletion;
+      if (result && result.blueprint) {
+        state.blueprint = result.blueprint;
+      } else if (state.blueprint && isBlueprintApproved(state.blueprint)) {
+        state.blueprint = { ...state.blueprint };
+      }
+      if (result && result.initialGrowthDirection) {
+        state.initialGrowthDirection = result.initialGrowthDirection;
+      }
+      showError('');
+      setPhase('complete');
+      const playbook =
+        (state.pendingCompletion && state.pendingCompletion.playbook) ||
+        (result && result.playbook) ||
+        null;
+      if (alreadyApproved) {
+        addBubble(
+          'meta',
+          playbook && playbook.id
+            ? 'Blueprint already approved. Client Playbook is ready.'
+            : 'Blueprint already approved.'
+        );
+      }
+      renderCompletion(state.pendingCompletion || {
+        blueprint: state.blueprint,
+        playbook,
+        initialGrowthDirection: state.initialGrowthDirection,
+      });
+      els.sessionStatus.textContent =
+        playbook && playbook.id
+          ? 'APPROVED · Client Playbook ready'
+          : 'APPROVED';
+    }
+
+    function setComposerEnabled(on) {
+      els.composer.hidden = !on;
+      els.sendBtn.disabled = !on || !state.interviewId;
+      if (!on) els.messageInput.blur();
+    }
+
+    function setGrowthPreviewActionsVisible(on) {
+      if (!els.growthPreviewActions) return;
+      els.growthPreviewActions.hidden = !on;
+    }
+
+    function applyGuidanceFooterClearance() {
+      const scroll = els.savedSessions;
+      if (!scroll) return;
+      const guidanceOpen =
+        state.phase === 'growth_workspace' && Boolean(state.taskGuidanceOpen);
+      const chatPanel = els.chatLog && els.chatLog.closest('.panel');
+      if (!guidanceOpen) {
+        scroll.style.removeProperty('--gw-sticky-footer-clearance');
+        if (chatPanel) chatPanel.style.removeProperty('--gw-sticky-footer-clearance');
+        const stale = scroll.querySelector('[data-role="guidance-scroll-spacer"]');
+        if (stale) stale.remove();
+        return;
+      }
+      // Bottom clearance = sticky footer height (actions + status) + 24px.
+      // Applied as an in-flow spacer inside the scroll container (not outer panel
+      // padding) so Complete when / Who owns it can scroll fully above the footer.
+      let footerHeight = 0;
+      if (els.growthWorkspaceActions && !els.growthWorkspaceActions.hidden) {
+        footerHeight += els.growthWorkspaceActions.getBoundingClientRect().height;
+      }
+      if (els.sessionStatus) {
+        footerHeight += els.sessionStatus.getBoundingClientRect().height;
+      }
+      const clearancePx = Math.max(0, Math.ceil(footerHeight)) + 24;
+      const value = clearancePx + 'px';
+      scroll.style.setProperty('--gw-sticky-footer-clearance', value);
+      if (chatPanel) chatPanel.style.setProperty('--gw-sticky-footer-clearance', value);
+      scroll.style.scrollPaddingBottom = value;
+
+      let spacer = scroll.querySelector('[data-role="guidance-scroll-spacer"]');
+      if (!spacer) {
+        spacer = document.createElement('div');
+        spacer.className = 'gw-guidance-scroll-spacer';
+        spacer.setAttribute('data-role', 'guidance-scroll-spacer');
+        spacer.setAttribute('aria-hidden', 'true');
+        scroll.appendChild(spacer);
+      } else if (spacer.parentElement !== scroll || spacer !== scroll.lastElementChild) {
+        scroll.appendChild(spacer);
+      }
+      spacer.style.height = value;
+      spacer.style.minHeight = value;
+    }
+
+    function syncGrowthWorkspaceChrome() {
+      const chatPanel = els.chatLog && els.chatLog.closest('.panel');
+      const inWorkspace = state.phase === 'growth_workspace';
+      const guidanceOpen = Boolean(state.taskGuidanceOpen) && inWorkspace;
+      if (chatPanel) {
+        if (inWorkspace) chatPanel.setAttribute('data-workspace', 'growth');
+        else chatPanel.removeAttribute('data-workspace');
+      }
+      if (els.savedSessions) {
+        els.savedSessions.classList.toggle('guidance-open', guidanceOpen);
+      }
+      if (els.chatLog) {
+        // Suppress chat bubbles while expanded guidance is open so a simple
+        // task summary does not appear under the guidance card.
+        els.chatLog.classList.toggle('guidance-suppressed', guidanceOpen);
+      }
+      // Measure after layout so Who owns it / Complete when clear the footer.
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => applyGuidanceFooterClearance());
+      } else {
+        applyGuidanceFooterClearance();
+      }
+    }
+
+    function hasApprovedUnderstanding() {
+      const bp = state.blueprint;
+      return !!(
+        state.sessionStatus === 'APPROVED' ||
+        (bp && String(bp.status || '').toLowerCase() === 'approved')
+      );
+    }
+
+    function syncStartNewInterviewButton() {
+      if (!els.newInterviewBtn) return;
+      // SPEC-099 — show when unfinished unapproved onboarding can be abandoned.
+      // Hide once an approved Blueprint is the authoritative understanding.
+      if (hasApprovedUnderstanding() && !state.hasUnapprovedOnboarding) {
+        els.newInterviewBtn.hidden = true;
+        return;
+      }
+      const show =
+        state.hasUnapprovedOnboarding ||
+        state.phase === 'welcome' ||
+        state.phase === 'blueprint' ||
+        state.phase === 'executive_summary' ||
+        state.phase === 'growth_workspace' ||
+        state.onboardingState === 'blueprint_review' ||
+        state.onboardingState === 'interview_in_progress';
+      els.newInterviewBtn.hidden = !show;
+      // Keep the control reachable outside welcome (operatorControls is welcome-only).
+      if (show && els.operatorControls && state.phase !== 'welcome') {
+        els.newInterviewBtn.hidden = false;
+      }
+    }
+
+    function setPhase(phase) {
+      state.phase = phase;
+      els.execActions.hidden = phase !== 'executive_summary';
+      els.completeActions.hidden = phase !== 'complete';
+      if (els.growthWorkspaceActions) {
+        els.growthWorkspaceActions.hidden = phase !== 'growth_workspace';
+      }
+      els.operatorControls.hidden = phase !== 'welcome';
+      if (els.savedSessions) {
+        const showNav = phase === 'welcome' || phase === 'growth_workspace';
+        els.savedSessions.hidden = !showNav;
+        els.savedSessions.classList.toggle('workspace-left-nav', phase === 'growth_workspace');
+      }
+      syncStartNewInterviewButton();
+      // When restart CTA must show outside welcome, keep only that control visible.
+      if (
+        els.operatorControls &&
+        phase !== 'welcome' &&
+        els.newInterviewBtn &&
+        !els.newInterviewBtn.hidden
+      ) {
+        els.operatorControls.hidden = false;
+        if (els.clientIdLabel) els.clientIdLabel.hidden = true;
+        if (els.startBtn) els.startBtn.hidden = true;
+        if (els.notesBtn) els.notesBtn.hidden = true;
+        if (els.loadAnchorFixtureBtn) els.loadAnchorFixtureBtn.hidden = true;
+        if (els.clientScopeLabel && state.isClientRole) {
+          els.clientScopeLabel.hidden = false;
+        }
+      }
+      if (els.loadAnchorFixtureBtn) {
+        els.loadAnchorFixtureBtn.hidden =
+          phase !== 'welcome' || !state.fixturesAllowed;
+      }
+      if (els.workspaceTabs) {
+        els.workspaceTabs.hidden =
+          phase !== 'growth_workspace' &&
+          phase !== 'growth' &&
+          phase !== 'readiness' &&
+          phase !== 'campaign_planning';
+      }
+      if (phase !== 'growth') setGrowthPreviewActionsVisible(false);
+      if (phase === 'welcome') {
+        setComposerEnabled(false);
+        els.chatPanelTitle.textContent = 'Conversation';
+        if (els.workspaceTabs) els.workspaceTabs.hidden = true;
+        if (els.startBtn) els.startBtn.hidden = false;
+        if (els.notesBtn) els.notesBtn.hidden = Boolean(state.isClientRole);
+        if (els.clientIdLabel) els.clientIdLabel.hidden = Boolean(state.isClientRole);
+        applyClientPhaseCopy(phase);
+      } else if (phase === 'discovery') {
+        setComposerEnabled(true);
+        els.chatPanelTitle.textContent = state.isClientRole ? 'Talking with Max' : 'Discovery';
+        applyClientPhaseCopy(phase);
+      } else if (phase === 'understanding_load' || phase === 'trust_bridge') {
+        setComposerEnabled(false);
+        els.chatPanelTitle.textContent = 'Understanding';
+        applyClientPhaseCopy(phase);
+      } else if (phase === 'executive_summary') {
+        setComposerEnabled(false);
+        els.chatPanelTitle.textContent = 'Understanding';
+        applyClientPhaseCopy(phase);
+      } else if (phase === 'blueprint') {
+        setComposerEnabled(false);
+        els.chatPanelTitle.textContent = 'Business Blueprint';
+        applyClientPhaseCopy(phase);
+      } else if (phase === 'playbook_prep') {
+        setComposerEnabled(false);
+        els.chatPanelTitle.textContent = 'Preparing Playbook';
+        els.blueprintActions.hidden = true;
+      } else if (phase === 'complete') {
+        setComposerEnabled(false);
+        els.chatPanelTitle.textContent = 'Complete';
+        els.blueprintActions.hidden = true;
+        applyClientPhaseCopy(phase);
+      } else if (phase === 'growth_workspace') {
+        setComposerEnabled(false);
+        els.chatPanelTitle.textContent = 'Growth Workspace';
+        els.blueprintActions.hidden = true;
+        els.completeActions.hidden = true;
+        setGrowthPreviewActionsVisible(false);
+        if (els.workspaceTabs) els.workspaceTabs.hidden = false;
+        syncWorkspaceActions(state.growthPlan);
+        if (els.savedSessions) {
+          els.savedSessions.hidden = false;
+          els.savedSessions.classList.add('workspace-left-nav');
+        }
+        applyClientPhaseCopy(phase);
+      } else if (phase === 'growth') {
+        setComposerEnabled(true);
+        els.chatPanelTitle.textContent = 'Growth Conversation';
+        els.blueprintActions.hidden = true;
+        els.completeActions.hidden = true;
+        setGrowthPreviewActionsVisible(Boolean(state.firstGrowthPlanPreview));
+        if (els.growthWorkspaceActions) els.growthWorkspaceActions.hidden = true;
+      } else if (phase === 'readiness') {
+        setComposerEnabled(true);
+        els.chatPanelTitle.textContent = 'Growth Infrastructure Readiness';
+        els.blueprintActions.hidden = true;
+        els.completeActions.hidden = true;
+        setGrowthPreviewActionsVisible(false);
+        if (els.growthWorkspaceActions) els.growthWorkspaceActions.hidden = true;
+        // Keep readiness report as a tab destination; do not force-replace workspace tabs.
+        if (!els.workspaceTabs || els.workspaceTabs.hidden) {
+          els.sidePanelTitle.textContent = 'Infrastructure Readiness';
+          els.sidePanelSub.textContent =
+            'Operational setup before campaigns — capture, convert, track';
+        }
+      } else if (phase === 'campaign_planning') {
+        setComposerEnabled(true);
+        els.chatPanelTitle.textContent = 'First Campaign Planning';
+        els.blueprintActions.hidden = true;
+        els.completeActions.hidden = true;
+        setGrowthPreviewActionsVisible(false);
+        if (els.growthWorkspaceActions) els.growthWorkspaceActions.hidden = true;
+        if (state.prospectBatchReview) {
+          els.sidePanelTitle.textContent = 'Prospect Batch Review';
+          els.sidePanelSub.textContent =
+            'Operator digest first — full evidence under View evidence';
+          els.sidePanel.innerHTML = renderProspectBatchReview(
+            state.prospectBatchReview
+          );
+          bindProspectBatchReviewActions(els.sidePanel);
+        } else if (state.scoutHandoffBrief) {
+          els.sidePanelTitle.textContent = 'Scout Handoff';
+          els.sidePanelSub.textContent =
+            state.scoutHandoffBrief.uiStatus ||
+            'Brief created — hand to Scout to queue';
+          els.sidePanel.innerHTML = renderScoutHandoffBrief(
+            state.scoutHandoffBrief
+          );
+        } else if (state.prospectListBuildProposal) {
+          els.sidePanelTitle.textContent = 'Prospect List Build Proposal';
+          els.sidePanelSub.textContent =
+            'Approach only — no prospect list built yet';
+          els.sidePanel.innerHTML = renderProspectListBuildProposal(
+            state.prospectListBuildProposal
+          );
+        } else if (state.prospectListCriteriaPreview) {
+          els.sidePanelTitle.textContent = 'Prospect List Criteria Preview';
+          els.sidePanelSub.textContent =
+            'Criteria only — no prospect list built yet';
+          els.sidePanel.innerHTML = renderProspectListCriteriaPreview(
+            state.prospectListCriteriaPreview
+          );
+        } else {
+          els.sidePanelTitle.textContent = 'First Campaign Plan Preview';
+          els.sidePanelSub.textContent =
+            'Hypothesis and validation gates before any build';
+          if (state.firstCampaignPlanPreview) {
+            els.sidePanel.innerHTML = renderFirstCampaignPlanPreview(
+              state.firstCampaignPlanPreview
+            );
+          }
+        }
+      }
+      syncGrowthWorkspaceChrome();
+    }
+
+    async function api(method, url, body) {
+      showError('');
+      const res = await fetch(url, {
+        method,
+        headers: {
+          Accept: 'application/json',
+          ...(body == null ? {} : { 'Content-Type': 'application/json' }),
+        },
+        body: body == null ? undefined : JSON.stringify(body),
+        credentials: 'same-origin',
+      });
+      const text = await res.text();
+      let json = null;
+      try { json = text ? JSON.parse(text) : null; } catch (_) {}
+      if (!res.ok) {
+        const msg = (json && (json.message || json.error)) || text || res.statusText;
+        throw new Error(msg);
+      }
+      return json;
+    }
+
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    async function runChecklist(steps, minMs, backendPromise) {
+      const wrap = document.createElement('div');
+      wrap.className = 'checklist';
+      wrap.setAttribute('aria-live', 'polite');
+      const items = steps.map((label) => {
+        const row = document.createElement('div');
+        row.className = 'checklist-item';
+        row.innerHTML = '<span class="checklist-mark">○</span><span>' + escapeHtml(label) + '</span>';
+        wrap.appendChild(row);
+        return row;
+      });
+      els.chatLog.appendChild(wrap);
+      maybeScrollChat();
+
+      const started = Date.now();
+      let backendResult = null;
+      let backendDone = false;
+      const backendWait = Promise.resolve(backendPromise).then((r) => {
+        backendDone = true;
+        backendResult = r;
+        return r;
+      });
+
+      const stepDelay = Math.max(320, Math.floor(minMs / Math.max(steps.length, 1)));
+      for (let i = 0; i < items.length; i += 1) {
+        items[i].classList.add('active');
+        items[i].querySelector('.checklist-mark').textContent = '…';
+        await sleep(stepDelay);
+        items[i].classList.remove('active');
+        items[i].classList.add('done');
+        items[i].querySelector('.checklist-mark').textContent = '✓';
+        maybeScrollChat();
+        if (backendDone && Date.now() - started >= minMs && i >= items.length - 2) {
+          for (let j = i + 1; j < items.length; j += 1) {
+            items[j].classList.add('done');
+            items[j].querySelector('.checklist-mark').textContent = '✓';
+          }
+          break;
+        }
+      }
+
+      const elapsed = Date.now() - started;
+      if (elapsed < minMs) await sleep(minMs - elapsed);
+      await backendWait;
+      return backendResult;
+    }
+
+    async function playTrustBridge() {
+      setPhase('trust_bridge');
+      const bubble = addBubble('trust', TRUST_BRIDGE);
+      await sleep(2200);
+      bubble.classList.add('fade-out');
+      await sleep(500);
+    }
+
+    async function enterUnderstandingFlow(data) {
+      state.interviewId = data.interviewId || data.id || state.interviewId;
+      if (data.status) state.sessionStatus = data.status;
+      state.blueprint = data.blueprint || null;
+      state.executiveSummary = data.executiveSummary || null;
+      renderProgress(data.progress);
+      if (data.understanding) renderUnderstanding(data.understanding);
+
+      setPhase('understanding_load');
+      addBubble('meta', 'Understanding your business…');
+      await runChecklist(LOAD_STEPS, PREMIUM_LOAD_MS, Promise.resolve(data));
+      await playTrustBridge();
+
+      setPhase('executive_summary');
+      addBubble(
+        'assistant',
+        "Thank you.\n\nI believe I understand your business well enough to begin helping you grow it.\n\nBefore we move forward, I'd like to share your Executive Business Brief."
+      );
+      if (state.executiveSummary) {
+        renderExecutiveSummary(state.executiveSummary);
+      } else if (state.blueprint && state.blueprint.sections) {
+        renderExecutiveSummary({
+          title: 'Executive Business Brief',
+          subtitle: 'Prepared by Max',
+          tagline: 'A working picture for leadership review',
+          sections: [],
+        });
+      }
+      els.sessionStatus.textContent =
+        'Session ' + state.interviewId + ' · Executive Business Brief';
+    }
+
+    function applyDiscoveryPayload(data, { skipMessage } = {}) {
+      state.interviewId = data.interviewId || data.id;
+      if (data.status) state.sessionStatus = data.status;
+      els.sessionStatus.textContent =
+        'Session ' + state.interviewId + ' · ' + data.status +
+        (data.currentStage ? ' · ' + data.currentStage : '');
+      renderProgress(data.progress);
+      if (data.understanding) renderUnderstanding(data.understanding);
+      if (data.reflection) addBubble('reflection', data.reflection);
+      if (
+        !skipMessage &&
+        data.message &&
+        data.nextAction !== 'COMPLETE' &&
+        data.nextAction !== 'GENERATE_BLUEPRINT'
+      ) {
+        addBubble('assistant', data.message);
+      }
+    }
+
+    function resumeTargetLabel(target) {
+      switch (target) {
+        case 'growth_workspace':
+          return 'Growth Plan in progress';
+        case 'growth_complete':
+          return 'Growth Plan complete';
+        case 'infrastructure_readiness':
+          return 'Infrastructure readiness';
+        case 'first_growth_plan_preview':
+          return 'First Growth Plan Preview';
+        case 'growth_conversation':
+          return 'Growth Conversation in progress';
+        case 'initial_growth_direction':
+          return 'Initial Growth Direction';
+        default:
+          return 'Growth Plan';
+      }
+    }
+
+    function sessionCardHtml(s, { primary } = {}) {
+      if (GrowthWorkspacePanel.planCardHtml) {
+        return GrowthWorkspacePanel.planCardHtml(s, { primary: Boolean(primary) });
+      }
+      const id = s.sessionId || s.interviewId;
+      const sample = s.isSample
+        ? '<span class="sample-badge">Sample / Dev</span>'
+        : '';
+      const pct =
+        s.growthPlan && typeof s.growthPlan.percentComplete === 'number'
+          ? s.growthPlan.percentComplete
+          : null;
+      const currentTitle =
+        s.growthPlan && s.growthPlan.currentTask && s.growthPlan.currentTask.title
+          ? s.growthPlan.currentTask.title
+          : resumeTargetLabel(s.resumeTarget);
+      const meta = [
+        pct != null ? pct + '% complete' : null,
+        currentTitle,
+        s.blueprintVersion ? 'Blueprint v' + s.blueprintVersion : null,
+      ].filter(Boolean).join(' · ');
+      const cta =
+        s.resumeTarget === 'growth_complete' ||
+        (s.growthPlan && s.growthPlan.status === 'complete')
+          ? 'View Completion'
+          : 'Resume Growth Plan';
+      return (
+        '<article class="session-card' + (s.isSample ? ' sample' : '') + '" data-session-id="' +
+        escapeHtml(id) + '">' +
+          '<p class="session-card-title">' +
+            escapeHtml(
+              primary
+                ? (s.businessName || 'Business') + ' · Growth Plan'
+                : s.label || ((s.businessName || 'Business') + ' · Growth Plan')
+            ) +
+            sample +
+          '</p>' +
+          '<p class="session-card-meta">' + escapeHtml(meta) + '</p>' +
+          '<div class="session-card-actions">' +
+            '<button type="button" data-action="continue" data-session-id="' +
+              escapeHtml(id) +
+            '">' +
+              cta +
+            '</button>' +
+            '<button type="button" class="secondary" data-action="view" data-session-id="' +
+              escapeHtml(id) +
+            '">View Blueprint</button>' +
+            (primary &&
+            !(
+              s.status === 'APPROVED' ||
+              (s.blueprintStatus &&
+                String(s.blueprintStatus).toLowerCase() === 'approved')
+            )
+              ? '<button type="button" class="secondary" data-action="new">Start New Interview</button>'
+              : '') +
+          '</div>' +
+        '</article>'
+      );
+    }
+
+    function currentSessionFromList(list) {
+      const sessions = Array.isArray(list) ? list : [];
+      if (!sessions.length) return null;
+      if (!state.interviewId) return sessions[0];
+      const match = sessions.find((s) => {
+        const id = s.sessionId || s.interviewId;
+        return String(id) === String(state.interviewId);
+      });
+      return match || sessions[0];
+    }
+
+    function renderWorkspaceLeftNav() {
+      if (!els.savedSessions) return;
+      const list = Array.isArray(state.savedSessions) ? state.savedSessions : [];
+      const plan = state.growthPlan;
+      let current = currentSessionFromList(list);
+      if (!current && plan) {
+        current = {
+          sessionId: state.interviewId || plan.sessionId,
+          interviewId: state.interviewId || plan.sessionId,
+          businessName: plan.businessName,
+          growthPlan: plan,
+          resumeTarget:
+            plan.status === 'complete' ? 'growth_complete' : 'growth_workspace',
+          isSample: state.isSample,
+        };
+      }
+      const currentId =
+        (current && (current.sessionId || current.interviewId)) ||
+        state.interviewId ||
+        null;
+      const previous = list.filter((s) => {
+        const id = s.sessionId || s.interviewId;
+        return currentId ? String(id) !== String(currentId) : false;
+      });
+      const task = plan && plan.currentTask ? plan.currentTask : null;
+      const currentForRender =
+        current && plan
+          ? Object.assign({}, current, {
+              growthPlan: Object.assign({}, current.growthPlan || {}, {
+                percentComplete: plan.percentComplete,
+                status: plan.status,
+                currentTask: task,
+              }),
+            })
+          : current;
+
+      if (!currentForRender && !previous.length) {
+        els.savedSessions.innerHTML = '';
+        els.savedSessions.hidden = true;
+        return;
+      }
+
+      if (GrowthWorkspacePanel.renderGrowthWorkspaceLeftPanel) {
+        els.savedSessions.innerHTML =
+          GrowthWorkspacePanel.renderGrowthWorkspaceLeftPanel({
+            currentSession: currentForRender,
+            previousSessions: previous,
+            currentSessionId: currentId,
+            currentTask: task,
+            guidanceOpen: Boolean(state.taskGuidanceOpen),
+            collapsePrevious: true,
+            businessName:
+              (currentForRender && currentForRender.businessName) ||
+              (state.blueprint && state.blueprint.businessName) ||
+              'Anchor Cleaning',
+          });
+      } else {
+        // Fallback: still use the shared single-card helper when available.
+        let html =
+          '<section class="gw-left-section" data-section="current-plan">' +
+          '<p class="blueprint-empty gw-section-label" style="margin:0 0 0.25rem">Current Growth Plan</p>' +
+          (currentForRender
+            ? sessionCardHtml(currentForRender, { primary: true })
+            : '') +
+          '</section>';
+        if (state.taskGuidanceOpen && task) {
+          html +=
+            '<section class="gw-left-section" data-section="task-guidance">' +
+            (GrowthWorkspacePanel.taskGuidanceCardHtml
+              ? GrowthWorkspacePanel.taskGuidanceCardHtml(task, {
+                  businessName:
+                    (currentForRender && currentForRender.businessName) ||
+                    'Anchor Cleaning',
+                })
+              : '') +
+            '</section>';
+        }
+        if (previous.length) {
+          html +=
+            '<details class="previous-plans" data-section="previous-plans">' +
+            '<summary>Previous Plans (' +
+            previous.length +
+            ')</summary>' +
+            '<div class="session-list previous-plan-list">' +
+            previous.map((s) => sessionCardHtml(s, { primary: false })).join('') +
+            '</div></details>';
+        }
+        els.savedSessions.innerHTML = html;
+      }
+      els.savedSessions.hidden = false;
+      els.savedSessions.classList.add('workspace-left-nav');
+      syncGrowthWorkspaceChrome();
+    }
+
+    function renderSavedSessions(sessions) {
+      if (!els.savedSessions) return;
+      const list = Array.isArray(sessions) ? sessions : [];
+      state.savedSessions = list;
+      if (state.phase === 'growth_workspace') {
+        if (!list.length && !state.growthPlan) {
+          els.savedSessions.innerHTML = '';
+          els.savedSessions.hidden = true;
+          return;
+        }
+        renderWorkspaceLeftNav();
+        return;
+      }
+      if (!list.length) {
+        els.savedSessions.innerHTML = '';
+        els.savedSessions.hidden = true;
+        return;
+      }
+      els.savedSessions.hidden = state.phase !== 'welcome';
+      els.savedSessions.classList.remove('workspace-left-nav');
+      const current = list[0];
+      const previous = list.slice(1);
+      let html =
+        '<p class="blueprint-empty" style="margin:0 0 0.25rem">Current Growth Plan</p>' +
+        sessionCardHtml(current, { primary: true });
+      if (previous.length) {
+        html +=
+          '<details class="previous-plans">' +
+            '<summary>Previous Plans (' +
+            previous.length +
+            ')</summary>' +
+            '<div class="session-list">' +
+            previous
+              .map((s) => sessionCardHtml(s, { primary: false }))
+              .join('') +
+            '</div>' +
+          '</details>';
+      }
+      els.savedSessions.innerHTML = html;
+    }
+
+    async function loadSavedSessions() {
+      try {
+        const clientId = resolvedClientId();
+        const qs = new URLSearchParams({
+          includeSamples: state.isClientRole ? '0' : '1',
+          limit: '20',
+        });
+        if (clientId) qs.set('clientId', clientId);
+        const data = await api('GET', '/api/v1/client-intel/sessions?' + qs.toString());
+        state.fixturesAllowed = Boolean(data && data.fixturesAllowed) && !state.isClientRole;
+        if (els.loadAnchorFixtureBtn) {
+          els.loadAnchorFixtureBtn.hidden =
+            state.isClientRole ||
+            state.phase !== 'welcome' ||
+            !state.fixturesAllowed;
+        }
+        renderSavedSessions((data && data.sessions) || []);
+      } catch (_) {
+        state.fixturesAllowed = !state.isClientRole;
+        if (els.loadAnchorFixtureBtn) {
+          els.loadAnchorFixtureBtn.hidden =
+            state.isClientRole || state.phase !== 'welcome';
+        }
+        renderSavedSessions([]);
+      }
+    }
+
+    function hydrateTurns(turns) {
+      const list = Array.isArray(turns) ? turns : [];
+      for (const turn of list) {
+        if (!turn || !turn.message) continue;
+        if (turn.speaker === 'assistant') addBubble('assistant', turn.message);
+        else if (turn.speaker === 'client') addBubble('client', turn.message);
+        else addBubble('meta', turn.message);
+      }
+    }
+
+    function setWorkspaceTab(tab) {
+      state.workspaceTab = tab || 'overview';
+      if (!els.workspaceTabs) return;
+      Array.from(els.workspaceTabs.querySelectorAll('button[data-tab]')).forEach((btn) => {
+        btn.classList.toggle('active', btn.getAttribute('data-tab') === state.workspaceTab);
+      });
+      renderWorkspaceSidePanel();
+    }
+
+    function renderPlanProgress(plan) {
+      if (!plan) return '';
+      const pct = typeof plan.percentComplete === 'number' ? plan.percentComplete : 0;
+      return (
+        '<div class="progress-block" style="margin:0 0 0.9rem">' +
+          '<div class="plan-progress-label">' +
+            '<strong>' + escapeHtml(plan.title || 'Growth Plan') + '</strong>' +
+            '<span class="progress-pct">' + pct + '%</span>' +
+          '</div>' +
+          '<div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' +
+            pct +
+          '"><div class="progress-fill" style="width:' +
+            pct +
+          '%"></div></div>' +
+        '</div>'
+      );
+    }
+
+    function shortClientName(name) {
+      const s = String(name || '').trim();
+      if (!s) return 'the business';
+      if (/\banchor\s+cleaning\b/i.test(s) || /^anchor\b/i.test(s)) return 'Anchor';
+      return s;
+    }
+
+    function nextObjectiveCopy(plan) {
+      const name = shortClientName(
+        (plan && plan.businessName) ||
+          (state.growthPlan && state.growthPlan.businessName) ||
+          ''
+      );
+      return (
+        name +
+        ' has completed the current growth setup checklist. The next step is to choose what Max should help with next.'
+      );
+    }
+
+    function completionStatusMeta(plan) {
+      if (plan && plan.completionStatusLine) return plan.completionStatusLine;
+      return 'Growth infrastructure checklist complete';
+    }
+
+    function renderCurrentTaskCard(plan, { guidanceOpen } = {}) {
+      if (!plan) return '';
+      if (plan.status === 'complete' || !plan.currentTask) {
+        const options = (plan.completionOptions || [])
+          .map(
+            (opt) =>
+              '<button type="button" class="secondary" data-completion="' +
+              escapeHtml(opt.id) +
+              '">' +
+              escapeHtml(opt.label) +
+              '</button>'
+          )
+          .join('');
+        return (
+          '<div class="current-task-card" id="growthCompleteCard">' +
+            '<p class="kicker">Growth Complete</p>' +
+            '<h3>' +
+            escapeHtml(nextObjectiveCopy(plan)) +
+            '</h3>' +
+            '<p class="task-meta">' +
+            escapeHtml(completionStatusMeta(plan)) +
+            '<br>Next objectives stay review-first — no campaign, prospect list, or account changes begin without operator approval.</p>' +
+            '<div class="completion-options">' +
+              options +
+            '</div>' +
+          '</div>'
+        );
+      }
+      // Next-objective milestone: show the same client-facing framing before Finish Review.
+      if (plan.currentTask && plan.currentTask.resumeAction === 'growth_complete') {
+        const task = plan.currentTask;
+        return (
+          '<div class="current-task-card" id="currentTaskCard" data-role="simple-task">' +
+            '<p class="kicker">Next Objective</p>' +
+            '<h3>' +
+            escapeHtml(task.title || 'Choose next growth objective') +
+            '</h3>' +
+            '<p class="task-meta">' +
+            escapeHtml(task.description || nextObjectiveCopy(plan)) +
+            '<br>' +
+            escapeHtml(completionStatusMeta(plan)) +
+            '<br>Next objectives stay review-first — no campaign, prospect list, or account changes begin without operator approval.' +
+            (task.estimatedMinutes
+              ? '<br>Estimated time · ' + task.estimatedMinutes + ' minutes'
+              : '') +
+            '</p>' +
+          '</div>'
+        );
+      }
+      // When left-panel guidance is open, do not render a second simple task card.
+      if (guidanceOpen) {
+        return (
+          '<p class="blueprint-empty" data-role="guidance-open-note">' +
+          'Task guidance is open in the left panel.' +
+          '</p>'
+        );
+      }
+      const task = plan.currentTask;
+      const next = plan.nextTask;
+      const after = plan.afterTask;
+      return (
+        '<div class="current-task-card" id="currentTaskCard" data-role="simple-task">' +
+          '<p class="kicker">Current Task</p>' +
+          '<h3>' + escapeHtml(task.title || 'Next step') + '</h3>' +
+          '<p class="task-meta">' +
+            escapeHtml(task.description || '') +
+            (task.estimatedMinutes
+              ? '<br>Estimated time · ' + task.estimatedMinutes + ' minutes'
+              : '') +
+            (next ? '<br>Next · ' + escapeHtml(next.title) : '') +
+            (after ? '<br>After · ' + escapeHtml(after.title) : '') +
+          '</p>' +
+        '</div>'
+      );
+    }
+
+    function renderTaskList(plan) {
+      const tasks = (plan && plan.tasks) || [];
+      if (!tasks.length) {
+        return '<p class="blueprint-empty">Nothing left to complete.</p>';
+      }
+      const currentId = plan.currentTask && plan.currentTask.id;
+      return (
+        '<ul class="task-queue">' +
+        tasks
+          .map((t) => {
+            const cls =
+              t.status === 'complete'
+                ? 'complete'
+                : t.id === currentId
+                  ? 'current'
+                  : '';
+            return (
+              '<li class="' +
+              cls +
+              '"><span>' +
+              escapeHtml(t.title) +
+              '</span><span class="task-status">' +
+              escapeHtml(t.status) +
+              '</span></li>'
+            );
+          })
+          .join('') +
+        '</ul>'
+      );
+    }
+
+    function renderHistory(plan) {
+      const history = (plan && plan.history) || [];
+      if (!history.length) {
+        return '<p class="blueprint-empty">No completed Growth Plan tasks yet.</p>';
+      }
+      return (
+        '<ul class="completion-checks">' +
+        history
+          .slice()
+          .reverse()
+          .map((h) => {
+            const when = h.completedAt
+              ? new Date(h.completedAt).toLocaleString()
+              : '';
+            return (
+              '<li>' +
+              escapeHtml(h.title || h.taskId || 'Task') +
+              (when ? ' <span class="conf-pct">· ' + escapeHtml(when) + '</span>' : '') +
+              '</li>'
+            );
+          })
+          .join('') +
+        '</ul>'
+      );
+    }
+
+    function renderWorkspaceOverview(plan) {
+      return (
+        '<div class="completion-card">' +
+          renderPlanProgress(plan) +
+          renderCurrentTaskCard(plan, {
+            guidanceOpen: Boolean(state.taskGuidanceOpen),
+          }) +
+          (plan && plan.artifacts && plan.artifacts.hasInitialGrowthDirection
+            ? renderGrowthDirection(state.initialGrowthDirection)
+            : '') +
+          '<p class="growth-disclaimer">' +
+            'Readiness Report is available as a tab. Resume always opens the first incomplete task.' +
+          '</p>' +
+        '</div>'
+      );
+    }
+
+    function renderWorkspaceSidePanel() {
+      const plan = state.growthPlan;
+      const tab = state.workspaceTab || 'overview';
+      if (tab === 'tasks') {
+        els.sidePanel.innerHTML =
+          '<div class="completion-card">' +
+          renderPlanProgress(plan) +
+          '<p class="growth-kicker">Tasks</p>' +
+          renderTaskList(plan) +
+          '</div>';
+        els.sidePanelTitle.textContent = 'Tasks';
+        els.sidePanelSub.textContent = 'Guided Growth Plan sequence';
+        return;
+      }
+      if (tab === 'readiness') {
+        if (state.growthInfrastructureReadinessReport) {
+          els.sidePanel.innerHTML = renderReadinessReport(
+            state.growthInfrastructureReadinessReport
+          );
+        } else {
+          els.sidePanel.innerHTML =
+            '<p class="blueprint-empty">No Readiness Report yet. Continue the Growth Plan to assess infrastructure when that task is current.</p>';
+        }
+        els.sidePanelTitle.textContent = 'Readiness Report';
+        els.sidePanelSub.textContent = 'Informational — does not block progress';
+        return;
+      }
+      if (tab === 'blueprint') {
+        if (state.blueprint) {
+          renderBlueprint(state.blueprint, {
+            editable: isBlueprintAwaitingApproval(state.blueprint),
+          });
+        } else {
+          els.sidePanel.innerHTML =
+            '<p class="blueprint-empty">Blueprint unavailable.</p>';
+          els.sidePanelTitle.textContent = 'Business Blueprint';
+          els.sidePanelSub.textContent = 'No Blueprint loaded for this session';
+        }
+        return;
+      }
+      if (tab === 'history') {
+        els.sidePanel.innerHTML =
+          '<div class="completion-card">' +
+          '<p class="growth-kicker">History</p>' +
+          renderHistory(plan) +
+          '</div>';
+        els.sidePanelTitle.textContent = 'History';
+        els.sidePanelSub.textContent = 'Completed Growth Plan tasks';
+        return;
+      }
+      els.sidePanel.innerHTML = renderWorkspaceOverview(plan);
+      els.sidePanelTitle.textContent = 'Growth Workspace';
+      els.sidePanelSub.textContent = 'Overview · first incomplete task is active';
+    }
+
+    function syncWorkspaceActions(plan) {
+      if (!els.growthWorkspaceActions) return;
+      const task = plan && plan.currentTask;
+      const complete = !task || (plan && plan.status === 'complete');
+      if (els.continueTaskBtn) {
+        els.continueTaskBtn.hidden = complete;
+        if (task) {
+          if (task.resumeAction === 'growth_conversation') {
+            els.continueTaskBtn.textContent = 'Continue Growth Conversation';
+          } else if (task.resumeAction === 'infrastructure_readiness') {
+            els.continueTaskBtn.textContent = 'Continue Readiness Check';
+          } else if (task.resumeAction === 'growth_complete') {
+            els.continueTaskBtn.textContent = 'Choose Next Objective';
+          } else {
+            els.continueTaskBtn.textContent = 'Open Task Guidance';
+          }
+        }
+      }
+      if (els.completeTaskBtn) {
+        els.completeTaskBtn.hidden = complete || (task && task.type === 'milestone' && task.resumeAction !== 'growth_complete');
+        els.completeTaskBtn.textContent =
+          task && task.resumeAction === 'growth_complete'
+            ? 'Finish Review'
+            : 'Mark Complete';
+      }
+    }
+
+    function openGrowthWorkspace(data, { autoOpenTask } = {}) {
+      state.growthPlan = data.growthPlan || state.growthPlan;
+      state.growthConversationActive = false;
+      state.readinessConversationActive = false;
+      state.campaignPlanningConversationActive = false;
+      state.taskGuidanceOpen = false;
+      setPhase('growth_workspace');
+      state.workspaceTab = 'overview';
+      if (els.workspaceTabs) els.workspaceTabs.hidden = false;
+      setWorkspaceTab('overview');
+      syncWorkspaceActions(state.growthPlan);
+      renderWorkspaceLeftNav();
+      // Refresh session list so Previous Plans stays accurate while in workspace.
+      loadSavedSessions().catch(() => {});
+
+      els.chatLog.innerHTML = '';
+      state.stickToBottom = true;
+      if (state.isSample) {
+        addBubble(
+          'meta',
+          'SAMPLE / DEV DATA — resuming Anchor sample Growth Plan. This is not a real client interview.'
+        );
+      }
+
+      const plan = state.growthPlan;
+      if (!plan || plan.status === 'complete' || !plan.currentTask) {
+        addBubble(
+          'assistant',
+          'Growth Complete.\n\n' +
+            nextObjectiveCopy(plan) +
+            '\n\n' +
+            completionStatusMeta(plan) +
+            '\n\nNext objectives stay review-first — no campaign, prospect list, or account changes begin without operator approval.'
+        );
+        els.sessionStatus.textContent =
+          'GROWTH PLAN · ' + completionStatusMeta(plan);
+        setComposerEnabled(false);
+        return;
+      }
+
+      const task = plan.currentTask;
+      if (task.resumeAction === 'growth_complete') {
+        addBubble(
+          'assistant',
+          (task.description || nextObjectiveCopy(plan)) +
+            '\n\n' +
+            completionStatusMeta(plan) +
+            '\n\nUse Choose Next Objective to review options, or Finish Review when you are done. Nothing launches without operator approval.'
+        );
+        els.sessionStatus.textContent =
+          'GROWTH PLAN · ' + completionStatusMeta(plan);
+      } else {
+        addBubble(
+          'assistant',
+          'Resuming your Growth Plan.\n\nCurrent task: ' +
+            (task.title || 'Next step') +
+            (task.description ? '\n\n' + task.description : '')
+        );
+        els.sessionStatus.textContent =
+          'GROWTH PLAN · ' +
+          (typeof plan.percentComplete === 'number' ? plan.percentComplete + '% · ' : '') +
+          (task.title || 'in progress');
+      }
+
+      // Auto-continue only conversation milestones — setup task guidance opens
+      // explicitly via "Open Task Guidance" so the left panel never duplicates cards.
+      if (autoOpenTask !== false) {
+        const action = task.resumeAction;
+        if (
+          action === 'growth_conversation' ||
+          action === 'infrastructure_readiness'
+        ) {
+          setTimeout(() => {
+            continueCurrentTask({ silent: true }).catch(() => {});
+          }, 0);
+        }
+      }
+    }
+
+    async function continueCurrentTask({ silent } = {}) {
+      const plan = state.growthPlan;
+      const task = plan && plan.currentTask;
+      if (!task) return;
+      if (task.resumeAction === 'growth_conversation') {
+        state.taskGuidanceOpen = false;
+        renderWorkspaceLeftNav();
+        await startGrowthConversation();
+        return;
+      }
+      if (task.resumeAction === 'infrastructure_readiness') {
+        state.taskGuidanceOpen = false;
+        renderWorkspaceLeftNav();
+        await startInfrastructureReadiness();
+        return;
+      }
+      if (task.resumeAction === 'growth_complete') {
+        state.taskGuidanceOpen = false;
+        setWorkspaceTab('overview');
+        renderWorkspaceLeftNav();
+        if (!silent) {
+          addBubble(
+            'meta',
+            'Review next-objective options when ready. Finish Review saves this checkpoint — no campaign or account changes start without approval.'
+          );
+        }
+        return;
+      }
+      // Setup task — show exactly one expanded guidance card in the left panel.
+      // Clear chat so a resume/simple task summary cannot sit under the card.
+      setPhase('growth_workspace');
+      setComposerEnabled(false);
+      setWorkspaceTab('overview');
+      state.taskGuidanceOpen = true;
+      if (els.chatLog) {
+        els.chatLog.innerHTML = '';
+        state.stickToBottom = true;
+      }
+      renderWorkspaceLeftNav();
+      renderWorkspaceSidePanel();
+      syncGrowthWorkspaceChrome();
+      // Defense in depth: strip any accidental simple-task nodes from left nav.
+      if (els.savedSessions) {
+        els.savedSessions
+          .querySelectorAll('[data-role="simple-task"]')
+          .forEach((node) => node.remove());
+        const activeCards = els.savedSessions.querySelectorAll(
+          '[data-active-task-card="1"]'
+        );
+        if (activeCards.length > 1) {
+          Array.from(activeCards)
+            .slice(1)
+            .forEach((node) => node.remove());
+        }
+      }
+      els.sessionStatus.textContent = 'GROWTH PLAN · ' + (task.title || 'setup task');
+      applyGuidanceFooterClearance();
+    }
+
+    async function completeCurrentTask() {
+      const plan = state.growthPlan;
+      const task = plan && plan.currentTask;
+      if (!task || !state.interviewId) return;
+      const data = await api(
+        'POST',
+        '/api/v1/interview/' +
+          encodeURIComponent(state.interviewId) +
+          '/growth-plan/tasks/' +
+          encodeURIComponent(task.id) +
+          '/complete',
+        {}
+      );
+      state.growthPlan = data.growthPlan || state.growthPlan;
+      if (data.growthInfrastructureReadinessReport) {
+        state.growthInfrastructureReadinessReport =
+          data.growthInfrastructureReadinessReport;
+      }
+      openGrowthWorkspace(
+        {
+          growthPlan: state.growthPlan,
+        },
+        { autoOpenTask: Boolean(state.growthPlan && state.growthPlan.currentTask) }
+      );
+      if (data.completedTask) {
+        addBubble('meta', 'Completed · ' + (data.completedTask.title || task.id));
+      }
+    }
+
+    function applyResumeState(data, action) {
+      state.interviewId = data.interviewId || data.id || state.interviewId;
+      state.sessionStatus = data.status || state.sessionStatus;
+      state.blueprint = data.blueprint || state.blueprint;
+      state.initialGrowthDirection = data.initialGrowthDirection || null;
+      state.growthInfrastructureReadinessReport =
+        data.growthInfrastructureReadinessReport || null;
+      state.firstGrowthPlanPreview = data.firstGrowthPlanPreview ||
+        (data.latestGrowthState && data.latestGrowthState.firstGrowthPlanPreview) ||
+        null;
+      state.growthPlan = data.growthPlan || null;
+      state.isSample = Boolean(data.isSample);
+      state.growthConversationActive = false;
+      state.readinessConversationActive = false;
+      state.campaignPlanningConversationActive = false;
+
+      const mode = action || data.action || 'continue';
+      const target = data.resumeTarget || 'growth_workspace';
+
+      els.chatLog.innerHTML = '';
+      state.stickToBottom = true;
+
+      if (state.isSample) {
+        addBubble(
+          'meta',
+          'SAMPLE / DEV DATA — resuming Anchor sample Blueprint. This is not a real client interview.'
+        );
+      }
+
+      if (mode === 'view') {
+        // View Blueprint: activate BLUEPRINT tab + render durable document.
+        // Must never call approve endpoints or mark locally approved.
+        // Controls/copy follow durable Blueprint status (never superseded-as-current).
+        const bpStatus = blueprintStatusOf(state.blueprint);
+        showCurrentBlueprintView({
+          editable: isBlueprintAwaitingApproval(state.blueprint),
+        });
+        const approved = isBlueprintApproved(state.blueprint);
+        els.sessionStatus.textContent =
+          'Session ' +
+          state.interviewId +
+          (approved
+            ? ' · Viewing Blueprint'
+            : bpStatus === 'superseded'
+              ? ' · Historical Blueprint'
+              : ' · Blueprint review');
+        if (bpStatus === 'superseded') {
+          addBubble(
+            'assistant',
+            'This is a historical superseded Blueprint. It is kept for History and is not the current Blueprint for review or approval.'
+          );
+        } else {
+          addBubble(
+            'assistant',
+            approved
+              ? 'Here is the Business Blueprint. Resume Growth Plan whenever you are ready — you will not need to re-answer the interview.'
+              : 'Here is the Business Blueprint awaiting approval. Review the sections, then approve when it feels right.'
+          );
+        }
+        if (els.growthBtn) els.growthBtn.textContent = 'Resume Growth Plan';
+        return;
+      }
+
+      // Unapproved onboarding must resume into review / interview — never Growth Workspace.
+      if (target === 'blueprint_review') {
+        const awaiting = isBlueprintAwaitingApproval(state.blueprint);
+        setPhase('blueprint');
+        if (state.blueprint) {
+          renderBlueprint(state.blueprint, { editable: awaiting });
+        }
+        els.sessionStatus.textContent =
+          'Session ' + state.interviewId + ' · Blueprint review';
+        addBubble(
+          'assistant',
+          awaiting
+            ? 'Your Business Blueprint is ready for review. Edit anything that needs sharpening, then approve when it feels right.'
+            : 'This Blueprint is not awaiting approval. Open the current Blueprint to continue.'
+        );
+        return;
+      }
+      if (target === 'blueprint_historical') {
+        setPhase('blueprint');
+        if (state.blueprint) {
+          renderBlueprint(state.blueprint, { editable: false });
+        }
+        els.sessionStatus.textContent =
+          'Session ' + state.interviewId + ' · Historical Blueprint';
+        addBubble(
+          'assistant',
+          'This Blueprint was superseded by a newer interview. It remains available in History and cannot be approved.'
+        );
+        return;
+      }
+      if (target === 'interview') {
+        setPhase('discovery');
+        applyDiscoveryPayload(data, { skipMessage: true });
+        if (data.turns && Array.isArray(data.turns)) {
+          for (const turn of data.turns) {
+            if (turn.speaker === 'assistant' || turn.speaker === 'client') {
+              addBubble(
+                turn.speaker === 'assistant' ? 'assistant' : 'client',
+                turn.message
+              );
+            }
+          }
+        } else if (data.message) {
+          addBubble('assistant', data.message);
+        }
+        setComposerEnabled(true);
+        return;
+      }
+
+      // SPEC-088: Continue/Resume for approved sessions enters Growth Workspace.
+      // Readiness Report is a tab — never the intermediate destination.
+      if (
+        target === 'growth_workspace' ||
+        target === 'growth_complete' ||
+        target === 'infrastructure_readiness' ||
+        target === 'first_growth_plan_preview' ||
+        target === 'growth_conversation' ||
+        target === 'initial_growth_direction'
+      ) {
+        openGrowthWorkspace(data, { autoOpenTask: mode === 'continue' });
+        return;
+      }
+
+      // Unknown targets: only open Growth Workspace when Blueprint is approved.
+      if (
+        String(state.sessionStatus || '').toUpperCase() === 'APPROVED' ||
+        isBlueprintApproved(state.blueprint)
+      ) {
+        openGrowthWorkspace(data, { autoOpenTask: mode === 'continue' });
+        return;
+      }
+      setPhase('blueprint');
+      if (state.blueprint) renderBlueprint(state.blueprint, { editable: true });
+    }
+
+    async function resumeSession(sessionId, action) {
+      const data = await api(
+        'GET',
+        '/api/v1/client-intel/sessions/' +
+          encodeURIComponent(sessionId) +
+          '/resume?action=' +
+          encodeURIComponent(action || 'continue')
+      );
+      applyResumeState(data, action || 'continue');
+    }
+
+    function showWelcome() {
+      setPhase('welcome');
+      els.chatLog.innerHTML = '';
+      state.stickToBottom = true;
+      state.interviewId = null;
+      state.sessionStatus = null;
+      state.blueprint = null;
+      state.growthConversationActive = false;
+      state.readinessConversationActive = false;
+      state.campaignPlanningConversationActive = false;
+      state.firstGrowthPlanPreview = null;
+      state.firstCampaignPlanPreview = null;
+      state.prospectListCriteriaPreview = null;
+      state.prospectListBuildProposal = null;
+      state.scoutHandoffBrief = null;
+      state.scoutHandoff = null;
+      state.prospectBatchReview = null;
+      state.outreachStrategyPreview = null;
+      state.outreachCopyPlan = null;
+      state.scoutWorkRequest = null;
+      state.scoutCandidateBatch = null;
+      state.growthInfrastructureReadinessReport = null;
+      state.isSample = false;
+      state.taskGuidanceOpen = false;
+      if (els.growthBtn) els.growthBtn.textContent = 'Resume Growth Plan';
+      state.growthPlan = null;
+      if (els.workspaceTabs) els.workspaceTabs.hidden = true;
+      if (els.savedSessions) els.savedSessions.classList.remove('workspace-left-nav');
+      if (state.isClientRole) {
+        const company = clientCompanyLabel();
+        addBubble(
+          'assistant',
+          "Welcome.\n\nBefore Max can give you useful guidance, he needs to understand your business.\n\nThis conversation helps Max learn who you serve, what you offer, where you're trying to go, and what still needs to be understood.\n\nWhen you're ready, start with Max."
+        );
+        els.sidePanel.innerHTML =
+          '<p class="blueprint-empty">Help Max understand ' +
+          escapeHtml(company) +
+          '. Your answers become Pulseforge\'s durable understanding of your company.</p>';
+        if (els.startBtn) els.startBtn.textContent = 'Start with Max';
+      } else {
+        addBubble(
+          'assistant',
+          "Welcome.\n\nBefore Pulseforge recommends anything, I'd like to understand how your business works.\n\nThe better I understand your business, the better every future recommendation will become.\n\nIf you already have a Growth Plan, resume from the current plan below — you will not re-answer the interview."
+        );
+        els.sidePanel.innerHTML = '<p class="blueprint-empty">When you\'re ready, begin the conversation or resume an approved Blueprint.</p>';
+      }
+      els.sessionStatus.textContent = 'Welcome';
+      renderProgress(null);
+      loadSavedSessions();
+    }
+
+    async function startNewInterviewFlow() {
+      // SPEC-099 — explicit restart, not welcome-screen theater.
+      if (hasApprovedUnderstanding() && !state.hasUnapprovedOnboarding) {
+        showError(
+          'Your approved business understanding stays in place. To change it, revise the Blueprint instead of starting a new interview.'
+        );
+        return;
+      }
+
+      const hasUnfinished =
+        state.hasUnapprovedOnboarding ||
+        (state.interviewId &&
+          state.sessionStatus &&
+          state.sessionStatus !== 'APPROVED' &&
+          ['NEW', 'DISCOVERY', 'CLARIFICATION', 'VALIDATION', 'BLUEPRINT_GENERATION', 'CLIENT_REVIEW'].indexOf(
+            state.sessionStatus
+          ) >= 0) ||
+        state.onboardingState === 'blueprint_review' ||
+        state.onboardingState === 'interview_in_progress' ||
+        (state.blueprint &&
+          ['draft', 'in_review'].indexOf(
+            String(state.blueprint.status || '').toLowerCase()
+          ) >= 0);
+
+      if (hasUnfinished) {
+        const ok = window.confirm(
+          'Start a new interview?\n\n' +
+            'Your current unfinished interview and pending Blueprint will be replaced by a new onboarding conversation. ' +
+            'Your previously approved business understanding, if any, will remain intact until a new Blueprint is approved.'
+        );
+        if (!ok) return;
+      }
+
+      try {
+        const clientId = resolvedClientId();
+        els.chatLog.innerHTML = '';
+        state.stickToBottom = true;
+        if (els.savedSessions) els.savedSessions.hidden = true;
+        setPhase('discovery');
+        const data = await postInterviewStart(clientId, { restart: true });
+        if (!data) return;
+        state.hasUnapprovedOnboarding = true;
+        state.onboardingState = 'interview_in_progress';
+        state.blueprint = null;
+        applyDiscoveryPayload(data);
+        setComposerEnabled(true);
+        addBubble(
+          'meta',
+          'Started a new interview. Previous unfinished onboarding was replaced.'
+        );
+        syncStartNewInterviewButton();
+      } catch (err) {
+        showError(err.message);
+        if (/approved_blueprint_protected/i.test(String(err.message || ''))) {
+          return;
+        }
+      }
+    }
+
+    function syncActiveTenantFromContext(activeClientId, tenantName) {
+      if (activeClientId == null || !Number.isFinite(Number(activeClientId))) return;
+      state.activeClientId = Number(activeClientId);
+      if (tenantName) state.clientDisplayName = tenantName;
+      if (els.clientId && !state.isClientRole) {
+        els.clientId.value = String(state.activeClientId);
+      }
+    }
+
+    function resolvedClientId() {
+      if (state.isClientRole && state.authClientId) {
+        return String(state.authClientId);
+      }
+      if (state.activeClientId != null && Number.isFinite(Number(state.activeClientId))) {
+        return String(state.activeClientId);
+      }
+      const shellId =
+        window.PulseforgeShell && window.PulseforgeShell.activeClientId != null
+          ? Number(window.PulseforgeShell.activeClientId)
+          : null;
+      if (shellId != null && Number.isFinite(shellId)) {
+        return String(shellId);
+      }
+      if (els.clientId && els.clientId.value.trim()) {
+        return els.clientId.value.trim();
+      }
+      throw new Error(
+        'No active client selected. Choose a tenant from the navigation bar before starting Client Intelligence.'
+      );
+    }
+
+    async function postInterviewStart(clientId, body) {
+      if (state.interviewStartInFlight) {
+        return null;
+      }
+      state.interviewStartInFlight = true;
+      try {
+        return await api(
+          'POST',
+          '/api/v1/clients/' + encodeURIComponent(clientId) + '/interview/start',
+          body || {}
+        );
+      } finally {
+        state.interviewStartInFlight = false;
+      }
+    }
+
+    function clientCompanyLabel() {
+      return (
+        state.clientDisplayName ||
+        (window.PulseforgeShell && window.PulseforgeShell.tenantName) ||
+        'your business'
+      );
+    }
+
+    function applyClientRoleUi() {
+      if (!state.isClientRole) return;
+      document.body.classList.add('client-role');
+      const company = clientCompanyLabel();
+      const pageTitle = document.getElementById('ciePageTitle');
+      const pageSub = document.getElementById('ciePageSub');
+      if (pageTitle) pageTitle.textContent = 'My Business';
+      if (pageSub) {
+        pageSub.textContent = "Pulseforge's durable understanding of " + company;
+      }
+      document.title = 'Pulseforge — My Business';
+      if (els.clientIdLabel) els.clientIdLabel.hidden = true;
+      if (els.clientId) {
+        els.clientId.value = String(state.authClientId || '');
+        els.clientId.disabled = true;
+        els.clientId.readOnly = true;
+      }
+      if (els.clientScopeLabel) {
+        els.clientScopeLabel.hidden = false;
+        els.clientScopeLabel.textContent =
+          'Signed in for your business — client scope is fixed by your account.';
+      }
+      if (els.notesBtn) els.notesBtn.hidden = true;
+      if (els.loadAnchorFixtureBtn) els.loadAnchorFixtureBtn.hidden = true;
+      // SPEC-099 — clients may restart unapproved onboarding; visibility is synced from state.
+      syncStartNewInterviewButton();
+      if (els.startBtn) els.startBtn.textContent = 'Start with Max';
+    }
+
+    function applyClientPhaseCopy(phase) {
+      if (!state.isClientRole) return;
+      const company = clientCompanyLabel();
+      if (phase === 'welcome') {
+        els.sidePanelTitle.textContent = 'My Business';
+        els.sidePanelSub.textContent = 'Help Max understand ' + company + '.';
+      } else if (
+        phase === 'executive_summary' ||
+        phase === 'blueprint' ||
+        phase === 'understanding_load' ||
+        phase === 'trust_bridge'
+      ) {
+        els.sidePanelTitle.textContent = 'My Business';
+        els.sidePanelSub.textContent =
+          "Here's what Max understands about " + company + '.';
+      } else if (phase === 'complete' || phase === 'growth_workspace') {
+        els.sidePanelTitle.textContent = "Max's understanding of " + company;
+        els.sidePanelSub.textContent =
+          'Approved business understanding — return here anytime to inspect it.';
+      }
+    }
+
+    async function loadAuthContext() {
+      try {
+        const res = await fetch('/api/me', {
+          credentials: 'same-origin',
+          headers: { Accept: 'application/json' },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const user = data.user || {};
+        state.authRole = user.role || null;
+        state.isClientRole = user.role === 'client';
+        state.authClientId =
+          user.client_id != null
+            ? Number(user.client_id)
+            : data.active_client_id != null
+              ? Number(data.active_client_id)
+              : null;
+        syncActiveTenantFromContext(
+          data.active_client_id != null ? Number(data.active_client_id) : state.authClientId,
+          data.client && (data.client.display_name || data.client.name)
+        );
+        state.clientDisplayName =
+          (data.client && (data.client.display_name || data.client.name)) ||
+          state.clientDisplayName ||
+          null;
+        applyClientRoleUi();
+      } catch (_) {
+        /* keep operator defaults */
+      }
+    }
+
+    async function recoverOnboardingState() {
+      const data = await api('GET', '/api/v1/client-intel/onboarding');
+      if (!data || data.onboardingState === 'none') {
+        state.onboardingState = 'none';
+        state.hasUnapprovedOnboarding = false;
+        showWelcome();
+        syncStartNewInterviewButton();
+        return data;
+      }
+      state.onboardingState = data.onboardingState || 'none';
+      state.hasUnapprovedOnboarding =
+        data.onboardingState === 'interview_in_progress' ||
+        data.onboardingState === 'blueprint_review';
+      if (data.clientId != null && !state.isClientRole) {
+        syncActiveTenantFromContext(Number(data.clientId));
+      }
+      if (
+        data.onboardingState === 'interview_in_progress' ||
+        data.onboardingState === 'blueprint_review'
+      ) {
+        if (els.startBtn && state.isClientRole) {
+          els.startBtn.textContent = 'Continue with Max';
+        }
+        if (data.status === 'CLIENT_REVIEW' || data.onboardingState === 'blueprint_review') {
+          applyResumeState(data, 'continue');
+        } else {
+          setPhase('discovery');
+          els.chatLog.innerHTML = '';
+          state.stickToBottom = true;
+          applyDiscoveryPayload(data, { skipMessage: true });
+          if (data.turns && Array.isArray(data.turns)) {
+            for (const turn of data.turns) {
+              if (turn.speaker === 'assistant' || turn.speaker === 'client') {
+                addBubble(
+                  turn.speaker === 'assistant' ? 'assistant' : 'client',
+                  turn.message
+                );
+              }
+            }
+          } else if (data.message) {
+            addBubble('assistant', data.message);
+          }
+          setComposerEnabled(true);
+        }
+        addBubble('meta', data.message || 'Recovered your saved onboarding progress.');
+        syncStartNewInterviewButton();
+        return data;
+      }
+      applyResumeState(data, 'continue');
+      addBubble('meta', data.message || 'Recovered your approved Blueprint.');
+      syncStartNewInterviewButton();
+      return data;
+    }
+
+    els.startBtn.addEventListener('click', async () => {
+      try {
+        const clientId = resolvedClientId();
+        els.chatLog.innerHTML = '';
+        state.stickToBottom = true;
+        if (els.savedSessions) els.savedSessions.hidden = true;
+        setPhase('discovery');
+        const data = await postInterviewStart(clientId, {});
+        if (!data) return;
+        if (data && data.resumedExisting && (data.status === 'CLIENT_REVIEW' || data.onboardingState === 'blueprint_review')) {
+          applyResumeState(data, 'continue');
+          addBubble('meta', data.message || 'Resumed your existing onboarding.');
+          return;
+        }
+        applyDiscoveryPayload(data);
+        setComposerEnabled(true);
+      } catch (err) {
+        showError(err.message);
+        showWelcome();
+      }
+    });
+
+    els.notesBtn.addEventListener('click', async () => {
+      if (state.isClientRole) return;
+      try {
+        const notes = prompt('Paste business notes:');
+        if (!notes) return;
+        const clientId = resolvedClientId();
+        els.chatLog.innerHTML = '';
+        state.stickToBottom = true;
+        addBubble('client', notes);
+        const data = await postInterviewStart(clientId, { notes });
+        if (!data) return;
+        await enterUnderstandingFlow(data);
+      } catch (err) {
+        showError(err.message);
+      }
+    });
+
+    async function sendMessage() {
+      try {
+        const text = els.messageInput.value.trim();
+        if (!text || !state.interviewId) return;
+        if (state.turnInFlight) return;
+        state.turnInFlight = true;
+        addBubble('client', text);
+        els.messageInput.value = '';
+        els.sendBtn.disabled = true;
+
+        if (state.phase === 'readiness' || state.readinessConversationActive) {
+          await runCieTurn(
+            text,
+            () =>
+              api(
+                'POST',
+                '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/readiness/message',
+                { message: text }
+              ),
+            async (data, turn) => {
+              if (data && data.growthInfrastructureReadinessReport) {
+                state.growthInfrastructureReadinessReport = data.growthInfrastructureReadinessReport;
+                els.sidePanel.innerHTML = renderReadinessReport(data.growthInfrastructureReadinessReport);
+                els.sidePanelTitle.textContent = 'Growth Infrastructure Readiness Report';
+                els.sidePanelSub.textContent = 'Assessment only — setup sequence before campaigns';
+              }
+              if (data && data.message) {
+                await presentCieAssistantMessage(data.message, {
+                  startedAtMs: turn.startedAtMs,
+                  provisionalWeight: turn.provisionalWeight,
+                  operatorText: text,
+                  clearThinking: turn.clearThinking,
+                });
+              } else {
+                turn.clearThinking();
+              }
+              setComposerEnabled(true);
+            }
+          );
+          return;
+        }
+
+        if (
+          state.phase === 'campaign_planning' ||
+          state.campaignPlanningConversationActive
+        ) {
+          await runCieTurn(
+            text,
+            () =>
+              api(
+                'POST',
+                '/api/v1/interview/' +
+                  encodeURIComponent(state.interviewId) +
+                  '/campaign/message',
+                { message: text }
+              ),
+            async (data, turn) => {
+              if (data && data.firstCampaignPlanPreview) {
+                state.firstCampaignPlanPreview = data.firstCampaignPlanPreview;
+              }
+              if (data && data.prospectListCriteriaPreview) {
+                state.prospectListCriteriaPreview = data.prospectListCriteriaPreview;
+              }
+              if (data && data.prospectListBuildProposal) {
+                state.prospectListBuildProposal = data.prospectListBuildProposal;
+              }
+              if (data && data.scoutHandoffBrief) {
+                state.scoutHandoffBrief = data.scoutHandoffBrief;
+              }
+              if (data && data.scoutHandoff) {
+                state.scoutHandoff = data.scoutHandoff;
+              }
+              if (data && data.scoutWorkRequest) {
+                state.scoutWorkRequest = data.scoutWorkRequest;
+              }
+              if (data && data.scoutCandidateBatch) {
+                state.scoutCandidateBatch = data.scoutCandidateBatch;
+              }
+              if (data && data.prospectBatchReview) {
+                state.prospectBatchReview = data.prospectBatchReview;
+              }
+              if (data && data.outreachStrategyPreview) {
+                state.outreachStrategyPreview = data.outreachStrategyPreview;
+              }
+              if (data && data.outreachCopyPlan) {
+                state.outreachCopyPlan = data.outreachCopyPlan;
+              }
+              if (data && data.outreachCopyPlan) {
+                els.sidePanelTitle.textContent = 'Outreach Copy Plan';
+                els.sidePanelSub.textContent =
+                  'Copy plan only — no final outreach copy, sends, or CRM writes';
+              } else if (data && data.prospectBatchReview) {
+                els.sidePanel.innerHTML = renderProspectBatchReview(
+                  data.prospectBatchReview
+                );
+                bindProspectBatchReviewActions(els.sidePanel);
+                els.sidePanelTitle.textContent = 'Prospect Batch Review';
+                els.sidePanelSub.textContent =
+                  data.prospectBatchReview.batch1Approved
+                    ? 'Batch 1 approved — next: Outreach Strategy Preview'
+                    : 'Operator digest first — full evidence under View evidence';
+              } else if (data && data.scoutHandoffBrief) {
+                els.sidePanel.innerHTML = renderScoutHandoffBrief(
+                  data.scoutHandoffBrief
+                );
+                els.sidePanelTitle.textContent = 'Scout Handoff';
+                els.sidePanelSub.textContent =
+                  data.scoutHandoffBrief.uiStatus ||
+                  (data.scoutHandoff && data.scoutHandoff.uiStatus) ||
+                  'Brief created';
+              } else if (data && data.prospectListBuildProposal) {
+                els.sidePanel.innerHTML = renderProspectListBuildProposal(
+                  data.prospectListBuildProposal
+                );
+                els.sidePanelTitle.textContent = 'Prospect List Build Proposal';
+                els.sidePanelSub.textContent =
+                  'Approach only — no prospect list built yet';
+              } else if (data && data.prospectListCriteriaPreview) {
+                els.sidePanel.innerHTML = renderProspectListCriteriaPreview(
+                  data.prospectListCriteriaPreview
+                );
+                els.sidePanelTitle.textContent = 'Prospect List Criteria Preview';
+                els.sidePanelSub.textContent =
+                  'Criteria only — no prospect list built yet';
+              } else if (data && data.firstCampaignPlanPreview) {
+                els.sidePanel.innerHTML = renderFirstCampaignPlanPreview(
+                  data.firstCampaignPlanPreview
+                );
+                els.sidePanelTitle.textContent = 'First Campaign Plan Preview';
+                els.sidePanelSub.textContent = 'Review before any list, copy, or launch';
+              }
+              if (data && data.message) {
+                await presentCieAssistantMessage(data.message, {
+                  startedAtMs: turn.startedAtMs,
+                  provisionalWeight: turn.provisionalWeight,
+                  operatorText: text,
+                  clearThinking: turn.clearThinking,
+                  hasEvidencePath: Boolean(
+                    data.prospectBatchReview || data.scoutHandoffBrief
+                  ),
+                });
+              } else {
+                turn.clearThinking();
+              }
+              setComposerEnabled(true);
+            }
+          );
+          return;
+        }
+
+        if (state.phase === 'growth' || state.growthConversationActive) {
+          await runCieTurn(
+            text,
+            () =>
+              api(
+                'POST',
+                '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/growth/message',
+                { message: text }
+              ),
+            async (data, turn) => {
+              if (data && data.initialGrowthDirection) {
+                state.initialGrowthDirection = data.initialGrowthDirection;
+              }
+              const shouldShowGrowthActions =
+                Boolean(data && data.firstGrowthPlanPreview) ||
+                Boolean(data && data.suggestedActions && data.suggestedActions.length);
+              if (data && data.firstGrowthPlanPreview) {
+                state.firstGrowthPlanPreview = data.firstGrowthPlanPreview;
+              }
+              if (data && data.message) {
+                await presentCieAssistantMessage(data.message, {
+                  startedAtMs: turn.startedAtMs,
+                  provisionalWeight: turn.provisionalWeight,
+                  operatorText: text,
+                  clearThinking: turn.clearThinking,
+                  onComplete: () => {
+                    if (shouldShowGrowthActions) setGrowthPreviewActionsVisible(true);
+                  },
+                });
+              } else {
+                turn.clearThinking();
+                if (shouldShowGrowthActions) setGrowthPreviewActionsVisible(true);
+              }
+              setComposerEnabled(true);
+            }
+          );
+          return;
+        }
+
+        await runCieTurn(
+          text,
+          () =>
+            api('POST', '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/message', {
+              message: text,
+            }),
+          async (data, turn) => {
+            if (data.blueprint || data.nextAction === 'GENERATE_BLUEPRINT' || data.nextAction === 'COMPLETE') {
+              turn.clearThinking();
+              if (data.reflection) addBubble('reflection', data.reflection);
+              await enterUnderstandingFlow(data);
+              return;
+            }
+            applyDiscoveryPayload(data, { skipMessage: true });
+            if (data.message) {
+              await presentCieAssistantMessage(data.message, {
+                startedAtMs: turn.startedAtMs,
+                provisionalWeight: turn.provisionalWeight,
+                operatorText: text,
+                answerDisposition: data.answerDisposition,
+                nextAction: data.nextAction,
+                clearThinking: turn.clearThinking,
+              });
+            } else {
+              turn.clearThinking();
+            }
+            setComposerEnabled(true);
+          }
+        );
+      } catch (err) {
+        showError(err.message);
+        setComposerEnabled(
+          state.phase === 'discovery' ||
+            state.phase === 'growth' ||
+            state.phase === 'readiness' ||
+            state.phase === 'campaign_planning'
+        );
+      } finally {
+        state.turnInFlight = false;
+      }
+    }
+
+    async function startCampaignPlanningConversation() {
+      try {
+        if (!state.interviewId) return;
+        state.growthConversationActive = false;
+        state.readinessConversationActive = false;
+        setGrowthPreviewActionsVisible(false);
+        const data = await api(
+          'POST',
+          '/api/v1/interview/' +
+            encodeURIComponent(state.interviewId) +
+            '/campaign/start',
+          {}
+        );
+        if (data && data.blueprint) state.blueprint = data.blueprint;
+        if (data && data.firstCampaignPlanPreview) {
+          state.firstCampaignPlanPreview = data.firstCampaignPlanPreview;
+        }
+        if (data && data.prospectListCriteriaPreview) {
+          state.prospectListCriteriaPreview = data.prospectListCriteriaPreview;
+        }
+        if (data && data.prospectListBuildProposal) {
+          state.prospectListBuildProposal = data.prospectListBuildProposal;
+        }
+        if (state.prospectListBuildProposal) {
+          els.sidePanel.innerHTML = renderProspectListBuildProposal(
+            state.prospectListBuildProposal
+          );
+        } else if (state.prospectListCriteriaPreview) {
+          els.sidePanel.innerHTML = renderProspectListCriteriaPreview(
+            state.prospectListCriteriaPreview
+          );
+        } else if (state.firstCampaignPlanPreview) {
+          els.sidePanel.innerHTML = renderFirstCampaignPlanPreview(
+            state.firstCampaignPlanPreview
+          );
+        } else {
+          els.sidePanel.innerHTML =
+            '<div class="growth-direction" id="firstCampaignPlanPreview">' +
+              '<p class="growth-kicker">First Campaign Plan Preview</p>' +
+              '<p class="blueprint-empty">Answer a few planning questions and Max will draft the preview here.</p>' +
+            '</div>';
+        }
+        state.campaignPlanningConversationActive = true;
+        setPhase('campaign_planning');
+        if (data && data.message) {
+          if (!data.resumed) {
+            addBubble('meta', 'First Campaign Planning started');
+          }
+          addBubble('assistant', data.message);
+        }
+        els.sessionStatus.textContent = 'CAMPAIGN PLANNING · review-first';
+        els.messageInput.placeholder =
+          'Confirm objective, segment, market, proof, hypothesis…';
+        els.messageInput.focus();
+      } catch (err) {
+        showError(err.message);
+      }
+    }
+
+    async function startGrowthConversation() {
+      try {
+        if (!state.interviewId) return;
+        els.growthBtn.disabled = true;
+        if (els.readinessBtn) els.readinessBtn.disabled = true;
+        state.readinessConversationActive = false;
+        state.campaignPlanningConversationActive = false;
+        const data = await api(
+          'POST',
+          '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/growth/start',
+          {}
+        );
+        if (data && data.initialGrowthDirection) {
+          state.initialGrowthDirection = data.initialGrowthDirection;
+        }
+        if (data && data.blueprint) state.blueprint = data.blueprint;
+        state.growthConversationActive = true;
+        setPhase('growth');
+        if (data && data.message) {
+          if (!data.resumed) addBubble('meta', 'Growth Conversation started');
+          addBubble('assistant', data.message);
+        }
+        els.sessionStatus.textContent = 'GROWTH · using approved Blueprint';
+        els.messageInput.placeholder = 'Talk with Max about the first growth focus…';
+        els.messageInput.focus();
+      } catch (err) {
+        showError(err.message);
+        els.growthBtn.disabled = false;
+        if (els.readinessBtn) els.readinessBtn.disabled = false;
+      }
+    }
+
+    async function startInfrastructureReadiness() {
+      try {
+        if (!state.interviewId) return;
+        if (els.readinessBtn) els.readinessBtn.disabled = true;
+        if (els.growthBtn) els.growthBtn.disabled = true;
+        if (els.checkInfraFromGrowthBtn) els.checkInfraFromGrowthBtn.disabled = true;
+        state.growthConversationActive = false;
+        state.campaignPlanningConversationActive = false;
+        setGrowthPreviewActionsVisible(false);
+        const data = await api(
+          'POST',
+          '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/readiness/start',
+          {}
+        );
+        if (data && data.blueprint) state.blueprint = data.blueprint;
+        if (data && data.growthInfrastructureReadinessReport) {
+          state.growthInfrastructureReadinessReport = data.growthInfrastructureReadinessReport;
+          els.sidePanel.innerHTML = renderReadinessReport(data.growthInfrastructureReadinessReport);
+        }
+        state.readinessConversationActive = true;
+        setPhase('readiness');
+        if (data && data.message) {
+          if (!data.resumed) {
+            addBubble(
+              'meta',
+              data.growthHandoff && data.growthHandoff.primarySegment
+                ? 'Growth Infrastructure Readiness · from First Growth Plan'
+                : 'Growth Infrastructure Readiness started'
+            );
+          }
+          addBubble('assistant', data.message);
+        }
+        els.sessionStatus.textContent = 'READINESS · capture & convert setup';
+        els.messageInput.placeholder = 'Tell Max about website, GBP, leads, tracking, assets…';
+        els.messageInput.focus();
+      } catch (err) {
+        showError(err.message);
+        if (els.readinessBtn) els.readinessBtn.disabled = false;
+        if (els.growthBtn) els.growthBtn.disabled = false;
+        if (els.checkInfraFromGrowthBtn) els.checkInfraFromGrowthBtn.disabled = false;
+        if (state.firstGrowthPlanPreview) setGrowthPreviewActionsVisible(true);
+      }
+    }
+
+    async function sendGrowthCtaMessage(text) {
+      if (!state.interviewId || !text) return;
+      addBubble('client', text);
+      setComposerEnabled(false);
+      try {
+        const data = await api(
+          'POST',
+          '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/growth/message',
+          { message: text }
+        );
+        if (data && data.firstGrowthPlanPreview) {
+          state.firstGrowthPlanPreview = data.firstGrowthPlanPreview;
+        }
+        if (data && data.message) addBubble('assistant', data.message);
+        if (data && data.suggestedActions && data.suggestedActions.length) {
+          setGrowthPreviewActionsVisible(true);
+        }
+        setComposerEnabled(true);
+      } catch (err) {
+        showError(err.message);
+        setComposerEnabled(true);
+      }
+    }
+
+    els.sendBtn.addEventListener('click', sendMessage);
+    els.messageInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+
+    els.accurateBtn.addEventListener('click', () => {
+      setPhase('blueprint');
+      const awaiting = isBlueprintAwaitingApproval(state.blueprint);
+      addBubble(
+        'assistant',
+        awaiting
+          ? "Here's your Business Blueprint — the living record of what I understand about your business. Edit anything that needs sharpening, then approve when it feels right."
+          : blueprintStatusOf(state.blueprint) === 'superseded'
+            ? 'This Blueprint was superseded. It is historical only and cannot be approved.'
+            : "Here's your Business Blueprint."
+      );
+      renderBlueprint(state.blueprint, { editable: awaiting });
+      els.sessionStatus.textContent =
+        'Session ' + state.interviewId + ' · Business Blueprint';
+    });
+
+    async function resumeConversation() {
+      try {
+        if (!state.interviewId) return;
+        const data = await api('POST', '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/resume', {});
+        setPhase('discovery');
+        applyDiscoveryPayload(data);
+        setComposerEnabled(true);
+      } catch (err) {
+        showError(err.message);
+      }
+    }
+
+    els.refineBtn.addEventListener('click', resumeConversation);
+    els.keepTalkingBtn.addEventListener('click', resumeConversation);
+    els.refineWithMaxBtn.addEventListener('click', resumeConversation);
+
+    els.regenerateBlueprintBtn.addEventListener('click', async () => {
+      try {
+        if (!state.interviewId || !isBlueprintAwaitingApproval(state.blueprint)) return;
+        if (state.regenerateInFlight || state.approveInFlight) return;
+        const confirmed = window.confirm(
+          'Regenerate the Business Blueprint from your current answers? Stale generated text will be replaced with a new version. Your interview answers are kept.'
+        );
+        if (!confirmed) return;
+        state.regenerateInFlight = true;
+        setApproveButtonState(state.blueprint, { editable: true });
+        const data = await api(
+          'POST',
+          '/api/v1/interview/' +
+            encodeURIComponent(state.interviewId) +
+            '/blueprint/regenerate',
+          {}
+        );
+        state.regenerateInFlight = false;
+        state.lastRegeneratedBlueprintVersion =
+          (data.blueprint && data.blueprint.version) || null;
+        state.blueprint = data.blueprint || state.blueprint;
+        state.executiveSummary = data.executiveSummary || state.executiveSummary;
+        if (data.executiveSummary) {
+          renderExecutiveSummary(data.executiveSummary);
+        }
+        renderBlueprint(state.blueprint, { editable: true });
+        addBubble(
+          'meta',
+          data.message ||
+            'Regenerated Business Blueprint from current understanding.'
+        );
+        setPhase('blueprint');
+      } catch (err) {
+        state.regenerateInFlight = false;
+        setApproveButtonState(state.blueprint, { editable: true });
+        showError(err.message);
+      }
+    });
+
+    els.reviseBtn.addEventListener('click', async () => {
+      try {
+        if (!state.blueprint) return;
+        const sections = {};
+        els.sidePanel.querySelectorAll('textarea[data-key]').forEach((ta) => {
+          sections[ta.getAttribute('data-key')] = { summary: ta.value };
+        });
+        const bp = await api('POST', '/api/v1/blueprint/' + encodeURIComponent(state.blueprint.id) + '/revise', {
+          sections,
+        });
+        renderBlueprint(bp, { editable: true });
+      } catch (err) {
+        showError(err.message);
+      }
+    });
+
+    els.approveBtn.addEventListener('click', async () => {
+      try {
+        if (!state.blueprint) return;
+
+        // Already approved — friendly idempotent UI, never call approve again.
+        if (
+          state.sessionStatus === 'APPROVED' ||
+          state.blueprint.status === 'approved' ||
+          state.phase === 'complete'
+        ) {
+          applyApprovedState(state.pendingCompletion || { blueprint: state.blueprint }, {
+            alreadyApproved: true,
+          });
+          return;
+        }
+
+        // Never attempt approval on superseded / non-review Blueprints.
+        if (!isBlueprintAwaitingApproval(state.blueprint)) {
+          showError(
+            blueprintStatusOf(state.blueprint) === 'superseded'
+              ? 'This Blueprint was superseded and cannot be approved. Open the current Blueprint instead.'
+              : 'This Blueprint is not awaiting approval.'
+          );
+          setApproveButtonState(state.blueprint, { editable: false });
+          return;
+        }
+
+        if (state.approveInFlight || state.phase === 'playbook_prep') return;
+
+        state.approveInFlight = true;
+        els.approveBtn.disabled = true;
+        els.reviseBtn.disabled = true;
+        els.approveBtn.textContent = 'Approving…';
+        els.blueprintActions.hidden = true;
+        setPhase('playbook_prep');
+        addBubble('meta', 'Preparing your Client Playbook…');
+
+        const pending = api(
+          'POST',
+          '/api/v1/blueprint/' + encodeURIComponent(state.blueprint.id) + '/approve',
+          {}
+        );
+        const result = await runChecklist(PLAYBOOK_STEPS, 2500, pending);
+
+        // Refresh session/artifacts after approval so local status matches server.
+        let fresh = null;
+        if (state.interviewId) {
+          try {
+            fresh = await api('GET', '/api/v1/interview/' + encodeURIComponent(state.interviewId));
+          } catch (_) {
+            fresh = null;
+          }
+        }
+        if (fresh && fresh.status) state.sessionStatus = fresh.status;
+        if (fresh && fresh.blueprint) {
+          state.blueprint = fresh.blueprint;
+        } else if (result && result.blueprint) {
+          state.blueprint = result.blueprint;
+        }
+
+        const already =
+          !!(result && (result.alreadyApproved || result.message === 'already_approved'));
+        if (result && result.initialGrowthDirection) {
+          state.initialGrowthDirection = result.initialGrowthDirection;
+        } else if (fresh && fresh.initialGrowthDirection) {
+          state.initialGrowthDirection = fresh.initialGrowthDirection;
+        }
+        applyApprovedState(
+          {
+            ...(result || {}),
+            blueprint: state.blueprint || (result && result.blueprint),
+            playbook: (result && result.playbook) || null,
+            initialGrowthDirection:
+              state.initialGrowthDirection ||
+              (result && result.initialGrowthDirection) ||
+              null,
+          },
+          { alreadyApproved: already }
+        );
+        if (!already) {
+          const focusLine =
+            state.initialGrowthDirection && state.initialGrowthDirection.firstFocus
+              ? '\n\nBased on this Blueprint, a sensible first growth focus is ' +
+                state.initialGrowthDirection.firstFocus +
+                '.'
+              : '';
+          addBubble(
+            'assistant',
+            'Excellent.\n\nI now understand your business well enough to begin helping it grow.\n\nEvery recommendation Pulseforge makes will build on this understanding.' +
+              focusLine +
+              '\n\nReview the Initial Growth Direction, then start the Growth Conversation when you are ready.'
+          );
+        }
+      } catch (err) {
+        const msg = String((err && err.message) || '');
+        if (/already_approved|was APPROVED|already approved/i.test(msg)) {
+          applyApprovedState(state.pendingCompletion || { blueprint: state.blueprint }, {
+            alreadyApproved: true,
+          });
+          return;
+        }
+        state.approveInFlight = false;
+        showError(msg);
+        setPhase('blueprint');
+        if (state.blueprint) {
+          renderBlueprint(state.blueprint, { editable: true });
+        }
+      }
+    });
+
+    els.growthBtn.addEventListener('click', async () => {
+      if (state.interviewId && state.sessionStatus === 'APPROVED') {
+        try {
+          await resumeSession(state.interviewId, 'continue');
+          return;
+        } catch (err) {
+          showError(err.message);
+        }
+      }
+      await startGrowthConversation();
+    });
+    els.readinessBtn.addEventListener('click', startInfrastructureReadiness);
+    els.dashboardBtn.addEventListener('click', () => {
+      window.location.href = '/dashboard';
+    });
+    if (els.continueTaskBtn) {
+      els.continueTaskBtn.addEventListener('click', () => {
+        continueCurrentTask({ silent: false }).catch((err) => showError(err.message));
+      });
+    }
+    if (els.completeTaskBtn) {
+      els.completeTaskBtn.addEventListener('click', () => {
+        completeCurrentTask().catch((err) => showError(err.message));
+      });
+    }
+    if (els.workspaceDashboardBtn) {
+      els.workspaceDashboardBtn.addEventListener('click', () => {
+        window.location.href = '/dashboard';
+      });
+    }
+    if (els.workspaceTabs) {
+      els.workspaceTabs.addEventListener('click', (event) => {
+        const btn = event.target && event.target.closest('button[data-tab]');
+        if (!btn) return;
+        setWorkspaceTab(btn.getAttribute('data-tab'));
+      });
+    }
+    if (els.sidePanel) {
+      els.sidePanel.addEventListener('click', (event) => {
+        const btn = event.target && event.target.closest('button[data-completion]');
+        if (!btn) return;
+        const id = btn.getAttribute('data-completion');
+        if (id === 'new_growth_plan') {
+          startNewInterviewFlow();
+          return;
+        }
+        const label = String(btn.textContent || id).trim();
+        let followUp =
+          'This stays review-first. No campaign, prospect list, or account changes begin without operator approval — start a new Growth Conversation or return to the dashboard when you are ready.';
+        if (id === 'launch_campaign' || label === 'Plan First Campaign') {
+          startCampaignPlanningConversation().catch((err) =>
+            showError(err.message)
+          );
+          return;
+        }
+        addBubble(
+          'assistant',
+          'Next objective noted: ' + label + '.\n\n' + followUp
+        );
+      });
+    }
+    if (els.useFocusBtn) {
+      els.useFocusBtn.addEventListener('click', () =>
+        sendGrowthCtaMessage('Use this focus')
+      );
+    }
+    if (els.refineSegmentBtn) {
+      els.refineSegmentBtn.addEventListener('click', () =>
+        sendGrowthCtaMessage('Refine first segment')
+      );
+    }
+    if (els.checkInfraFromGrowthBtn) {
+      els.checkInfraFromGrowthBtn.addEventListener(
+        'click',
+        startInfrastructureReadiness
+      );
+    }
+    if (els.growthDashboardBtn) {
+      els.growthDashboardBtn.addEventListener('click', () => {
+        window.location.href = '/dashboard';
+      });
+    }
+
+    if (els.savedSessions) {
+      els.savedSessions.addEventListener('click', async (event) => {
+        const btn = event.target && event.target.closest('button[data-action]');
+        if (!btn) return;
+        const action = btn.getAttribute('data-action');
+        if (action === 'new') {
+          startNewInterviewFlow();
+          return;
+        }
+        const sessionId = btn.getAttribute('data-session-id');
+        if (!sessionId) return;
+        try {
+          btn.disabled = true;
+          await resumeSession(sessionId, action);
+        } catch (err) {
+          showError(err.message);
+          showWelcome();
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    }
+
+    if (els.newInterviewBtn) {
+      els.newInterviewBtn.addEventListener('click', startNewInterviewFlow);
+    }
+
+    if (els.loadAnchorFixtureBtn) {
+      els.loadAnchorFixtureBtn.addEventListener('click', async () => {
+        try {
+          els.loadAnchorFixtureBtn.disabled = true;
+          const data = await api(
+            'POST',
+            '/api/v1/client-intel/fixtures/anchor-blueprint',
+            {}
+          );
+          applyResumeState(data, 'continue');
+          await loadSavedSessions();
+        } catch (err) {
+          showError(err.message);
+        } finally {
+          els.loadAnchorFixtureBtn.disabled = false;
+        }
+      });
+    }
+
+    async function bootFromQuery() {
+      await loadAuthContext();
+      const params = new URLSearchParams(window.location.search || '');
+      const interviewId = params.get('interviewId') || params.get('sessionId');
+      const action = params.get('action') || 'continue';
+      const clientId = params.get('clientId');
+      // Client role ignores URL clientId overrides (SPEC-096).
+      if (clientId && !state.isClientRole) {
+        syncActiveTenantFromContext(Number(clientId));
+      }
+
+      document.addEventListener('pulseforge:tenant-changed', (event) => {
+        const detail = (event && event.detail) || {};
+        syncActiveTenantFromContext(detail.active_client_id, detail.tenantName);
+      });
+
+      if (action === 'new' && !interviewId) {
+        showWelcome();
+        addBubble('meta', 'Start a new interview when ready — existing approved Blueprints stay saved.');
+        return;
+      }
+
+      if (interviewId) {
+        try {
+          await resumeSession(interviewId, action);
+          return;
+        } catch (err) {
+          showError(err.message);
+        }
+      }
+
+      // SPEC-097 — reconnect to durable CIE state without requiring an interview ID.
+      try {
+        await recoverOnboardingState();
+      } catch (err) {
+        showError(err.message);
+        showWelcome();
+      }
+    }
+
+    window.addEventListener('resize', () => {
+      if (state.phase === 'growth_workspace' && state.taskGuidanceOpen) {
+        applyGuidanceFooterClearance();
+      }
+    });
+
+    bootFromQuery();
+  </script>
+</body>
+</html>

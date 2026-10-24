@@ -1,28 +1,83 @@
 const express = require('express');
+const crypto = require('crypto');
 const router = express.Router();
 const pool = require('../db');
 const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
-const { ensureClientArchitecture, getActiveClients, getRequestClientId, normalizeClientId } = require('../utils/clientContext');
-const { ensureCloserSchema } = require('../utils/closerSchema');
-const { publishBlogPost } = require('../utils/blogPublisher');
 const {
-  publishToGoogleBusiness,
-  publishToFacebookPage,
-  publishFayeComment,
-  publishToLinkedInPage,
-  publishToLinkedInPersonal,
-  publishLinkComment,
-} = require('../utils/publishPipeline');
+  ensureClientArchitecture,
+  getOperatorSwitchableClients,
+  getClientConfig,
+  getRequestClientId,
+  normalizeClientId,
+} = require('../utils/clientContext');
+const { workspaceDisplayName } = require('../utils/clientFacingPresentation');
+const { featuresFromFlag } = require('../utils/pipelineExperience');
+const { ensureCloserSchema } = require('../utils/closerSchema');
+const { buildMiraContext } = require('../utils/miraContext');
+const { normalizeVertical } = require('../utils/normalize');
+const { setSetterVisibility } = require('../utils/setterVisibility');
+const { ensureTieredEnrichmentSchema } = require('../utils/tieredEnrichmentSchema');
+const { deriveBusinessNameShort, ensureBusinessNameShortColumns } = require('../utils/businessNameShort');
+const { autorun: autorunEmmett } = require('../utils/emmettAutosend');
+const { applyManualLifecycleOverride } = require('../utils/maxManualOverride');
+const { notSyntheticSql } = require('../utils/callDispositions');
+const { transitionProspectLifecycle } = require('../services/lifecycleService');
+const { SETTER_QUEUE_DISPLAY_THRESHOLD } = require('../utils/qualificationThreshold');
+const {
+  isAgentEnabledForClient,
+  logBlockedDispatch,
+  BLOCK_REASON,
+} = require('../utils/agentDispatchPolicy');
+const {
+  assertAuthorizedClientSwitch,
+  filterClientsForUser,
+  reconcileOperatorActiveClient,
+} = require('../utils/tenantAuthorization');
+const { getTenantWorkspace } = require('../services/tenantWorkspace');
 
-const requireAuth = [sessionAuth, requireRole('admin', 'manager')];
+router.use(require('./paigeSocial').createPaigeSocialRouter());
+
+const requireOperator = [sessionAuth, requireRole('admin', 'manager')];
+const requireDashboardRead = [sessionAuth, requireRole('admin', 'manager', 'viewer', 'client')];
 let prospectSetterAssignmentSchemaPromise;
 let agentLogStatusSchemaPromise;
+let linkedinSlotTestSchemaPromise;
+const tableColumnCache = new Map();
 const EXCLUDE_COMMAND_FEED_ACTIONS_SQL = `
   NOT (
     LOWER(REPLACE(COALESCE(al.agent_name, ''), '_agent', '')) = 'max'
     AND COALESCE(al.action, '') IN ('daily_brief', 'daily_digest')
   )
 `;
+const PROSPECT_ROSTER_ACTIVE_WHERE_SQL = `
+  p.do_not_contact = false
+  AND p.client_id = $1
+`;
+const LINKEDIN_POST_FORMATS = new Set(['text', 'carousel', 'video', 'image', 'poll']);
+const LINKEDIN_HOOK_TYPES = new Set(['dialogue', 'claim', 'numbers', 'story', 'question', 'other']);
+
+function pct(num, den) {
+  const n = Number(num || 0);
+  const d = Number(den || 0);
+  return d > 0 ? +((n / d) * 100).toFixed(1) : 0;
+}
+
+function analyticsWindowDays(value) {
+  const days = Number.parseInt(value, 10);
+  return [7, 30, 90].includes(days) ? days : 7;
+}
+
+async function tableColumns(tableName) {
+  if (!tableColumnCache.has(tableName)) {
+    tableColumnCache.set(tableName, pool.query(`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = $1
+    `, [tableName]).then(result => new Set(result.rows.map(row => row.column_name))));
+  }
+  return tableColumnCache.get(tableName);
+}
 
 function ensureProspectSetterAssignmentSchema() {
   if (!prospectSetterAssignmentSchemaPromise) {
@@ -52,40 +107,216 @@ function ensureAgentLogStatusSchema() {
   return agentLogStatusSchemaPromise;
 }
 
-router.get('/api/me', sessionAuth, (req, res) => {
-  res.json({ user: req.user, active_client_id: req.session?.active_client_id || 1 });
+function ensureLinkedInSlotTestSchema() {
+  if (!linkedinSlotTestSchemaPromise) {
+    linkedinSlotTestSchemaPromise = (async () => {
+      await pool.query(`
+        ALTER TABLE pending_comments
+          ADD COLUMN IF NOT EXISTS slot INTEGER,
+          ADD COLUMN IF NOT EXISTS format TEXT,
+          ADD COLUMN IF NOT EXISTS posted_at TIMESTAMPTZ,
+          ADD COLUMN IF NOT EXISTS stats JSONB
+      `);
+      await pool.query(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint WHERE conname = 'pending_comments_slot_check'
+          ) THEN
+            ALTER TABLE pending_comments
+              ADD CONSTRAINT pending_comments_slot_check
+              CHECK (slot IS NULL OR slot IN (1, 2));
+          END IF;
+        END $$;
+      `);
+    })().catch(err => {
+      linkedinSlotTestSchemaPromise = null;
+      throw err;
+    });
+  }
+  return linkedinSlotTestSchemaPromise;
+}
+
+function parseOptionalInt(value, field) {
+  if (value === undefined || value === null || value === '') return 0;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    const err = new Error(`${field} must be a non-negative integer`);
+    err.statusCode = 400;
+    throw err;
+  }
+  return parsed;
+}
+
+function requireEnumValue(value, allowed, field) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!allowed.has(normalized)) {
+    const err = new Error(`${field} must be one of: ${[...allowed].join(', ')}`);
+    err.statusCode = 400;
+    throw err;
+  }
+  return normalized;
+}
+
+function requirePostedAt(value) {
+  const parsed = new Date(value);
+  if (!value || Number.isNaN(parsed.getTime())) {
+    const err = new Error('posted_at must be a valid timestamp');
+    err.statusCode = 400;
+    throw err;
+  }
+  return parsed.toISOString();
+}
+
+function nullableText(value, maxLength = null) {
+  if (value === undefined || value === null) return null;
+  const text = String(value).replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  return maxLength ? text.slice(0, maxLength) : text;
+}
+
+function optionalNonNegativeInteger(value, field) {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    const err = new Error(`${field} must be a non-negative integer`);
+    err.statusCode = 400;
+    throw err;
+  }
+  return parsed;
+}
+
+function optionalEngagementRate(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 999.99) {
+    const err = new Error('engagement_rate must be a non-negative percent that fits numeric(5,2)');
+    err.statusCode = 400;
+    throw err;
+  }
+  return Math.round(parsed * 100) / 100;
+}
+
+router.get('/api/emmett/autorun', async (req, res) => {
+  const configuredSecret = String(process.env.CRON_SECRET || '');
+  const suppliedSecret = String(req.get('x-cron-secret') || '');
+  const configured = Buffer.from(configuredSecret);
+  const supplied = Buffer.from(suppliedSecret);
+  const authenticated = configured.length > 0 &&
+    configured.length === supplied.length &&
+    crypto.timingSafeEqual(configured, supplied);
+  if (!authenticated) return res.status(401).json({ error: 'Unauthorized' });
+
+  try {
+    const clientId = Number(req.query.client_id);
+    const result = await autorunEmmett(clientId);
+    return res.json(result);
+  } catch (err) {
+    console.error('[emmett_autorun] failed:', err.message);
+    return res.status(err.statusCode || 500).json({ error: err.message });
+  }
 });
 
-router.get('/api/clients', requireAuth, async (req, res) => {
+router.get('/api/me', sessionAuth, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const role = req.user?.role || null;
+  // SPEC-099 / SPEC-096 — client identity is authoritative from session user.client_id.
+  // Never honor query/body client_id for client-role workspace display.
+  const activeClientId =
+    role === 'client'
+      ? getRequestClientId(req)
+      : getRequestClientId(req) || req.session?.active_client_id || 1;
+
+  let client = null;
+  if (activeClientId != null) {
+    try {
+      const row = await getClientConfig(activeClientId);
+      if (row) {
+        client = {
+          id: Number(row.id),
+          name: row.name || null,
+          business_name: row.business_name || row.name || null,
+          display_name: workspaceDisplayName(row),
+          slug: row.slug || null,
+        };
+      }
+    } catch (_err) {
+      client = null;
+    }
+  }
+
+  const { getEffectiveActor, isImpersonating } = require('../utils/requestIdentity');
+  const { publicImpersonationState } = require('../services/aoImpersonationService');
+  const effectiveUser = getEffectiveActor(req);
+
+  res.json({
+    user: req.user,
+    effective_user: isImpersonating(req) ? effectiveUser : null,
+    impersonation: publicImpersonationState(req.session, req.user),
+    active_client_id: activeClientId,
+    client,
+  });
+});
+
+router.get('/api/clients', requireOperator, async (req, res) => {
   try {
+    const allClients = await getOperatorSwitchableClients();
+    const clients = filterClientsForUser(allClients, req.user);
+    const activeClientId = reconcileOperatorActiveClient(req.session, clients);
+    const active = clients.find(c => Number(c.id) === Number(activeClientId)) || null;
     res.json({
-      active_client_id: req.session.active_client_id || 1,
-      clients: await getActiveClients(),
+      active_client_id: activeClientId,
+      clients,
+      // Canonical tenant-feature snapshot for the active client. Dashboard
+      // Pipeline hydration must use this (or /setter/api/features) — never a
+      // hardcoded default that briefly shows pilot_v2 before resolve.
+      features: featuresFromFlag(activeClientId, active?.setter_pipeline_v2_enabled === true),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.post('/api/clients/active', requireAuth, async (req, res) => {
+router.post('/api/clients/active', requireOperator, async (req, res) => {
   const clientId = normalizeClientId(req.body.client_id || req.query.client_id);
   try {
-    const clients = await getActiveClients();
-    if (!clients.find(c => c.id === clientId)) {
+    const auth = assertAuthorizedClientSwitch(req.user, clientId);
+    if (!auth.ok) {
+      return res.status(auth.status).json({
+        error: auth.error,
+        message: auth.message || 'Tenant switch not authorized',
+      });
+    }
+    const clients = filterClientsForUser(await getOperatorSwitchableClients(), req.user);
+    const active = clients.find(c => Number(c.id) === Number(clientId));
+    if (!active) {
       return res.status(404).json({ error: 'Client not found' });
     }
     req.session.active_client_id = clientId;
-    res.json({ ok: true, active_client_id: clientId });
+    let workspace = null;
+    try {
+      workspace = await getTenantWorkspace({ pool, clientId });
+    } catch (_err) {
+      workspace = null;
+    }
+    res.json({
+      ok: true,
+      active_client_id: clientId,
+      features: featuresFromFlag(clientId, active.setter_pipeline_v2_enabled === true),
+      client: workspace && workspace.client ? workspace.client : { id: clientId, name: active.name },
+      status: workspace && workspace.status ? workspace.status : null,
+      greeting: workspace && workspace.greeting ? workspace.greeting : null,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.get('/api/agent-visibility', requireAuth, async (req, res) => {
+router.get('/api/agent-visibility', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const [clientResult, prospectsWithEmail] = await Promise.all([
-      pool.query('SELECT id, facebook_url, gbp_url, max_email FROM clients WHERE id = $1', [clientId]),
+      pool.query('SELECT id, facebook_url, gbp_url, max_email, enabled_agents FROM clients WHERE id = $1', [clientId]),
       pool.query(`
         SELECT COUNT(*)::int AS count
         FROM prospects
@@ -115,186 +346,296 @@ router.get('/api/agent-visibility', requireAuth, async (req, res) => {
       sketch: false,
       penny: false,
       analytics: true,
+      enabled_agents: client.enabled_agents || [],
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.get('/api/pipeline', requireAuth, async (_req, res) => {
+router.get('/api/pipeline/client', requireDashboardRead, async (req, res) => {
   try {
-    await ensureClientArchitecture();
-    await ensureCloserSchema();
-    await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS assigned_city TEXT');
-    await pool.query(`
-      INSERT INTO clients (name, slug, email, city, state, active)
-      VALUES ('McLeod Legal Services', 'mcleod', 'ashley@mcleodlegal.com',
-              'Manchester', 'NH', false)
-      ON CONFLICT (slug) DO NOTHING
-    `);
-
-    const agentNames = [
-      'Scout', 'Emmett', 'Riley', 'Paige', 'Max', 'Rex', 'Vera', 'Faye',
-      'Link', 'Sam', 'Cal', 'CalBatch', 'WarmSignal', 'Analytics',
-      'Sketch', 'SetterHandoff',
-    ];
-    const agentKeys = {
-      scout_agent: 'Scout', scout: 'Scout',
-      emmett_agent: 'Emmett', email_agent: 'Emmett', emmett: 'Emmett',
-      riley_agent: 'Riley', riley: 'Riley',
-      paige_agent: 'Paige', paige: 'Paige',
-      max_agent: 'Max', max: 'Max',
-      rex_agent: 'Rex', rex: 'Rex',
-      vera_agent: 'Vera', vera: 'Vera',
-      facebook_agent: 'Faye', faye: 'Faye',
-      linkedin_agent: 'Link', link: 'Link',
-      sam_agent: 'Sam', sam: 'Sam',
-      cal_agent: 'Cal', cal: 'Cal',
-      cal_batch_agent: 'CalBatch', calbatch: 'CalBatch', cal_batch: 'CalBatch',
-      warm_signal_agent: 'WarmSignal', warm_signal: 'WarmSignal', warmsignal: 'WarmSignal',
-      analytics_agent: 'Analytics', analytics: 'Analytics',
-      sketch_agent: 'Sketch', sketch: 'Sketch',
-      setter_handoff_agent: 'SetterHandoff', setterhandoff: 'SetterHandoff', handoff_utility: 'SetterHandoff',
-    };
-
-    const [clients, revenueMrr, revenueBooked, revenuePayouts, setters, closers, logs] = await Promise.all([
+    const clientId = getRequestClientId(req);
+    const syntheticGuard = await notSyntheticSql(pool, 'p.is_synthetic');
+    const [clientResult, revenueResult] = await Promise.all([
       pool.query(`
+        WITH prospect_rollup AS (
+          SELECT COUNT(*) FILTER (
+            WHERE COALESCE(do_not_contact, false) = false
+              AND COALESCE(status, 'cold') NOT IN ('dead', 'disqualified')
+          )::int AS active_prospects
+          FROM prospects
+          WHERE client_id = $1
+        ), touchpoint_rollup AS (
+          SELECT
+            COUNT(*)::int AS touchpoints,
+            COUNT(*) FILTER (
+              WHERE action_type IN ('send', 'outbound', 'email_warm')
+            )::int AS sends
+          FROM touchpoints t
+          JOIN prospects p ON p.id = t.prospect_id AND p.client_id = t.client_id
+          WHERE t.client_id = $1 AND ${syntheticGuard}
+        )
         SELECT
-          c.id, c.name, c.slug, c.email, c.city, c.state,
-          c.max_email, c.active, c.created_at,
-          COUNT(DISTINCT p.id)::int as prospect_count,
-          COUNT(DISTINCT p.id) FILTER (
-            WHERE p.setter_status = 'booked')::int as booked_count,
-          COUNT(DISTINCT p.id) FILTER (
-            WHERE p.setter_status = 'closed')::int as closed_count
+          c.id, c.name, c.slug, c.city, c.state, c.max_email, c.active, c.created_at,
+          prospect_rollup.active_prospects,
+          touchpoint_rollup.touchpoints,
+          touchpoint_rollup.sends
         FROM clients c
-        LEFT JOIN prospects p ON p.client_id = c.id
-        WHERE c.slug != 'pulseforge'
-        GROUP BY c.id
-        ORDER BY c.created_at ASC
-      `),
-      pool.query(`SELECT COALESCE(SUM(mrr_amount), 0)::numeric as confirmed_mrr FROM commissions WHERE status != 'void'`),
-      pool.query(`SELECT COUNT(*)::int as booked_pending FROM prospects WHERE setter_status = 'booked' AND closed_at IS NULL`),
+        CROSS JOIN prospect_rollup
+        CROSS JOIN touchpoint_rollup
+        WHERE c.id = $1
+      `, [clientId]),
       pool.query(`
         SELECT
-          COALESCE(SUM(commission_amt) FILTER (
-            WHERE status = 'pending'), 0)::numeric as pending_payout,
-          COALESCE(SUM(commission_amt) FILTER (
-            WHERE status = 'paid'), 0)::numeric as paid_out
-        FROM commissions
-      `),
-      pool.query(`
-        SELECT
-          u.id, u.name, u.assigned_city,
-          COUNT(DISTINCT p.id) FILTER (
-            WHERE p.setter_visible = true
-            AND p.setter_status = 'new')::int as queue_size,
-          COUNT(DISTINCT al.id) FILTER (
-            WHERE al.action_type = 'call'
-            AND DATE(al.created_at) = CURRENT_DATE)::int as calls_today,
-          COUNT(DISTINCT p.id) FILTER (
-            WHERE p.setter_status = 'booked'
-            AND p.booked_at >= DATE_TRUNC('week', CURRENT_DATE)
-            )::int as booked_this_week
-        FROM users u
-        LEFT JOIN prospects p ON p.setter_visible = true
-        LEFT JOIN activity_log al ON al.setter_id::text = u.id::text
-        WHERE u.role = 'setter' AND u.active = true
-        GROUP BY u.id, u.name, u.assigned_city
-        ORDER BY u.name ASC
-      `),
-      pool.query(`
-        SELECT
-          u.id, u.name,
-          COUNT(p.id) FILTER (
-            WHERE p.closer_id = u.id
-            AND p.setter_status = 'booked'
-            AND p.closed_at IS NULL)::int as pending_calls,
-          COUNT(p.id) FILTER (
-            WHERE p.closer_id = u.id
-            AND p.closer_status = 'showed'
-            AND p.booked_at >= DATE_TRUNC('week', CURRENT_DATE)
-            )::int as showed_this_week,
-          COUNT(p.id) FILTER (
-            WHERE p.closer_id = u.id
-            AND p.setter_status = 'closed'
-            AND p.closed_at >= DATE_TRUNC('month', CURRENT_DATE)
-            )::int as closed_this_month,
-          COALESCE(SUM(p.mrr_value) FILTER (
-            WHERE p.setter_status = 'closed'
-            AND p.closed_at >= DATE_TRUNC('month', CURRENT_DATE)
-            ), 0)::numeric as mrr_this_month,
-          COUNT(p.id) FILTER (
-            WHERE p.closer_id = u.id
-            AND p.setter_status = 'booked')::int as total_booked,
-          COUNT(p.id) FILTER (
-            WHERE p.closer_id = u.id
-            AND p.closer_status = 'showed')::int as total_showed
-        FROM users u
-        LEFT JOIN prospects p ON p.closer_id = u.id
-        WHERE u.role = 'closer' AND u.active = true
-        GROUP BY u.id, u.name
-        ORDER BY u.name ASC
-      `),
-      pool.query(`
-        SELECT DISTINCT ON (agent_name)
-          agent_name, status, ran_at, error_msg, duration_ms
-        FROM agent_log
-        ORDER BY agent_name, ran_at DESC
-      `),
+          COALESCE(SUM(c.mrr_amount) FILTER (WHERE c.status <> 'void'), 0)::numeric AS confirmed_mrr,
+          COALESCE(SUM(c.commission_amt) FILTER (WHERE c.status = 'pending'), 0)::numeric AS pending_payout,
+          COALESCE(SUM(c.commission_amt) FILTER (WHERE c.status = 'paid'), 0)::numeric AS paid_out,
+          (SELECT COUNT(*)::int
+             FROM prospects p
+            WHERE p.client_id = $1
+              AND p.setter_status = 'booked'
+              AND ${syntheticGuard}
+              AND p.closed_at IS NULL) AS booked_pending
+        FROM commissions c
+        WHERE c.client_id = $1
+      `, [clientId]),
     ]);
-
-    const latestByAgent = {};
-    logs.rows.forEach(row => {
-      const normalized = agentKeys[String(row.agent_name || '').toLowerCase()];
-      if (normalized && !latestByAgent[normalized]) latestByAgent[normalized] = row;
-    });
 
     res.json({
       refreshed_at: new Date().toISOString(),
-      clients: clients.rows,
+      client: clientResult.rows[0] || null,
       revenue: {
-        confirmed_mrr: Number(revenueMrr.rows[0]?.confirmed_mrr || 0),
-        booked_pending: Number(revenueBooked.rows[0]?.booked_pending || 0),
-        pending_payout: Number(revenuePayouts.rows[0]?.pending_payout || 0),
-        paid_out: Number(revenuePayouts.rows[0]?.paid_out || 0),
+        confirmed_mrr: Number(revenueResult.rows[0]?.confirmed_mrr || 0),
+        booked_pending: Number(revenueResult.rows[0]?.booked_pending || 0),
+        pending_payout: Number(revenueResult.rows[0]?.pending_payout || 0),
+        paid_out: Number(revenueResult.rows[0]?.paid_out || 0),
         mrr_target: 5000,
         breakeven: 250,
       },
-      setters: setters.rows,
-      closers: closers.rows.map(row => ({
+    });
+  } catch (err) {
+    console.error('[pipeline/client] error:', err.message);
+    res.status(500).json({ error: 'Unable to load client pipeline' });
+  }
+});
+
+router.get('/api/pipeline/setters', requireDashboardRead, async (req, res) => {
+  try {
+    const clientId = getRequestClientId(req);
+    const result = await pool.query(`
+      WITH queue AS (
+        SELECT COUNT(*)::int AS queue_size
+        FROM prospects
+        WHERE client_id = $1
+          AND source = 'scout'
+          AND COALESCE(setter_visible, false) = true
+          AND COALESCE(do_not_contact, false) = false
+          AND COALESCE(is_synthetic, false) = false
+          AND COALESCE(icp_score, 0) >= COALESCE(
+            (SELECT setter_qualification_threshold FROM clients WHERE id = $1),
+            ${SETTER_QUEUE_DISPLAY_THRESHOLD}
+          )
+      ), calls AS (
+        SELECT setter_id::text AS setter_id, COUNT(*)::int AS calls_today
+        FROM activity_log al
+        JOIN prospects p ON p.id = al.lead_id AND p.client_id = al.client_id
+        WHERE al.client_id = $1
+          AND al.action_type = 'call'
+          AND COALESCE(p.is_synthetic, false) = false
+          AND al.created_at >= CURRENT_DATE
+          AND al.created_at < CURRENT_DATE + INTERVAL '1 day'
+        GROUP BY al.setter_id::text
+      ), dispositions AS (
+        SELECT setter_id::text AS setter_id, COUNT(*)::int AS calls_today
+        FROM call_dispositions
+        WHERE client_id = $1
+          AND source = 'manual_setter'
+          AND COALESCE(is_synthetic, false) = false
+          AND created_at >= CURRENT_DATE
+          AND created_at < CURRENT_DATE + INTERVAL '1 day'
+        GROUP BY setter_id::text
+      ), bookings AS (
+        SELECT assigned_setter_id, COUNT(*)::int AS booked_this_week
+        FROM prospects
+        WHERE client_id = $1
+          AND setter_status = 'booked'
+          AND COALESCE(is_synthetic, false) = false
+          AND booked_at >= DATE_TRUNC('week', CURRENT_DATE)
+        GROUP BY assigned_setter_id
+      )
+      SELECT
+        u.id, u.name, c.city,
+        queue.queue_size,
+        (COALESCE(calls.calls_today, 0) + COALESCE(dispositions.calls_today, 0))::int AS calls_today,
+        COALESCE(bookings.booked_this_week, 0)::int AS booked_this_week
+      FROM users u
+      JOIN clients c ON c.id = $1
+      CROSS JOIN queue
+      LEFT JOIN calls ON calls.setter_id = u.id::text
+      LEFT JOIN dispositions ON dispositions.setter_id = u.id::text
+      LEFT JOIN bookings ON bookings.assigned_setter_id = u.id
+      WHERE u.role = 'setter'
+        AND u.active = true
+        AND u.client_id = $1
+      ORDER BY u.name ASC
+    `, [clientId]);
+    res.json({ refreshed_at: new Date().toISOString(), setters: result.rows });
+  } catch (err) {
+    console.error('[pipeline/setters] error:', err.message);
+    res.status(500).json({ error: 'Unable to load setter pipeline' });
+  }
+});
+
+router.get('/api/pipeline/closers', requireDashboardRead, async (req, res) => {
+  try {
+    const clientId = getRequestClientId(req);
+    const result = await pool.query(`
+      SELECT
+        u.id, u.name,
+        COUNT(DISTINCT p.id) FILTER (
+          WHERE p.setter_status = 'booked' AND p.closed_at IS NULL
+        )::int AS pending_calls,
+        COUNT(DISTINCT p.id) FILTER (
+          WHERE p.closer_status IN ('showed', 'closed')
+            AND p.booked_at >= DATE_TRUNC('week', CURRENT_DATE)
+        )::int AS showed_this_week,
+        COUNT(DISTINCT p.id) FILTER (
+          WHERE p.setter_status = 'closed'
+            AND p.closed_at >= DATE_TRUNC('month', CURRENT_DATE)
+        )::int AS closed_this_month,
+        COALESCE(SUM(p.mrr_value) FILTER (
+          WHERE p.setter_status = 'closed'
+            AND p.closed_at >= DATE_TRUNC('month', CURRENT_DATE)
+        ), 0)::numeric AS mrr_this_month,
+        COUNT(DISTINCT p.id) FILTER (WHERE p.booked_at IS NOT NULL)::int AS total_booked,
+        COUNT(DISTINCT p.id) FILTER (
+          WHERE p.closer_status IN ('showed', 'closed') OR p.setter_status = 'closed'
+        )::int AS total_showed,
+        COALESCE((
+          SELECT SUM(cm.commission_amt)
+          FROM commissions cm
+          WHERE cm.client_id = $1
+            AND cm.closer_id = u.id
+            AND cm.status <> 'void'
+            AND cm.created_at >= DATE_TRUNC('month', CURRENT_DATE)
+        ), 0)::numeric AS commission_earned
+      FROM users u
+      LEFT JOIN prospects p ON p.closer_id = u.id AND p.client_id = $1
+      WHERE u.role = 'closer'
+        AND u.active = true
+        AND u.client_id = $1
+      GROUP BY u.id, u.name
+      ORDER BY u.name ASC
+    `, [clientId]);
+    res.json({
+      refreshed_at: new Date().toISOString(),
+      closers: result.rows.map(row => ({
         ...row,
-        show_rate: Number(row.total_booked || 0) ? +((Number(row.total_showed || 0) / Number(row.total_booked || 0)) * 100).toFixed(1) : 0,
-        commission_earned: +(Number(row.mrr_this_month || 0) * 0.15).toFixed(2),
-      })),
-      agents: agentNames.map(name => ({
-        name,
-        ...(latestByAgent[name] || { status: 'never_run', ran_at: null, error_msg: null, duration_ms: null }),
+        show_rate: pct(row.total_showed, row.total_booked),
       })),
     });
   } catch (err) {
-    console.error('[pipeline] error:', err.message);
-    res.status(500).json({ error: err.message });
+    console.error('[pipeline/closers] error:', err.message);
+    res.status(500).json({ error: 'Unable to load closer pipeline' });
+  }
+});
+
+router.get('/api/pipeline/prospects', requireDashboardRead, async (req, res) => {
+  try {
+    const clientId = getRequestClientId(req);
+    const result = await pool.query(`
+      WITH scoped AS (
+        SELECT
+          p.id,
+          p.first_name,
+          p.last_name,
+          p.last_contacted_at,
+          c.name AS company_name,
+          CASE
+            WHEN p.setter_status = 'closed' OR p.status = 'closed' THEN 'closed'
+            WHEN p.setter_status = 'booked' THEN 'booked'
+            WHEN p.status IN ('warm', 'hot') THEN 'warm'
+            WHEN p.status = 'contacted' OR p.setter_status IN ('contacted', 'follow_up') THEN 'contacted'
+            ELSE 'cold'
+          END AS stage
+        FROM prospects p
+        LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+        WHERE p.client_id = $1
+          AND COALESCE(p.do_not_contact, false) = false
+          AND COALESCE(p.status, 'cold') NOT IN ('dead', 'disqualified')
+      )
+      SELECT id, first_name, last_name, company_name, last_contacted_at, stage
+      FROM scoped
+      ORDER BY
+        CASE stage
+          WHEN 'cold' THEN 1
+          WHEN 'contacted' THEN 2
+          WHEN 'warm' THEN 3
+          WHEN 'booked' THEN 4
+          WHEN 'closed' THEN 5
+        END,
+        last_contacted_at DESC NULLS LAST,
+        id
+    `, [clientId]);
+    const stageRows = Object.fromEntries(
+      ['cold', 'contacted', 'warm', 'booked', 'closed'].map(stage => [stage, []])
+    );
+    result.rows.forEach(row => stageRows[row.stage].push(row));
+    res.json({
+      refreshed_at: new Date().toISOString(),
+      stages: Object.entries(stageRows).map(([stage, prospects]) => ({
+        stage,
+        count: prospects.length,
+        prospects,
+      })),
+    });
+  } catch (err) {
+    console.error('[pipeline/prospects] error:', err.message);
+    res.status(500).json({ error: 'Unable to load prospect pipeline' });
   }
 });
 
 // Agent status for dashboard (deduplicated — was registered twice in server.js)
-router.get('/api/agent-status', requireAuth, async (req, res) => {
+router.get('/api/agent-status', requireDashboardRead, async (req, res) => {
   try {
-    const clientId = getRequestClientId(req);
-    const [prospects, touchpoints, pending, agentRuns, channels, weeklyTouchpoints] = await Promise.all([
-      pool.query('SELECT COUNT(*) FROM prospects WHERE client_id = $1', [clientId]),
-      pool.query('SELECT COUNT(*) FROM touchpoints WHERE client_id = $1', [clientId]),
-      pool.query('SELECT COUNT(*) FROM pending_comments WHERE status = $1 AND client_id = $2', ['pending', clientId]),
-      pool.query('SELECT agent_name, COUNT(*) as runs, MAX(ran_at) as last_run FROM agent_log WHERE client_id = $1 GROUP BY agent_name', [clientId]),
-      pool.query('SELECT channel, COUNT(*) as count FROM pending_comments WHERE client_id = $1 GROUP BY channel', [clientId]),
-      pool.query('SELECT COUNT(*) FROM touchpoints WHERE client_id = $1 AND created_at > NOW() - INTERVAL \'7 days\'', [clientId])
+    const requestClientId = getRequestClientId(req);
+    const [prospectCount, touchpoints, pending, agentRuns, channels, weeklyTouchpoints, prospectClient] = await Promise.all([
+      pool.query(`
+        SELECT
+          COUNT(*)::int AS count,
+          COUNT(*) FILTER (WHERE COALESCE(p.status, 'cold') = 'cold')::int AS cold
+        FROM prospects p
+        WHERE ${PROSPECT_ROSTER_ACTIVE_WHERE_SQL}
+      `, [requestClientId]),
+      pool.query('SELECT COUNT(*) FROM touchpoints WHERE client_id = $1', [requestClientId]),
+      pool.query('SELECT COUNT(*) FROM pending_comments WHERE status = $1 AND client_id = $2', ['pending', requestClientId]),
+      pool.query('SELECT agent_name, COUNT(*) as runs, MAX(ran_at) as last_run FROM agent_log WHERE client_id = $1 GROUP BY agent_name', [requestClientId]),
+      pool.query('SELECT channel, COUNT(*) as count FROM pending_comments WHERE client_id = $1 GROUP BY channel', [requestClientId]),
+      pool.query('SELECT COUNT(*) FROM touchpoints WHERE client_id = $1 AND created_at > NOW() - INTERVAL \'7 days\'', [requestClientId]),
+      pool.query(`
+        SELECT
+          c.id AS client_id,
+          c.name AS client_name,
+          c.slug,
+          COUNT(p.id) FILTER (WHERE p.do_not_contact = false)::int AS active,
+          COUNT(p.id) FILTER (
+            WHERE p.do_not_contact = false
+              AND COALESCE(p.status, 'cold') = 'cold'
+          )::int AS cold
+        FROM clients c
+        LEFT JOIN prospects p ON p.client_id = c.id
+        WHERE c.id = $1
+        GROUP BY c.id, c.name, c.slug
+      `, [requestClientId])
     ]);
 
     const runMap = {};
     agentRuns.rows.forEach(r => { runMap[r.agent_name] = parseInt(r.runs); });
 
-    const totalProspects = parseInt(prospects.rows[0].count);
+    const activeProspects = Number(prospectCount.rows[0]?.count || 0);
+    const coldProspects = Number(prospectCount.rows[0]?.cold || 0);
+    const totalProspects = activeProspects;
     const totalTouchpoints = parseInt(touchpoints.rows[0].count);
     const fbPending = channels.rows.find(c => c.channel === 'facebook')?.count || 0;
     const liPending = channels.rows.find(c => c.channel === 'linkedin')?.count || 0;
@@ -309,7 +650,14 @@ router.get('/api/agent-status', requireAuth, async (req, res) => {
     };
 
     res.json({
-      prospects: totalProspects,
+      prospects: activeProspects,
+      prospectBreakdown: {
+        active: activeProspects,
+        cold: coldProspects,
+        total: totalProspects,
+      },
+      prospectClients: prospectClient.rows,
+      prospectScope: 'client',
       touchpoints: totalTouchpoints,
       pending: parseInt(pending.rows[0].count),
       weeklyTouchpoints: parseInt(weeklyTouchpoints.rows[0].count),
@@ -324,7 +672,7 @@ router.get('/api/agent-status', requireAuth, async (req, res) => {
 });
 
 // Get pending approvals
-router.get('/api/approvals', requireAuth, async (req, res) => {
+router.get('/api/approvals', requireOperator, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const result = await pool.query(`
@@ -340,8 +688,26 @@ router.get('/api/approvals', requireAuth, async (req, res) => {
   }
 });
 
+// Paige canonical social content inspection (database-backed status)
+router.get('/api/paige/social-content/status', requireDashboardRead, async (req, res) => {
+  try {
+    const clientId = getRequestClientId(req);
+    const access = assertAuthorizedClientSwitch(req.user, clientId);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
+    const { inspectPaigeSocialContentStatus } = require('../services/paigeSocialContentInspection');
+    const status = await inspectPaigeSocialContentStatus({
+      clientId,
+      tenantId: String(clientId),
+      missionId: req.query.mission_id || req.query.missionId || null,
+    });
+    res.json(status);
+  } catch (err) {
+    res.status(err.message === 'tenant_scope_required' ? 400 : 500).json({ error: err.message });
+  }
+});
+
 // Approve or reject a comment
-router.post('/api/approvals/:id', requireAuth, async (req, res) => {
+router.post('/api/approvals/:id', requireOperator, async (req, res) => {
   const { id } = req.params;
   const { action } = req.body;
   if (!['approved', 'rejected'].includes(action)) {
@@ -349,54 +715,169 @@ router.post('/api/approvals/:id', requireAuth, async (req, res) => {
   }
   try {
     const clientId = getRequestClientId(req);
-    const result = await pool.query(
-      'UPDATE pending_comments SET status = $1 WHERE id = $2 AND client_id = $3 RETURNING *',
-      [action, id, clientId]
-    );
-    res.json({ success: true, id, action });
-
-    const item = result.rows[0];
-    if (item && action === 'approved') {
-      const publishers = {
-        blog:             () => publishBlogPost(item),
-        google_business:  () => publishToGoogleBusiness(item),
-        facebook_page:    () => publishToFacebookPage(item),
-        facebook:         () => publishFayeComment(item),
-        linkedin_page:    () => publishToLinkedInPage(item),
-        linkedin_personal:() => publishToLinkedInPersonal(item),
-        linkedin:         () => publishLinkComment(item),
-      };
-      const publish = publishers[item.channel];
-      if (publish) {
-        publish().catch(err =>
-          console.error(`[Publisher:${item.channel}] Unhandled error:`, err.message)
-        );
-      }
+    const { applyPendingCommentApprovalAction } = require('../services/paigeSocialContentApprovalFlow');
+    const result = await applyPendingCommentApprovalAction({
+      clientId,
+      pendingCommentId: id,
+      action,
+      source: 'dashboard_api',
+    });
+    if (!result.ok) {
+      return res.status(result.statusCode || 500).json({
+        error: result.error || 'approval_failed',
+        message: result.message || null,
+        mode: result.mode || null,
+      });
     }
+    res.json({
+      success: true,
+      id,
+      action,
+      mode: result.mode,
+      artifact_id: result.artifact?.id || null,
+      publication: result.publication || null,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
+router.post('/api/linkedin-personal-posts/:id/stats', requireOperator, async (req, res) => {
+  const { id } = req.params;
+  try {
+    await ensureLinkedInSlotTestSchema();
+    const clientId = getRequestClientId(req);
+    const postRes = await pool.query(`
+      SELECT id, channel, posted_at, created_at
+      FROM pending_comments
+      WHERE id = $1 AND client_id = $2
+      LIMIT 1
+    `, [id, clientId]);
+
+    const post = postRes.rows[0];
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    if (post.channel !== 'linkedin_personal') {
+      return res.status(400).json({ error: 'Stats capture is only for linkedin_personal posts' });
+    }
+
+    const stats = {
+      impressions: parseOptionalInt(req.body.impressions, 'impressions'),
+      reactions: parseOptionalInt(req.body.reactions, 'reactions'),
+      comments: parseOptionalInt(req.body.comments, 'comments'),
+      outside_network_comments: parseOptionalInt(req.body.outside_network_comments, 'outside_network_comments'),
+      saves: parseOptionalInt(req.body.saves, 'saves'),
+      dms: parseOptionalInt(req.body.dms, 'dms'),
+      top_viewer_segment: req.body.top_viewer_segment == null
+        ? null
+        : String(req.body.top_viewer_segment).trim().slice(0, 200),
+      captured_at: new Date().toISOString(),
+    };
+
+    const warnings = [];
+    const maturityBase = post.posted_at || post.created_at;
+    if (!post.posted_at) warnings.push('Post has no posted_at timestamp yet; using created_at for the 48h maturity check.');
+    if (maturityBase && Date.now() - new Date(maturityBase).getTime() < 48 * 60 * 60 * 1000) {
+      warnings.push('Post is younger than 48h; stats may not be mature yet.');
+    }
+
+    const updated = await pool.query(`
+      UPDATE pending_comments
+      SET stats = $1
+      WHERE id = $2 AND client_id = $3
+      RETURNING id, slot, format, stats
+    `, [JSON.stringify(stats), id, clientId]);
+
+    res.json({ success: true, post: updated.rows[0], warnings });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
 // Prospects table
-router.get('/api/prospects', requireAuth, async (req, res) => {
+router.get('/api/prospects', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const result = await pool.query(`
       SELECT
         p.id, p.company_id, p.first_name, p.last_name, p.email, p.phone,
         p.vertical, p.status, p.icp_score, p.do_not_contact, p.notes, p.last_contacted_at, p.created_at,
+        p.assigned_setter_id,
+        su.name AS assigned_setter_name,
         c.name as company_name, c.location AS city,
         COUNT(t.id)::int as touchpoint_count
       FROM prospects p
       LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+      LEFT JOIN users su ON su.id = p.assigned_setter_id
       LEFT JOIN touchpoints t ON t.prospect_id = p.id AND t.client_id = p.client_id
       WHERE p.do_not_contact = false
         AND p.client_id = $1
-      GROUP BY p.id, c.name, c.location
+      GROUP BY p.id, c.name, c.location, su.name
       ORDER BY p.icp_score DESC NULLS LAST
-      LIMIT 200
     `, [clientId]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/api/prospect-pipeline', requireDashboardRead, async (req, res) => {
+  try {
+    const clientId = getRequestClientId(req);
+    const result = await pool.query(`
+      SELECT
+        p.id, p.vertical, p.status, p.icp_score, p.last_contacted_at,
+        c.name as company_name
+      FROM prospects p
+      LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+      WHERE p.do_not_contact = false
+        AND p.client_id = $1
+      ORDER BY p.icp_score DESC NULLS LAST
+    `, [clientId]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/api/enrichment/manual-queue', requireDashboardRead, async (req, res) => {
+  try {
+    await ensureTieredEnrichmentSchema();
+    const clientId = getRequestClientId(req);
+    const status = String(req.query.status || 'open').trim().toLowerCase();
+    const result = await pool.query(`
+      SELECT
+        q.id,
+        q.client_id,
+        q.prospect_id,
+        q.company_name,
+        q.website,
+        q.missing_fields,
+        q.candidate_names,
+        q.candidate_emails,
+        q.partial_data,
+        q.status,
+        q.last_attempted_at,
+        q.created_at,
+        q.updated_at,
+        p.first_name,
+        p.last_name,
+        p.email,
+        p.email_status,
+        p.email_verified,
+        p.email_verification_method,
+        p.do_not_contact,
+        p.practice_area,
+        p.firm_size,
+        p.vertical,
+        p.icp_score
+      FROM enrichment_manual_queue q
+      LEFT JOIN prospects p
+        ON p.id = q.prospect_id
+        AND p.client_id = q.client_id
+      WHERE q.client_id = $1
+        AND q.status = $2
+      ORDER BY q.updated_at DESC, q.id DESC
+    `, [clientId, status]);
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -409,10 +890,13 @@ async function selectUpdatedProspect(id, clientId) {
       p.id, p.company_id, p.first_name, p.last_name, p.email, p.phone,
       p.vertical, p.status, p.icp_score, p.do_not_contact, p.notes,
       p.last_contacted_at, p.created_at,
+      p.assigned_setter_id,
+      su.name AS assigned_setter_name,
       c.name AS company_name, c.location AS city,
       COALESCE(tp.touchpoint_count, 0)::int AS touchpoint_count
     FROM prospects p
     LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+    LEFT JOIN users su ON su.id = p.assigned_setter_id
     LEFT JOIN (
       SELECT prospect_id, COUNT(*)::int AS touchpoint_count
       FROM touchpoints
@@ -448,7 +932,7 @@ function splitLocation(location) {
   return { city: String(location || '').trim(), state: '' };
 }
 
-router.put('/api/prospects/:id', requireAuth, async (req, res) => {
+router.put('/api/prospects/:id', requireOperator, async (req, res) => {
   const client = await pool.connect();
   try {
     const clientId = getRequestClientId(req);
@@ -475,7 +959,7 @@ router.put('/api/prospects/:id', requireAuth, async (req, res) => {
     if (has('last_name')) addProspectField('last_name', cleanNullable(req.body.last_name, 120));
     if (has('email')) addProspectField('email', cleanNullable(req.body.email, 320));
     if (has('phone')) addProspectField('phone', cleanNullable(req.body.phone, 80));
-    if (has('vertical')) addProspectField('vertical', cleanNullable(req.body.vertical, 120));
+    if (has('vertical')) addProspectField('vertical', normalizeVertical(cleanNullable(req.body.vertical, 120)));
     if (has('notes')) addProspectField('notes', cleanNullable(req.body.notes, 4000));
 
     if (has('icp_score')) {
@@ -488,7 +972,7 @@ router.put('/api/prospects/:id', requireAuth, async (req, res) => {
 
     if (has('status')) {
       const status = String(req.body.status || '').toLowerCase();
-      if (!['cold', 'warm', 'contacted', 'booked', 'closed', 'hot', 'dead'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+      if (!['cold', 'contacted', 'warm', 'dead', 'disqualified', 'closed', 'bounced', 'auto_responder', 'do_not_email'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
       addProspectField('status', status);
     }
 
@@ -504,18 +988,39 @@ router.put('/api/prospects/:id', requireAuth, async (req, res) => {
     ) : undefined;
     const locationChanged = location !== undefined && location !== (current.company_location || null);
 
+    if (companyChanged || locationChanged) {
+      await ensureBusinessNameShortColumns(pool);
+    }
+
     await client.query('BEGIN');
 
     if (companyChanged || locationChanged) {
       const companyName = has('company') ? cleanNullable(req.body.company, 220) : current.company_name;
       const companyNameForWrite = companyName || 'Unknown Company';
       const companyLocation = location !== undefined ? location : current.company_location;
+      const shortName = deriveBusinessNameShort(companyNameForWrite);
       if (current.company_id) {
         const setParts = [];
         const companyValues = [];
         if (companyChanged) {
           companyValues.push(companyNameForWrite);
           setParts.push(`name = $${companyValues.length}`);
+          companyValues.push(shortName.business_name_short);
+          setParts.push(`business_name_short = $${companyValues.length}`);
+          companyValues.push(shortName.confidence);
+          setParts.push(`business_name_short_confidence = $${companyValues.length}`);
+          companyValues.push(shortName.flags);
+          setParts.push(`business_name_short_flags = $${companyValues.length}::text[]`);
+        } else {
+          companyValues.push(shortName.business_name_short);
+          setParts.push(`business_name_short = COALESCE(NULLIF(business_name_short, ''), $${companyValues.length})`);
+          companyValues.push(shortName.confidence);
+          setParts.push(`business_name_short_confidence = COALESCE(NULLIF(business_name_short_confidence, ''), $${companyValues.length})`);
+          companyValues.push(shortName.flags);
+          setParts.push(`business_name_short_flags = CASE
+            WHEN COALESCE(array_length(business_name_short_flags, 1), 0) = 0 THEN $${companyValues.length}::text[]
+            ELSE business_name_short_flags
+          END`);
         }
         if (locationChanged) {
           companyValues.push(companyLocation);
@@ -531,10 +1036,21 @@ router.put('/api/prospects/:id', requireAuth, async (req, res) => {
         }
       } else if (companyName || companyLocation) {
         const companyRes = await client.query(`
-          INSERT INTO companies (name, industry, location, client_id)
-          VALUES ($1, $2, $3, $4)
+          INSERT INTO companies (
+            name, business_name_short, business_name_short_confidence, business_name_short_flags,
+            industry, location, client_id
+          )
+          VALUES ($1, $2, $3, $4::text[], $5, $6, $7)
           RETURNING id
-        `, [companyNameForWrite, req.body.vertical || current.vertical || null, companyLocation || null, clientId]);
+        `, [
+          companyNameForWrite,
+          shortName.business_name_short,
+          shortName.confidence,
+          shortName.flags,
+          req.body.vertical || current.vertical || null,
+          companyLocation || null,
+          clientId,
+        ]);
         addProspectField('company_id', companyRes.rows[0].id);
       }
     }
@@ -553,6 +1069,11 @@ router.put('/api/prospects/:id', requireAuth, async (req, res) => {
     res.json({ success: true, prospect: updated });
   } catch (err) {
     try { await client.query('ROLLBACK'); } catch (_rollbackErr) {}
+    if (err.code === '23514' && /vertical_canonical_chk/.test(err.constraint || '')) {
+      const { mapVerticalConstraintError } = require('../utils/canonicalVerticals');
+      const mapped = mapVerticalConstraintError(err);
+      return res.status(mapped.status).json({ error: mapped.message });
+    }
     res.status(500).json({ error: err.message });
   } finally {
     client.release();
@@ -560,7 +1081,7 @@ router.put('/api/prospects/:id', requireAuth, async (req, res) => {
 });
 
 // Touchpoints for a single prospect
-router.get('/api/prospects/:id/touchpoints', requireAuth, async (req, res) => {
+router.get('/api/prospects/:id/touchpoints', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const result = await pool.query(`
@@ -575,7 +1096,7 @@ router.get('/api/prospects/:id/touchpoints', requireAuth, async (req, res) => {
   }
 });
 
-router.get('/api/prospects/:id/preview', requireAuth, async (req, res) => {
+router.get('/api/prospects/:id/preview', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const result = await pool.query(`
@@ -634,7 +1155,7 @@ router.get('/api/prospects/:id/preview', requireAuth, async (req, res) => {
   }
 });
 
-router.get('/api/prospects/:id/detail', requireAuth, async (req, res) => {
+router.get('/api/prospects/:id/detail', requireDashboardRead, async (req, res) => {
   try {
     await ensureProspectSetterAssignmentSchema();
     const clientId = getRequestClientId(req);
@@ -744,26 +1265,28 @@ router.get('/api/prospects/:id/detail', requireAuth, async (req, res) => {
   }
 });
 
-router.get('/api/setters/assignable', requireAuth, async (_req, res) => {
+router.get('/api/setters/assignable', requireOperator, async (req, res) => {
   try {
+    const clientId = normalizeClientId(req.session?.active_client_id || req.user?.client_id);
     const result = await pool.query(`
       SELECT id, name, email, role
       FROM users
       WHERE role IN ('setter', 'sales')
         AND active = true
+        AND client_id = $1
       ORDER BY name ASC, email ASC
-    `);
+    `, [clientId]);
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.post('/api/prospects/:id/assign-setter', requireAuth, async (req, res) => {
+router.post('/api/prospects/:id/assign-setter', requireOperator, async (req, res) => {
   const client = await pool.connect();
   try {
     await ensureProspectSetterAssignmentSchema();
-    const clientId = getRequestClientId(req);
+    const clientId = normalizeClientId(req.session?.active_client_id || req.user?.client_id);
     const setterId = Number.parseInt(req.body.setter_id, 10);
     const note = String(req.body.note || '').slice(0, 2000).trim();
     if (!Number.isInteger(setterId)) return res.status(400).json({ error: 'Setter is required' });
@@ -775,8 +1298,9 @@ router.post('/api/prospects/:id/assign-setter', requireAuth, async (req, res) =>
       WHERE id = $1
         AND role IN ('setter', 'sales')
         AND active = true
+        AND client_id = $2
       LIMIT 1
-    `, [setterId]);
+    `, [setterId, clientId]);
     if (!setterRes.rows.length) {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Setter not found' });
@@ -784,8 +1308,7 @@ router.post('/api/prospects/:id/assign-setter', requireAuth, async (req, res) =>
 
     const prospectRes = await client.query(`
       UPDATE prospects
-      SET setter_visible = true,
-          assigned_setter_id = $1,
+      SET assigned_setter_id = $1,
           setter_status = COALESCE(setter_status, 'new'),
           setter_updated_at = NOW(),
           updated_at = NOW()
@@ -797,6 +1320,10 @@ router.post('/api/prospects/:id/assign-setter', requireAuth, async (req, res) =>
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Prospect not found' });
     }
+    const assignedProspect = await setSetterVisibility(client, prospectRes.rows[0].id, {
+      reason: 'manual',
+      clientId,
+    });
 
     const setter = setterRes.rows[0];
     const subject = `Assigned to setter ${setter.name}`;
@@ -813,7 +1340,7 @@ router.post('/api/prospects/:id/assign-setter', requireAuth, async (req, res) =>
     ]);
 
     await client.query('COMMIT');
-    res.json({ success: true, setter });
+    res.json({ success: true, setter, setter_visible: Boolean(assignedProspect?.setter_visible) });
   } catch (err) {
     try { await client.query('ROLLBACK'); } catch (_rollbackErr) {}
     res.status(500).json({ error: err.message });
@@ -822,7 +1349,7 @@ router.post('/api/prospects/:id/assign-setter', requireAuth, async (req, res) =>
   }
 });
 
-router.post('/api/prospects/:id/touch', requireAuth, async (req, res) => {
+router.post('/api/prospects/:id/touch', requireOperator, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const actionType = String(req.body.action_type || 'manual_touch').slice(0, 80);
@@ -844,11 +1371,33 @@ router.post('/api/prospects/:id/touch', requireAuth, async (req, res) => {
   }
 });
 
-router.patch('/api/prospects/:id/status', requireAuth, async (req, res) => {
+router.patch('/api/prospects/:id/status', requireOperator, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const status = String(req.body.status || '').toLowerCase();
-    if (!['cold', 'warm', 'contacted', 'booked', 'closed', 'hot', 'dead'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+    if (!['cold', 'contacted', 'warm', 'dead', 'disqualified', 'closed'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+    // Phase A2 convergence: terminal statuses are canonical stage changes and
+    // must flow through the one lifecycle writer so setter_status stays
+    // consistent and a transition event is recorded. Non-terminal statuses
+    // remain on the legacy email-lifecycle axis and do not move the canonical
+    // stage.
+    if (['dead', 'disqualified'].includes(status)) {
+      try {
+        await transitionProspectLifecycle({
+          clientId,
+          prospectId: req.params.id,
+          targetStage: 'dead',
+          statusOverride: status,
+          reason: String(req.body.reason || `Marked ${status} from dashboard`).slice(0, 2000),
+          actor: { type: 'user', id: req.user?.id, name: req.user?.name, role: req.user?.role },
+          source: 'dashboard_status_endpoint',
+        });
+      } catch (transitionErr) {
+        if (transitionErr.code === 'PROSPECT_NOT_FOUND') return res.status(404).json({ error: 'Prospect not found' });
+        throw transitionErr;
+      }
+      return res.json({ success: true, prospect: await selectUpdatedProspect(req.params.id, clientId) });
+    }
     const result = await pool.query(
       'UPDATE prospects SET status = $1, updated_at = NOW() WHERE id = $2 AND client_id = $3 RETURNING id',
       [status, req.params.id, clientId]
@@ -860,7 +1409,25 @@ router.patch('/api/prospects/:id/status', requireAuth, async (req, res) => {
   }
 });
 
-router.patch('/api/prospects/:id/do-not-contact', requireAuth, async (req, res) => {
+router.post('/api/prospects/:id/lifecycle-override', requireOperator, async (req, res) => {
+  try {
+    const clientId = getRequestClientId(req);
+    const override = await applyManualLifecycleOverride({
+      prospectId: req.params.id,
+      clientId,
+      requestedState: req.body?.lifecycle_state,
+      reason: req.body?.reason,
+      source: req.body?.source || 'dashboard',
+      confirmTerminalRestore: req.body?.confirm_terminal_restore === true,
+      operator: req.user || {},
+    });
+    res.json({ success: true, override });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.patch('/api/prospects/:id/do-not-contact', requireOperator, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const result = await pool.query(
@@ -875,7 +1442,7 @@ router.patch('/api/prospects/:id/do-not-contact', requireAuth, async (req, res) 
 });
 
 // Agent stats for sparklines
-router.get('/api/agent-stats', requireAuth, async (req, res) => {
+router.get('/api/agent-stats', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const result = await pool.query(`
@@ -923,8 +1490,91 @@ router.get('/api/agent-stats', requireAuth, async (req, res) => {
   }
 });
 
+// Agent health strip for dashboard cards
+router.get('/api/agent-health', requireDashboardRead, async (req, res) => {
+  try {
+    const clientId = getRequestClientId(req);
+    const result = await pool.query(`
+      WITH roster(agent_key) AS (
+        VALUES
+          ('scout'), ('emmett'), ('riley'), ('paige'), ('max'), ('rex'), ('vera'), ('faye'),
+          ('link'), ('sam'), ('cal'), ('cal_batch'), ('warm_signal'), ('analytics'),
+          ('sketch'), ('setter_handoff'), ('ivy'), ('penny')
+      ),
+      scoped AS (
+        SELECT
+          CASE
+            WHEN LOWER(agent_name) IN ('email_agent', 'emmett_agent', 'emmett') THEN 'emmett'
+            WHEN LOWER(agent_name) IN ('facebook_agent', 'faye_agent', 'faye', 'facebook') THEN 'faye'
+            WHEN LOWER(agent_name) IN ('linkedin_agent', 'link_agent', 'link', 'linkedin') THEN 'link'
+            WHEN LOWER(agent_name) IN ('warm_signal_agent', 'warm_signal', 'warmsignal') THEN 'warm_signal'
+            WHEN LOWER(agent_name) IN ('setter_handoff_agent', 'handoff_utility', 'setterhandoff') THEN 'setter_handoff'
+            WHEN LOWER(agent_name) IN ('cal_batch_agent', 'cal_batch', 'calbatch') THEN 'cal_batch'
+            ELSE REGEXP_REPLACE(LOWER(agent_name), '_agent$', '')
+          END AS agent_key,
+          agent_name,
+          status,
+          error_msg,
+          duration_ms,
+          ran_at
+        FROM agent_log
+        WHERE client_id = $1
+      ),
+      latest AS (
+        SELECT DISTINCT ON (agent_key)
+          agent_key, agent_name, status AS last_status, error_msg, duration_ms, ran_at AS last_run
+        FROM scoped
+        ORDER BY agent_key, ran_at DESC
+      ),
+      rollup_24h AS (
+        SELECT
+          agent_key,
+          COUNT(*)::int AS runs_24h,
+          COUNT(*) FILTER (WHERE status IN ('error', 'failed'))::int AS errors_24h
+        FROM scoped
+        WHERE ran_at >= NOW() - INTERVAL '24 hours'
+        GROUP BY agent_key
+      )
+      SELECT
+        r.agent_key,
+        l.agent_name,
+        l.last_run,
+        COALESCE(l.last_status, 'never_run') AS last_status,
+        l.error_msg,
+        l.duration_ms,
+        COALESCE(roll.errors_24h, 0)::int AS errors_24h,
+        COALESCE(roll.runs_24h, 0)::int AS runs_24h
+      FROM roster r
+      LEFT JOIN latest l ON l.agent_key = r.agent_key
+      LEFT JOIN rollup_24h roll ON roll.agent_key = r.agent_key
+      ORDER BY r.agent_key
+    `, [clientId]);
+
+    const agents = {};
+    result.rows.forEach(row => {
+      agents[row.agent_key] = {
+        agent_name: row.agent_name || row.agent_key,
+        last_run: row.last_run,
+        last_status: row.last_status,
+        error_msg: row.error_msg,
+        duration_ms: row.duration_ms,
+        errors_24h: Number(row.errors_24h || 0),
+        runs_24h: Number(row.runs_24h || 0),
+      };
+    });
+
+    res.json({
+      refreshed_at: new Date().toISOString(),
+      client_id: clientId,
+      agents,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Agent weekly stats for hover tooltips
-router.get('/api/agent-weekly-stats', requireAuth, async (req, res) => {
+router.get('/api/agent-weekly-stats', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const WEEK = `created_at > NOW() - INTERVAL '7 days'`;
@@ -976,12 +1626,14 @@ router.get('/api/agent-weekly-stats', requireAuth, async (req, res) => {
 });
 
 // Live activity feed
-router.get('/api/activity', requireAuth, async (req, res) => {
+router.get('/api/activity', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
     const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
-    const result = await pool.query(`
+    const perSourceLimit = Math.max(20, Math.min(limit + offset, 100));
+    const [agentResult, emailResult, excludedResult] = await Promise.all([
+      pool.query(`
       SELECT al.id, al.agent_name, al.action, al.status, al.ran_at, al.payload,
         COALESCE(
           al.prospect_id,
@@ -1004,21 +1656,83 @@ router.get('/api/activity', requireAuth, async (req, res) => {
       WHERE al.client_id = $1
         AND ${EXCLUDE_COMMAND_FEED_ACTIONS_SQL}
       ORDER BY al.ran_at DESC
-      LIMIT $2 OFFSET $3
-    `, [clientId, limit, offset]);
+      LIMIT $2
+    `, [clientId, perSourceLimit]),
+      pool.query(`
+        SELECT
+          ee.id,
+          ee.event_type,
+          ee.event_at,
+          ee.recipient_email,
+          ee.sending_domain,
+          ee.subject_line,
+          ee.prospect_id AS event_prospect_id,
+          p.id AS prospect_id,
+          p.first_name,
+          p.last_name,
+          p.notes AS prospect_notes,
+          c.name AS company_name
+        FROM email_events ee
+        LEFT JOIN LATERAL (
+          SELECT p.*
+          FROM prospects p
+          WHERE p.client_id = ee.client_id
+            AND (
+              p.id = ee.prospect_id
+              OR LOWER(p.email) = LOWER(ee.recipient_email)
+            )
+          ORDER BY (p.id = ee.prospect_id) DESC, p.created_at DESC
+          LIMIT 1
+        ) p ON true
+        LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+        WHERE ee.client_id = $1
+        ORDER BY ee.event_at DESC
+        LIMIT $2
+      `, [clientId, perSourceLimit]),
+      pool.query(`
+        SELECT
+          epl.id,
+          epl.email,
+          epl.domain,
+          epl.source,
+          epl.exclusion_reason,
+          epl.exclusion_detail,
+          epl.excluded_at AS created_at,
+          p.id AS prospect_id,
+          p.first_name,
+          p.last_name,
+          p.notes AS prospect_notes,
+          c.name AS company_name
+        FROM excluded_prospect_log epl
+        LEFT JOIN LATERAL (
+          SELECT p.*
+          FROM prospects p
+          WHERE p.client_id = $1
+            AND LOWER(p.email) = LOWER(epl.email)
+          ORDER BY p.created_at DESC
+          LIMIT 1
+        ) p ON true
+        LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+        ORDER BY epl.excluded_at DESC
+        LIMIT $2
+      `, [clientId, perSourceLimit]),
+    ]);
 
     const agentNameMap = {
       facebook: 'Faye', linkedin: 'Link', emmett: 'Emmett',
       max: 'Max', rex: 'Rex', scout: 'Scout', sketch: 'Sketch', email: 'Emmett'
     };
+    const timeLabelFor = (value) => {
+      const minutesAgo = Math.max(0, Math.floor((Date.now() - new Date(value)) / 60000));
+      return minutesAgo < 60 ? `${minutesAgo}m` : minutesAgo < 1440 ? `${Math.floor(minutesAgo/60)}h` : `${Math.floor(minutesAgo/1440)}d`;
+    };
+    const companyFromNotes = (notes) => String(notes || '').split(/\s(?:\u2013|\u2014|-)\s/)[0].trim() || null;
 
-    const feed = result.rows.map(row => {
+    const agentFeed = agentResult.rows.map(row => {
       const rawAgent = row.agent_name?.replace('_agent', '') || 'system';
       const agent = agentNameMap[rawAgent] || rawAgent.charAt(0).toUpperCase() + rawAgent.slice(1);
-      const minutesAgo = Math.floor((Date.now() - new Date(row.ran_at)) / 60000);
-      const timeLabel = minutesAgo < 60 ? `${minutesAgo}m` : minutesAgo < 1440 ? `${Math.floor(minutesAgo/60)}h` : `${Math.floor(minutesAgo/1440)}d`;
       const payload = row.payload || {};
-      const companyName = (row.prospect_notes || '').split('—')[0].trim() || payload.company || null;
+      const companyName = companyFromNotes(row.prospect_notes) || payload.company || null;
       const prospectName = cleanProspectName(row.first_name, row.last_name, companyName);
       const displayProspectName = payload.prospect_name || prospectName;
       const prospect = displayProspectName && displayProspectName !== 'Unknown contact' ? `· ${displayProspectName}` : '';
@@ -1028,6 +1742,8 @@ router.get('/api/activity', requireAuth, async (req, res) => {
         weekly_report: 'weekly report dispatched',
         generate_mockup: `generated a mockup ${prospect}`,
         outbound: `sent email sequence ${prospect}`,
+        email_sent: `Email sent ${prospect}`,
+        email_skipped: `Email skipped ${prospect}`,
         dashboard_trigger: 'triggered from dashboard',
         email_opened: `email opened ${prospect}`,
         open: `email opened ${prospect}`,
@@ -1051,13 +1767,79 @@ router.get('/api/activity', requireAuth, async (req, res) => {
       const isWarmSignal = ['open', 'email_opened', 'click', 'email_clicked', 'reply', 'inbound', 'call_answered', 'triage'].includes(rawAction);
       return {
         id: row.id,
+        source: 'agent_log',
+        detail_id: row.id,
+        detailable: true,
         agent, action: label, raw_action: rawAction, icon, color,
-        time: timeLabel, ran_at: row.ran_at, status: row.status,
+        time: timeLabelFor(row.ran_at), ran_at: row.ran_at, status: row.status,
         prospect_id: row.prospect_id,
         prospect: displayProspectName || null,
         is_warm_signal: isWarmSignal
       };
     });
+
+    const eventLabels = {
+      sent: 'email sent',
+      delivered: 'email delivered',
+      opened: 'email opened',
+      clicked: 'link clicked',
+      replied: 'reply received',
+      hard_bounce: 'hard bounce recorded',
+      soft_bounce: 'soft bounce recorded',
+      blocked: 'email blocked',
+      unsubscribed: 'unsubscribe recorded',
+      spam: 'spam complaint recorded',
+    };
+    const emailFeed = emailResult.rows.map(row => {
+      const rawAction = String(row.event_type || 'email_event').toLowerCase();
+      const companyName = row.company_name || companyFromNotes(row.prospect_notes);
+      const prospectName = cleanProspectName(row.first_name, row.last_name, companyName) || row.recipient_email;
+      const warm = ['opened', 'clicked', 'replied'].includes(rawAction);
+      const risk = ['hard_bounce', 'soft_bounce', 'blocked', 'unsubscribed', 'spam'].includes(rawAction);
+      return {
+        id: `email_event:${row.id}`,
+        source: 'email_events',
+        detailable: false,
+        agent: rawAction === 'replied' ? 'Riley' : 'Emmett',
+        action: `${eventLabels[rawAction] || rawAction.replace(/_/g, ' ')} · ${prospectName || row.recipient_email}`,
+        raw_action: rawAction,
+        icon: risk ? '!' : warm ? '↗' : '@',
+        color: risk ? 'fi-o' : warm ? 'fi-t' : 'fi-p',
+        time: timeLabelFor(row.event_at),
+        ran_at: row.event_at,
+        status: rawAction,
+        prospect_id: row.prospect_id || row.event_prospect_id || null,
+        prospect: prospectName || row.recipient_email,
+        is_warm_signal: warm,
+      };
+    });
+
+    const excludedFeed = excludedResult.rows.map(row => {
+      const detail = row.exclusion_detail || {};
+      const companyName = row.company_name || companyFromNotes(row.prospect_notes) || detail.company || row.domain || row.email;
+      const reason = row.exclusion_reason || 'excluded';
+      return {
+        id: `track1:${row.id}`,
+        source: 'excluded_prospect_log',
+        detailable: false,
+        agent: 'Scout',
+        action: `Track 1 excluded ${companyName || row.email || 'prospect'} · ${reason}`,
+        raw_action: 'track1_excluded',
+        icon: '×',
+        color: 'fi-o',
+        time: timeLabelFor(row.created_at),
+        ran_at: row.created_at,
+        status: reason,
+        prospect_id: row.prospect_id || detail.prospect_id || null,
+        prospect: companyName || row.email,
+        is_warm_signal: false,
+      };
+    });
+
+    const feed = agentFeed
+      .concat(emailFeed, excludedFeed)
+      .sort((a, b) => new Date(b.ran_at || 0) - new Date(a.ran_at || 0))
+      .slice(offset, offset + limit);
 
     res.json(feed);
   } catch (err) {
@@ -1104,10 +1886,9 @@ function sequenceStepLabel(sendCount) {
   return `Step ${idx} — Day ${SEQUENCE_DAYS[idx - 1]}`;
 }
 
-router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
+router.get('/api/activity/:id/details', requireDashboardRead, async (req, res) => {
   try {
     const logId = String(req.params.id || '').trim();
-    console.log('[activity-details] hit', { id: logId });
     if (!/^[0-9a-f-]{36}$/i.test(logId) && !/^\d+$/.test(logId)) {
       return res.status(400).json({ error: 'Invalid id' });
     }
@@ -1123,18 +1904,20 @@ router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
         ${prospectIdSql} AS prospect_id,
         p.first_name, p.last_name, p.email AS prospect_email, p.phone, p.vertical,
         p.icp_score, p.status AS prospect_status, p.last_contacted_at, p.notes,
+        p.assigned_setter_id,
+        su.name AS assigned_setter_name,
         c.name AS company_name
       FROM agent_log al
       LEFT JOIN prospects p
         ON p.id = ${prospectIdSql}
         AND p.client_id = COALESCE(al.client_id, $2)
       LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+      LEFT JOIN users su ON su.id = p.assigned_setter_id
       WHERE al.id::text = $1 AND (al.client_id = $2 OR al.client_id IS NULL)
       LIMIT 1
     `, [logId, clientId]);
 
     if (!logRes.rows.length) {
-      console.log('[activity-details] not_found', { id: logId, client_id: clientId });
       return res.status(404).json({ error: 'Activity not found' });
     }
     const row = logRes.rows[0];
@@ -1158,9 +1941,12 @@ router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
           SELECT p.id, p.first_name, p.last_name, p.email AS prospect_email, p.phone,
                  p.vertical, p.icp_score, p.status AS prospect_status,
                  p.last_contacted_at, p.notes, p.client_id AS p_client_id,
+                 p.assigned_setter_id,
+                 su.name AS assigned_setter_name,
                  c.name AS company_name
           FROM prospects p
           LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+          LEFT JOIN users su ON su.id = p.assigned_setter_id
           WHERE p.id = $1
           LIMIT 1
         `, [row.prospect_id]);
@@ -1170,9 +1956,12 @@ router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
           SELECT p.id, p.first_name, p.last_name, p.email AS prospect_email, p.phone,
                  p.vertical, p.icp_score, p.status AS prospect_status,
                  p.last_contacted_at, p.notes, p.client_id AS p_client_id,
+                 p.assigned_setter_id,
+                 su.name AS assigned_setter_name,
                  c.name AS company_name
           FROM prospects p
           LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
+          LEFT JOIN users su ON su.id = p.assigned_setter_id
           WHERE LOWER(p.email) = LOWER($1)
           ORDER BY p.last_contacted_at DESC NULLS LAST
           LIMIT 1
@@ -1191,11 +1980,9 @@ router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
         row.last_contacted_at = fb.last_contacted_at;
         row.notes = fb.notes;
         row.company_name = fb.company_name;
+        row.assigned_setter_id = fb.assigned_setter_id;
+        row.assigned_setter_name = fb.assigned_setter_name;
         recoveredClientId = fb.p_client_id;
-        console.log('[activity-details] bounce_fallback_recovered', {
-          id: row.id, prospect_id: row.prospect_id,
-          log_client_id: row.client_id, prospect_client_id: recoveredClientId,
-        });
       }
     }
 
@@ -1241,11 +2028,16 @@ router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
     const f = (label, value) => fields.push({ label, value: (value === null || value === undefined || value === '') ? '—' : String(value) });
     let actions = [];
 
+    // Surface the assigned setter wherever the panel mentions the prospect.
+    // Fallback to "Unassigned" so the panel never silently omits this column.
+    const setterLabel = row.assigned_setter_name || (row.prospect_id ? 'Unassigned' : null);
+
     switch (action) {
       case 'email_opened':
         f('Prospect', prospectName);
         f('Company', companyName);
         f('Email', row.prospect_email || payload.email);
+        f('Setter', setterLabel);
         f('Vertical', row.vertical);
         f('ICP score', row.icp_score);
         f('Total opens', eng.open_count ?? 0);
@@ -1256,6 +2048,7 @@ router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
         f('Prospect', prospectName);
         f('Company', companyName);
         f('Email', row.prospect_email || payload.email);
+        f('Setter', setterLabel);
         f('Vertical', row.vertical);
         f('ICP score', row.icp_score);
         f('Total touchpoints', eng.touch_count ?? 0);
@@ -1265,6 +2058,7 @@ router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
       case 'hot_prospect_alert':
         f('Prospect', prospectName);
         f('Company', companyName);
+        f('Setter', setterLabel);
         f('ICP score', row.icp_score);
         f('Opens in 24h', payload.open_count ?? eng.open_count_24h ?? 0);
         f('Phone', row.phone);
@@ -1277,6 +2071,7 @@ router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
         f('Prospect', payload.prospect_name || prospectName);
         f('Company', payload.company || companyName);
         f('Email', payload.email || row.prospect_email);
+        f('Setter', setterLabel);
         f('Vertical', payload.vertical || row.vertical);
         f('ICP Score', payload.icp_score ?? row.icp_score);
         f('Total Opens', payload.total_opens ?? eng.open_count ?? 0);
@@ -1288,12 +2083,14 @@ router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
       case 'reengagement_trigger':
         f('Prospect', prospectName);
         f('Company', companyName);
+        f('Setter', setterLabel);
         f('Days since last touch', daysSince(eng.last_touch_at ?? row.last_contacted_at));
         f('Current status', row.prospect_status);
         break;
       case 'auto_marked_dead':
         f('Prospect', prospectName);
         f('Company', companyName);
+        f('Setter', setterLabel);
         f('Touch count', eng.touch_count ?? 0);
         f('Last contact date', fmtDate(eng.last_touch_at ?? row.last_contacted_at));
         break;
@@ -1316,7 +2113,10 @@ router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
         f('Error message', row.error_msg || 'Unknown error');
         break;
       default:
-        if (prospectName) f('Prospect', prospectName);
+        if (prospectName) {
+          f('Prospect', prospectName);
+          if (setterLabel) f('Setter', setterLabel);
+        }
         break;
     }
 
@@ -1329,24 +2129,12 @@ router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
       title: activityDetailTitle(action),
       prospect_id: row.prospect_id || null,
       fields,
-      actions,
+      actions: ['viewer', 'client'].includes(req.user?.role) ? [] : actions,
       payload,
       error_msg: row.error_msg || null,
       duration_ms: row.duration_ms ?? null,
       prospect_found: Boolean(row.prospect_id && (row.first_name || row.last_name || row.prospect_email || row.phone || row.notes)),
     };
-    console.log('[activity-details] response', {
-      id: responseBody.id,
-      action: responseBody.action,
-      status: responseBody.status,
-      ran_at: responseBody.ran_at,
-      title: responseBody.title,
-      prospect_id: responseBody.prospect_id,
-      prospect_found: responseBody.prospect_found,
-      fields: responseBody.fields,
-      payload: responseBody.payload,
-      actions: responseBody.actions.map(a => a.key),
-    });
     res.json(responseBody);
   } catch (err) {
     console.error('[activity-details] error', { id: req.params.id, error: err.message });
@@ -1354,28 +2142,8 @@ router.get('/api/activity/:id/details', requireAuth, async (req, res) => {
   }
 });
 
-// Quick action: surface a prospect to the setter queue
-router.post('/api/prospects/:id/assign-setter', requireAuth, async (req, res) => {
-  try {
-    const clientId = getRequestClientId(req);
-    const result = await pool.query(`
-      UPDATE prospects
-      SET setter_visible = true,
-          setter_status = COALESCE(setter_status, 'new'),
-          setter_updated_at = NOW(),
-          updated_at = NOW()
-      WHERE id = $1 AND client_id = $2
-      RETURNING id
-    `, [req.params.id, clientId]);
-    if (!result.rows.length) return res.status(404).json({ error: 'Prospect not found' });
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // Activity panel (sequences + timeline)
-router.get('/api/activity-panel', requireAuth, async (req, res) => {
+router.get('/api/activity-panel', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const [seqResult, timelineResult] = await Promise.all([
@@ -1490,7 +2258,7 @@ router.get('/api/activity-panel', requireAuth, async (req, res) => {
 });
 
 // Load more timeline items
-router.get('/api/activity-timeline', requireAuth, async (req, res) => {
+router.get('/api/activity-timeline', requireDashboardRead, async (req, res) => {
   const offset = parseInt(req.query.offset) || 0;
   try {
     const clientId = getRequestClientId(req);
@@ -1542,7 +2310,7 @@ router.get('/api/activity-timeline', requireAuth, async (req, res) => {
 });
 
 // Analytics
-router.get('/api/analytics', requireAuth, async (req, res) => {
+router.get('/api/analytics', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const [vol, reply, icp, agents, funnel, topProspects] = await Promise.all([
@@ -1711,7 +2479,7 @@ router.get('/api/analytics', requireAuth, async (req, res) => {
 });
 
 // Content analytics: recent posts with metrics
-router.get('/api/analytics/posts', requireAuth, async (req, res) => {
+router.get('/api/analytics/posts', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const result = await pool.query(`
@@ -1719,7 +2487,7 @@ router.get('/api/analytics/posts', requireAuth, async (req, res) => {
         pa.id, pa.channel, pa.content_type, pa.post_text,
         pa.platform_post_id, pa.published_at,
         pa.post_day_of_week, pa.post_hour,
-        pa.likes, pa.comments, pa.shares, pa.reach, pa.clicks,
+        pa.likes, pa.comments, pa.shares, pa.reach, pa.impressions, pa.clicks,
         pa.engagement_rate, pa.metrics_fetched_at,
         c.name AS company_name
       FROM post_analytics pa
@@ -1734,15 +2502,85 @@ router.get('/api/analytics/posts', requireAuth, async (req, res) => {
   }
 });
 
+// Manual LinkedIn native-post stats tracker.
+router.post('/api/linkedin-post-stats', requireOperator, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const clientId = getRequestClientId(req);
+    const postedAt = requirePostedAt(body.posted_at);
+    const format = requireEnumValue(body.format, LINKEDIN_POST_FORMATS, 'format');
+    const hookType = requireEnumValue(body.hook_type, LINKEDIN_HOOK_TYPES, 'hook_type');
+    const firstHourActive = body.first_hour_active === true ||
+      ['1', 'true', 'yes', 'on'].includes(String(body.first_hour_active || '').toLowerCase());
+    const warmedBeforePublish = body.warmed_before_publish === true ||
+      ['1', 'true', 'yes', 'on'].includes(String(body.warmed_before_publish || '').toLowerCase());
+
+    const result = await pool.query(`
+      INSERT INTO linkedin_post_stats (
+        client_id, posted_at, post_url, buffer_post_id, format, hook_type,
+        content_snippet, first_hour_active, warmed_before_publish, notes
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      RETURNING id, client_id, posted_at, post_url, buffer_post_id, format, hook_type,
+                content_snippet, impressions, members_reached, engagement_rate,
+                first_hour_active, warmed_before_publish, stats_captured_at, notes, created_at, updated_at
+    `, [
+      clientId,
+      postedAt,
+      nullableText(body.post_url),
+      nullableText(body.buffer_post_id),
+      format,
+      hookType,
+      nullableText(body.content_snippet, 120),
+      firstHourActive,
+      warmedBeforePublish,
+      nullableText(body.notes),
+    ]);
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.patch('/api/linkedin-post-stats/:id/stats', requireOperator, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const clientId = getRequestClientId(req);
+    const impressions = optionalNonNegativeInteger(body.impressions, 'impressions');
+    const membersReached = optionalNonNegativeInteger(body.members_reached, 'members_reached');
+    const engagementRate = optionalEngagementRate(body.engagement_rate);
+
+    const result = await pool.query(`
+      UPDATE linkedin_post_stats
+      SET impressions = $1,
+          members_reached = $2,
+          engagement_rate = $3,
+          stats_captured_at = NOW(),
+          updated_at = NOW()
+      WHERE id = $4
+        AND client_id = $5
+      RETURNING id, client_id, posted_at, post_url, buffer_post_id, format, hook_type,
+                content_snippet, impressions, members_reached, engagement_rate,
+                first_hour_active, stats_captured_at, notes, created_at, updated_at
+    `, [impressions, membersReached, engagementRate, req.params.id, clientId]);
+
+    if (!result.rows.length) return res.status(404).json({ error: 'LinkedIn post stats row not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
 // Content performance summary by channel/type
-router.get('/api/analytics/summary', requireAuth, async (req, res) => {
+router.get('/api/analytics/summary', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const result = await pool.query(`
       SELECT
         cps.channel, cps.content_type,
         cps.post_count, cps.avg_likes, cps.avg_comments,
-        cps.avg_shares, cps.avg_reach, cps.avg_engagement_rate,
+        cps.avg_shares, cps.avg_reach, cps.avg_impressions, cps.avg_engagement_rate,
         cps.best_day_of_week, cps.best_hour,
         c.name AS company_name
       FROM content_performance_summary cps
@@ -1757,7 +2595,7 @@ router.get('/api/analytics/summary', requireAuth, async (req, res) => {
 });
 
 // Top posts by engagement rate
-router.get('/api/analytics/top-posts', requireAuth, async (req, res) => {
+router.get('/api/analytics/top-posts', requireDashboardRead, async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 10, 50);
     const clientId = getRequestClientId(req);
@@ -1766,7 +2604,7 @@ router.get('/api/analytics/top-posts', requireAuth, async (req, res) => {
         pa.id, pa.channel, pa.content_type,
         LEFT(pa.post_text, 120) AS post_preview,
         pa.published_at, pa.likes, pa.comments, pa.shares,
-        pa.reach, pa.engagement_rate,
+        pa.reach, pa.impressions, pa.engagement_rate,
         c.name AS company_name
       FROM post_analytics pa
       LEFT JOIN companies c ON pa.company_id = c.id AND c.client_id = pa.client_id
@@ -1782,28 +2620,139 @@ router.get('/api/analytics/top-posts', requireAuth, async (req, res) => {
 });
 
 // Email engagement stats
-router.get('/api/analytics/email', requireAuth, async (req, res) => {
+router.get('/api/analytics/email', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
-    const [totals, weekTotals, warmUpgraded] = await Promise.all([
+    const days = analyticsWindowDays(req.query.days);
+    const [prospectColumns, excludedColumns] = await Promise.all([
+      tableColumns('prospects'),
+      tableColumns('excluded_prospect_log'),
+    ]);
+    const hasEmailStatus = prospectColumns.has('email_status');
+    const excludedHasCreatedAt = excludedColumns.has('created_at');
+
+    const pipelineSql = hasEmailStatus ? `
+      SELECT
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (
+          WHERE COALESCE(email_status, 'unverified_legacy') = 'valid'
+            AND COALESCE(do_not_contact, false) = false
+        )::int AS sendable,
+        COUNT(*) FILTER (WHERE COALESCE(do_not_contact, false) = true)::int AS excluded,
+        COUNT(*) FILTER (
+          WHERE COALESCE(do_not_contact, false) = false
+            AND COALESCE(NULLIF(email_status, ''), 'unverified_legacy') IN ('unknown', 'unverified_legacy')
+        )::int AS unknown
+      FROM prospects
+      WHERE client_id = $1
+    ` : `
+      SELECT
+        COUNT(*)::int AS total,
+        0::int AS sendable,
+        COUNT(*) FILTER (WHERE COALESCE(do_not_contact, false) = true)::int AS excluded,
+        COUNT(*) FILTER (WHERE COALESCE(do_not_contact, false) = false)::int AS unknown
+      FROM prospects
+      WHERE client_id = $1
+    `;
+    const verifierSql = hasEmailStatus ? `
+      SELECT email_bucket AS status, COUNT(*)::int AS count
+      FROM (
+        SELECT CASE
+          WHEN COALESCE(NULLIF(email_status, ''), 'unverified_legacy') IN ('valid', 'invalid', 'catchall', 'risky', 'unknown', 'unverified_legacy')
+            THEN COALESCE(NULLIF(email_status, ''), 'unverified_legacy')
+          ELSE 'unknown'
+        END AS email_bucket
+        FROM prospects
+        WHERE client_id = $1
+      ) scoped_email_statuses
+      GROUP BY email_bucket
+    ` : `
+      SELECT 'unverified_legacy' AS status, COUNT(*)::int AS count
+      FROM prospects
+      WHERE client_id = $1
+    `;
+    const track1Where = excludedHasCreatedAt
+      ? "WHERE epl.created_at >= NOW() - INTERVAL '7 days'"
+      : '';
+
+    const [totals, weekTotals, domainBreakdown, verticalBreakdown, pipelineHealth, track1Reasons, verifierStats, warmUpgraded] = await Promise.all([
       pool.query(`
         SELECT
-          COUNT(CASE WHEN action_type = 'outbound'            THEN 1 END)::int AS sent_total,
-          COUNT(CASE WHEN action_type = 'email_opened'        THEN 1 END)::int AS opened_total,
-          COUNT(CASE WHEN action_type = 'email_clicked'       THEN 1 END)::int AS clicked_total,
-          COUNT(CASE WHEN action_type = 'email_bounced'       THEN 1 END)::int AS bounced_total,
-          COUNT(CASE WHEN action_type = 'email_unsubscribed'  THEN 1 END)::int AS unsub_total
-        FROM touchpoints WHERE channel = 'email' AND client_id = $1
+          COUNT(*) FILTER (WHERE event_type = 'sent')::int AS sent_total,
+          COUNT(DISTINCT LOWER(TRIM(recipient_email))) FILTER (WHERE event_type = 'delivered')::int AS delivered_total,
+          COUNT(DISTINCT LOWER(TRIM(recipient_email))) FILTER (WHERE event_type = 'opened')::int AS opened_total,
+          COUNT(*) FILTER (WHERE event_type = 'opened_proxy')::int AS opened_proxy_total,
+          COUNT(*) FILTER (WHERE event_type = 'clicked')::int AS clicked_total,
+          COUNT(*) FILTER (WHERE event_type = 'replied')::int AS replied_total,
+          COUNT(*) FILTER (WHERE event_type IN ('hard_bounce', 'blocked'))::int AS bounced_total,
+          COUNT(*) FILTER (WHERE event_type = 'unsubscribed')::int AS unsub_total
+        FROM email_events
+        WHERE client_id = $1
+          AND event_at >= NOW() - ($2 * INTERVAL '1 day')
+      `, [clientId, days]),
+      pool.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE event_type = 'sent')::int AS sent_week,
+          COUNT(DISTINCT LOWER(TRIM(recipient_email))) FILTER (WHERE event_type = 'delivered')::int AS delivered_week,
+          COUNT(DISTINCT LOWER(TRIM(recipient_email))) FILTER (WHERE event_type = 'opened')::int AS opened_week,
+          COUNT(*) FILTER (WHERE event_type = 'opened_proxy')::int AS opened_proxy_week,
+          COUNT(*) FILTER (WHERE event_type = 'clicked')::int AS clicked_week,
+          COUNT(*) FILTER (WHERE event_type IN ('hard_bounce', 'blocked'))::int AS bounced_week
+        FROM email_events
+        WHERE client_id = $1
+          AND event_at >= NOW() - INTERVAL '7 days'
       `, [clientId]),
       pool.query(`
         SELECT
-          COUNT(CASE WHEN action_type = 'outbound'           THEN 1 END)::int AS sent_week,
-          COUNT(CASE WHEN action_type = 'email_opened'       THEN 1 END)::int AS opened_week,
-          COUNT(CASE WHEN action_type = 'email_clicked'      THEN 1 END)::int AS clicked_week,
-          COUNT(CASE WHEN action_type = 'email_bounced'      THEN 1 END)::int AS bounced_week
-        FROM touchpoints
-        WHERE channel = 'email' AND client_id = $1 AND created_at > NOW() - INTERVAL '7 days'
-      `, [clientId]),
+          COALESCE(NULLIF(sending_domain, ''), 'unknown') AS sending_domain,
+          COUNT(*) FILTER (WHERE event_type = 'sent')::int AS sent,
+          COUNT(DISTINCT LOWER(TRIM(recipient_email))) FILTER (WHERE event_type = 'delivered')::int AS delivered,
+          COUNT(DISTINCT LOWER(TRIM(recipient_email))) FILTER (WHERE event_type = 'opened')::int AS opened,
+          COUNT(*) FILTER (WHERE event_type = 'opened_proxy')::int AS opened_proxy,
+          COUNT(*) FILTER (WHERE event_type = 'clicked')::int AS clicked,
+          COUNT(*) FILTER (WHERE event_type = 'replied')::int AS replied,
+          COUNT(*) FILTER (WHERE event_type IN ('hard_bounce', 'blocked'))::int AS bounced
+        FROM email_events
+        WHERE client_id = $1
+          AND event_at >= NOW() - ($2 * INTERVAL '1 day')
+        GROUP BY sending_domain
+        ORDER BY bounced DESC, sent DESC, delivered DESC
+      `, [clientId, days]),
+      pool.query(`
+        SELECT
+          COALESCE(NULLIF(p.vertical, ''), 'unknown') AS vertical,
+          COUNT(*) FILTER (WHERE ee.event_type = 'sent')::int AS sent,
+          COUNT(DISTINCT LOWER(TRIM(ee.recipient_email))) FILTER (WHERE ee.event_type = 'delivered')::int AS delivered,
+          COUNT(DISTINCT LOWER(TRIM(ee.recipient_email))) FILTER (WHERE ee.event_type = 'opened')::int AS opened,
+          COUNT(*) FILTER (WHERE ee.event_type = 'opened_proxy')::int AS opened_proxy,
+          COUNT(*) FILTER (WHERE ee.event_type = 'clicked')::int AS clicked,
+          COUNT(*) FILTER (WHERE ee.event_type = 'replied')::int AS replied,
+          COUNT(*) FILTER (WHERE ee.event_type IN ('hard_bounce', 'blocked'))::int AS bounced
+        FROM email_events ee
+        LEFT JOIN LATERAL (
+          SELECT vertical
+          FROM prospects p
+          WHERE p.client_id = ee.client_id
+            AND LOWER(p.email) = LOWER(ee.recipient_email)
+          ORDER BY p.created_at DESC
+          LIMIT 1
+        ) p ON true
+        WHERE ee.client_id = $1
+          AND ee.event_at >= NOW() - ($2 * INTERVAL '1 day')
+        GROUP BY COALESCE(NULLIF(p.vertical, ''), 'unknown')
+        ORDER BY delivered DESC, sent DESC
+      `, [clientId, days]),
+      pool.query(pipelineSql, [clientId]),
+      pool.query(`
+        SELECT
+          COALESCE(NULLIF(epl.exclusion_reason, ''), 'unknown') AS reason,
+          COUNT(*)::int AS count
+        FROM excluded_prospect_log epl
+        ${track1Where}
+        GROUP BY reason
+        ORDER BY count DESC, reason ASC
+      `),
+      pool.query(verifierSql, [clientId]),
       pool.query(`
         SELECT COUNT(*)::int AS count
         FROM prospects
@@ -1811,25 +2760,59 @@ router.get('/api/analytics/email', requireAuth, async (req, res) => {
           AND client_id = $1
           AND updated_at > NOW() - INTERVAL '7 days'
           AND EXISTS (
-            SELECT 1 FROM touchpoints t
-            WHERE t.prospect_id = prospects.id AND t.client_id = prospects.client_id AND t.action_type = 'email_clicked'
+            SELECT 1 FROM email_events ee
+            WHERE ee.client_id = prospects.client_id
+              AND LOWER(ee.recipient_email) = LOWER(prospects.email)
+              AND ee.event_type = 'clicked'
           )
       `, [clientId]),
     ]);
 
     const t = totals.rows[0];
     const w = weekTotals.rows[0];
-    const pct = (num, den) => den > 0 ? +((num / den) * 100).toFixed(1) : 0;
+    const denominator = Number(t.sent_total || 0);
+    const denominatorLabel = 'sent';
+    const weekDenominator = Number(w.sent_week || 0);
+    const decorateBreakdown = row => {
+      const den = Number(row.sent || 0);
+      const denLabel = 'sent';
+      return {
+        ...row,
+        denominator: den,
+        denominator_label: denLabel,
+        open_rate: pct(row.opened, Number(row.delivered || 0)),
+        reply_rate: pct(row.replied, den),
+        bounce_pct: pct(row.bounced, den),
+        kill_switch_bounce_pct: pct(row.bounced, row.sent),
+      };
+    };
 
     res.json({
-      sent_total:         t.sent_total,
-      sent_week:          w.sent_week,
-      open_rate:          pct(t.opened_total, t.sent_total),
-      click_rate:         pct(t.clicked_total, t.sent_total),
-      bounce_rate:        pct(t.bounced_total, t.sent_total),
-      unsub_rate:         pct(t.unsub_total, t.sent_total),
-      open_rate_week:     pct(w.opened_week, w.sent_week),
+      days,
+      denominator_label:  denominatorLabel,
+      sent_total:         denominator,
+      raw_sent_total:     t.sent_total,
+      delivered_total:    t.delivered_total,
+      opened_total:       t.opened_total,
+      opened_proxy_total: t.opened_proxy_total,
+      sent_week:          weekDenominator,
+      raw_sent_week:      w.sent_week,
+      delivered_week:     w.delivered_week,
+      opened_week:        w.opened_week,
+      opened_proxy_week:  w.opened_proxy_week,
+      open_rate:          pct(t.opened_total, t.delivered_total),
+      click_rate:         pct(t.clicked_total, denominator),
+      reply_rate:         pct(t.replied_total, denominator),
+      bounce_rate:        pct(t.bounced_total, denominator),
+      unsub_rate:         pct(t.unsub_total, denominator),
+      open_rate_week:     pct(w.opened_week, w.delivered_week),
       warm_upgraded_week: warmUpgraded.rows[0].count,
+      pipeline_health:    pipelineHealth.rows[0],
+      track1_reasons:     track1Reasons.rows,
+      track1_window_days: excludedHasCreatedAt ? 7 : null,
+      verifier_stats:     verifierStats.rows,
+      domain_health:      domainBreakdown.rows.map(decorateBreakdown),
+      vertical_breakdown: verticalBreakdown.rows.map(decorateBreakdown),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1837,9 +2820,9 @@ router.get('/api/analytics/email', requireAuth, async (req, res) => {
 });
 
 // Max daily brief
-router.get('/api/max-brief', requireAuth, async (req, res) => {
+router.get('/api/max-brief', requireDashboardRead, async (req, res) => {
   try {
-    const clientId = normalizeClientId(req.session?.active_client_id || 1);
+    const clientId = getRequestClientId(req);
     const result = await pool.query(`
       SELECT payload, ran_at
       FROM agent_log
@@ -1863,7 +2846,7 @@ router.get('/api/max-brief', requireAuth, async (req, res) => {
 });
 
 // Rex cross-market executive summary
-router.get('/api/rex-executive-summary', requireAuth, async (req, res) => {
+router.get('/api/rex-executive-summary', requireDashboardRead, async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT payload, ran_at
@@ -1884,7 +2867,7 @@ router.get('/api/rex-executive-summary', requireAuth, async (req, res) => {
 });
 
 // Agent actions (deposited by Max)
-router.get('/api/actions', requireAuth, async (req, res) => {
+router.get('/api/actions', requireOperator, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const result = await pool.query(`
@@ -1900,7 +2883,7 @@ router.get('/api/actions', requireAuth, async (req, res) => {
   }
 });
 
-router.post('/api/actions/:id/dismiss', requireAuth, async (req, res) => {
+router.post('/api/actions/:id/dismiss', requireOperator, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     await pool.query(
@@ -1913,7 +2896,7 @@ router.post('/api/actions/:id/dismiss', requireAuth, async (req, res) => {
   }
 });
 
-router.post('/api/actions/:id/execute', requireAuth, async (req, res) => {
+router.post('/api/actions/:id/execute', requireOperator, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     await pool.query(
@@ -1927,7 +2910,7 @@ router.post('/api/actions/:id/execute', requireAuth, async (req, res) => {
 });
 
 // Trigger agents
-router.post('/api/run/:agent', requireAuth, async (req, res) => {
+router.post('/api/run/:agent', requireOperator, async (req, res) => {
   const { agent } = req.params;
   const clientId = getRequestClientId(req);
   const localOnly = ['ivy'];
@@ -1935,14 +2918,35 @@ router.post('/api/run/:agent', requireAuth, async (req, res) => {
     return res.json({ success: false, message: `${agent} requires local execution — run from your terminal` });
   }
   const agentModules = {
-    scout: '../leadgen', emmett: '../emmettAgent',
+    scout: '../leadgen', emmett: '../emmettSchedulerCron',
     max: '../maxAgent', rex: '../rexAgent', sketch: '../sketchAgent',
     paige: '../paigeAgent', faye: '../facebookAgent', link: '../linkedinAgent',
     sam: '../samAgent', vera: '../veraAgent', cal: '../calAgent', ivy: '../ivyAgent',
     penny: '../pennyAgent', analytics: '../analyticsAgent', riley: '../rileyAgent',
     warm_signal: '../warmSignalAgent',
+    tiered_enrichment: '../tieredEnrichmentAgent',
+    paige_reflection: '../agents/reflection/run',
   };
   if (!agentModules[agent]) return res.status(400).json({ error: 'Unknown agent' });
+
+  const dispatchGate = await isAgentEnabledForClient(clientId, agent);
+  if (!dispatchGate.allowed) {
+    await ensureAgentLogStatusSchema();
+    await logBlockedDispatch({
+      agentName: agent,
+      clientId,
+      reason: dispatchGate.reason || BLOCK_REASON,
+      channel: 'dashboard',
+      payload: { triggered_by: 'dashboard' },
+    });
+    return res.status(403).json({
+      error: dispatchGate.reason || BLOCK_REASON,
+      message: `${agent} is not enabled for this client`,
+      agent,
+      client_id: clientId,
+    });
+  }
+
   await ensureAgentLogStatusSchema();
   const triggerLog = await pool.query(
     `INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
@@ -1963,9 +2967,44 @@ router.post('/api/run/:agent', requireAuth, async (req, res) => {
       }
 
       const result = agent === 'scout'
-        ? await mod.run({ client_id: clientId })
+        ? await mod.run({
+            client_id: clientId,
+            industry: req.body?.industry,
+            location: req.body?.location,
+            sourceMode: req.body?.sourceMode || req.body?.source_mode,
+            titleFilter: req.body?.titleFilter || req.body?.title_filter,
+            titleExclude: req.body?.titleExclude || req.body?.title_exclude,
+            sizeSignal: req.body?.sizeSignal || req.body?.size_signal,
+            dryRun: req.body?.dryRun ?? req.body?.dry_run,
+            maxRequests: req.body?.maxRequests || req.body?.max_requests,
+            pageDepth: req.body?.pageDepth || req.body?.page_depth,
+          })
         : agent === 'emmett'
           ? await mod.run({ client_id: clientId, triggered_by: 'dashboard' })
+          : agent === 'paige'
+            ? await require('../services/paigeSocialContentExecution').routePaigeSocialContentExecution({
+                client_id: clientId,
+                tenantId: String(clientId),
+                dryRun: req.body?.dryRun ?? req.body?.dry_run,
+                channel: req.body?.channel,
+                platform: req.body?.platform || req.body?.channel,
+                format: req.body?.format,
+                count: req.body?.count,
+                simulateMiraUnavailable: req.body?.simulateMiraUnavailable,
+                contentObjective: req.body?.contentObjective || req.body?.content_objective,
+                workspaceContext: req.body?.workspaceContext || req.body?.workspace_context,
+                missionContext: req.body?.missionContext || req.body?.mission_context,
+                evidence: req.body?.evidence,
+                cadenceContext: req.body?.cadenceContext || req.body?.cadence_context,
+                source: 'dashboard',
+              })
+          : agent === 'paige_reflection'
+            ? await mod.run({
+                client_id: clientId,
+                windowStart: req.body?.windowStart || req.body?.window_start,
+                windowEnd: req.body?.windowEnd || req.body?.window_end,
+                dryRun: req.body?.dryRun ?? req.body?.dry_run,
+              })
           : await mod.run({ client_id: clientId });
 
       if (triggerLogId) {
@@ -1997,6 +3036,62 @@ router.post('/api/run/:agent', requireAuth, async (req, res) => {
       }
     }
   })();
+});
+
+// ---------------------------------------------------------------------------
+// Mira context endpoint (READ-ONLY — for Claude.ai consumption)
+//
+// GET /api/mira/context and GET /api/mira/context/:secret return a JSON snapshot
+// of Jacob's current Mira state so an external Claude.ai conversation can read
+// live context when Jacob talks to it. This endpoint is strictly read-only: it
+// issues SELECT-only DB reads and outbound Todoist GET requests, and never
+// mutates any Mira table, agent, or schema. It does NOT use session auth —
+// instead it is guarded by the MIRA_CONTEXT_SECRET env var (passed as
+// ?secret=..., an `Authorization: Bearer <secret>` header, or the :secret path
+// parameter), mirroring the CRON_SECRET guard pattern used by the /cron routes.
+// ---------------------------------------------------------------------------
+function requireMiraContextSecret(req, res, next) {
+  const expected = process.env.MIRA_CONTEXT_SECRET;
+  const header = String(req.get('authorization') || '');
+  const hasBearer = header.toLowerCase().startsWith('bearer ');
+  const bearer = hasBearer ? header.slice(7).trim() : null;
+  const hasQuery = Object.prototype.hasOwnProperty.call(req.query, 'secret');
+  const query = typeof req.query.secret === 'string' ? req.query.secret : null;
+  const hasPath = Object.prototype.hasOwnProperty.call(req.params, 'secret');
+  const path = typeof req.params.secret === 'string' ? req.params.secret : null;
+
+  const matchesExpected = provided => {
+    if (typeof provided !== 'string' || typeof expected !== 'string') return false;
+    const providedBuffer = Buffer.from(provided, 'utf8');
+    const expectedBuffer = Buffer.from(expected, 'utf8');
+    return providedBuffer.length === expectedBuffer.length
+      && crypto.timingSafeEqual(providedBuffer, expectedBuffer);
+  };
+
+  // All credential sources are independent; any valid value grants access.
+  if (expected && (matchesExpected(query) || matchesExpected(bearer) || matchesExpected(path))) {
+    return next();
+  }
+
+  const sources = [];
+  if (hasQuery) sources.push({ source: 'query', length: query === null ? null : Buffer.byteLength(query, 'utf8') });
+  if (hasBearer) sources.push({ source: 'bearer', length: Buffer.byteLength(bearer, 'utf8') });
+  if (hasPath) sources.push({ source: 'path', length: path === null ? null : Buffer.byteLength(path, 'utf8') });
+  console.warn(`[mira_context] auth rejected ${JSON.stringify({
+    secret_provided: sources.some(source => Number(source.length) > 0),
+    sources,
+  })}`);
+
+  return res.status(401).json({ error: 'Unauthorized' });
+}
+
+router.get(['/api/mira/context', '/api/mira/context/:secret'], requireMiraContextSecret, async (req, res) => {
+  try {
+    res.json(await buildMiraContext(null, { contentSafe: false }));
+  } catch (err) {
+    console.error('[mira_context] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;

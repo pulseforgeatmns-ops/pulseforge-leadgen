@@ -1,0 +1,585 @@
+'use strict';
+
+const { serviceTradeVerticals } = require('../../../utils/canonicalBusinessTaxonomy');
+const { rethrowResearchProviderControl } = require('../../../utils/anchorResearchProviderPause');
+
+/**
+ * SPEC-153 — Discovery Coverage Engine (ADR-076: Coverage Before Conclusion).
+ * Scout proves the market was investigated before concluding what exists within it.
+ *
+ * Mission → Discovery Strategy → Coverage Plan → Source Execution → Candidate Universe
+ */
+
+const { expandConcepts } = require('./ConceptLibrary');
+const { scopeSearchDefinitionForTask } = require('./EvidenceRequest');
+const { INVESTIGATIVE_EVIDENCE } = require('./EvidenceRequirements');
+const { asText, SOURCE_TYPES } = require('../../max/scoutAcquisition/Types');
+const {
+  expandCitiesFromSearchDefinition,
+  inferStateFromLabel,
+  formatCityState,
+  dedupeCities,
+} = require('./SearchGeography');
+const { enforceCandidateMinimumContract } = require('./CandidateMinimumContract');
+const { buildDiscoveryProviderReport } = require('./ProviderExecution');
+const { discoverCandidates } = require('../../max/scoutAcquisition/DiscoveryAdapters');
+const {
+  computeCoverageFromEstimate,
+  normalizeCandidateUniverseEstimate,
+  extractExpectedValue,
+} = require('../universe/CandidateUniverseEstimate');
+
+const ORIGINS = Object.freeze({
+  EXISTING_INTELLIGENCE: 'existing_intelligence',
+  EXTERNAL_DISCOVERY: 'external_discovery',
+  MISSION_MEMORY: 'mission_memory',
+  IMPORTED: 'imported',
+});
+
+function clamp01(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(1, n));
+}
+
+function defaultEnabledSources(adapters = []) {
+  const sources = new Set();
+  for (const adapter of adapters || []) {
+    if (!adapter) continue;
+    if (typeof adapter.available === 'function' && !adapter.available()) continue;
+    if (adapter.sourceType) sources.add(adapter.sourceType);
+  }
+  if (!sources.size) {
+    sources.add(SOURCE_TYPES.PUBLIC_BUSINESS_DATA);
+  }
+  return [...sources];
+}
+
+function adapterForSource(adapters, sourceType) {
+  return (adapters || []).find((row) => row && row.sourceType === sourceType) || null;
+}
+
+/**
+ * Build a structured coverage plan: City × Concept × Source workloads.
+ * @param {object} searchDefinition
+ * @param {object} [opts]
+ * @returns {object}
+ */
+function buildDiscoveryPlan(searchDefinition = {}, opts = {}) {
+  const cities = expandCitiesFromSearchDefinition(searchDefinition);
+  const concepts = expandConcepts(searchDefinition, opts.marketDefinition);
+  const adapters = opts.adapters || [];
+  const enabledSources = opts.enabledSources || defaultEnabledSources(adapters);
+  const externalSources = enabledSources.filter((src) => src !== SOURCE_TYPES.EXISTING_PF);
+
+  const workloads = [];
+  for (const city of cities) {
+    for (const concept of concepts) {
+      for (const source of externalSources) {
+        workloads.push({
+          id: `${city}|${concept}|${source}`,
+          city,
+          concept,
+          source,
+        });
+      }
+    }
+  }
+
+  return {
+    missionGeography: searchDefinition.geography && searchDefinition.geography.label,
+    cities,
+    concepts,
+    sources: externalSources,
+    workloads,
+    totals: {
+      cities: cities.length,
+      concepts: concepts.length,
+      sources: externalSources.length,
+      searches: workloads.length,
+    },
+  };
+}
+
+function scopedSearchDefinition(searchDefinition, workload, marketDefinition = null) {
+  const cityToken = asText(workload.city).split(/\s+/)[0];
+  const state =
+    asText(searchDefinition.geography && searchDefinition.geography.state) ||
+    inferStateFromLabel(workload.city) ||
+    null;
+  // A property-management workload must reach the corresponding provider
+  // strategy, rather than repeating the STR queries for every concept.
+  const canonicalSegment = serviceTradeVerticals(workload.concept)[0] || (/real estate|realtor|realty|brokerage|property sales/i.test(workload.concept) ? 'real_estate'
+    : /commercial office|office park|business center|cowork|executive office|office building|business campus|corporate office|managed office/i.test(workload.concept) ? 'commercial_office'
+    : /restaurant|cafe|bistro|bar and grill|tavern|gastropub|diner|eatery/i.test(workload.concept) ? 'restaurant_foh'
+    : /vacation|airbnb|\bstr\b|hospitality operator/i.test(workload.concept) ? 'short_term_rental'
+    : /property manag|hoa manag|condominium manag|apartment manag|association manag|multifamily manag|leasing office|rental manag/i.test(workload.concept) && !/vacation/i.test(workload.concept)
+    ? 'property_management' :
+    (Array.isArray(searchDefinition.segments) && searchDefinition.segments[0]) ||
+    asText(workload.concept).replace(/\s+/g, '_').toLowerCase());
+
+  const base = {
+    ...searchDefinition,
+    geography: {
+      ...(searchDefinition.geography || {}),
+      label: workload.city,
+      cities: [cityToken],
+      state,
+    },
+    segments: [canonicalSegment],
+    _coverageWorkload: workload,
+  };
+
+  const task = {
+    id: `task:coverage:${workload.id || `${workload.city}|${workload.concept}|${workload.source}`}`,
+    evidenceType: INVESTIGATIVE_EVIDENCE.IDENTITY,
+    providers: [{ providerId: 'google_maps' }],
+  };
+
+  return scopeSearchDefinitionForTask(
+    base,
+    task,
+    { ...(marketDefinition || {}), segments: [canonicalSegment] }
+  );
+}
+
+function buildDiscoveryEvidenceRef(row = {}, workload = {}) {
+  const name = asText(row.name);
+  const placeId = asText(row.placeId || row.place_id);
+  const website = asText(row.website || row.url);
+  const address = asText(row.address || row.location);
+  if (!name && !placeId) return null;
+
+  const source = row.discoverySource || row.source || workload.source || 'public_business_data';
+  return {
+    id: `ev-places-${placeId || name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+    label: `Discovered via ${String(source).replace(/_/g, ' ')}`,
+    snapshot: {
+      source: /places|google/i.test(String(source)) ? 'google_places' : source,
+      companyName: name || null,
+      placeId: placeId || null,
+      website: website || null,
+      address: address || null,
+      city: row.discoveryCity || workload.city || null,
+      concept: workload.concept || row.discoveryConcept || null,
+    },
+  };
+}
+
+/**
+ * Execute every workload in the coverage plan. One source returning zero does not stop others.
+ * @returns {Promise<object>}
+ */
+async function executeCoveragePlan(plan, searchDefinition, adapters = [], opts = {}) {
+  const marketDefinition = opts.marketDefinition || null;
+  const executed = [];
+  const errors = [];
+  const candidates = [];
+  const sourceTypesChecked = [];
+  const sourceTypesUnavailable = [];
+
+  const marketAdapters = (adapters || []).filter((row) => row && row.id !== 'existing_pf');
+
+  const reports = new Map();
+  const providerReceipts = [];
+  for (const workload of plan.workloads || []) {
+    const adapter = adapterForSource(marketAdapters, workload.source);
+    if (!adapter || (typeof adapter.available === 'function' && !adapter.available())) {
+      sourceTypesUnavailable.push(workload.source);
+      providerReceipts.push(buildDiscoveryProviderReport({ errors: [{ code: 'adapter_unavailable' }] }, adapter || {}, { status: 'skipped' }));
+      executed.push({
+        ...workload,
+        status: 'skipped',
+        reason: 'adapter_unavailable',
+        resultCount: 0,
+      });
+      continue;
+    }
+
+    const scoped = scopedSearchDefinition(searchDefinition, workload, marketDefinition);
+    let providerAttempted = false;
+    let receiptRecorded = false;
+    try {
+      const { investigationTaskId, ...evidenceKey } = scoped.evidenceRequest || {};
+      const requestKey = JSON.stringify([adapter.id, evidenceKey]);
+      const reused = adapter.id === 'public_business_places' && reports.has(requestKey);
+      let report;
+      if (reused) report = reports.get(requestKey);
+      else {
+        providerAttempted = true;
+        report = await adapter.discover(scoped);
+      }
+      reports.set(requestKey, report);
+      if (!reused) {
+        providerReceipts.push(buildDiscoveryProviderReport(report, adapter, {
+          evidenceType: scoped.evidenceRequest?.evidenceType,
+        }));
+        receiptRecorded = true;
+      }
+      const rows = report.candidates || [];
+      executed.push({
+        ...workload,
+        status: 'executed',
+        reused,
+        resultCount: rows.length,
+      });
+      if (!sourceTypesChecked.includes(workload.source)) {
+        sourceTypesChecked.push(workload.source);
+      }
+      const { accepted, rejected } = enforceCandidateMinimumContract(rows, workload);
+      if (rejected.length) {
+        errors.push(
+          ...rejected.map((entry) => ({
+            code: 'candidate_minimum_contract',
+            message: entry.reason,
+            workload,
+          }))
+        );
+      }
+      for (const row of accepted) {
+        candidates.push({
+          ...row,
+          _coverageWorkload: workload,
+          discoveryConcept: workload.concept,
+          discoveryCity: workload.city,
+          discoverySource: workload.source,
+        });
+      }
+      if (report.errors && report.errors.length) {
+        errors.push(...report.errors.map((err) => ({ ...err, workload })));
+      }
+    } catch (err) {
+      rethrowResearchProviderControl(err);
+      // Candidate processing (including a reused report) is not another provider call.
+      if (providerAttempted && !receiptRecorded) {
+        providerReceipts.push(buildDiscoveryProviderReport({ errors: [{ code: 'provider_error', message: err.message || String(err) }] }, adapter, {
+          status: 'failed',
+          evidenceType: scoped.evidenceRequest?.evidenceType,
+        }));
+      }
+      executed.push({
+        ...workload,
+        status: 'failed',
+        reason: err.message || String(err),
+        resultCount: 0,
+      });
+      errors.push({
+        code: 'provider_error',
+        message: err.message || String(err),
+        workload,
+      });
+    }
+  }
+
+  const coverage = computeCoverageMetrics(plan, executed);
+  return {
+    candidates,
+    executed,
+    coverage,
+    errors,
+    sourceTypesChecked: [...new Set(sourceTypesChecked)],
+    sourceTypesUnavailable: [...new Set(sourceTypesUnavailable)],
+    discoveryPlan: plan,
+    providerReceipts,
+  };
+}
+
+/**
+ * Fallback single-pass discovery when coverage engine is disabled.
+ */
+async function executeLegacyDiscovery(searchDefinition, adapters) {
+  return discoverCandidates(searchDefinition, adapters);
+}
+
+function computeCoverageMetrics(plan, executed = []) {
+  const planned = plan.totals || { cities: 0, concepts: 0, sources: 0, searches: 0 };
+  const addressed = executed.filter((row) => row.status === 'executed' || row.status === 'skipped');
+  const citiesSearched = new Set(
+    addressed.filter((row) => row.status === 'executed').map((row) => row.city)
+  );
+  const conceptsSearched = new Set(
+    addressed.filter((row) => row.status === 'executed').map((row) => row.concept)
+  );
+  const sourcesSearched = new Set(
+    addressed.filter((row) => row.status === 'executed').map((row) => row.source)
+  );
+  const searchesExecuted = executed.filter((row) => row.status === 'executed').length;
+
+  const ratio = (searched, total) => (total > 0 ? searched / total : 1);
+  const cityRatio = ratio(citiesSearched.size, planned.cities);
+  const conceptRatio = ratio(conceptsSearched.size, planned.concepts);
+  const sourceRatio = ratio(sourcesSearched.size, planned.sources);
+  const searchRatio = ratio(addressed.length, planned.searches);
+
+  const complete =
+    planned.searches === 0 ||
+    (addressed.length >= planned.searches &&
+      citiesSearched.size >= planned.cities &&
+      conceptsSearched.size >= planned.concepts);
+
+  return {
+    cities: { searched: citiesSearched.size, planned: planned.cities, ratio: cityRatio },
+    concepts: { searched: conceptsSearched.size, planned: planned.concepts, ratio: conceptRatio },
+    sources: { searched: sourcesSearched.size, planned: planned.sources, ratio: sourceRatio },
+    searches: { executed: searchesExecuted, addressed: addressed.length, planned: planned.searches, ratio: searchRatio },
+    complete,
+    warnings: buildCoverageWarnings({
+      cities: { searched: citiesSearched.size, planned: planned.cities },
+      concepts: { searched: conceptsSearched.size, planned: planned.concepts },
+      sources: { searched: sourcesSearched.size, planned: planned.sources },
+      searches: { addressed: addressed.length, planned: planned.searches },
+      complete,
+    }),
+  };
+}
+
+function buildCoverageWarnings(metrics) {
+  const warnings = [];
+  if (metrics.complete) return warnings;
+  if (metrics.cities.searched < metrics.cities.planned) {
+    warnings.push(
+      `Only ${metrics.cities.searched} / ${metrics.cities.planned} cities searched.`
+    );
+  }
+  if (metrics.concepts.searched < metrics.concepts.planned) {
+    warnings.push(
+      `Only ${metrics.concepts.searched} / ${metrics.concepts.planned} concepts searched.`
+    );
+  }
+  if (metrics.sources.searched < metrics.sources.planned) {
+    warnings.push(
+      `Only ${metrics.sources.searched} / ${metrics.sources.planned} sources executed.`
+    );
+  }
+  if (metrics.searches.addressed < metrics.searches.planned) {
+    warnings.push(
+      `Only ${metrics.searches.addressed} / ${metrics.searches.planned} planned searches addressed.`
+    );
+  }
+  warnings.push('Discovery incomplete.');
+  warnings.push('Recommendation: Continue investigation.');
+  return warnings;
+}
+
+function buildCandidateUniverseRecords(candidates = [], opts = {}) {
+  const seeded = opts.seeded || [];
+  const records = [];
+  const seen = new Set();
+
+  function pushRecord(row = {}, originOverride) {
+    const id = asText(row.id || row.companyId || row.candidate_id || row.candidateId);
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    const record = {
+      candidate_id: id,
+      candidateId: id,
+      canonicalIdentity: row.canonicalIdentity || row._identityKey || id,
+      origin: originOverride || row.origin || ORIGINS.EXISTING_INTELLIGENCE,
+      sources: [row.source || row.discoverySource || SOURCE_TYPES.EXISTING_PF],
+      cities: [row.location || row.discoveryCity || row.address].filter(Boolean),
+      confidence: row.confidence != null ? Number(row.confidence) : 0.75,
+      dedupeStatus: 'primary',
+      name: row.name || null,
+      website: row.website || row.url || null,
+      phone: row.phone || null,
+      address: row.address || row.location || null,
+      placeId: row.placeId || row.place_id || null,
+    };
+    if (row.qualification) record.qualification = row.qualification;
+    if (row.readiness) record.readiness = row.readiness;
+    if (row.evaluation || row.prospectEvaluation) {
+      record.evaluation = row.evaluation || row.prospectEvaluation;
+    }
+    if (row.businessFit || row.fitEvaluation) {
+      record.businessFit = row.businessFit || row.fitEvaluation;
+    }
+    if (Array.isArray(row.evidenceRefs) && row.evidenceRefs.length) {
+      record.evidenceRefs = row.evidenceRefs;
+    }
+    if (Array.isArray(row.signals) && row.signals.length) record.signals = row.signals;
+    if (row.investigationState) record.investigationState = row.investigationState;
+    if (row.hypothesisState) record.hypothesisState = row.hypothesisState;
+    if (Array.isArray(row.unknowns) && row.unknowns.length) record.unknowns = row.unknowns;
+    records.push(record);
+  }
+
+  for (const row of seeded) {
+    pushRecord(row, row.origin || ORIGINS.EXISTING_INTELLIGENCE);
+  }
+
+  for (const row of candidates) {
+    const id =
+      asText(row.id || row.companyId || row.placeId) ||
+      `cand-${asText(row.name).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+    const dedupeStatus = seen.has(id) ? 'duplicate' : 'primary';
+    if (!seen.has(id)) seen.add(id);
+    const workload = row._coverageWorkload || {};
+    const record = {
+      candidate_id: id,
+      candidateId: id,
+      origin: ORIGINS.EXTERNAL_DISCOVERY,
+      sources: [row.discoverySource || row.source || SOURCE_TYPES.PUBLIC_BUSINESS_DATA],
+      cities: [row.discoveryCity || row.location].filter(Boolean),
+      confidence: row.icpScore != null ? clamp01(Number(row.icpScore) / 100) : 0.55,
+      dedupeStatus,
+      name: row.name || null,
+      website: row.website || row.url || null,
+      phone: row.phone || null,
+      address: row.address || row.location || null,
+      placeId: row.placeId || row.place_id || null,
+      concept: workload.concept || row.discoveryConcept || null,
+    };
+    const evidenceRef = buildDiscoveryEvidenceRef(row, workload);
+    if (evidenceRef) {
+      record.evidenceRefs = [evidenceRef];
+      record.evidence = [evidenceRef];
+    }
+    if (row.qualification) record.qualification = row.qualification;
+    if (row.readiness) record.readiness = row.readiness;
+    if (row.evaluation) record.evaluation = row.evaluation;
+    records.push(record);
+  }
+
+  return records;
+}
+
+function computeDiscoveryConfidence(input = {}) {
+  const coverage = input.coverage || {};
+  const universe = input.candidateUniverse || [];
+  const searchSuccess = input.searchSuccess != null ? input.searchSuccess : 0.5;
+  const evidenceQuality = input.evidenceQuality != null ? input.evidenceQuality : 0.5;
+
+  const coverageScore = clamp01(
+    ((coverage.cities && coverage.cities.ratio) || 0) * 0.25 +
+      ((coverage.concepts && coverage.concepts.ratio) || 0) * 0.25 +
+      ((coverage.sources && coverage.sources.ratio) || 0) * 0.2 +
+      ((coverage.searches && coverage.searches.ratio) || 0) * 0.3
+  );
+
+  const uniqueSources = new Set(universe.flatMap((row) => row.sources || [])).size;
+  const uniqueCities = new Set(universe.flatMap((row) => row.cities || [])).size;
+  const diversityScore = clamp01(
+    Math.min(1, uniqueSources / 3) * 0.5 + Math.min(1, uniqueCities / 4) * 0.5
+  );
+
+  const overall = clamp01(
+    coverageScore * 0.45 + searchSuccess * 0.2 + diversityScore * 0.2 + evidenceQuality * 0.15
+  );
+
+  return {
+    overall: Number(overall.toFixed(2)),
+    coverage: Number(coverageScore.toFixed(2)),
+    searchSuccess: Number(clamp01(searchSuccess).toFixed(2)),
+    candidateDiversity: Number(diversityScore.toFixed(2)),
+    evidenceQuality: Number(clamp01(evidenceQuality).toFixed(2)),
+    investigationComplete: Boolean(coverage.complete),
+  };
+}
+
+function buildDiscoveryReport(input = {}) {
+  const coverage = input.coverage || {};
+  const universe = input.candidateUniverse || [];
+  const qualified = input.qualifiedCount != null ? Number(input.qualifiedCount) : 0;
+  const confidence = input.discoveryConfidence || computeDiscoveryConfidence(input);
+  const universeEstimate = normalizeCandidateUniverseEstimate(input.universeEstimate);
+  const investigated =
+    input.investigated != null
+      ? Number(input.investigated)
+      : universe.filter((row) => row.dedupeStatus !== 'duplicate').length;
+  const marketCoveragePct =
+    input.coveragePct != null
+      ? input.coveragePct
+      : computeCoverageFromEstimate(investigated, universeEstimate);
+
+  const report = {
+    coverage: {
+      cities: `${coverage.cities && coverage.cities.searched}/${coverage.cities && coverage.cities.planned}`,
+      concepts: `${coverage.concepts && coverage.concepts.searched}/${coverage.concepts && coverage.concepts.planned}`,
+      sources: `${coverage.sources && coverage.sources.searched}/${coverage.sources && coverage.sources.planned}`,
+      searches: `${coverage.searches && coverage.searches.addressed}/${coverage.searches && coverage.searches.planned}`,
+    },
+    candidateUniverse: investigated,
+    qualified,
+    confidence: confidence.overall,
+    discoveryConfidence: confidence,
+    status: coverage.complete ? 'complete' : 'incomplete',
+    warnings: coverage.warnings || [],
+    recommendation: coverage.complete
+      ? qualified > 0
+        ? 'Review qualified candidates.'
+        : 'Investigation complete. No qualified candidates remain — proceed to operator review.'
+      : 'Continue investigation.',
+  };
+
+  if (input.marketDefinition) {
+    report.marketDefinition = {
+      market: input.marketDefinition.market,
+      geography: input.marketDefinition.geography,
+      customerTypes: input.marketDefinition.customerTypes,
+      decisionMakers: input.marketDefinition.decisionMakers,
+      businessModels: input.marketDefinition.businessModels,
+      terminology: input.marketDefinition.terminology,
+      adjacentMarkets: input.marketDefinition.adjacentMarkets,
+      exclusions: input.marketDefinition.exclusions,
+      buyingSignals: input.marketDefinition.buyingSignals,
+      expectedEvidence: input.marketDefinition.expectedEvidence,
+      operatorSegment: input.marketDefinition.operatorSegment,
+    };
+  }
+
+  if (input.investigationReport) {
+    report.investigationHypotheses = input.investigationReport.hypotheses;
+    report.investigationBranches = input.investigationReport.branches;
+    report.finalUnderstanding = input.investigationReport.finalUnderstanding;
+  }
+
+  if (input.revisedMarketDefinition) {
+    report.revisedMarketDefinition = {
+      market: input.revisedMarketDefinition.market,
+      terminology: input.revisedMarketDefinition.terminology,
+      customerTypes: input.revisedMarketDefinition.customerTypes,
+      revisionHistory: input.revisedMarketDefinition.revisionHistory,
+    };
+  }
+
+  if (universeEstimate) {
+    report.estimatedMarket = {
+      minimum: universeEstimate.minimum,
+      expected: universeEstimate.expected,
+      maximum: universeEstimate.maximum,
+      confidence: universeEstimate.confidence,
+      reasoning: universeEstimate.reasoning,
+      revisionHistory: universeEstimate.revisionHistory || [],
+    };
+    report.investigated = investigated;
+    if (marketCoveragePct != null) {
+      report.marketCoveragePct = marketCoveragePct;
+      report.marketCoverage = `${Math.round(marketCoveragePct * 100)}%`;
+    }
+  }
+
+  return report;
+}
+
+function canConcludeEmptyUniverse(coverage, qualifiedCount) {
+  return Boolean(coverage && coverage.complete) && Number(qualifiedCount) === 0;
+}
+
+function discoveryStatusFromCoverage(coverage) {
+  if (!coverage || coverage.complete !== true) return 'incomplete';
+  return 'complete';
+}
+
+module.exports = {
+  ORIGINS,
+  expandCitiesFromSearchDefinition,
+  buildDiscoveryPlan,
+  executeCoveragePlan,
+  executeLegacyDiscovery,
+  computeCoverageMetrics,
+  buildCandidateUniverseRecords,
+  computeDiscoveryConfidence,
+  buildDiscoveryReport,
+  canConcludeEmptyUniverse,
+  discoveryStatusFromCoverage,
+};
