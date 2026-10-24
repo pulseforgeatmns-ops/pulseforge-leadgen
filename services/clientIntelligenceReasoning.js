@@ -1,5 +1,11 @@
 'use strict';
 
+const {
+  EPISTEMIC_STATES,
+  classifyEpistemicState,
+  extractBusinessFacts,
+} = require('./clientIntelligenceEpistemic');
+
 /**
  * SPEC-090 — Max Conversational Reasoning Layer.
  *
@@ -218,6 +224,19 @@ const EXPLICIT_REPLAY_RE =
 
 const SKIP_RE =
   /^\s*(?:skip(?:\s+(?:this|it))?(?:\s+for\s+now)?|pass|next(?:\s+question)?|n\/?a|not\s+applicable|come\s+back\s+later|no\s+answer|i'?ll\s+skip)\s*[.!]*$/i;
+
+/** Explicit operator writing / regeneration guidance during an active intake question. */
+const INTERVIEW_WRITING_GUIDANCE_RE =
+  /\b(?:make\s+(?:the\s+)?(?:website\s+)?copy|rewrite(?:\s+that|\s+this|\s+the)?|regenerat(?:e|ing)(?:\s+that|\s+this|\s+the)?|sound\s+more\s+(?:premium|professional|conversational|formal)|more\s+professional|less\s+generic|(?:make\s+it|keep\s+it)\s+(?:shorter|longer)|writing\s+style|change\s+(?:the\s+)?(?:tone|wording)|how\s+you\s+write)\b/i;
+
+const INTERVIEW_PAUSE_RE =
+  /\b(?:pause\s+(?:this\s+)?intake|pause\s+(?:the\s+)?interview|pause\s+for\s+now)\b/i;
+
+const INTERVIEW_CANCEL_RE =
+  /\b(?:cancel\s+(?:this\s+)?interview|stop\s+(?:this\s+)?interview|exit\s+(?:this\s+)?interview)\b/i;
+
+const DO_NOT_SAVE_AS_EVIDENCE_RE =
+  /\bdo\s+not\s+save\s+(?:this\s+)?as\s+evidence\b/i;
 
 /** SPEC-100 — operator explicitly defers; preserve UNKNOWN and advance. */
 const DEFERRAL_RE =
@@ -1509,6 +1528,141 @@ function looksLikeSkip(text) {
   return looksLikeExplicitDeferral(s);
 }
 
+/** Brief/copy generation targets — not business-outcome language like "regenerate demand". */
+const GENERATION_ARTIFACT_RE =
+  /\b(?:brief|blueprint|summary|section|max|copy|wording|tone|revision|executive\s+business\s+brief)\b/i;
+
+function isAwaitingGuidedIntakeQuestion(opts = {}) {
+  return Boolean(
+    opts.awaitingQuestionId ||
+    (opts.activeQuestion &&
+      (opts.activeQuestion.id || opts.activeQuestion.questionId))
+  );
+}
+
+/**
+ * Explicit copy/tone/regeneration guidance — not business evidence.
+ * Narrower than full refinement detection; safe during active intake.
+ * During guided intake the active question is authoritative — broad meta/refinement
+ * heuristics only apply when the message clearly targets brief/copy generation.
+ */
+function hasActiveGuidedIntakeQuestion(opts = {}) {
+  return Boolean(
+    opts.awaitingQuestionId ||
+      (opts.activeQuestion && (opts.activeQuestion.id || opts.activeQuestion.questionId))
+  );
+}
+
+function looksLikeInterviewWritingGuidance(text, opts = {}) {
+  const raw = String(text || '').trim();
+  if (!raw) return false;
+  if (DO_NOT_SAVE_AS_EVIDENCE_RE.test(raw)) return true;
+
+  const guidedIntake = isAwaitingGuidedIntakeQuestion(opts);
+
+  if (INTERVIEW_WRITING_GUIDANCE_RE.test(raw)) {
+    const bareRegenerateOrRewrite =
+      /\b(?:regenerat(?:e|ing)|rewrite)\b/i.test(raw) && !GENERATION_ARTIFACT_RE.test(raw);
+    if (guidedIntake) {
+      if (bareRegenerateOrRewrite) {
+        // e.g. "we regenerate demand" during a metrics answer — not copy guidance.
+      } else if (
+        /\b(?:regenerat(?:e|ing)|rewrite|refine)\b/i.test(raw) &&
+        GENERATION_ARTIFACT_RE.test(raw)
+      ) {
+        if (
+          !/\b(?:regenerat(?:e|ing)|rewrite|refine)\s+(?:the\s+)?(?:brief|blueprint|summary|copy|section)\b/i.test(
+            raw
+          )
+        ) {
+          // Incidental "Max … regenerate … reports" phrasing inside a business answer.
+        } else {
+          return true;
+        }
+      } else {
+        return true;
+      }
+    } else if (!bareRegenerateOrRewrite) {
+      return true;
+    }
+  }
+
+  if (
+    !guidedIntake &&
+    /\b(?:regenerate|rewrite|refine)\b/i.test(raw) &&
+    GENERATION_ARTIFACT_RE.test(raw)
+  ) {
+    return true;
+  }
+  // During guided intake the active question is authoritative — incidental metric /
+  // quality language must not inherit global refinement or meta-instruction classifiers.
+  if (hasActiveGuidedIntakeQuestion(opts)) {
+    return false;
+  }
+  if (typeof opts.looksLikeRefinement === 'function' && opts.looksLikeRefinement(raw)) {
+    return true;
+  }
+  if (typeof opts.containsMetaInstruction === 'function' && opts.containsMetaInstruction(raw)) {
+    return true;
+  }
+
+  const metaOrRefinement =
+    (typeof opts.looksLikeRefinement === 'function' && opts.looksLikeRefinement(raw)) ||
+    (typeof opts.containsMetaInstruction === 'function' && opts.containsMetaInstruction(raw));
+  if (!metaOrRefinement) return false;
+
+  return (
+    GENERATION_ARTIFACT_RE.test(raw) ||
+    /\b(?:regenerat(?:e|ing)|rewrite|refine)\s+(?:the\s+)?(?:brief|blueprint|summary|copy)\b/i.test(
+      raw
+    )
+  );
+}
+
+/**
+ * Escape intents while an interview question is actively awaiting an answer.
+ * @returns {'skip'|'cancel'|'pause'|'style_or_regeneration_guidance'|'do_not_save'|null}
+ */
+function detectInterviewEscapeIntent(text, opts = {}) {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+  if (looksLikeSkip(raw)) return 'skip';
+  if (INTERVIEW_CANCEL_RE.test(raw)) return 'cancel';
+  if (INTERVIEW_PAUSE_RE.test(raw)) return 'pause';
+  if (DO_NOT_SAVE_AS_EVIDENCE_RE.test(raw)) return 'do_not_save';
+  if (looksLikeInterviewWritingGuidance(raw, opts)) {
+    return 'style_or_regeneration_guidance';
+  }
+  return null;
+}
+
+/**
+ * When an intake question is open, default to treating the turn as the answer
+ * unless the operator clearly signals an escape intent or out-of-order add-on.
+ */
+function classifyMessageWithAwaitingQuestion(raw, opts = {}) {
+  const escape = detectInterviewEscapeIntent(raw, opts);
+  if (escape === 'skip') return MESSAGE_CLASSES.SKIP;
+  if (escape === 'cancel' || escape === 'pause') return MESSAGE_CLASSES.OFF_TOPIC;
+  if (escape === 'style_or_regeneration_guidance' || escape === 'do_not_save') {
+    return MESSAGE_CLASSES.REFINEMENT_FEEDBACK;
+  }
+
+  if (typeof opts.looksLikeCorrection === 'function' && opts.looksLikeCorrection(raw)) {
+    return MESSAGE_CLASSES.CORRECTION;
+  }
+  if (typeof opts.looksLikeAddOn === 'function' && opts.looksLikeAddOn(raw, opts)) {
+    return MESSAGE_CLASSES.ADD_ON;
+  }
+  if (looksLikeClarificationRequest(raw)) return MESSAGE_CLASSES.CLARIFICATION_REQUEST;
+  if (typeof opts.answerLooksEmpty === 'function' && opts.answerLooksEmpty(raw)) {
+    return MESSAGE_CLASSES.INSUFFICIENT_ANSWER;
+  }
+  if (looksLikeVagueAnswer(raw)) return MESSAGE_CLASSES.INSUFFICIENT_ANSWER;
+
+  return MESSAGE_CLASSES.DIRECT_ANSWER;
+}
+
 /**
  * SPEC-100 — operator asks to leave the field unresolved and move on.
  * Distinct from open uncertainty (which triggers collaborative reasoning).
@@ -1549,6 +1703,10 @@ function looksLikeExplicitUnknownAnswer(text) {
   if (!s) return true;
   // Deferral phrases are handled separately — do not treat as open uncertainty.
   if (looksLikeExplicitDeferral(text)) return false;
+  const epistemicState = classifyEpistemicState(text);
+  if (epistemicState === EPISTEMIC_STATES.UNKNOWN || epistemicState === EPISTEMIC_STATES.NOT_APPLICABLE) {
+    return true;
+  }
   if (EXPLICIT_UNKNOWN_RE.test(String(text || '').trim())) return true;
   if (/^(we\s+)?(do\s+not|don't|dont)\s+know(\s+(yet|yeet|right\s+now))?$/i.test(s)) return true;
   if (
@@ -1628,6 +1786,11 @@ function classifyReasoningMessage(text, opts = {}) {
   const speaker = String(opts.speaker || '').toLowerCase();
   const context = String(opts.context || '').toLowerCase();
   const raw = String(text || '').trim();
+  const activeQuestion = opts.activeQuestion || null;
+  const awaitingQuestionId =
+    opts.awaitingQuestionId ||
+    (activeQuestion && (activeQuestion.id || activeQuestion.questionId)) ||
+    null;
 
   if (context === 'generated_brief' || speaker === 'assistant') {
     return MESSAGE_CLASSES.REFINEMENT_FEEDBACK;
@@ -1636,6 +1799,11 @@ function classifyReasoningMessage(text, opts = {}) {
     return MESSAGE_CLASSES.OFF_TOPIC;
   }
   if (!raw) return MESSAGE_CLASSES.INSUFFICIENT_ANSWER;
+
+  // Active intake question overrides global refinement/meta classifiers (SPEC-084 guard).
+  if (awaitingQuestionId) {
+    return classifyMessageWithAwaitingQuestion(raw, opts);
+  }
 
   if (typeof opts.looksLikeCorrection === 'function' && opts.looksLikeCorrection(raw)) {
     return MESSAGE_CLASSES.CORRECTION;
@@ -1681,7 +1849,17 @@ function assessAnswerSufficiency(text, activeQuestion = null, opts = {}) {
     return { sufficient: false, reason: 'deferred', shouldProbe: false };
   }
   if (looksLikeExplicitUnknownAnswer(raw)) {
-    return { sufficient: false, reason: 'explicit_unknown', shouldProbe: true };
+    const propositions = extractBusinessFacts(raw, {
+      section: activeQuestion && activeQuestion.section,
+    });
+    const hasSubstantiveProposition = propositions.some(
+      (fact) =>
+        fact.epistemic_state === EPISTEMIC_STATES.HYPOTHESIS ||
+        (fact.epistemic_state === EPISTEMIC_STATES.KNOWN && fact.value)
+    );
+    if (!hasSubstantiveProposition) {
+      return { sufficient: false, reason: 'explicit_unknown', shouldProbe: true };
+    }
   }
   if (looksLikeGenericCategoryAnswer(raw)) {
     return { sufficient: false, reason: 'needs_specificity', shouldProbe: true };
@@ -3639,7 +3817,7 @@ function reasoningAck(messageClass, opts = {}) {
         ? `Noted. Whenever you're ready: ${reopen}`
         : "Noted. Whenever you're ready, we can continue.";
     case MESSAGE_CLASSES.REFINEMENT_FEEDBACK:
-      return "Understood — I'll treat that as guidance for how I write, not as business evidence.";
+      return "Understood — I'll treat that as guidance for how I write and regenerate, not as business evidence.";
     default:
       return "Thanks — I've got that.";
   }
@@ -3651,7 +3829,21 @@ function reasoningAck(messageClass, opts = {}) {
  */
 function planReasoningTurn(text, context = {}) {
   const activeQuestion = context.activeQuestion || null;
-  const messageClass = classifyReasoningMessage(text, context);
+  const intakeAwaiting =
+    context.awaitingQuestionId ||
+    (activeQuestion && (activeQuestion.id || activeQuestion.questionId));
+  let messageClass = classifyReasoningMessage(text, context);
+  if (
+    intakeAwaiting &&
+    messageClass === MESSAGE_CLASSES.REFINEMENT_FEEDBACK &&
+    !looksLikeInterviewWritingGuidance(text, {
+      ...context,
+      looksLikeRefinement: undefined,
+      containsMetaInstruction: undefined,
+    })
+  ) {
+    messageClass = MESSAGE_CLASSES.DIRECT_ANSWER;
+  }
   const memory = ensureReasoningMemory(context.state || {});
 
   let targetSection = activeQuestion && activeQuestion.section;
@@ -3660,12 +3852,22 @@ function planReasoningTurn(text, context = {}) {
 
   if (messageClass === MESSAGE_CLASSES.ADD_ON || messageClass === MESSAGE_CLASSES.CORRECTION) {
     cross = inferCrossSectionTarget(text, activeQuestion, context.crossSectionHelpers || {});
-    if (cross.section && cross.confidence >= 0.55) {
+    const explicitCrossSection =
+      /\b(forgot|also forgot|for\s+(?:the\s+)?(?:icp|ideal)|not for this question)\b/i.test(
+        String(text || '')
+      ) || /\b(?:for|about|regarding|on|to)\s+(?:the\s+)?(?:services?|ideal|icp|geography|pricing|brand)/i.test(
+        String(text || '')
+      );
+    if (
+      cross.section &&
+      cross.confidence >= 0.55 &&
+      (!intakeAwaiting || explicitCrossSection)
+    ) {
       targetSection = cross.section;
       routeReason = messageClass === MESSAGE_CLASSES.CORRECTION ? 'correction' : 'add_on';
     }
-  } else if (messageClass === MESSAGE_CLASSES.DIRECT_ANSWER) {
-    // Soft cross-section: "I forgot property managers" on avoid question.
+  } else if (messageClass === MESSAGE_CLASSES.DIRECT_ANSWER && !activeQuestion) {
+    // Soft cross-section only when no intake question is awaiting an answer.
     cross = inferCrossSectionTarget(text, activeQuestion, context.crossSectionHelpers || {});
     if (cross.section && cross.confidence >= 0.8) {
       return {
@@ -3806,6 +4008,10 @@ module.exports = {
   looksLikeExplicitReplayRequest,
   looksLikeSkip,
   looksLikeExplicitDeferral,
+  detectInterviewEscapeIntent,
+  looksLikeInterviewWritingGuidance,
+  isAwaitingGuidedIntakeQuestion,
+  classifyMessageWithAwaitingQuestion,
   looksLikeClarificationRequest,
   looksLikeVagueAnswer,
   looksLikeGenericCategoryAnswer,

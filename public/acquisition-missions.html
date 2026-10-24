@@ -6,13 +6,16 @@
 <title>Pulseforge — Acquisition Missions</title>
 <link rel="stylesheet" href="/shared/tokens.css">
 <link rel="stylesheet" href="/shared/shell.css">
+<script src="/shared/tenantCoordinator.js" defer></script>
 <script src="/shared/shell.js" defer></script>
 <style>
   body { margin: 0; background: var(--pf-bg, #040810); color: var(--pf-text, #e8f0fe); font-family: 'DM Sans', sans-serif; }
   .wrap { max-width: 980px; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
   h1 { font-family: 'Bebas Neue', sans-serif; letter-spacing: 3px; font-size: 1.8rem; margin: 0 0 0.35rem; }
-  .sub { font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; letter-spacing: 1.6px; text-transform: uppercase; color: #6b7fa0; margin-bottom: 1.25rem; }
+  .sub { font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; letter-spacing: 1.6px; text-transform: uppercase; color: #6b7fa0; margin-bottom: 0.35rem; }
+  .mode-badge { display: inline-block; font-family: 'JetBrains Mono', monospace; font-size: 0.58rem; letter-spacing: 1.2px; text-transform: uppercase; padding: 0.25rem 0.55rem; border-radius: 999px; border: 1px solid rgba(139,92,246,0.45); color: #c4b5fd; background: rgba(96,48,177,0.15); margin-bottom: 1.25rem; }
   .panel { background: #070d1a; border: 1px solid rgba(96,48,177,0.18); border-radius: 10px; padding: 1.1rem; margin-bottom: 1rem; }
+  .panel[data-hidden="true"] { display: none; }
   h2 { margin: 0 0 0.5rem; font-size: 1rem; }
   p { margin: 0.25rem 0; color: #9bb0d0; font-size: 0.9rem; line-height: 1.45; }
   .meta { font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; letter-spacing: 1px; text-transform: uppercase; color: #6b7fa0; }
@@ -35,6 +38,7 @@
   .msg.ok { color: #00e676; }
   .mission-row { border-bottom: 1px solid rgba(255,255,255,0.06); padding: 0.55rem 0; cursor: pointer; }
   .mission-row:hover { color: #fff; }
+  .mission-row.active { color: #c4b5fd; }
   .timeline { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; color: #9bb0d0; }
   .timeline div { padding: 0.2rem 0; }
   .discovery-list { margin: 0.5rem 0 0; padding: 0; list-style: none; }
@@ -50,17 +54,11 @@
 <body>
 <div class="wrap">
   <h1>Acquisition Missions</h1>
-  <p class="sub">SPEC-118 · Max manages missions · Capabilities contribute · Nothing is hidden</p>
+  <p class="sub">SPEC-118 · SPEC-171 · Surfaces produce execution requests · Router dispatches</p>
+  <div class="mode-badge" id="modeBadge">Workspace Mode: Create</div>
   <p class="msg" id="msg"></p>
-  <section class="panel" id="planPanel"></section>
-  <section class="panel" id="listPanel"></section>
-  <section class="panel" id="workspacePanel"></section>
-  <section class="panel" id="discoveryPanel"></section>
-  <section class="panel" id="healthPanel"></section>
-  <section class="panel" id="blockerPanel"></section>
-  <section class="panel" id="timelinePanel"></section>
-  <section class="panel" id="whyPanel"></section>
-  <section class="panel" id="createPanel">
+
+  <section class="panel" id="createPanel" data-component="missionCreator">
     <h2>Create mission</h2>
     <label>Objective</label>
     <textarea id="objective" rows="2" placeholder="Acquire commercial cleaning customers in Manchester."></textarea>
@@ -70,26 +68,124 @@
     <input id="campaign" placeholder="Fall Outreach">
     <div class="actions">
       <button id="createBtn">Create</button>
-      <button class="secondary" id="advanceBtn">Advance stage</button>
+    </div>
+  </section>
+
+  <section class="panel" id="listPanel" data-component="missionList"></section>
+  <section class="panel" id="planPanel" data-component="missionUnderstanding"></section>
+  <section class="panel" id="intelligencePanel" data-component="missionIntelligenceReport"></section>
+  <section class="panel" id="operatorPanel" data-component="operatorDecision"></section>
+  <section class="panel" id="workspacePanel" data-component="missionWorkspace"></section>
+  <section class="panel" id="discoveryPanel" data-component="discovery"></section>
+  <section class="panel" id="healthPanel" data-component="missionHealth"></section>
+  <section class="panel" id="blockerPanel" data-component="blockers"></section>
+  <section class="panel" id="timelinePanel" data-component="missionTimeline"></section>
+  <section class="panel" id="whyPanel" data-component="why"></section>
+
+  <section class="panel" id="executionPanel" data-component="executionWorkspace">
+    <h2>Execution</h2>
+    <p class="meta">Current step</p>
+    <p id="executionStep"><strong>—</strong></p>
+    <div class="actions">
+      <button id="advanceBtn">Advance stage</button>
     </div>
   </section>
 </div>
 <script>
 (function () {
+  const WORKSPACE_MODES = {
+    CREATE: 'create',
+    MISSION_PLANNING: 'mission_planning',
+    DISCOVERY_APPROVAL: 'discovery_approval',
+    DISCOVERY_RUNNING: 'discovery_running',
+    DISCOVERY_REVIEW: 'discovery_review',
+    OUTREACH: 'outreach',
+    EXECUTION: 'execution',
+    COMPLETE: 'complete',
+  };
+
+  const WORKSPACE_MODE_LABELS = {
+    create: 'Create',
+    mission_planning: 'Mission Planning',
+    discovery_approval: 'Discovery Approval',
+    discovery_running: 'Discovery Running',
+    discovery_review: 'Discovery Review',
+    outreach: 'Outreach',
+    execution: 'Execution',
+    complete: 'Complete',
+  };
+
+  const INSPECT_LIKE_MODES = [
+    WORKSPACE_MODES.MISSION_PLANNING,
+    WORKSPACE_MODES.DISCOVERY_APPROVAL,
+    WORKSPACE_MODES.DISCOVERY_RUNNING,
+    WORKSPACE_MODES.DISCOVERY_REVIEW,
+    WORKSPACE_MODES.OUTREACH,
+    WORKSPACE_MODES.EXECUTION,
+    WORKSPACE_MODES.COMPLETE,
+  ];
+
+  const COMPONENTS = {
+    missionCreator: { supportedModes: [WORKSPACE_MODES.CREATE] },
+    missionList: { supportedModes: [WORKSPACE_MODES.CREATE].concat(INSPECT_LIKE_MODES) },
+    missionUnderstanding: { supportedModes: INSPECT_LIKE_MODES },
+    missionTimeline: { supportedModes: INSPECT_LIKE_MODES },
+    missionWorkspace: { supportedModes: INSPECT_LIKE_MODES },
+    missionHealth: { supportedModes: INSPECT_LIKE_MODES },
+    discovery: { supportedModes: [
+      WORKSPACE_MODES.DISCOVERY_APPROVAL,
+      WORKSPACE_MODES.DISCOVERY_RUNNING,
+      WORKSPACE_MODES.DISCOVERY_REVIEW,
+    ] },
+    missionIntelligenceReport: { supportedModes: [WORKSPACE_MODES.DISCOVERY_REVIEW] },
+    blockers: { supportedModes: [
+      WORKSPACE_MODES.MISSION_PLANNING,
+      WORKSPACE_MODES.DISCOVERY_APPROVAL,
+      WORKSPACE_MODES.DISCOVERY_RUNNING,
+      WORKSPACE_MODES.DISCOVERY_REVIEW,
+      WORKSPACE_MODES.OUTREACH,
+      WORKSPACE_MODES.EXECUTION,
+    ] },
+    why: { supportedModes: INSPECT_LIKE_MODES },
+    operatorDecision: { supportedModes: [
+      WORKSPACE_MODES.MISSION_PLANNING,
+      WORKSPACE_MODES.DISCOVERY_APPROVAL,
+      WORKSPACE_MODES.DISCOVERY_REVIEW,
+      WORKSPACE_MODES.EXECUTION,
+    ] },
+    executionWorkspace: { supportedModes: [WORKSPACE_MODES.EXECUTION] },
+  };
+
   const $ = (id) => document.getElementById(id);
   const msg = $('msg');
   let missions = [];
   let selected = null;
   let snapshot = null;
+  let workspaceMode = WORKSPACE_MODES.CREATE;
 
   function setMsg(text, kind) {
     msg.textContent = text || '';
     msg.className = 'msg' + (kind ? ' ' + kind : '');
   }
 
+  function isComponentVisible(componentId, mode) {
+    const component = COMPONENTS[componentId];
+    if (!component) return false;
+    return component.supportedModes.indexOf(mode) !== -1;
+  }
+
+  function applyWorkspaceMode(mode) {
+    workspaceMode = mode;
+    $('modeBadge').textContent = 'Workspace Mode: ' + (WORKSPACE_MODE_LABELS[mode] || mode);
+    document.querySelectorAll('[data-component]').forEach(function (el) {
+      const visible = isComponentVisible(el.getAttribute('data-component'), mode);
+      el.setAttribute('data-hidden', visible ? 'false' : 'true');
+    });
+  }
+
   async function api(url, opts) {
     const res = await fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts || {}));
-    const body = await res.json().catch(() => ({}));
+    const body = await res.json().catch(function () { return {}; });
     if (!res.ok) throw new Error(body.message || body.error || 'Request failed');
     return body;
   }
@@ -135,16 +231,144 @@
       html += '<div style="margin:0.35rem 0"><span class="meta">' + row[0] + '</span><br><strong>' + row[1] + '</strong></div>';
     });
     html += '</dl>';
-    if (pending && pending.prompt) {
-      html += '<div class="discovery-section"><h3>Operator Decision</h3><p>' + pending.prompt + '</p>';
-      if (pending.choices && pending.choices.length) {
-        html += '<p class="meta">' + pending.choices.map(function (row) { return row.label; }).join(' · ') + '</p>';
-      } else if (!plan.immutable) {
-        html += '<p class="meta">Approve · Edit · Cancel</p>';
+    $('planPanel').innerHTML = html;
+  }
+
+  function intentFromPending(pending) {
+    const kind = pending && pending.kind ? String(pending.kind) : '';
+    if (kind === 'plan_approval') return 'APPROVE_PLAN';
+    if (kind === 'discovery_approval') return 'APPROVE_DISCOVERY';
+    if (kind === 'discovery_investigation') return 'CONTINUE_INVESTIGATION';
+    if (kind === 'prioritization_approval') return 'APPROVE_PRIORITIZATION';
+    return null;
+  }
+
+  function approvalButtonLabel(intent, pending) {
+    if (intent === 'APPROVE_PLAN') return 'Approve plan';
+    if (intent === 'APPROVE_DISCOVERY') return 'Approve discovery';
+    if (intent === 'CONTINUE_INVESTIGATION') return 'Continue investigation';
+    if (intent === 'APPROVE_PRIORITIZATION') return 'Approve prioritization';
+    return (pending && pending.prompt) || 'Approve';
+  }
+
+  function renderOperatorDecision(pending, pause, governedExecution) {
+    if (!isComponentVisible('operatorDecision', workspaceMode)) {
+      $('operatorPanel').innerHTML = '';
+      return;
+    }
+    if (governedExecution && governedExecution.standingDelegationActive) {
+      let html = '<h2>Emmett Execution</h2>' + pill('Standing delegation active', 'ok');
+      html += '<p>' + governedExecution.message + '</p>';
+      html += '<p class="meta">No manual execution approval required';
+      if (governedExecution.operatorDelegatedMaximumDailyCapacity != null) {
+        html += ' · Emmett-controlled capacity up to ' +
+          governedExecution.operatorDelegatedMaximumDailyCapacity + '/day';
+      }
+      html += '</p>';
+      $('operatorPanel').innerHTML = html;
+      return;
+    }
+    const decision = pending || (pause ? {
+      prompt: pause.requiredDecision,
+      choices: (pause.availableOptions || []).map(function (label) { return { label: label }; }),
+    } : null);
+    if (!decision || !decision.prompt) {
+      $('operatorPanel').innerHTML = '';
+      return;
+    }
+    let html = '<h2>Operator Decision</h2><p>' + decision.prompt + '</p>';
+    if (decision.choices && decision.choices.length) {
+      html += '<p class="meta">' + decision.choices.map(function (row) { return row.label; }).join(' · ') + '</p>';
+    }
+    const intent = intentFromPending(pending);
+    if (intent) {
+      html += '<div class="actions"><button type="button" id="approveDecisionBtn" data-intent="' + intent + '">' +
+        approvalButtonLabel(intent, pending) + '</button></div>';
+    }
+    $('operatorPanel').innerHTML = html;
+    const approveBtn = $('approveDecisionBtn');
+    if (approveBtn) {
+      approveBtn.addEventListener('click', function () {
+        submitExecution(approveBtn.getAttribute('data-intent'));
+      });
+    }
+  }
+
+  function renderIntelligenceReport(artifact, pause) {
+    if (!isComponentVisible('missionIntelligenceReport', workspaceMode)) {
+      $('intelligencePanel').innerHTML = '';
+      return;
+    }
+    if (!artifact || !artifact.rankedProspects) {
+      $('intelligencePanel').innerHTML = '<h2>Mission Intelligence Report</h2><p>Awaiting Scout findings.</p>';
+      return;
+    }
+    const count = artifact.qualifiedCount || artifact.rankedProspects.length;
+    let html = '<h2>Mission Intelligence Report</h2>';
+    html += '<p><strong>' + count + ' qualified prospect' + (count === 1 ? '' : 's') + '</strong></p>';
+    if (artifact.summary) {
+      html += '<p>' + artifact.summary + '</p>';
+    }
+    if (artifact.coverage || artifact.discoveryReport || artifact.estimatedMarket) {
+      html += '<div class="discovery-section"><h3>Coverage</h3><ul>';
+      const report = artifact.discoveryReport || {};
+      const cov = artifact.coverage || {};
+      const estimated = artifact.estimatedMarket || report.estimatedMarket || null;
+      if (estimated) {
+        html += '<li>Estimated Market — Expected Universe: ' + (estimated.expected != null ? estimated.expected : estimated) + '</li>';
+        if (estimated.minimum != null) html += '<li>Minimum: ' + estimated.minimum + '</li>';
+        if (estimated.maximum != null) html += '<li>Maximum: ' + estimated.maximum + '</li>';
+        if (estimated.confidence != null) html += '<li>Estimate Confidence: ' + Number(estimated.confidence).toFixed(2) + '</li>';
+        if (estimated.revisionHistory && estimated.revisionHistory.length) {
+          html += '<li>Revisions: ' + estimated.revisionHistory.length + '</li>';
+        }
+      }
+      if (artifact.marketCoveragePct != null || report.marketCoveragePct != null) {
+        const pct = artifact.marketCoveragePct != null ? artifact.marketCoveragePct : report.marketCoveragePct;
+        html += '<li>Investigation Coverage: ' + Math.round(Number(pct) * 100) + '%</li>';
+      }
+      if (artifact.candidateUniverseCount != null) {
+        html += '<li>Investigated: ' + artifact.candidateUniverseCount + '</li>';
+      }
+      const cities = (report.coverage && report.coverage.cities) ||
+        (cov.cities ? cov.cities.searched + ' / ' + cov.cities.planned : '—');
+      const concepts = (report.coverage && report.coverage.concepts) ||
+        (cov.concepts ? cov.concepts.searched + ' / ' + cov.concepts.planned : '—');
+      const sources = (report.coverage && report.coverage.sources) ||
+        (cov.sources ? cov.sources.searched + ' / ' + cov.sources.planned : '—');
+      html += '<li>Cities searched: ' + cities + '</li>';
+      html += '<li>Concepts: ' + concepts + '</li>';
+      html += '<li>Sources: ' + sources + '</li>';
+      if (artifact.candidateUniverseCount != null && !estimated) {
+        html += '<li>Candidate Universe: ' + artifact.candidateUniverseCount + '</li>';
+      }
+      html += '<li>Qualified: ' + count + '</li>';
+      if (artifact.confidence != null) {
+        html += '<li>Confidence: ' + Number(artifact.confidence).toFixed(2) + '</li>';
+      }
+      html += '</ul>';
+      if (artifact.discoveryStatus === 'incomplete') {
+        html += '<p class="meta"><strong>Coverage Warning</strong> — Discovery incomplete.</p>';
+        const warnings = (report.warnings || cov.warnings || []).slice(0, 3);
+        if (warnings.length) {
+          html += '<ul>';
+          warnings.forEach(function (w) { html += '<li>' + w + '</li>'; });
+          html += '</ul>';
+        }
       }
       html += '</div>';
     }
-    $('planPanel').innerHTML = html;
+    if (artifact.evidence && artifact.evidence.length) {
+      html += '<div class="discovery-section"><h3>Evidence</h3><ul>';
+      artifact.evidence.forEach(function (item) {
+        html += '<li>' + item + '</li>';
+      });
+      html += '</ul></div>';
+    }
+    if (pause && pause.reason) {
+      html += '<div class="discovery-section"><h3>Review Required</h3><p>' + pause.reason + '</p></div>';
+    }
+    $('intelligencePanel').innerHTML = html;
   }
 
   function renderList() {
@@ -152,15 +376,22 @@
       $('listPanel').innerHTML = '<h2>Missions</h2><p>No acquisition missions yet. Max creates them. You can start one below.</p>';
       return;
     }
-    $('listPanel').innerHTML = '<h2>Missions</h2>' + missions.map((row) =>
-      '<div class="mission-row" data-id="' + row.id + '">' +
+    $('listPanel').innerHTML = '<h2>Missions</h2>' + missions.map(function (row) {
+      const active = row.id === selected ? ' active' : '';
+      return '<div class="mission-row' + active + '" data-id="' + row.id + '">' +
         '<strong>' + (row.title || row.id) + '</strong> ' +
         pill(row.status, row.stage === 'prepare' ? 'warn' : 'ok') +
         '<div class="meta">' + row.id + ' · ' + (row.targetSegment || '') + ' · ' + (row.campaign || '') + '</div>' +
-      '</div>'
-    ).join('');
-    $('listPanel').querySelectorAll('.mission-row').forEach((el) => {
-      el.addEventListener('click', () => loadOne(el.getAttribute('data-id')));
+      '</div>';
+    }).join('');
+    $('listPanel').querySelectorAll('.mission-row').forEach(function (el) {
+      el.addEventListener('click', function () {
+        const id = el.getAttribute('data-id');
+        const url = new URL(window.location.href);
+        url.searchParams.set('mission', id);
+        window.history.replaceState({}, '', url.toString());
+        loadOne(id);
+      });
     });
   }
 
@@ -191,44 +422,71 @@
       });
       html += '</ul></div>';
     }
-    if (artifact.evidence && artifact.evidence.length) {
-      html += '<div class="discovery-section"><h3>Supporting Evidence</h3><ul>';
-      artifact.evidence.forEach(function (item) {
-        html += '<li>' + item + '</li>';
-      });
-      html += '</ul></div>';
-    }
-    if (artifact.summary) {
-      html += '<div class="discovery-section"><h3>Discovery Summary</h3><p>' + artifact.summary + '</p></div>';
-    }
-    const scoutComplete = snapshot.workspace && snapshot.workspace.scout && snapshot.workspace.scout.state === 'complete';
-    const maxWaiting = snapshot.workspace && snapshot.workspace.max && snapshot.workspace.max.state === 'waiting';
-    if (scoutComplete && maxWaiting && count > 0) {
-      html += '<div class="discovery-section"><h3>Operator Decision</h3><p>Approve prioritization?</p></div>';
-    }
     $('discoveryPanel').innerHTML = html;
+  }
+
+  function renderExecutionPanel() {
+    if (!isComponentVisible('executionWorkspace', workspaceMode)) return;
+    const ws = snapshot && snapshot.workspace ? snapshot.workspace : {};
+    const progression = snapshot && snapshot.progression ? snapshot.progression : {};
+    const step = (progression.presentation && progression.presentation.split('\n')[0])
+      || ws.status
+      || 'Execution in progress';
+    $('executionStep').innerHTML = '<strong>' + step + '</strong>';
+  }
+
+  function clearMissionPanels() {
+    ['planPanel', 'intelligencePanel', 'operatorPanel', 'workspacePanel', 'discoveryPanel',
+      'healthPanel', 'blockerPanel', 'timelinePanel', 'whyPanel', 'executionPanel'].forEach(function (id) {
+      $(id).innerHTML = id === 'executionPanel'
+        ? '<h2>Execution</h2><p class="meta">Current step</p><p id="executionStep"><strong>—</strong></p><div class="actions"><button id="advanceBtn">Advance stage</button></div>'
+        : '';
+    });
+    if ($('advanceBtn')) {
+      $('advanceBtn').addEventListener('click', onAdvance);
+    }
   }
 
   function renderSnapshot() {
     if (!snapshot) return;
     const mission = snapshot.mission || {};
-    renderMissionPlan(mission, snapshot.executableDecision || null);
+    const pending = snapshot.executableDecision || null;
+    const pause = snapshot.progression && snapshot.progression.pause ? snapshot.progression.pause : null;
+    renderMissionPlan(mission, pending);
+    renderIntelligenceReport(snapshot.discoveryArtifact || null, pause);
+    const governedExecution = snapshot.governedExecution || null;
+    renderOperatorDecision(pending, pause, governedExecution);
     const ws = snapshot.workspace || {};
     const health = snapshot.health || {};
-    const blocker = snapshot.blocker;
+    let blocker = snapshot.blocker;
     const why = snapshot.why || {};
+    const standingDelegation = governedExecution && governedExecution.standingDelegationActive;
+    const workspaceStatus = standingDelegation && governedExecution.envelopeStatus === 'frozen'
+      ? 'EMMETT AUTO-EXECUTION SCHEDULED'
+      : (ws.status || '');
+    const reportedBlocker = String(health.currentBlocker || '');
+    const healthBlocker = standingDelegation && /approv|authoriz/i.test(reportedBlocker)
+      ? 'Waiting for the next eligible governed tick'
+      : (health.currentBlocker || 'None');
+    if (standingDelegation && blocker && /approv|authoriz/i.test(
+      String(blocker.label || '') + ' ' + String(blocker.reason || '')
+    )) {
+      blocker = null;
+    }
     $('workspacePanel').innerHTML =
       '<h2>Workspace</h2>' +
-      '<p class="meta">Status</p><p><strong>' + (ws.status || '') + '</strong></p>' +
+      '<p class="meta">Status</p><p><strong>' + workspaceStatus + '</strong></p>' +
       '<div class="bar">' + (ws.bar || '') + ' ' + (ws.progressPercent || 0) + '%</div>' +
-      (ws.specialists || []).map((row) => pill((row.id + ': ' + row.label), specialistKind(row.state))).join(' ');
+      (ws.specialists || []).map(function (row) {
+        return pill((row.id + ': ' + row.label), specialistKind(row.state));
+      }).join(' ');
     const healthKind = health.label === 'healthy' ? 'ok' : health.label === 'paused' ? 'danger' : 'warn';
     $('healthPanel').innerHTML =
       '<h2>Mission Health</h2>' +
       pill(health.status || '—', healthKind) +
       '<div class="grid" style="margin-top:0.75rem">' +
         '<div class="stat"><span class="meta">Confidence</span><strong>' + (health.confidence == null ? '—' : health.confidence) + '</strong></div>' +
-        '<div class="stat"><span class="meta">Current blocker</span><strong>' + (health.currentBlocker || 'None') + '</strong></div>' +
+        '<div class="stat"><span class="meta">Current blocker</span><strong>' + healthBlocker + '</strong></div>' +
         '<div class="stat"><span class="meta">Risk</span><strong>' + (health.risk || '—') + '</strong></div>' +
         '<div class="stat"><span class="meta">Capacity remaining</span><strong>' + (health.capacityRemaining == null ? '—' : health.capacityRemaining) + '</strong></div>' +
         '<div class="stat"><span class="meta">Replies</span><strong>' + (health.replies || 0) + '</strong></div>' +
@@ -237,25 +495,38 @@
       (health.learning ? '<p style="margin-top:0.6rem">' + health.learning + '</p>' : '');
     $('blockerPanel').innerHTML = '<h2>Blockers</h2>' + (blocker
       ? '<p>' + pill(blocker.label, blocker.kind && blocker.kind.indexOf('paused') === 0 ? 'danger' : 'warn') + '</p><p>' + (blocker.reason || '') + '</p>'
-      : '<p>No silent waits. This mission can proceed.</p>');
+      : '<p>' + (standingDelegation
+        ? 'No operator action required. Emmett will execute automatically inside the governed send window.'
+        : 'No silent waits. This mission can proceed.') + '</p>');
     $('timelinePanel').innerHTML = '<h2>Timeline</h2><div class="timeline">' +
-      (snapshot.timeline || []).map((row) => '<div>' + (row.clock || '') + ' &nbsp; ' + (row.label || '') + '</div>').join('') +
+      (snapshot.timeline || []).map(function (row) {
+        return '<div>' + (row.clock || '') + ' &nbsp; ' + (row.label || '') + '</div>';
+      }).join('') +
       '</div>';
     $('whyPanel').innerHTML = '<h2>Why is this mission here?</h2>' +
-      (why.reasons || []).map((row) => '<p>' + row + '</p>').join('') +
+      (why.reasons || []).map(function (row) { return '<p>' + row + '</p>'; }).join('') +
       '<p class="meta">Confidence ' + (why.confidence == null ? '—' : why.confidence) + ' · evidence, not opinion</p>';
     renderDiscoveryArtifact(snapshot.discoveryArtifact || null);
+    renderExecutionPanel();
+  }
+
+  function enterCreateMode() {
+    selected = null;
+    snapshot = null;
+    applyWorkspaceMode(WORKSPACE_MODES.CREATE);
+    clearMissionPanels();
+    renderList();
+    setMsg('');
   }
 
   async function loadList() {
     const body = await api('/api/v1/amo/missions');
     missions = body.missions || [];
-    renderList();
     const urlMission = new URLSearchParams(window.location.search).get('mission');
-    if (urlMission && missions.some((row) => row.id === urlMission)) {
+    if (urlMission && missions.some(function (row) { return row.id === urlMission; })) {
       await loadOne(urlMission);
-    } else if (!selected && missions[0]) {
-      await loadOne(missions[0].id);
+    } else {
+      enterCreateMode();
     }
   }
 
@@ -263,22 +534,26 @@
     selected = id;
     try {
       snapshot = await api('/api/v1/amo/missions/' + encodeURIComponent(id));
+      try {
+        const governed = await api('/api/v1/tenant-outreach/governed-missions/' + encodeURIComponent(id));
+        snapshot.governedExecution = governed.governedExecution || null;
+      } catch (_governedStatusUnavailable) {
+        snapshot.governedExecution = null;
+      }
+      const ctx = snapshot.workspaceContext || {};
+      applyWorkspaceMode(ctx.workspaceMode || WORKSPACE_MODES.MISSION_PLANNING);
+      renderList();
       renderSnapshot();
       setMsg('Inspecting ' + id, 'ok');
     } catch (err) {
       snapshot = null;
-      $('planPanel').innerHTML = '';
-      $('workspacePanel').innerHTML = '';
-      $('discoveryPanel').innerHTML = '';
-      $('healthPanel').innerHTML = '';
-      $('blockerPanel').innerHTML = '';
-      $('timelinePanel').innerHTML = '';
-      $('whyPanel').innerHTML = '';
+      applyWorkspaceMode(WORKSPACE_MODES.MISSION_PLANNING);
+      clearMissionPanels();
       setMsg(err.message || 'MISSION_STATE_INCONSISTENT', 'err');
     }
   }
 
-  $('createBtn').addEventListener('click', async () => {
+  $('createBtn').addEventListener('click', async function () {
     try {
       setMsg('Creating…');
       const body = await api('/api/v1/amo/missions', {
@@ -291,6 +566,9 @@
         }),
       });
       await loadList();
+      const url = new URL(window.location.href);
+      url.searchParams.set('mission', body.mission.id);
+      window.history.replaceState({}, '', url.toString());
       await loadOne(body.mission.id);
       setMsg('Mission created', 'ok');
     } catch (err) {
@@ -298,7 +576,27 @@
     }
   });
 
-  $('advanceBtn').addEventListener('click', async () => {
+  async function submitExecution(intent) {
+    if (!selected) return setMsg('Select a mission first', 'err');
+    if (!intent) return setMsg('No executable intent', 'err');
+    try {
+      setMsg('Submitting execution request…');
+      const body = await api('/api/v1/amo/missions/' + encodeURIComponent(selected) + '/execute', {
+        method: 'POST',
+        body: JSON.stringify({
+          intent: intent,
+          source: 'approval_button',
+          question: intent,
+        }),
+      });
+      await loadOne(selected);
+      setMsg('Executed ' + ((body.request && body.request.intent) || intent), 'ok');
+    } catch (err) {
+      setMsg(err.message, 'err');
+    }
+  }
+
+  async function onAdvance() {
     if (!selected) return setMsg('Select a mission first', 'err');
     try {
       await api('/api/v1/amo/missions/' + encodeURIComponent(selected) + '/progress', {
@@ -310,9 +608,11 @@
     } catch (err) {
       setMsg(err.message, 'err');
     }
-  });
+  }
 
-  loadList().catch((err) => setMsg(err.message, 'err'));
+  $('advanceBtn').addEventListener('click', onAdvance);
+  applyWorkspaceMode(WORKSPACE_MODES.CREATE);
+  loadList().catch(function (err) { setMsg(err.message, 'err'); });
 })();
 </script>
 </body>

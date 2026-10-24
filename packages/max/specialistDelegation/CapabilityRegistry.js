@@ -10,6 +10,10 @@ const { AUTHORITY_LEVELS, asText, clone } = require('./Types');
 
 const DEFAULT_CAPABILITIES = Object.freeze([
   {
+    specialist: 'paige', capability: 'social_content_publish', authoritySupported: Object.freeze(['execute_after_approval']),
+    callable: true, adapter: 'paige_social_publication', description: 'Publish or verify one canonical artifact with an exact human approval binding.',
+  },
+  {
     specialist: 'test_intelligence',
     capability: 'acquisition_assessment',
     authoritySupported: Object.freeze(['observe']),
@@ -44,6 +48,15 @@ const DEFAULT_CAPABILITIES = Object.freeze([
     adapter: null,
     description:
       'Paige content strategy. Existing SPEC-094 path remains; SPEC-098 adapter not wired.',
+  },
+  {
+    specialist: 'paige',
+    capability: 'social_content',
+    authoritySupported: Object.freeze(['draft']),
+    callable: true,
+    adapter: 'paige_social_content',
+    description:
+      'SPEC-256 canonical Paige social content generation — tenant-scoped drafts only.',
   },
 ]);
 

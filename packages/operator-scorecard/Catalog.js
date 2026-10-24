@@ -530,7 +530,14 @@ function detectProfile(input = {}) {
   if (/babrun|founder transformation|student completion|pilot enrollment/.test(blob)) {
     return PROFILES.FOUNDER_TRANSFORMATION;
   }
-  if (/anchor|commercial cleaning|walkthrough|cleaner utilization/.test(blob)) {
+  if (
+    /(?:\banchor\b|cleaner utilization)/.test(blob) ||
+    (/\b(?:commercial cleaning|janitorial|office cleaning)\b/.test(blob) &&
+      !/\b(?:website redesign|web design|studio substral|landing page)\b/.test(blob))
+  ) {
+    return PROFILES.COMMERCIAL_CLEANING;
+  }
+  if (/\bwalkthrough\b/.test(blob) && /\b(?:cleaning|janitorial|facilities)\b/.test(blob)) {
     return PROFILES.COMMERCIAL_CLEANING;
   }
   if (/home renovation|mshi|siding|deck/.test(blob)) return PROFILES.HOME_RENOVATION;

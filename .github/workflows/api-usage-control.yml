@@ -1,0 +1,52 @@
+name: API usage and spending controls
+on:
+  pull_request:
+    paths:
+      - 'utils/apiPricing.js'
+      - 'utils/apiSpendControl.js'
+      - 'utils/meteredAnthropic.js'
+      - 'utils/placesApi.js'
+      - 'utils/placesQueryCache.js'
+      - 'packages/capabilities/discovery/providers/PlacesProvider.js'
+      - 'test/placesRequestSavings.test.js'
+      - 'test/placesCostAttribution.test.js'
+      - 'services/apiUsageService.js'
+      - 'routes/apiUsage.js'
+      - 'routes/maxChat.js'
+      - 'routes/maxWorkspace.js'
+      - 'test/apiUsage*.test.js'
+      - '.github/workflows/api-usage-control.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  api-usage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: test-only
+          POSTGRES_DB: api_usage_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      API_USAGE_TEST_DATABASE_URL: postgresql://postgres:test-only@127.0.0.1:5432/api_usage_test
+      DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
+      DATABASE_SSL: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Budget concurrency, reservations, history, privacy and existing agent behavior
+        run: node --test test/apiUsageControl.test.js test/apiUsageControlPostgres.test.js test/placesCostAttribution.test.js test/placesRequestSavings.test.js test/paigeModelSelection.test.js test/paigeDryRun.test.js test/paigeAnchorSocialDoctrine.test.js
+

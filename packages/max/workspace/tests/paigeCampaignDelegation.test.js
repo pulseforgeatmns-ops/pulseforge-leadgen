@@ -2,7 +2,7 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { createWorkspaceEngine } = require('../../index');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const {
   maybeHandlePaigeCampaignContentDelegation,
 } = require('../PaigeCampaignDelegationContext');

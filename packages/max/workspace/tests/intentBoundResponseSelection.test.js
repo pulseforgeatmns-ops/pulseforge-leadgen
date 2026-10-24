@@ -9,9 +9,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const {
-  maybeHandleRetrievalBeforeDelegationTurn,
+  maybeHandleRetrievalBeforeDelegationTurn: rawRetrievalHandler,
   isOperatorDeskWorkflowQuestion,
 } = require('../RetrievalBeforeDelegationContext');
 const {
@@ -428,3 +428,6 @@ describe('SPEC-109 spec file exists', () => {
     assert.equal(fs.existsSync(spec), true);
   });
 });
+
+const { createHermeticRetrievalHandler } = require('./workspaceTestHarness');
+const maybeHandleRetrievalBeforeDelegationTurn = createHermeticRetrievalHandler(rawRetrievalHandler);

@@ -466,6 +466,9 @@ function normalizeBusinessFacts(input = {}) {
     disqualifyingSignals,
     phrases,
     evidence,
+    epistemic_states: factsIn.epistemic_states || {},
+    hypotheses: factsIn.hypotheses || {},
+    evidence_statements: factsIn.evidence_statements || {},
   });
 }
 

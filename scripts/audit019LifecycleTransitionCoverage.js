@@ -1,77 +1,58 @@
 'use strict';
 
-/**
- * AUDIT-019 — Lifecycle Transition Coverage
- *
- * Determines whether an inconsistent mission originated from:
- *   (A) stale persisted state before SPEC-137, or
- *   (B) an uncovered lifecycle transition after SPEC-137.
- *
- * Usage:
- *   DATABASE_URL=... node scripts/audit019LifecycleTransitionCoverage.js [--mission-id <id>] [--tenant-id <id>]
- *
- * Without DATABASE_URL, prints code-path analysis only.
- */
+const { classifyMission, timestampContext } = require('../packages/acquisition-mission/audit/LifecycleTransitionAudit');
 
-const SPEC137_DEPLOYED_AT = '2026-08-22T12:52:50.000Z'; // PR #373 merge
-const SPEC136_DEPLOYED_AT = '2026-08-22T03:13:37.000Z'; // PR #372 merge (putMission validation + progress pending clear)
+const EVENT_LIMIT = 1000;
+const USAGE = `AUDIT-019: limited lifecycle pattern observations, not an origin diagnosis.
+No database access occurs by default or merely because DATABASE_URL is present.
 
-const STALE_PATTERNS = [
-  {
-    id: 'stage_pending_stage_mismatch',
-    test(m) {
-      const pending = m.pendingOperatorDecision;
-      return Boolean(pending && pending.stage && m.stage && pending.stage !== m.stage);
-    },
-    message: 'pendingOperatorDecision.stage !== mission.stage',
-    origin: 'A',
-    transition: 'discover → understand via Engine.progress() before SPEC-136 (stage advanced without clearing pending)',
-  },
-  {
-    id: 'discovery_approval_off_discover',
-    test(m) {
-      const pending = m.pendingOperatorDecision;
-      return pending?.kind === 'discovery_approval' && m.stage && m.stage !== 'discover';
-    },
-    message: 'discovery_approval advertised outside discover stage',
-    origin: 'A',
-    transition: 'discover → understand via Engine.progress() before SPEC-136',
-  },
-  {
-    id: 'plan_decision_off_discover',
-    test(m) {
-      const pending = m.pendingOperatorDecision;
-      const planKinds = new Set(['plan_approval', 'plan_edit', 'plan_clarification']);
-      return planKinds.has(pending?.kind) && m.stage && m.stage !== 'discover';
-    },
-    message: 'plan decision advertised outside discover stage',
-    origin: 'A',
-    transition: 'discover → * via Engine.progress() before SPEC-136',
-  },
-  {
-    id: 'approved_plan_stale_pending',
-    test(m) {
-      const pending = m.pendingOperatorDecision;
-      const planKinds = new Set(['plan_approval', 'plan_edit', 'plan_clarification']);
-      return m.structuredMissionApproved === true && planKinds.has(pending?.kind);
-    },
-    message: 'structuredMissionApproved with stale plan pending',
-    origin: 'A',
-    transition: 'plan approval commit without atomic pending swap (pre-SPEC-136 persist)',
-  },
-];
+Manual read-only mode (requires separate authorization for the target database):
+  node scripts/audit019LifecycleTransitionCoverage.js --database --tenant-id <id> [--mission-id <id>] [--limit <1..1000>]
+Set AUDIT019_DATABASE_URL through your approved secret mechanism, preferably for
+a SELECT-only role. Ambient DATABASE_URL and .env files are not used.
+
+The tenant scope is mandatory. Mission limit defaults to 100. Results explicitly
+report truncation. Creation/update times and recorded transition events cannot
+prove mutation origin, deployment timing, or whether Engine.progress executed.
+No known pattern matches does not certify full mission consistency.
+This diagnostic never repairs data or imports the application's shared DB pool.`;
 
 function parseArgs(argv) {
-  const out = { missionId: null, tenantId: null };
-  for (let i = 2; i < argv.length; i += 1) {
-    if (argv[i] === '--mission-id') out.missionId = argv[++i];
-    else if (argv[i] === '--tenant-id') out.tenantId = argv[++i];
+  const out = { database: false, help: false, tenantId: null, missionId: null, limit: 100 };
+  const seen = new Set();
+  for (let i = 0; i < argv.length; i += 1) {
+    const flag = argv[i];
+    if (seen.has(flag)) throw new Error('Duplicate option. Use --help for usage.');
+    seen.add(flag);
+    if (flag === '--database') out.database = true;
+    else if (flag === '--help') out.help = true;
+    else if (['--tenant-id', '--mission-id', '--limit'].includes(flag)) {
+      const value = argv[++i];
+      if (!value || value.startsWith('--') || !value.trim()) {
+        throw new Error('An option value is missing. Use --help for usage.');
+      }
+      if (flag === '--tenant-id') out.tenantId = value;
+      if (flag === '--mission-id') out.missionId = value;
+      if (flag === '--limit') {
+        if (!/^[1-9]\d*$/.test(value) || Number(value) > 1000) {
+          throw new Error('--limit must be an integer from 1 to 1000.');
+        }
+        out.limit = Number(value);
+      }
+    } else throw new Error('Unknown option. Use --help for usage.');
+  }
+  if (!out.help) {
+    if (out.database && !out.tenantId) throw new Error('--database requires --tenant-id.');
+    if (!out.database && (out.tenantId || out.missionId || seen.has('--limit'))) {
+      throw new Error('Database scope options require explicit --database mode.');
+    }
   }
   return out;
 }
 
 function missionFromRow(row) {
-  const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
+  const payload = row.payload && typeof row.payload === 'object' && !Array.isArray(row.payload)
+    ? row.payload : {};
   return {
     ...payload,
     id: row.id,
@@ -83,120 +64,113 @@ function missionFromRow(row) {
   };
 }
 
-function classifyMission(mission) {
-  const hits = STALE_PATTERNS.filter((p) => p.test(mission));
-  if (!hits.length) {
-    return { category: 'consistent', hits: [] };
+// This function owns a dedicated client, never the application's shared pool.
+// The injected factory keeps all offline tests independent of pg and the DB.
+async function auditFromDatabase(opts, createClient) {
+  if (!opts.database || typeof opts.tenantId !== 'string' || !opts.tenantId.trim()
+      || !Number.isInteger(opts.limit) || opts.limit < 1 || opts.limit > 1000
+      || (opts.missionId != null && (typeof opts.missionId !== 'string' || !opts.missionId.trim()))) {
+    throw new Error('Explicit database mode, tenant scope and a bounded limit are required.');
   }
-  const createdBeforeSpec137 = mission.createdAt && new Date(mission.createdAt) < new Date(SPEC137_DEPLOYED_AT);
-  return {
-    category: createdBeforeSpec137 ? 'A_stale_persisted_state' : 'B_uncovered_transition_candidate',
-    createdBeforeSpec137,
-    hits,
-  };
-}
-
-async function loadStageTransitions(pool, missionId) {
-  const { rows } = await pool.query(
-    `SELECT kind, specialist, label, payload, at
-     FROM acquisition_mission_events
-     WHERE mission_id = $1 AND kind = 'stage_transition'
-     ORDER BY at ASC`,
-    [missionId]
-  );
-  return rows;
-}
-
-function printCodePathAnalysis() {
-  console.log('\n=== AUDIT-019 code-path analysis (no DATABASE_URL) ===\n');
-  console.log('SPEC-136 deployed:', SPEC136_DEPLOYED_AT);
-  console.log('SPEC-137 deployed:', SPEC137_DEPLOYED_AT);
-  console.log('');
-  console.log('Post-SPEC-137 stage mutations:');
-  console.log('  - packages/acquisition-mission/Lifecycle.js → applyStageTransition() ONLY');
-  console.log('  - packages/acquisition-mission/Engine.js → progress() delegates to applyStageTransition()');
-  console.log('  - packages/max/workspace/AmoOperatorApproval.js → commitDiscoveryStage() calls engine.progress()');
-  console.log('');
-  console.log('Uncovered post-SPEC-137 transition path: NONE FOUND.');
-  console.log('All production stage writes route through applyStageTransition since PR #373.');
-  console.log('');
-  console.log('Pre-SPEC-136 stale origin:');
-  console.log('  Engine.progress() set stage/status only; pendingOperatorDecision was not cleared.');
-  console.log('  putMission validation did not exist until SPEC-136.');
-  console.log('  Rows persisted with stage=understand + pendingOperatorDecision.stage=discover.');
-  console.log('');
-  console.log('First lifecycle transition that produced stale state:');
-  console.log('  discover → understand via Engine.progress() (direct API or Max advance), pre-SPEC-136.');
-  console.log('  commitDiscoveryStage() cleared pending before progress since SPEC-128 — that path was safe.');
-  console.log('');
-  console.log('Engine.progress() from SPEC-137 on stale missions:');
-  console.log('  No — hydrate/putMission rejects MISSION_STATE_INCONSISTENT before progress can run.');
-  console.log('');
-  console.log('Conclusion (code analysis): category A — stale persisted state.');
-  console.log('Run with DATABASE_URL to attach a specific mission id and event timeline.');
-}
-
-async function auditFromDatabase(opts) {
-  const pool = require('../db');
-  let missions;
-  if (opts.missionId) {
-    const { rows } = await pool.query(
-      `SELECT * FROM acquisition_missions WHERE id = $1`,
-      [opts.missionId]
+  const client = createClient();
+  let transactionOpen = false;
+  let failure;
+  let report;
+  try {
+    await client.connect();
+    await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    transactionOpen = true;
+    await client.query("SET LOCAL statement_timeout = '10s'");
+    await client.query("SET LOCAL idle_in_transaction_session_timeout = '10s'");
+    const values = [opts.tenantId];
+    const missionClause = opts.missionId ? ' AND id = $2' : '';
+    if (opts.missionId) values.push(opts.missionId);
+    values.push(opts.limit + 1);
+    const { rows } = await client.query(
+      `SELECT id, tenant_id, stage, status, created_at, updated_at, payload
+       FROM acquisition_missions WHERE tenant_id = $1${missionClause}
+       ORDER BY created_at ASC, id ASC LIMIT $${values.length}`,
+      values
     );
-    missions = rows.map(missionFromRow);
-  } else if (opts.tenantId) {
-    const { rows } = await pool.query(
-      `SELECT * FROM acquisition_missions WHERE tenant_id = $1 ORDER BY created_at ASC`,
-      [String(opts.tenantId)]
-    );
-    missions = rows.map(missionFromRow);
-  } else {
-    const { rows } = await pool.query(
-      `SELECT * FROM acquisition_missions ORDER BY created_at ASC`
-    );
-    missions = rows.map(missionFromRow);
+    report = {
+      audit: 'AUDIT-019',
+      readOnly: true,
+      scope: { tenantId: opts.tenantId, missionId: opts.missionId || null, limit: opts.limit },
+      missionsTruncated: rows.length > opts.limit,
+      limitations: [
+        'Only four historical patterns are checked; no matches is not full consistency validation.',
+        'Origin remains unknown. Creation/update timestamps are not mutation provenance.',
+        'The historical merge reference is not verified deployment evidence.',
+        'Recorded transition rows, or their absence, do not prove Engine.progress execution or causality.',
+      ],
+      missions: [],
+    };
+    for (const row of rows.slice(0, opts.limit)) {
+      if (row.tenant_id !== opts.tenantId || (opts.missionId && row.id !== opts.missionId)) {
+        throw new Error('Database returned a mission outside the requested scope.');
+      }
+      const mission = missionFromRow(row);
+      const classification = classifyMission(mission);
+      const observation = { id: mission.id, stage: mission.stage, classification, transitions: null };
+      if (classification.hits.length) {
+        const events = await client.query(
+          `SELECT id, at FROM acquisition_mission_events
+           WHERE tenant_id = $1 AND mission_id = $2 AND kind = 'stage_transition'
+           ORDER BY at ASC, id ASC LIMIT $3`,
+          [opts.tenantId, mission.id, EVENT_LIMIT + 1]
+        );
+        observation.transitions = {
+          observedCount: Math.min(events.rows.length, EVENT_LIMIT),
+          truncated: events.rows.length > EVENT_LIMIT,
+          limit: EVENT_LIMIT,
+          recorded: events.rows.slice(0, EVENT_LIMIT).map((event) => ({
+            id: event.id, at: timestampContext(event.at),
+          })),
+        };
+      }
+      report.missions.push(observation);
+    }
+  } catch (error) {
+    failure = error;
+  } finally {
+    if (transactionOpen) {
+      try { await client.query('ROLLBACK'); } catch (error) { failure ||= error; }
+    }
+    try { await client.end(); } catch (error) { failure ||= error; }
   }
+  if (failure) throw failure;
+  return report;
+}
 
-  const inconsistent = missions.filter((m) => classifyMission(m).category !== 'consistent');
-  if (!inconsistent.length) {
-    console.log('No inconsistent missions found in database.');
+async function main(argv = process.argv.slice(2), {
+  env = process.env,
+  log = console.log,
+  createClient = (config) => new (require('pg').Client)(config),
+} = {}) {
+  const opts = parseArgs(argv);
+  if (opts.help || !opts.database) {
+    log(USAGE);
     return;
   }
-
-  for (const mission of inconsistent) {
-    const verdict = classifyMission(mission);
-    const transitions = await loadStageTransitions(pool, mission.id);
-    const spec137Progress = transitions.some((row) => {
-      const at = row.at && new Date(row.at);
-      return at && at >= new Date(SPEC137_DEPLOYED_AT);
-    });
-
-    console.log('\n--- Mission', mission.id, '---');
-    console.log('Created:', mission.createdAt);
-    console.log('Updated:', mission.updatedAt);
-    console.log('Stage:', mission.stage);
-    console.log('Pending:', JSON.stringify(mission.pendingOperatorDecision, null, 2));
-    console.log('Created before SPEC-137:', verdict.createdBeforeSpec137);
-    console.log('Verdict:', verdict.category);
-    console.log('Patterns:', verdict.hits.map((h) => h.message).join('; '));
-    console.log('First offending transition:', verdict.hits[0]?.transition || 'unknown');
-    console.log('Stage transitions:', transitions.length);
-    console.log('Engine.progress (SPEC-137 era) events after deploy:', spec137Progress);
-    console.log('SPEC-137 progress executed for this mission:', spec137Progress ? 'possibly (see events)' : 'no post-SPEC-137 stage_transition events');
-  }
+  const connectionString = env.AUDIT019_DATABASE_URL;
+  if (!connectionString) throw new Error('Explicit AUDIT019_DATABASE_URL is required for database mode.');
+  const report = await auditFromDatabase(opts, () => createClient({
+    connectionString,
+    application_name: 'audit019-read-only',
+    connectionTimeoutMillis: 5000,
+    options: '-c default_transaction_read_only=on',
+  }));
+  log(JSON.stringify(report, null, 2));
+  return report;
 }
 
-async function main() {
-  const opts = parseArgs(process.argv);
-  if (!process.env.DATABASE_URL) {
-    printCodePathAnalysis();
-    return;
-  }
-  await auditFromDatabase(opts);
+if (require.main === module) {
+  main().catch(() => {
+    // Driver errors can contain connection strings or SQL details. Do not print
+    // them from a diagnostic likely to be copied into an incident report.
+    console.error('AUDIT-019 failed. Check --help, scope, read-only credentials and database availability. No complete report was produced.');
+    process.exitCode = 1;
+  });
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+module.exports = { EVENT_LIMIT, USAGE, parseArgs, missionFromRow, auditFromDatabase, main };

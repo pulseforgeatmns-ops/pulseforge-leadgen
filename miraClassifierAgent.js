@@ -1,6 +1,6 @@
 require('dotenv').config();
 
-const Anthropic = require('@anthropic-ai/sdk');
+const Anthropic = require('./utils/meteredAnthropic').forAgent('miraClassifier');
 const pool = require('./db');
 const { PROJECTS, ROUTING_CONTEXT } = require('./utils/miraWorld');
 
@@ -429,3 +429,4 @@ if (require.main === module) {
       process.exit(1);
     });
 }
+

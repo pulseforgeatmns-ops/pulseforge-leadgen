@@ -49,11 +49,12 @@ describe('SPEC-137 — Atomic Mission Lifecycle Transitions', () => {
     assert.doesNotThrow(() => assertMissionStateConsistent(mission));
   });
 
-  it('discover → understand via Engine.progress leaves no stale pending decision', () => {
+  it('discover → understand via advancePrioritizationAfterApproval leaves no stale pending decision', async () => {
     const engine = amo.createAcquisitionMissionEngine();
     const mission = engine.create({
       tenantId: '10',
       objective: OBJECTIVE,
+      planApproved: true,
     });
     engine.contribute(mission.id, {
       specialist: amo.SPECIALISTS.SCOUT,
@@ -61,31 +62,23 @@ describe('SPEC-137 — Atomic Mission Lifecycle Transitions', () => {
       payload: {
         companies: [{ id: 'c1', name: 'Harbor Law' }],
         prospects: [{ id: 'p1', name: 'Alex' }],
-        buyingSignals: ['Hiring office manager'],
+        buyingSignals: [{ type: 'hiring', label: 'Hiring office manager', source: 'job_board' }],
         evidence: [{ label: 'Job post', source: 'job_board' }],
         confidence: 0.8,
+        qualifiedCount: 1,
+        summary: 'Found 1 prospect.',
       },
     }, { tenantId: '10' });
 
-    const stored = engine.store.getMission(mission.id);
-    stored.pendingOperatorDecision = {
-      stage: STAGES.DISCOVER,
-      kind: OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL,
-      prompt: 'Approve discovery?',
-    };
-    engine.store.restore({
-      missions: [[stored.id, stored]],
-      events: engine.store.snapshot().events,
-      contributions: engine.store.snapshot().contributions,
-      observations: [],
-      outcomes: [],
-      learning: [],
+    const { advancePrioritizationAfterApproval } = require('../../max/workspace/AmoOperatorApproval');
+    await advancePrioritizationAfterApproval({
+      engine,
+      mission: engine.get(mission.id, '10'),
+      tenantId: '10',
+      question: 'Approved prioritization.',
     });
 
-    const progressed = engine.progress(mission.id, { role: 'max' }, {
-      tenantId: '10',
-      stage: STAGES.UNDERSTAND,
-    });
+    const progressed = engine.get(mission.id, '10');
     assert.equal(progressed.stage, STAGES.UNDERSTAND);
     assert.equal(progressed.pendingOperatorDecision, null);
     assert.doesNotThrow(() => engine.inspect(mission.id, { tenantId: '10' }));

@@ -1,5 +1,7 @@
 'use strict';
 
+const { normalizeObservedInterestLevel } = require('./aoInterestLevel');
+
 /**
  * Maps AO lead/task/escalation data to operator-facing operational states.
  * Computed at read time — no duplicate state column on ao_leads.
@@ -85,7 +87,7 @@ function inferPriceShoppingRisk(row) {
 
 function inferSignalType(row) {
   const state = deriveOperationalState(row);
-  const interest = String(row.interest_level || 'medium').toLowerCase();
+  const interest = normalizeObservedInterestLevel(row.interest_level);
   if (state === 'disqualified') return 'bad_fit';
   if (state === 'walkthrough_requested' || /quote|walkthrough/i.test(String(row.open_next_action || ''))) {
     return 'real_buying_signal';
@@ -95,7 +97,7 @@ function inferSignalType(row) {
   if (state === 'gatekeeper_reached') return 'gatekeeper_conversation';
   if (/just send info|send info|email me/i.test(String(row.original_visit_note || ''))) return 'just_send_info';
   if (inferPriceShoppingRisk(row) !== 'none') return 'price_shopping';
-  if (interest === 'low') return 'curiosity';
+  if (!interest || interest === 'low') return 'curiosity';
   if (state === 'decision_maker_reached') return 'real_buying_signal';
   return 'curiosity';
 }
@@ -170,7 +172,7 @@ function buildRelationshipIntel(row) {
     current_pain: probes.cleaner_issues || null,
     urgency_timing: row.next_follow_up_date || null,
     price_shopping_risk: inferPriceShoppingRisk(row),
-    interest_level: row.interest_level || 'medium',
+    interest_level: normalizeObservedInterestLevel(row.interest_level),
     next_promised_action: row.open_next_action || row.next_action || null,
     latest_ao_note: row.last_interaction_summary || row.original_visit_note || null,
     signal_type: inferSignalType(row),
@@ -226,10 +228,12 @@ function recommendCrmPromotion(row) {
   if (state === 'walkthrough_requested') reasons.push('Walkthrough requested');
   if (/quote/i.test(String(row.open_next_action || row.original_visit_note || ''))) reasons.push('Quote requested');
   if (state === 'jake_action_needed') reasons.push('Jake follow-up required');
-  if (state === 'decision_maker_reached' && ['high', 'medium'].includes(String(row.interest_level))) {
+  if (state === 'decision_maker_reached' && ['high', 'medium'].includes(String(intel.interest_level || ''))) {
     reasons.push('Decision-maker identified and interested');
   }
-  if (intel.current_pain && intel.interest_level !== 'low') reasons.push('Clear cleaning pain identified');
+  if (intel.current_pain && intel.interest_level && intel.interest_level !== 'low') {
+    reasons.push('Clear cleaning pain identified');
+  }
   if (intel.signal_type === 'real_buying_signal') reasons.push('Meaningful buying signal');
   if (state === 'converted_to_crm') return { eligible: false, reasons: ['Already converted'] };
   if (state === 'disqualified' || state === 'not_started') return { eligible: false, reasons: [] };

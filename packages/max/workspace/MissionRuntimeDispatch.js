@@ -8,8 +8,9 @@
 
 const { isActiveMissionStatus } = require('../../mission-engine/types');
 const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
-const { resolveAcquisitionActiveMission } = require('./ActiveMissionGuard');
+const { resolveAcquisitionActiveMission, UNRESOLVED_BOUND_MISSION_REASON } = require('./ActiveMissionGuard');
 const { isMissionPlanningTurn } = require('./MissionPlanningTurn');
+const { sessionStateBlocksExecution } = require('./SessionState');
 const askPathTrace = require('./audit/AskPathTrace');
 
 const MISSION_RUNTIMES = Object.freeze({
@@ -117,14 +118,81 @@ async function resolveLegacyActiveMission(input = {}) {
 async function resolveMissionRuntime(input = {}) {
   askPathTrace.traceEnter('resolveMissionRuntime');
   const question = String(input.question || '').trim();
-  const amoMission = await resolveAcquisitionActiveMission(input);
+  const operatorIntent = input.operatorIntent || null;
+  const conversationContract =
+    input.conversationContract ||
+    (operatorIntent && operatorIntent.conversationContract) ||
+    null;
+  const sessionState =
+    input.sessionState ||
+    (operatorIntent && operatorIntent.sessionState) ||
+    (input.session && input.session.sessionState) ||
+    null;
+
+  if (sessionState && sessionStateBlocksExecution(sessionState)) {
+    askPathTrace.traceEarlyReturn('resolveMissionRuntime', 'session_state_read_only');
+    return {
+      runtime: null,
+      reason: 'session_state_read_only',
+      missionType: null,
+      mission: null,
+      amoMission: null,
+      legacyMission: null,
+      readOnly: true,
+      sessionState,
+      sessionExecutionPolicy: sessionState.executionPolicy,
+    };
+  }
+
+  if (conversationContract && conversationContract.executionAllowed === false) {
+    askPathTrace.traceEarlyReturn('resolveMissionRuntime', 'conversation_contract_read_only');
+    return {
+      runtime: null,
+      reason: 'conversation_contract_read_only',
+      missionType: null,
+      mission: null,
+      amoMission: null,
+      legacyMission: null,
+      readOnly: true,
+      conversationContract,
+    };
+  }
+
+  const amoResolution = await resolveAcquisitionActiveMission(input);
+  const amoMission = amoResolution.mission;
+  const unresolvedBoundMissionId = amoResolution.unresolvedBoundMissionId;
   const legacyMission = await resolveLegacyActiveMission(input);
   const amoActive = isAmoMission(amoMission);
   const legacyActive = Boolean(legacyMission);
-  const executionCommand = isMissionExecutionCommand(question)
-    || isMissionPlanningTurn(amoMission, question);
+  const executionCommand = operatorIntent
+    ? operatorIntent.executionRequested || operatorIntent.planningRequested
+    : isMissionExecutionCommand(question) || isMissionPlanningTurn(amoMission, question);
 
-  if (amoActive && hasPendingOperatorDecision(amoMission) && (executionCommand || isMissionPlanningTurn(amoMission, question))) {
+  if (unresolvedBoundMissionId) {
+    askPathTrace.traceRuntime(MISSION_RUNTIMES.AMO, UNRESOLVED_BOUND_MISSION_REASON, {
+      boundMissionId: unresolvedBoundMissionId,
+    });
+    askPathTrace.traceEarlyReturn('resolveMissionRuntime', UNRESOLVED_BOUND_MISSION_REASON);
+    return {
+      runtime: MISSION_RUNTIMES.AMO,
+      reason: UNRESOLVED_BOUND_MISSION_REASON,
+      missionType: MISSION_TYPES.ACQUISITION,
+      mission: null,
+      amoMission: null,
+      legacyMission,
+      unresolvedBoundMission: true,
+      boundMissionId: unresolvedBoundMissionId,
+    };
+  }
+
+  if (
+    amoActive &&
+    hasPendingOperatorDecision(amoMission) &&
+    (executionCommand ||
+      (operatorIntent
+        ? operatorIntent.planningRequested
+        : isMissionPlanningTurn(amoMission, question)))
+  ) {
     askPathTrace.traceRuntime(MISSION_RUNTIMES.AMO, 'amo_pending_approval', {
       missionId: amoMission && amoMission.id,
     });

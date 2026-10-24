@@ -1,0 +1,30 @@
+name: Penny Anchor daily review
+
+on:
+  schedule:
+    - cron: '0 12 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: penny-anchor-daily-production
+  cancel-in-progress: false
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Run Anchor paid-media review
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          test -n "$CRON_SECRET"
+          payload=$(jq -n --arg secret "$CRON_SECRET" '{secret: $secret, client_id: 10}')
+          curl --fail-with-body --retry 2 --retry-all-errors \
+            --request POST \
+            --header 'Content-Type: application/json' \
+            --data "$payload" \
+            'https://pulseforge-leadgen-production.up.railway.app/cron/penny-daily'

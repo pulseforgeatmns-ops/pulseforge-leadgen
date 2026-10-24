@@ -80,11 +80,15 @@ function normalizeSuccessMetric(input = {}) {
 }
 
 function normalizeMarket(input = {}) {
+  const eligibleSubsegments = Array.isArray(input.eligibleSubsegments)
+    ? [...new Set(input.eligibleSubsegments.map(asText).filter(Boolean))]
+    : [];
   return {
     segment: asText(input.segment) || null,
     industry: asText(input.industry) || null,
     buyer: asText(input.buyer) || null,
     label: asText(input.label) || null,
+    eligibleSubsegments,
   };
 }
 
@@ -92,10 +96,12 @@ function normalizeGeography(input = {}) {
   const cities = Array.isArray(input.cities)
     ? input.cities.map(asText).filter(Boolean)
     : [];
+  const scope = asText(input.scope).toLowerCase() || null;
   return {
     region: asText(input.region) || null,
     cities,
     mention: asText(input.mention) || null,
+    scope: scope === 'nationwide' || scope === 'regional' || scope === 'local' ? scope : null,
   };
 }
 
@@ -372,6 +378,25 @@ function formatMissionUnderstandingProse(plan) {
 }
 
 /**
+ * SPEC-168 — Mission Understanding displays only the canonical business objective.
+ * Never the full operator prompt or execution instructions.
+ * @param {object} mission
+ * @returns {string}
+ */
+function formatCanonicalObjectiveDisplay(mission) {
+  const resolved = mission && mission.resolvedObjective;
+  const objective = resolved && resolved.objective
+    ? resolved.objective
+    : (mission && mission.objective) || '';
+  if (!objective) return '';
+  return [
+    'Mission Understanding',
+    '',
+    objective,
+  ].join('\n');
+}
+
+/**
  * Operator confirmation copy. Approve / Edit / Cancel — never silent execute.
  */
 function formatOperatorConfirmation(plan) {
@@ -404,6 +429,7 @@ module.exports = {
   isReadyForLock,
   formatMissionUnderstanding,
   formatMissionUnderstandingProse,
+  formatCanonicalObjectiveDisplay,
   formatOperatorConfirmation,
   formatAmbiguityPrompt,
   provenanceFor,

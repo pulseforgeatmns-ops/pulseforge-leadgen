@@ -381,6 +381,17 @@ function scoreIntentCandidates(lower, sourceText, extracted) {
 
   // --- Operator inbox / help ---
   if (
+    /\bdo\s+we\s+have\s+anything\s+pending\b/i.test(lower) ||
+    /\banything\s+pending\s+for\s+approval\b/i.test(lower) ||
+    /\bwhat(?:'s| is)\s+pending\s+for\s+approval\b/i.test(lower)
+  ) {
+    push(INTENT_CATEGORIES.OPERATOR_INBOX, 0.9, {
+      mode: INTENT_MODES.HELP,
+      domain: INTENT_DOMAINS.OPERATOR,
+      goal: 'Pending operator approval queue',
+    });
+  }
+  if (
     /\boperator\s+inbox\b/.test(lower) ||
     /\bshow\s+(my\s+)?inbox\b/.test(lower) ||
     /\bwhat\s+needs\s+(my\s+)?attention\b/.test(lower)
