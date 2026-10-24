@@ -7,6 +7,7 @@ const { hash, missionScope } = require('../packages/acquisition-mission/DailyOut
 const scope = require('./anchorScopedResume');
 const control = require('./anchorScopedResumeControl');
 const quarantine = require('./anchorEmailQuarantine');
+const preparationAuthority = require('./anchorCrmPreparationAuthority');
 const { GovernedOutboundStore, ownershipNameKey, ownershipDomain } = require('./governedOutboundStore');
 const { governedContactReason } = require('../utils/governedContactEligibility');
 const { sourceScope, missionCandidateReason } = require('./maxOutboundControlLoop');
@@ -48,7 +49,9 @@ async function locked(pool, work) {
 }
 async function bindings(db, input, options) {
   const program = (await db.query('SELECT * FROM acquisition_outbound_programs WHERE id=$1 AND tenant_id=$2', [input.programId, '10'])).rows[0];
-  const authority = await scope.assertScopedResumeCapability(db, { program, capability: 'preparation', operation: OPERATION }, { ...options, now: time(options) });
+  const authorityOptions = { ...options, now: time(options) };
+  const authority = await preparationAuthority.assertPreparationCapability(db, program, authorityOptions)
+    || await scope.assertScopedResumeCapability(db, { program, capability: 'preparation', operation: OPERATION }, authorityOptions);
   const grant = authority.manifest;
   // Optional HTTP authority is checked under every canonical binding lock, not
   // just in route preflight. Legacy one-shot callers retain their old contract.
@@ -62,12 +65,16 @@ async function bindings(db, input, options) {
   const admissions = input.admissions.map(a => grant.admissions.find(approved => hash(approved) === hash(a)));
   if (admissions.some(a => !a)) fail('anchor_scoped_resume_admission_missing');
   admissions.sort((a, b) => a.prospectId.localeCompare(b.prospectId));
+  if (preparationAuthority.isPreparationAuthority(grant)
+    && hash(admissions) !== hash([...grant.admissions].sort((a, b) => a.prospectId.localeCompare(b.prospectId))))
+    fail('anchor_crm_preparation_exact_batch_required');
   if (new Set(admissions.map(a => a.companyId)).size !== admissions.length
     || new Set(admissions.map(a => a.companyNameKey)).size !== admissions.length
     || new Set(admissions.map(a => a.companyDomain)).size !== admissions.length) fail('anchor_crm_preparation_duplicate_company');
   const source = (await db.query('SELECT payload FROM acquisition_missions WHERE id=$1 AND tenant_id=$2 FOR SHARE', [grant.sourceMissionId, '10'])).rows[0]?.payload;
   if (!source || source.stage !== 'discover' || hash(source) !== input.sourceMissionHash
     || hash(missionScope(source)) !== grant.scopeHash) fail('anchor_crm_preparation_source_changed');
+  if (preparationAuthority.isPreparationAuthority(grant)) preparationAuthority.assertPreparationSource(source, grant);
   const store = new GovernedOutboundStore(db, '10'), rows = [];
   for (const admission of admissions) {
     const bound = await scope.readScopedIdentity(db, { tenantId: '10', ...admission });
@@ -177,8 +184,11 @@ async function prepareExistingCrm(pool, rawInput, options = {}) {
       const crmByProspectId = new Map();
       for (const row of binding.rows) { const crm = { ...row, prospect_id: String(row.id) };
         crmByProspectId.set(String(row.id), crm); crmByProspectId.set(String(row.company_id), crm); }
-      const runScout = (m, opts) => require('../packages/max/workspace/ScoutDiscoveryExecutor').runScoutForAmoMission(m,
-        { ...opts, runScout: undefined, allowFixtureFallback: false, discoverImpl: async () => crmDiscovery(binding) });
+      const scoutExecutor = require('../packages/max/workspace/ScoutDiscoveryExecutor');
+      const runScout = preparationAuthority.isPreparationAuthority(binding.manifest)
+        ? scoutExecutor.createExistingCrmScoutRunner(crmDiscovery(binding))
+        : (m, opts) => scoutExecutor.runScoutForAmoMission(m,
+          { ...opts, runScout: undefined, allowFixtureFallback: false, discoverImpl: async () => crmDiscovery(binding) });
       const runPaige = async (m, opts) => {
         const executionInput = amo.buildExecutionInput({ mission: m, contributions: opts.contributions, specialist: 'paige',
           transactionId: opts.transactionId, executionContext: opts.executionContext, store: engine.store, crmByProspectId });

@@ -7,6 +7,45 @@ const { RECOVERY_LOCK_KEY, validateLivePolicy } = require('./anchorEmailRecovery
 const quarantine = require('./anchorEmailQuarantine');
 const { validateCanonicalSenderConfig } = require('../utils/canonicalSenderIdentity');
 const scope = () => require('./anchorScopedResume');
+const preparationAuthority = require('./anchorCrmPreparationAuthority');
+function validateProgramAuthority(program, manifest, options) {
+  if (preparationAuthority.isPreparationAuthority(manifest)) {
+    preparationAuthority.assertPreparationEnvironment(manifest, options);
+    preparationAuthority.validatePreparationProgram(program, manifest, now(options));
+  } else validateLivePolicy(program, manifest, now(options));
+}
+async function assertPreparationIdentitiesUnconsumed(db, manifest) {
+  // An explicitly regranted/subset batch cannot replay a partially prepared
+  // identity. Keep the original program namespace and permanently charged rows.
+  const rows = (await db.query(`SELECT identities FROM anchor_scoped_resume_consumption
+    WHERE tenant_id='10' AND program_id=$1 AND capability='preparation' AND operation='prepare_existing_crm'`,
+  [manifest.programId])).rows;
+  const keys = ['prospectId', 'companyId', 'recipientEmail', 'companyNameKey', 'companyDomain'];
+  for (const row of rows) {
+    if (!Array.isArray(row.identities) || !row.identities.length
+      || row.identities.some(identity => !exact(identity, scope().IDENTITY_KEYS)
+        || scope().IDENTITY_KEYS.some(key => !text(identity[key])) || !/^[a-f0-9]{64}$/.test(identity.identityFingerprint)
+        || identity.recipientEmail !== identity.recipientEmail.trim().toLowerCase()))
+      fail('anchor_crm_preparation_consumed_identity_invalid');
+    for (const identity of row.identities) {
+      let company;
+      try { company = quarantine.companyIdentity({ name: identity.companyNameKey, domain: identity.companyDomain }); }
+      catch { fail('anchor_crm_preparation_consumed_identity_invalid'); }
+      if (company.companyNameKey !== identity.companyNameKey || company.companyDomain !== identity.companyDomain)
+        fail('anchor_crm_preparation_consumed_identity_invalid');
+    }
+    if (row.identities.some(prior => manifest.admissions.some(admission => keys.some(key => prior[key] === admission[key]))))
+      fail('anchor_crm_preparation_identity_consumed');
+  }
+}
+async function assertPreparationBaseline(db, manifest) {
+  const baseline = manifest.preparationAuthority;
+  const totals = await one(db, `SELECT count(*)::int AS total_operations,coalesce(sum(item_count),0)::int AS total_items
+    FROM anchor_scoped_resume_consumption WHERE tenant_id='10' AND program_id=$1 AND capability='preparation'`,
+  [manifest.programId], 'anchor_scoped_resume_consumption_unavailable');
+  if (totals.total_operations !== baseline.consumedOperations || totals.total_items !== baseline.consumedItems)
+    fail('anchor_crm_preparation_baseline_changed');
+}
 const text = value => typeof value === 'string' && value.length > 0 && value.length <= 512
   && value === value.trim() && !/[\x00-\x1f\x7f]/.test(value);
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
@@ -59,7 +98,7 @@ async function liveBindings(db, manifest, options) {
   await currentActor(db, { id: manifest.operatorId, role: manifest.operatorRole }, manifest);
   const program = await one(db, 'SELECT * FROM acquisition_outbound_programs WHERE id=$1 AND tenant_id=$2 FOR SHARE',
     [manifest.programId, '10'], 'anchor_scoped_resume_program_missing');
-  validateLivePolicy(program, manifest, now(options));
+  validateProgramAuthority(program, manifest, options);
   if (String(program.authorized_by) !== manifest.operatorId || program.source_mission_id !== manifest.sourceMissionId
     || program.scope_hash !== manifest.scopeHash) fail('anchor_scoped_resume_program_changed');
   const source = await one(db, 'SELECT id,tenant_id,payload FROM acquisition_missions WHERE id=$1 AND tenant_id=$2 FOR SHARE',
@@ -68,6 +107,7 @@ async function liveBindings(db, manifest, options) {
     || String(source.payload?.tenantId) !== '10' || source.payload?.structuredMission?.immutable !== true
     || source.payload.planCancelled || /cancel/i.test(String(source.payload.status))
     || hash(missionScope(source.payload)) !== manifest.scopeHash) fail('anchor_scoped_resume_source_changed');
+  if (preparationAuthority.isPreparationAuthority(manifest)) preparationAuthority.assertPreparationSource(source.payload, manifest);
   const client = await one(db, 'SELECT id,active,autosend_enabled,sender_email,sender_name,sending_domain FROM clients WHERE id=$1 FOR SHARE', [10], 'anchor_scoped_resume_sender_changed');
   if (client.active !== true || client.autosend_enabled !== false || client.sender_email !== manifest.senderEmail
     || client.sender_name !== manifest.senderName || client.sending_domain !== manifest.sendingDomain
@@ -157,9 +197,13 @@ async function installScopedResume(pool, input, actor, options = {}) {
       return { installed: true, idempotent: true, manifestId: manifest.id, initialized: 0, providerAuthorized: false };
     }
     if (control.manifest !== null) fail('anchor_scoped_resume_revoke_required');
+    if (preparationAuthority.isPreparationAuthority(manifest)) {
+      await assertPreparationBaseline(db, manifest);
+      await assertPreparationIdentitiesUnconsumed(db, manifest);
+    }
     const audit = await reviewIdentities(db, manifest, initialization);
     scope().validateScopedResumeManifest(manifest, { now: now(options) });
-    validateLivePolicy(program, manifest, now(options));
+    validateProgramAuthority(program, manifest, options);
     if ((options.env || process.env).ANCHOR_EMAIL_SCOPED_RESUME_ID !== manifest.id) fail('anchor_scoped_resume_activation_required');
     await db.query(`INSERT INTO anchor_scoped_resume_grants(manifest_id,tenant_id,program_id,manifest_hash,manifest,
       approval_ref,operator_id,operator_role,review_initializations,installed_at) VALUES($1,'10',$2,$3,$4,$5,$6,$7,$8,$9)`,
@@ -193,6 +237,11 @@ async function consumeScopedOperation(pool, input, options = {}) {
   const identities = input.identities === undefined ? manifest.admissions : input.identities;
   if (!Array.isArray(identities) || !identities.length || new Set(identities.map(a => a.prospectId)).size !== identities.length
     || identities.some(a => !manifest.admissions.some(admitted => hash(a) === hash(admitted)))) fail('anchor_scoped_resume_operation_identity_invalid');
+  if (preparationAuthority.isPreparationAuthority(manifest)
+    && (capability !== 'preparation' || input.operation !== 'prepare_existing_crm'
+      || hash([...identities].sort((a, b) => a.prospectId.localeCompare(b.prospectId)))
+        !== hash([...manifest.admissions].sort((a, b) => a.prospectId.localeCompare(b.prospectId)))))
+    fail('anchor_crm_preparation_exact_batch_required');
   // Item budgets count new CRM draft identities and separately frozen/refilled entries.
   // Draft then freeze charges twice; canonical approval and read-only reuse add no items.
   const itemCount = ['prepare_existing_crm', 'freeze', 'refill'].includes(input.operation) ? identities.length : 0;
@@ -204,6 +253,7 @@ async function consumeScopedOperation(pool, input, options = {}) {
     if (capability === 'research') await assertScopedResumeProviderBudget(db, manifest, { program, operation: input.operation, ...options });
     await reviewIdentities(db, { ...manifest, admissions: identities });
     if ((await db.query('SELECT operation_id FROM anchor_scoped_resume_consumption WHERE operation_id=$1', [input.operationId])).rows.length) fail('anchor_scoped_resume_operation_consumed');
+    if (preparationAuthority.isPreparationAuthority(manifest)) await assertPreparationIdentitiesUnconsumed(db, manifest);
     const at = now(options), localDay = clock(at).day;
     const totals = await one(db, `SELECT count(*)::int AS total_operations,
       count(*) FILTER (WHERE local_day=$3::date)::int AS daily_operations,
@@ -211,11 +261,14 @@ async function consumeScopedOperation(pool, input, options = {}) {
       coalesce(sum(item_count) FILTER (WHERE local_day=$3::date),0)::int AS daily_items
       FROM anchor_scoped_resume_consumption WHERE tenant_id='10' AND program_id=$1 AND capability=$2`,
     [manifest.programId, capability, localDay], 'anchor_scoped_resume_consumption_unavailable');
+    if (preparationAuthority.isPreparationAuthority(manifest)
+      && (totals.total_operations !== manifest.preparationAuthority.consumedOperations
+        || totals.total_items !== manifest.preparationAuthority.consumedItems)) fail('anchor_crm_preparation_baseline_changed');
     const dailyCap = Math.min(permission.dailyCap, capability === 'preparation' ? program.policy.preparationAttemptsPerDay : program.policy.enrichmentLimit);
     if (totals.total_operations >= permission.totalCap || totals.daily_operations >= dailyCap
       || (capability === 'preparation' && (totals.total_items + itemCount > permission.totalItemCap || totals.daily_items + itemCount > permission.dailyItemCap))) fail('anchor_scoped_resume_operation_cap_reached');
     scope().validateScopedResumeManifest(manifest, { now: now(options) });
-    validateLivePolicy(program, manifest, now(options));
+    validateProgramAuthority(program, manifest, options);
     if ((options.env || process.env).ANCHOR_EMAIL_SCOPED_RESUME_ID !== manifest.id) fail('anchor_scoped_resume_closed');
     if (clock(now(options)).day !== localDay) fail('anchor_scoped_resume_operation_day_changed');
     await db.query(`INSERT INTO anchor_scoped_resume_consumption(operation_id,tenant_id,program_id,manifest_id,capability,operation,

@@ -2,6 +2,7 @@
 // Explicit HTTP action, not a scheduler, activation or retry authority.
 const { hash, missionScope } = require('../packages/acquisition-mission/DailyOutboundPolicy');
 const recovery = require('./anchorEmailRecovery');
+const preparationAuthority = require('./anchorCrmPreparationAuthority');
 const { prepareExistingCrm } = require('./anchorScopedResumeCrmPreparation');
 function reject() { throw Object.assign(new Error('anchor_crm_action_rejected'), { code: 'anchor_crm_action_rejected' }); }
 function actorFromRequest(req) {
@@ -42,9 +43,11 @@ async function prepareDrafts(pool, input, actor, { env = process.env, now = () =
     try {
       await db.query('BEGIN READ ONLY'); begun = true;
       await db.query("SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='5s'");
-      const state = await recovery.loadRecoveryState(db, { env, now: now(), lockControl: false });
+      const preparationState = await preparationAuthority.readPreparationState(db, { env, now: now(), lockControl: false });
+      const state = preparationState.mode === 'preparation_only' ? preparationState
+        : await recovery.loadRecoveryState(db, { env, now: now(), lockControl: false });
       manifest = state.manifest;
-      if (state.mode !== 'scoped_resume' || hash(manifest) !== input.manifestHash
+      if (!['scoped_resume', 'preparation_only'].includes(state.mode) || hash(manifest) !== input.manifestHash
         || manifest.operatorId !== String(actor.id) || manifest.operatorRole !== 'admin'
         || manifest.scopes.email.enabled || manifest.scopes.research.enabled
         || !manifest.scopes.preparation.enabled
@@ -56,6 +59,7 @@ async function prepareDrafts(pool, input, actor, { env = process.env, now = () =
         || source.stage !== 'discover' || source.structuredMission?.immutable !== true
         || source.planCancelled || /cancel/i.test(String(source.status))
         || hash(source) !== input.sourceMissionHash || hash(missionScope(source)) !== manifest.scopeHash) reject();
+      if (preparationAuthority.isPreparationAuthority(manifest)) preparationAuthority.assertPreparationSource(source, manifest);
       await db.query('COMMIT'); begun = false;
     } finally { if (begun) await db.query('ROLLBACK').catch(() => {}); db.release(true); }
     const pinnedEnv = new Proxy(env, { get(target, key) {

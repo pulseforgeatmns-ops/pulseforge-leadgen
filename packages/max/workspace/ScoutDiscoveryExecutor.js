@@ -213,14 +213,45 @@ async function runScoutDiscovery(executionInput = {}, opts = {}) {
   });
 }
 
+const existingCrmRunners = new WeakSet();
+function createExistingCrmScoutRunner(scoutResult) {
+  // No caller-supplied function is registered. This closure can only normalize
+  // already-materialized CRM evidence; its identity cannot be forged by JSON.
+  if (scoutResult?.payload?.source !== 'explicit_approved_existing_crm'
+    || !Array.isArray(scoutResult.payload.fitCandidates) || scoutResult.payload.fitCandidates.length < 1
+    || scoutResult.payload.fitCandidates.length > 5) {
+    throw Object.assign(new Error('existing_crm_discovery_required'), { code: 'existing_crm_discovery_required' });
+  }
+  const data = JSON.parse(JSON.stringify(scoutResult));
+  const runner = (mission, opts) => runExistingCrmScoutForAmoMission(mission, data, opts);
+  existingCrmRunners.add(runner);
+  return runner;
+}
 async function runScoutForAmoMission(mission, opts = {}) {
+  const runner = opts.runScout;
+  if (existingCrmRunners.has(runner)) return runner(mission, opts);
   return withResearchProviderScope(mission.tenantId ?? mission.clientId, () => {
     if (mission.clientId != null) assertResearchProviderAllowed('research', mission.clientId);
-    return runScoutForAmoMissionResearchScoped(mission, opts);
+    return runScoutForAmoMissionCanonical(mission, opts);
   });
 }
 
-async function runScoutForAmoMissionResearchScoped(mission, opts = {}) {
+// A separate data-only adapter, not a skip-pause flag. This function never
+// evaluates discovery/provider callbacks or inventory fallbacks. Its caller is
+// the locked, explicitly authorized existing-CRM preparation bridge.
+async function runExistingCrmScoutForAmoMission(mission, scoutResult, opts = {}) {
+  if (String(mission?.tenantId) !== '10' || String(mission?.clientId) !== '10'
+    || mission.crmPreparation?.preparationOnly !== true || mission.crmPreparation?.providerCalls !== 0
+    || scoutResult?.payload?.source !== 'explicit_approved_existing_crm') {
+    throw Object.assign(new Error('existing_crm_discovery_required'), { code: 'existing_crm_discovery_required' });
+  }
+  const data = JSON.parse(JSON.stringify(scoutResult));
+  const canonical = Object.fromEntries(['engine', 'pool', 'contributions', 'operatorId', 'transactionId', 'executionRequest']
+    .filter(key => Object.hasOwn(opts, key)).map(key => [key, opts[key]]));
+  return runScoutForAmoMissionCanonical(mission, { ...canonical, allowFixtureFallback: false, treatErrorsAsBlocked: false }, data);
+}
+
+async function runScoutForAmoMissionCanonical(mission, opts = {}, existingCrmResult) {
   if (typeof opts.runScout === 'function') {
     return opts.runScout(mission, opts);
   }
@@ -262,7 +293,15 @@ async function runScoutForAmoMissionResearchScoped(mission, opts = {}) {
       transactionId: opts.transactionId,
       store: opts.engine?.store,
       run: async (secInput) => {
-        try { return await runScoutDiscovery({ ...secInput, mission }, opts); }
+        try {
+          if (existingCrmResult !== undefined) {
+            return buildScoutExecutionResult({ scoutResult: existingCrmResult,
+              discoveryPayload: mapScoutIntelligenceToDiscoveryPayload(existingCrmResult, { missionObjective: mission.objective }),
+              transactionId: secInput.transactionId,
+              priorLearningRetrievalWarning: secInput.memoryContext?.priorLearningRetrievalWarning || null });
+          }
+          return await runScoutDiscovery({ ...secInput, mission }, opts);
+        }
         catch (error) {
           if (isResearchProviderControlError(error)) providerControlError = error;
           throw error;
@@ -333,6 +372,7 @@ async function runScoutForAmoMissionResearchScoped(mission, opts = {}) {
 
 module.exports = {
   runScoutForAmoMission,
+  createExistingCrmScoutRunner,
   runScoutDiscovery,
   buildScoutDiscoverOpts,
   buildScoutExecutionResult,

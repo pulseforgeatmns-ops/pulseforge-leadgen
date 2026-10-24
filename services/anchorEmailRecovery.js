@@ -96,6 +96,9 @@ async function readState(db, { env = process.env, now = new Date(), lockControl 
     if (result.rows?.length !== 1 || row?.singleton !== true || row?.maintenance_armed !== true) {
       return { mode: 'maintenance', reason: 'recovery_control_invalid' };
     }
+    // Typed draft continuation is never a shared send/legacy authority, even
+    // if an operator accidentally lowers an environment kill switch.
+    if (row.manifest?.version === 2) return { mode: 'maintenance', reason: 'recovery_preparation_only' };
     if (![undefined, '', 'false'].includes(env.ANCHOR_EMAIL_RECOVERY_MAINTENANCE)) {
       return { mode: 'maintenance', reason: 'recovery_kill_switch' };
     }
