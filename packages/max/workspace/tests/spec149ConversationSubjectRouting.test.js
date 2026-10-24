@@ -24,7 +24,7 @@ const { shouldClaimClientIntelligenceTurn } = require('../ClientIntelligenceCont
 const { maybeHandleIdentityTurn, composeIdentityProse } = require('../IdentityConversationContext');
 const { maybeHandleReflectionTurn } = require('../ReflectionRouting');
 const { buildRoutingTrace } = require('../SubjectRoutingTrace');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 
 describe('SPEC-149 — Conversation Subject Routing', () => {
   describe('detectConversationSubject — subject before intent', () => {

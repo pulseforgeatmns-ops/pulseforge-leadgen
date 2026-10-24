@@ -43,6 +43,7 @@ const transactionalExecution = require('./TransactionalExecution');
 const transactionalPersistence = require('./TransactionalPersistence');
 const specialistExecutionContract = require('./SpecialistExecutionContract');
 const pendingOperatorDecision = require('./PendingOperatorDecision');
+const decisionReadiness = require('./DecisionReadiness');
 const missionProgression = require('./MissionProgression');
 const workspaceMode = require('./WorkspaceMode');
 const operatorDecisionPolicy = require('./OperatorDecisionPolicy');
@@ -50,6 +51,26 @@ const outcomeLearning = require('./OutcomeLearning');
 const canonicalMissionProjection = require('./CanonicalMissionProjection');
 const missionRuntimeOwnership = require('./MissionRuntimeOwnership');
 const missionExecutionContext = require('./MissionExecutionContext');
+const executionRequest = require('./ExecutionRequest');
+const executionRouter = require('./ExecutionRouter');
+const executionApproval = require('./ExecutionApproval');
+const outboundExecution = require('./OutboundExecution');
+const communicationObservation = require('./CommunicationObservation');
+const observationInterpretation = require('./ObservationInterpretation');
+const observeReaction = require('./ObserveReaction');
+const observeEvaluator = require('./ObserveEvaluator');
+const observeCadence = require('./ObserveCadence');
+const preparedOutreachSequence = require('./PreparedOutreachSequence');
+const learnProgression = require('./LearnProgression');
+const improveProgression = require('./ImproveProgression');
+const meaningfulLearning = require('./MeaningfulLearning');
+const outcomeLearningRetrieval = require('./OutcomeLearningRetrieval');
+const acquisitionApproach = require('./AcquisitionApproach');
+const contributionSupersession = require('./ContributionSupersession');
+const canonicalContributionSelection = require('./CanonicalContributionSelection');
+const upstreamArtifactCoherence = require('./UpstreamArtifactCoherence');
+const resolveInspectionMission = require('./resolveInspectionMission');
+const missionInspectionSnapshot = require('./MissionInspectionSnapshot');
 
 module.exports = {
   ...types,
@@ -85,6 +106,7 @@ module.exports = {
   createAcquisitionMissionEngine,
   ...inspection,
   ...require('./DiscoveryPresentation'),
+  ...require('./PrioritizationPresentation'),
   ...structuredMission,
   ...missionPlanner,
   ...specialistInputs,
@@ -95,6 +117,7 @@ module.exports = {
   ...transactionalPersistence,
   ...specialistExecutionContract,
   ...pendingOperatorDecision,
+  ...decisionReadiness,
   ...missionProgression,
   ...workspaceMode,
   ...operatorDecisionPolicy,
@@ -102,4 +125,24 @@ module.exports = {
   ...canonicalMissionProjection,
   ...missionRuntimeOwnership,
   ...missionExecutionContext,
+  ...executionRequest,
+  ...executionRouter,
+  ...executionApproval,
+  ...outboundExecution,
+  ...communicationObservation,
+  ...observationInterpretation,
+  ...observeReaction,
+  ...observeEvaluator,
+  ...observeCadence,
+  ...preparedOutreachSequence,
+  ...learnProgression,
+  ...improveProgression,
+  ...meaningfulLearning,
+  ...outcomeLearningRetrieval,
+  ...acquisitionApproach,
+  ...contributionSupersession,
+  ...canonicalContributionSelection,
+  ...upstreamArtifactCoherence,
+  ...resolveInspectionMission,
+  ...missionInspectionSnapshot,
 };

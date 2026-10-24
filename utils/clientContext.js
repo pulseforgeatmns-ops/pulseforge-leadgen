@@ -60,6 +60,9 @@ const CLIENT_COLUMNS = [
   ['warmup_start_date', 'date'],
   ['autosend_enabled', 'boolean default false'],
   ['active', 'boolean default true'],
+  // When false, tenant may remain active for agents/scripts but must not appear
+  // in operator tenant switchers (/api/clients, session activate).
+  ['operator_switchable', 'boolean default true'],
   ['created_at', 'timestamptz default now()'],
 ];
 
@@ -102,7 +105,18 @@ function getRequestClientId(req) {
   );
 }
 
-async function ensureClientArchitecture() {
+// Share concurrent work only; later calls retain the legacy recheck behavior.
+let clientArchitectureInFlight;
+function ensureClientArchitecture() {
+  if (!clientArchitectureInFlight) {
+    clientArchitectureInFlight = Promise.resolve()
+      .then(ensureClientArchitectureOnce)
+      .finally(() => { clientArchitectureInFlight = undefined; });
+  }
+  return clientArchitectureInFlight;
+}
+
+async function ensureClientArchitectureOnce() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS clients (
       id serial primary key
@@ -321,6 +335,84 @@ async function ensureClientArchitecture() {
 
   await pool.query(`SELECT setval(pg_get_serial_sequence('clients', 'id'), GREATEST((SELECT MAX(id) FROM clients), 1))`);
 
+  // SPEC-WEB-001 — Maynard Web tenant (slug-resolved; no fixed id)
+  await pool.query(`
+    INSERT INTO clients (
+      name, slug, business_name, vertical, email, primary_contact,
+      country, timezone, industry, service_area, verticals, target_clients,
+      scoring_profile, enabled_agents, active, operator_switchable, notes
+    ) VALUES (
+      'Maynard Web',
+      'maynard-web',
+      'Maynard Web',
+      'web_design',
+      'jacob@gopulseforge.com',
+      'Jacob Maynard',
+      'United States',
+      'America/New_York',
+      'Website design and development',
+      ARRAY['United States'],
+      ARRAY['professional_services','legal','accounting','home_services','dental','fitness','restaurant','salon','hvac','roofing','landscaping','med_spa'],
+      'Established SMBs in the United States where website credibility and customer acquisition plausibly depend on web presence',
+      'web_design',
+      ARRAY['scout','max'],
+      true,
+      false,
+      'SPEC-WEB-001 — neutral working identity; NO outbound until explicitly authorized.'
+    )
+    ON CONFLICT (slug) DO UPDATE SET
+      scoring_profile = EXCLUDED.scoring_profile,
+      enabled_agents = EXCLUDED.enabled_agents,
+      notes = EXCLUDED.notes,
+      operator_switchable = false
+  `);
+  await pool.query(`
+    UPDATE clients SET operator_switchable = false WHERE slug = 'maynard-web'
+  `);
+
+  // SPEC-SUBSTRAL-PF-001 — Studio Substral first-class tenant (slug-resolved)
+  await pool.query(`
+    INSERT INTO clients (
+      name, slug, business_name, vertical, email, primary_contact,
+      country, timezone, industry, website, service_area, verticals, target_clients,
+      scoring_profile, enabled_agents, active, notes,
+      brand_voice, never_say, lead_with, sender_name, sender_email, sending_domain
+    ) VALUES (
+      'Studio Substral',
+      'studio-substral',
+      'Studio Substral',
+      'web_design',
+      'hello@studiosubstral.com',
+      'Jacob Maynard',
+      'United States',
+      'America/New_York',
+      'Website diagnosis, targeted remediation, redesign and build',
+      'https://studiosubstral.com',
+      ARRAY['United States'],
+      ARRAY['professional_services','legal','accounting','home_services','dental','fitness','restaurant','salon','hvac','roofing','landscaping','med_spa'],
+      'Established businesses with a live website and a real decision about what to fix, rebuild, or leave alone.',
+      'studio_substral',
+      ARRAY['scout','max','paige'],
+      true,
+      'SPEC-SUBSTRAL-PF-001 — diagnosis-before-design tenant. NO Emmett/outbound until governed mailbox readiness passes.',
+      'Diagnosis before design. Plain language, evidence-specific openings, no manufactured urgency, no redesign assumption. Primary CTA: paid website assessment.',
+      'free strategy call; website makeover; redesign consultation; your site is broken; you are losing customers',
+      'Evidence-first website assessment',
+      'Studio Substral',
+      'hello@studiosubstral.com',
+      'studiosubstral.com'
+    )
+    ON CONFLICT (slug) DO UPDATE SET
+      scoring_profile = EXCLUDED.scoring_profile,
+      enabled_agents = EXCLUDED.enabled_agents,
+      website = EXCLUDED.website,
+      brand_voice = EXCLUDED.brand_voice,
+      never_say = EXCLUDED.never_say,
+      sender_email = EXCLUDED.sender_email,
+      sending_domain = EXCLUDED.sending_domain,
+      notes = EXCLUDED.notes
+  `);
+
   await pool.query(`
     INSERT INTO clients (name, slug, email, city, state, active)
     VALUES ('McLeod Legal Services', 'mcleod', 'ashley@mcleodlegal.com',
@@ -386,13 +478,15 @@ async function getClientConfig(clientId = DEFAULT_CLIENT_ID) {
   return result.rows[0];
 }
 
-async function getActiveClients() {
+const OPERATOR_SWITCHABLE_WHERE = 'active = true AND COALESCE(operator_switchable, true) = true';
+
+async function queryActiveClientRows(whereClause = 'active = true') {
   try {
     const result = await pool.query(`
       SELECT id, name, slug, email, city, state,
         COALESCE(setter_pipeline_v2_enabled, false) AS setter_pipeline_v2_enabled
       FROM clients
-      WHERE active = true
+      WHERE ${whereClause}
       ORDER BY id
     `);
     return result.rows.map(row => ({
@@ -403,9 +497,23 @@ async function getActiveClients() {
     // Pre-Phase-3D schemas lack the pilot column; fail closed to legacy.
     if (!/setter_pipeline_v2_enabled/i.test(err.message || '')) throw err;
     const result = await pool.query(
-      'SELECT id, name, slug, email, city, state FROM clients WHERE active = true ORDER BY id'
+      `SELECT id, name, slug, email, city, state FROM clients WHERE ${whereClause} ORDER BY id`
     );
     return result.rows.map(row => ({ ...row, setter_pipeline_v2_enabled: false }));
+  }
+}
+
+async function getActiveClients() {
+  return queryActiveClientRows('active = true');
+}
+
+/** Tenants operators may select in session switchers (excludes hidden pilots like maynard-web). */
+async function getOperatorSwitchableClients() {
+  try {
+    return await queryActiveClientRows(OPERATOR_SWITCHABLE_WHERE);
+  } catch (err) {
+    if (!/operator_switchable/i.test(err.message || '')) throw err;
+    return queryActiveClientRows('active = true');
   }
 }
 
@@ -416,6 +524,7 @@ module.exports = {
   ensureClientArchitecture,
   ensureProspectStatusConstraint,
   getActiveClients,
+  getOperatorSwitchableClients,
   getClientConfig,
   getRequestClientId,
   getRuntimeClientId,

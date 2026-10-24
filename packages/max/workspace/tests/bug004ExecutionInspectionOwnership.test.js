@@ -23,10 +23,10 @@ const {
 } = require('../ExecutionState');
 const { buildExecutionPlan } = require('../ExecutionPlanner');
 const { extractIntents } = require('../IntentExtractor');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { createTestAmoRuntime } = require('./amoTestRuntime');
 const { shouldRetrieveOperatingEvidence } = require('../OperatingEvidenceRetrieval');
-const { maybeHandleRetrievalBeforeDelegationTurn } = require('../RetrievalBeforeDelegationContext');
+const { maybeHandleRetrievalBeforeDelegationTurn: rawRetrievalHandler } = require('../RetrievalBeforeDelegationContext');
 const { classifyMorningBriefing } = require('../ExecutionDomain');
 const { classifyCognitiveMode } = require('../../specialistDelegation/CognitiveMode');
 
@@ -57,6 +57,7 @@ function seedAmoMission(extra = {}) {
 async function openEngine(runtime) {
   const engine = createWorkspaceEngine({
     disableLlm: true,
+    clientIntelligenceService: { getApprovedClientBlueprint: async () => null },
     acquisitionMissionRuntime: runtime,
   });
   const opened = await engine.open({ tenantId: '10' });
@@ -175,3 +176,7 @@ describe('BUG-004 — Execution Inspection Ownership', () => {
     });
   });
 });
+
+// The same explicit CIE fixture contract applies to direct retrieval entry points.
+const { createHermeticRetrievalHandler } = require('./workspaceTestHarness');
+const maybeHandleRetrievalBeforeDelegationTurn = createHermeticRetrievalHandler(rawRetrievalHandler);

@@ -6,6 +6,17 @@
  */
 
 const { buildIntelligenceBrief } = require('../scout/credibility/CredibilityFramework');
+const {
+  buildPublicMissionIntelligenceReport,
+  containsForbiddenReasoningKeys,
+} = require('../scout/investigation/MissionIntelligenceReport');
+const {
+  buildScoutDiscoveryArtifact,
+  mapCanonicalEvidenceToContribution,
+} = require('../scout/adapters/ScoutDiscoveryArtifact');
+const { normalizeProviderExecution } = require('../scout/coverage/ProviderExecution');
+const { READINESS_STATES } = require('../max/scoutAcquisition/Types');
+const { assertCandidateBeliefPersistence } = require('../scout/investigation/CandidateBeliefState');
 
 const SOURCE_LABELS = Object.freeze({
   existing_repository: 'Company repository',
@@ -219,74 +230,126 @@ function buildDiscoverySummary(opportunities, missionObjective) {
 }
 
 /**
+ * Project candidate universe records for AMO contribution boundary (SPEC-173 / SPEC-196).
+ * Merges hypotheses into unknowns and strips contract-forbidden keys.
+ * @param {object[]} records
+ * @returns {object[]}
+ */
+function projectCandidateUniverseForContribution(records = []) {
+  if (!Array.isArray(records)) return [];
+  return records.map((record = {}) => {
+    const unknowns = [
+      ...(Array.isArray(record.unknowns) ? record.unknowns : []),
+      ...(Array.isArray(record.hypotheses) ? record.hypotheses : []),
+    ];
+    const investigationState =
+      record.investigationState && typeof record.investigationState === 'object'
+        ? {
+            missingEvidence: record.investigationState.missingEvidence || [],
+            unresolvedHypotheses: record.investigationState.unresolvedHypotheses || [],
+            canonicalGaps: record.investigationState.canonicalGaps || [],
+          }
+        : null;
+
+    const projected = {
+      candidateId: record.candidateId || record.candidate_id || record.id || null,
+      candidate_id: record.candidate_id || record.candidateId || record.id || null,
+      canonicalIdentity:
+        record.canonicalIdentity || record.candidateId || record.candidate_id || record.id || null,
+      name: record.name || null,
+      placeId: record.placeId || record.place_id || null,
+      website: record.website || record.url || null,
+      phone: record.phone || null,
+      address: record.address || record.location || null,
+      evidence: record.evidence || null,
+      qualification: record.qualification || null,
+      readiness: record.readiness || null,
+      evaluation: record.evaluation || null,
+      businessFit: record.businessFit || null,
+      evidenceRefs: record.evidenceRefs || null,
+      signals: record.signals || null,
+      hypothesisState: record.hypothesisState || null,
+      origin: record.origin || null,
+      sources: record.sources || null,
+      cities: record.cities || null,
+      confidence: record.confidence != null ? Number(record.confidence) : null,
+      dedupeStatus: record.dedupeStatus || null,
+      concept: record.concept || null,
+    };
+
+    if (unknowns.length) projected.unknowns = unknowns;
+    if (investigationState) projected.investigationState = investigationState;
+    if (record.excluded === true) projected.excluded = true;
+
+    return projected;
+  });
+}
+
+/**
  * @param {object} result - Scout intelligence result
  * @param {object} [opts]
  * @returns {object}
  */
 function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
-  const payload = result.payload || {};
-  const opportunities = payload.opportunities || payload.acquisitionOpportunities || [];
-  const missionObjective = opts.missionObjective || payload.missionObjective || null;
+  const artifact =
+    opts.discoveryArtifact ||
+    buildScoutDiscoveryArtifact(result, {
+      missionObjective: opts.missionObjective,
+      approvalConsumed: opts.approvalConsumed,
+    });
+  const payload = artifact.sourceResult?.payload || result.payload || {};
+  const opportunities = artifact.opportunities || [];
+  const fitCandidates = artifact.fitCandidates || payload.fitCandidates || [];
+  const watchCandidates = artifact.watchCandidates || payload.watchCandidates || [];
+  const missionObjective = artifact.missionObjective || opts.missionObjective || payload.missionObjective || null;
 
-  const companies =
-    payload.companies ||
-    opportunities
-      .map((row) => ({
-        id: row.companyId || row.id,
-        name: row.name,
-        fit: row.fit,
-        timing: row.timing,
-        confidence: row.confidence,
-      }))
-      .filter((row) => row.id || row.name);
-
-  const prospects = payload.prospects || payload.people || [];
+  const companies = artifact.companies || [];
+  const prospects = artifact.prospects || [];
+  const qualifiedFromEvaluations =
+    payload.readinessUnknownCount != null || payload.readinessReadyCount != null
+      ? Number(payload.readinessReadyCount || 0) +
+        Number(payload.readinessUnknownCount || 0) +
+        Number(payload.readinessNotReadyCount || 0)
+      : null;
   const qualifiedCount =
-    payload.qualifiedCount != null
-      ? Number(payload.qualifiedCount)
-      : companies.length || opportunities.length;
+    artifact.qualifiedCount != null
+      ? Number(artifact.qualifiedCount)
+      : qualifiedFromEvaluations != null && qualifiedFromEvaluations > 0
+        ? qualifiedFromEvaluations
+        : opportunities.length +
+            fitCandidates.length +
+            watchCandidates.filter((row) => row.qualified === true).length || companies.length;
 
   const buyingSignals = [];
   const seenSignals = new Set();
-  for (const opp of opportunities) {
-    for (const sig of opp.signals || []) {
-      const normalized = normalizeBuyingSignal(sig, opp.name);
-      if (!normalized) continue;
-      const key = `${normalized.company}|${normalized.label}`;
-      if (seenSignals.has(key)) continue;
-      seenSignals.add(key);
-      buyingSignals.push(normalized);
-    }
-  }
-  for (const sig of payload.buyingSignals || payload.signals || []) {
-    const normalized = normalizeBuyingSignal(sig);
+  for (const sig of artifact.buyingSignals || []) {
+    const normalized = normalizeBuyingSignal(sig, sig.company);
     if (!normalized) continue;
-    const key = normalized.label;
+    const key = `${normalized.company || ''}|${normalized.label}`;
     if (seenSignals.has(key)) continue;
     seenSignals.add(key);
     buyingSignals.push(normalized);
   }
 
-  const evidence = [];
-  const seenEvidence = new Set();
-  for (const opp of opportunities) {
-    for (const ref of opp.evidenceRefs || []) {
-      const normalized = normalizeEvidenceItem(ref, opp.name);
-      if (!normalized) continue;
-      const key = `${normalized.company}|${normalized.label}|${normalized.source}`;
-      if (seenEvidence.has(key)) continue;
-      seenEvidence.add(key);
-      evidence.push(normalized);
-    }
-  }
-  for (const ref of payload.evidence || payload.evidenceRefs || []) {
-    const normalized = normalizeEvidenceItem(ref);
-    if (!normalized) continue;
-    const key = `${normalized.label}|${normalized.source}`;
-    if (seenEvidence.has(key)) continue;
-    seenEvidence.add(key);
-    evidence.push(normalized);
-  }
+  const evidence = mapCanonicalEvidenceToContribution(artifact.evidence || []).map((item) =>
+    normalizeEvidenceItem(
+      {
+        id: item.id,
+        label: item.label,
+        source: item.source,
+        observedAt: item.observedAt,
+        kind: item.evidenceType,
+        provenance: item.provenance,
+        snapshot: {
+          source: item.source,
+          companyName: item.company,
+          evidenceType: item.evidenceType,
+          observedAt: item.observedAt,
+        },
+      },
+      item.company
+    )
+  ).filter(Boolean);
 
   const decisionMakers = [];
   for (const opp of opportunities) {
@@ -300,15 +363,25 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
     else if (dm && dm.name) decisionMakers.push(dm);
   }
 
-  const rankedProspects = opportunities.map((opp, index) => {
+  function buildRankedProspectRow(opp, index, readinessState) {
     const credibilityBrief = buildOpportunityCredibilityBrief(opp, index);
+    const evaluation = opp.evaluation || null;
     return {
       rank: index + 1,
       name: opp.name,
       id: opp.companyId || opp.id || null,
+      website: opp.website || opp.url || null,
+      domain: opp.domain || null,
+      placeId: opp.placeId || opp.place_id || null,
+      location: opp.location || null,
+      evidenceRefs: opp.evidenceRefs || [],
       fit: opp.fit != null ? Number(opp.fit) : null,
       timing: opp.timing != null ? Number(opp.timing) : null,
       confidence: opp.confidence != null ? Number(opp.confidence) : null,
+      readinessState,
+      qualificationStatus: evaluation && evaluation.qualification ? evaluation.qualification.status : opp.qualificationStatus || null,
+      prospectBucket: evaluation ? evaluation.bucket : opp.prospectBucket || null,
+      evaluation,
       rationale: buildProspectRationale(opp),
       signals: (opp.signals || []).map((s) => normalizeBuyingSignal(s, opp.name)).filter(Boolean),
       unknowns: (opp.unknowns || [])
@@ -320,6 +393,45 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
       highestRemainingUnknowns: credibilityBrief.highestRemainingUnknowns,
       recommendedNextInvestigation: credibilityBrief.recommendedNextInvestigation,
     };
+  }
+
+  const rankedProspects = opportunities.map((opp, index) =>
+    buildRankedProspectRow(opp, index, READINESS_STATES.READY)
+  );
+  for (let i = 0; i < fitCandidates.length; i += 1) {
+    rankedProspects.push(
+      buildRankedProspectRow(
+        fitCandidates[i],
+        rankedProspects.length,
+        fitCandidates[i].readinessState || READINESS_STATES.UNKNOWN
+      )
+    );
+  }
+  for (let i = 0; i < watchCandidates.length; i += 1) {
+    const row = watchCandidates[i];
+    if (row.qualified !== true && row.qualificationStatus !== 'qualified') continue;
+    rankedProspects.push(
+      buildRankedProspectRow(
+        row,
+        rankedProspects.length,
+        row.readinessState || READINESS_STATES.NOT_READY
+      )
+    );
+  }
+
+  const readinessOrder = {
+    [READINESS_STATES.READY]: 0,
+    [READINESS_STATES.UNKNOWN]: 1,
+    [READINESS_STATES.NOT_READY]: 2,
+  };
+  rankedProspects.sort((a, b) => {
+    const left = readinessOrder[a.readinessState] ?? 1;
+    const right = readinessOrder[b.readinessState] ?? 1;
+    if (left !== right) return left - right;
+    return (Number(b.fit) || 0) - (Number(a.fit) || 0);
+  });
+  rankedProspects.forEach((row, index) => {
+    row.rank = index + 1;
   });
 
   if (!rankedProspects.length && companies.length) {
@@ -329,6 +441,7 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
         rank: i + 1,
         name: formatDiscoveryItem(company),
         id: company.id || null,
+        readinessState: READINESS_STATES.UNKNOWN,
         rationale: 'Returned by Scout discovery.',
         signals: [],
         unknowns: [],
@@ -336,45 +449,60 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
     }
   }
 
-  const confidenceBreakdown = computeConfidenceBreakdown(
-    opportunities,
-    payload,
-    payload.confidence != null ? payload.confidence : result.confidence
-  );
+  const confidenceBreakdown =
+    artifact.confidenceBreakdown ||
+    computeConfidenceBreakdown(
+      opportunities,
+      payload,
+      artifact.confidence != null ? artifact.confidence : payload.confidence
+    );
 
   const summary =
-    (result.summary && String(result.summary).trim()) ||
-    (payload.summary && String(payload.summary).trim()) ||
+    (artifact.summary && String(artifact.summary).trim()) ||
     buildDiscoverySummary(opportunities, missionObjective);
 
-  const blocked =
-    result.status === 'blocked' ||
-    (qualifiedCount <= 0 && payload.discoveryStatus === 'incomplete') ||
-    payload.outcome === 'blocked';
+  const blocked = artifact.blocked === true;
 
-  const coverage = payload.coverage || (payload.discoveryReport && payload.discoveryReport.coverage) || null;
-  const discoveryStatus = payload.discoveryStatus || (payload.discoveryReport && payload.discoveryReport.status) || null;
-  const candidateUniverseCount =
-    payload.candidateUniverseCount != null
-      ? Number(payload.candidateUniverseCount)
+  const coverage = artifact.coverage || null;
+  const discoveryStatus = artifact.discoveryStatus || null;
+  const candidateUniverse = projectCandidateUniverseForContribution(
+    Array.isArray(artifact.candidateUniverse)
+      ? artifact.candidateUniverse
       : Array.isArray(payload.candidateUniverse)
-        ? payload.candidateUniverse.filter((row) => row.dedupeStatus !== 'duplicate').length
-        : payload.discoveryReport && payload.discoveryReport.candidateUniverse != null
-          ? Number(payload.discoveryReport.candidateUniverse)
-          : null;
+        ? payload.candidateUniverse
+        : []
+  );
+  const candidateUniverseCount = candidateUniverse.length || null;
+  const rankedProspectCount = rankedProspects.length;
+  const readinessKnownCount =
+    payload.readinessKnownCount != null
+      ? Number(payload.readinessKnownCount)
+      : Number(payload.readinessReadyCount || 0) + Number(payload.readinessNotReadyCount || 0);
+  const excludedCount =
+    payload.excludedCount != null
+      ? Number(payload.excludedCount)
+      : [
+          ...watchCandidates,
+          ...fitCandidates,
+          ...candidateUniverse,
+        ].filter((row) => row.excluded === true || row.prospectBucket === 'excluded').length;
 
-  const estimatedMarket =
-    payload.universeEstimate ||
-    (payload.discoveryReport && payload.discoveryReport.estimatedMarket) ||
-    null;
+  const estimatedMarket = artifact.estimatedMarket || null;
   const marketCoveragePct =
-    payload.coveragePct != null
-      ? payload.coveragePct
-      : payload.discoveryReport && payload.discoveryReport.marketCoveragePct != null
-        ? payload.discoveryReport.marketCoveragePct
-        : null;
+    artifact.marketCoveragePct != null ? artifact.marketCoveragePct : null;
 
-  return {
+  const publicMir = artifact.missionIntelligenceReport
+    ? buildPublicMissionIntelligenceReport(artifact.missionIntelligenceReport)
+    : null;
+
+  const providerExecution = normalizeProviderExecution(
+    artifact.providerExecution ||
+      payload.providerExecution ||
+      payload.providerReports ||
+      []
+  );
+
+  const contribution = {
     companies,
     prospects,
     buyingSignals,
@@ -388,25 +516,56 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
       briefCount: rankedProspects.filter((r) => r.intelligenceBrief).length,
     },
     qualifiedCount,
-    outcome: result.status || (blocked ? 'blocked' : 'completed'),
+    readinessReadyCount: payload.readinessReadyCount != null ? Number(payload.readinessReadyCount) : opportunities.length,
+    readinessUnknownCount:
+      payload.readinessUnknownCount != null
+        ? Number(payload.readinessUnknownCount)
+        : fitCandidates.length,
+    readinessNotReadyCount: payload.readinessNotReadyCount != null ? Number(payload.readinessNotReadyCount) : 0,
+    outcome: artifact.outcome || (blocked ? 'blocked' : 'completed'),
     blocked,
+    blockerCode: artifact.blockerCode || payload.blockerCode || null,
+    blockReason: artifact.blockReason || payload.blockReason || null,
     summary,
     missionObjective,
-    approvalConsumed: Boolean(opts.approvalConsumed),
+    approvalConsumed: Boolean(artifact.approvalConsumed ?? opts.approvalConsumed),
     coverage,
     discoveryStatus,
+    candidateUniverse,
     candidateUniverseCount,
+    rankedProspectCount,
+    readinessKnownCount,
+    excludedCount,
     estimatedMarket,
     marketCoveragePct,
-    discoveryReport: payload.discoveryReport || null,
-    discoveryConfidence: payload.discoveryConfidence || null,
-    discoveryPlan: payload.discoveryPlan || null,
-    intelligenceReport: payload.intelligenceReport || result.intelligenceReport || null,
-    missionIntelligenceReport:
-      payload.missionIntelligenceReport ||
-      result.missionIntelligenceReport ||
-      null,
+    discoveryReport: artifact.discoveryReport || null,
+    discoveryConfidence: artifact.discoveryConfidence || null,
+    discoveryPlan: artifact.discoveryPlan || null,
+    missionIntelligenceReport: publicMir,
+    discoveryArtifact: {
+      spec: 'SPEC-173',
+      fitCandidates: artifact.fitCandidates || [],
+      watchCandidates: artifact.watchCandidates || [],
+      uncertainCandidates: artifact.uncertainCandidates || payload.uncertainCandidates || [],
+      rankedProspects: rankedProspects,
+      candidateUniverse,
+      prospectEvaluations: payload.prospectEvaluations || [],
+      businessUnderstanding: artifact.businessUnderstanding || null,
+      businessJudgment: artifact.businessJudgment || null,
+    },
+    cognitiveTrace: artifact.cognitiveTrace || null,
+    explainabilityGraph: artifact.explainabilityGraph || null,
+    providerExecution,
+    candidateInvestigation: payload.candidateInvestigation || null,
   };
+
+  if (containsForbiddenReasoningKeys(contribution)) {
+    throw new Error('SPEC-173 boundary projection failed: forbidden reasoning keys remain in discovery contribution.');
+  }
+
+  assertCandidateBeliefPersistence(contribution);
+
+  return contribution;
 }
 
 /**
@@ -420,21 +579,36 @@ function hasSufficientEvidenceForPrioritization(presentation) {
   if (!presentation.rankedProspects || !presentation.rankedProspects.length) return false;
   if (!presentation.summary) return false;
 
+  const evidenceItems = presentation.evidence || [];
+  const hasProvenance = evidenceItems.some((e) => {
+    if (typeof e === 'object') {
+      const source = String(e.source || '');
+      return source && !/test fixture/i.test(source);
+    }
+    const text = String(e || '').toLowerCase();
+    return text && text !== 'fixture' && !/test fixture/i.test(text);
+  });
+  if (!hasProvenance) return false;
+
+  const hasReadyProspects = presentation.rankedProspects.some(
+    (row) => row.readinessState === READINESS_STATES.READY
+  );
+  if (!hasReadyProspects) {
+    // ADR-101: qualified prospects with unknown readiness and provenance are prioritizable.
+    return presentation.rankedProspects.some(
+      (row) =>
+        row.readinessState === READINESS_STATES.UNKNOWN ||
+        row.readinessState == null
+    );
+  }
+
   const signals = presentation.buyingSignals || [];
   const hasSpecificSignals = signals.some((s) => {
     if (typeof s === 'object') return Boolean(s.label && s.type);
     return String(s).split(/\s+/).length >= 2;
   });
 
-  const evidenceItems = presentation.evidence || [];
-  const hasProvenance = evidenceItems.some((e) => {
-    if (typeof e === 'object') {
-      return e.source && !/test fixture/i.test(String(e.source));
-    }
-    return e && String(e).toLowerCase() !== 'fixture';
-  });
-
-  return hasSpecificSignals && hasProvenance;
+  return hasSpecificSignals;
 }
 
 module.exports = {

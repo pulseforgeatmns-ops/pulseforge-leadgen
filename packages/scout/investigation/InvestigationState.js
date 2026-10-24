@@ -44,6 +44,12 @@ function cloneList(value) {
  * @property {object[]} [businessUnderstandings]
  * @property {object|null} [synthesisSummary]
  * @property {object|null} [priorUnderstanding]
+ * @property {object|null} [investigationPlan] — SPEC-177 hypothesis-driven plan
+ * @property {object[]} [questions] — investigative questions
+ * @property {object[]} [evidenceRequirements] — declared evidence requirements
+ * @property {object[]} [assignedProviders] — providers assigned by evidence type
+ * @property {object[]} [satisfiedEvidence] — evidence already collected
+ * @property {object[]} [outstandingEvidence] — evidence still needed
  */
 
 function buildInvestigationState(partial = {}) {
@@ -66,6 +72,12 @@ function buildInvestigationState(partial = {}) {
     businessUnderstandings: cloneList(partial.businessUnderstandings),
     synthesisSummary: partial.synthesisSummary || null,
     priorUnderstanding: partial.priorUnderstanding || null,
+    investigationPlan: partial.investigationPlan || null,
+    questions: cloneList(partial.questions),
+    evidenceRequirements: cloneList(partial.evidenceRequirements),
+    assignedProviders: cloneList(partial.assignedProviders),
+    satisfiedEvidence: cloneList(partial.satisfiedEvidence),
+    outstandingEvidence: cloneList(partial.outstandingEvidence),
     seededFromMemory: partial.seededFromMemory === true,
     createdAt: partial.createdAt || nowIso(),
     updatedAt: partial.updatedAt || nowIso(),
@@ -439,6 +451,33 @@ function applyBusinessJudgment(state, judgmentResult = {}) {
   });
 }
 
+function applyInvestigationPlan(state, plan = {}) {
+  if (!plan || !plan.version) return state;
+  return {
+    ...state,
+    investigationPlan: plan,
+    questions: cloneList(plan.questions),
+    evidenceRequirements: cloneList(plan.evidenceRequirements),
+    assignedProviders: cloneList(plan.assignedProviders),
+    satisfiedEvidence: cloneList(plan.satisfiedEvidence),
+    outstandingEvidence: cloneList(plan.outstandingEvidence),
+    updatedAt: nowIso(),
+  };
+}
+
+function updateEvidenceTracking(state, partial = {}) {
+  return {
+    ...state,
+    satisfiedEvidence: cloneList(
+      partial.satisfiedEvidence != null ? partial.satisfiedEvidence : state.satisfiedEvidence
+    ),
+    outstandingEvidence: cloneList(
+      partial.outstandingEvidence != null ? partial.outstandingEvidence : state.outstandingEvidence
+    ),
+    updatedAt: nowIso(),
+  };
+}
+
 function serializeInvestigationState(state) {
   return {
     missionId: state.missionId,
@@ -460,6 +499,12 @@ function serializeInvestigationState(state) {
     synthesisSummary: state.synthesisSummary,
     businessJudgment: state.businessJudgment,
     priorUnderstanding: state.priorUnderstanding,
+    investigationPlan: state.investigationPlan,
+    questions: state.questions,
+    evidenceRequirements: state.evidenceRequirements,
+    assignedProviders: state.assignedProviders,
+    satisfiedEvidence: state.satisfiedEvidence,
+    outstandingEvidence: state.outstandingEvidence,
     seededFromMemory: state.seededFromMemory,
     createdAt: state.createdAt,
     updatedAt: state.updatedAt,
@@ -480,5 +525,7 @@ module.exports = {
   addEvidenceToGraph,
   setNextQuestions,
   updateUncertainty,
+  applyInvestigationPlan,
+  updateEvidenceTracking,
   serializeInvestigationState,
 };

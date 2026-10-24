@@ -123,6 +123,8 @@ function generateHypotheses(marketDefinition, mission = {}, opts = {}) {
       text: tpl.text,
       requiredEvidence: tpl.requiredEvidence.slice(),
       missingEvidence: tpl.requiredEvidence.slice(),
+      gap: tpl.gap || null,
+      rationale: tpl.rationale || `Evidence gap "${tpl.gap}" must be resolved for this segment hypothesis.`,
       minConfidence: threshold,
       confidence: null,
     })

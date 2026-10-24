@@ -1,12 +1,12 @@
 require('dotenv').config();
 const pool = require('./db');
 const axios = require('axios');
-const Anthropic = require('@anthropic-ai/sdk');
+const Anthropic = require('./utils/meteredAnthropic').forAgent('rex');
 const { randomUUID } = require('crypto');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { reportAgentRun } = require('./utils/agentObservability');
 
-const client = new Anthropic();
+const client = new Anthropic(undefined, { tenantId: () => CLIENT_ID });
 const AGENT_NAME = 'rex';
 const CLIENT_ID = getRuntimeClientId();
 let lastSendReportError = null;
@@ -803,3 +803,4 @@ if (require.main === module) {
     process.exit(1);
   });
 }
+

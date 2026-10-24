@@ -21,7 +21,7 @@ const JOB_TRANSITIONS = Object.freeze({
 });
 
 const LEAD_SOURCES = new Set([
-  'yelp', 'google_ads', 'google_lsa', 'organic_search', 'direct', 'referral',
+  'yelp', 'google_ads', 'google_lsa', 'chatgpt_ads', 'organic_search', 'direct', 'referral',
   'repeat_customer', 'outbound_email', 'outbound_phone', 'linkedin', 'str_partner',
   'cleaning_company_overflow', 'property_manager', 'realtor', 'manual', 'unknown',
 ]);

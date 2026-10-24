@@ -24,6 +24,10 @@ const {
 } = require('./WorkspaceMissionInspection');
 const { isOperatorOperatingUpdate } = require('./OperatorOperatingUpdate');
 const { shouldRetrieveOperatingEvidence } = require('./OperatingEvidenceRetrieval');
+const {
+  isClaimChallenge,
+  isOperatorClaimCorrection,
+} = require('./RecommendationClaimChallenge');
 const { isActiveWorkFollowUpCue, getActiveWorkContext, activeContextHasEntities } = require('./ActiveWorkContext');
 const {
   detectAcquisitionObjective,
@@ -36,6 +40,7 @@ const {
 const {
   detectObjectiveEstablishment,
   isExplicitObjectivePersistenceRequest,
+  looksLikeObjectiveContentRequest,
 } = require('../../../services/operatorObjectives');
 const {
   isExplicitMissionExit,
@@ -45,7 +50,7 @@ const {
   blocksBusinessSubsystemClaim,
 } = require('./WorkspaceRoutingPatterns');
 const { CONVERSATION_SUBJECTS } = require('./ConversationSubject');
-const { missionMayOwnTurn } = require('./OperatorIntentContract');
+const { missionMayOwnTurn, pendingDecisionRetainsTurn, resolvedPendingHasCanonicalAction } = require('./OperatorIntentContract');
 const { contractBlocksExecution, contractLocksConversation } = require('./ConversationContract');
 const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
 const { MESSAGE_TYPES } = require('./MessageType');
@@ -256,7 +261,7 @@ function claimsObjectivePersistence(question, input = {}) {
 
   // SPEC-126 / SPEC-153 — execution language never yields to objective persistence.
   const executionPresent = operatorIntent
-    ? operatorIntent.executionLanguagePresent || operatorIntent.executionRequested
+    ? operatorIntent.executionLanguagePresent
     : hasExecutionLanguage(q);
   if (executionPresent) return null;
   if (isAcquisitionObjectiveForMission(q)) return null;
@@ -286,7 +291,10 @@ function claimsSpecialistOwnership(question) {
   const q = normalizeQuestion(question);
   if (!q) return null;
 
-  if (INTERROGATION_RE.test(q)) {
+  const interrogationIntent = require('../../../services/specialistDelegation')
+    .classifyOperatorIntent(q, []);
+  if (INTERROGATION_RE.test(q) ||
+      ['interrogate', 'context_inspection'].includes(interrogationIntent && interrogationIntent.kind)) {
     return {
       owner: WORKSPACE_OWNERS.SPECIALIST_INTERROGATION,
       reason: 'specialist_trace_interrogation',
@@ -335,6 +343,7 @@ function claimsKnowledgeRetrieval(question) {
   if (!q) return false;
   if (claimsExecutionInspection(q)) return false;
   if (isOperatorOperatingUpdate(q)) return true;
+  if (isClaimChallenge(q) || isOperatorClaimCorrection(q)) return true;
   if (shouldRetrieveOperatingEvidence(q)) return true;
   return false;
 }
@@ -741,6 +750,24 @@ async function resolveWorkspaceOwner(input = {}) {
     };
   }
 
+  // SPEC-202 — pending operator decision retains turn ownership before retrieval/routing fallbacks.
+  if (
+    missionLock.active &&
+    !missionLock.explicitExit &&
+    operatorIntent &&
+    pendingDecisionRetainsTurn(operatorIntent)
+  ) {
+    askPathTrace.traceOwner(WORKSPACE_OWNERS.ACTIVE_MISSION, 'pending_decision_turn_ownership');
+    askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', 'pending_decision_turn_ownership');
+    return {
+      owner: WORKSPACE_OWNERS.ACTIVE_MISSION,
+      reason: 'pending_decision_turn_ownership',
+      confidence: 0.98,
+      specialist: null,
+      missionLock,
+    };
+  }
+
   // 4 — SPEC-153: active mission owns execution/planning/mutation/continuation turns
   const activeMissionExecutionCommand =
     missionLock.executionCommand ||
@@ -819,6 +846,31 @@ async function resolveWorkspaceOwner(input = {}) {
     }
   }
 
+  // SPEC-216 — Resolved pending decision with canonical mission action retains active-mission ownership.
+  // A resolved pending decision that produced an execution intent (e.g., REVISE_PREPARED_OUTREACH)
+  // must not be reclassified by generic mission_creation ownership rules.
+  if (
+    missionLock.active &&
+    operatorIntent &&
+    resolvedPendingHasCanonicalAction(operatorIntent.pendingDecisionResolution)
+  ) {
+    askPathTrace.traceOwner(
+      WORKSPACE_OWNERS.ACTIVE_MISSION,
+      'resolved_pending_canonical_action'
+    );
+    askPathTrace.traceEarlyReturn(
+      'resolveWorkspaceOwner',
+      'resolved_pending_canonical_action'
+    );
+    return {
+      owner: WORKSPACE_OWNERS.ACTIVE_MISSION,
+      reason: 'resolved_pending_canonical_action',
+      confidence: 0.98,
+      specialist: null,
+      missionLock,
+    };
+  }
+
   // 2 — Mission Creation
   const missionClaim = claimsMissionCreation(question, input);
   if (missionClaim) return { ...missionClaim, specialist: null };
@@ -826,6 +878,20 @@ async function resolveWorkspaceOwner(input = {}) {
   // 3 — Objective Persistence (explicit save/track only; never execution language)
   const objectiveClaim = claimsObjectivePersistence(question, input);
   if (objectiveClaim) return { ...objectiveClaim, specialist: null };
+
+  // SPEC-095 — recover the durable objective before choosing a content owner.
+  // A canonical mission objective is a different contract and cannot stand in
+  // for a resolved durable operator objective here.
+  if (input.operatorObjectiveContext &&
+      input.operatorObjectiveContext.resolvedObjective &&
+      looksLikeObjectiveContentRequest(question)) {
+    return {
+      owner: WORKSPACE_OWNERS.SPECIALIST_PAIGE,
+      reason: 'resolved_operator_objective_content',
+      confidence: 0.95,
+      specialist: 'paige',
+    };
+  }
 
   // 4 — Blueprint
   if (claimsBlueprintOwnership(question, input)) {

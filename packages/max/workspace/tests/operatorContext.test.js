@@ -16,7 +16,7 @@ const {
   REBUILD_TRIGGERS,
 } = require('../../../../services/operatorContext');
 const { loadOperatorContextForSession } = require('../OperatorContextLoader');
-const { createWorkspaceEngine } = require('../index');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const {
   createMemoryStore: createObjectiveStore,
   createOperatorObjective,
@@ -107,7 +107,7 @@ describe('SPEC-104 operator context service', () => {
         title: 'Land first recurring commercial account',
         objectiveText: 'Validate outbound before scaling.',
       },
-      { store: objectiveStore }
+      { store: objectiveStore, operatorContextOpts: baseOpts() }
     );
 
     const doc = await assembleOperatorContext({
@@ -123,6 +123,32 @@ describe('SPEC-104 operator context service', () => {
     assert.equal(doc.activeMissions[0].title, 'Campaign 002');
     assert.ok(doc.recentOutcomes.length >= 1);
     assert.ok(doc.sources.blueprintApproved);
+  });
+
+  it('AMO stage labels count as active missions in session brief projection', async () => {
+    await seedAnchorBlueprint(cieStore);
+
+    const doc = await assembleOperatorContext({
+      tenantId: String(CLIENT_ID),
+      clientId: CLIENT_ID,
+      ...baseOpts({
+        listMissions: async () => [
+          {
+            id: 'amo_mission_1',
+            title: 'Manchester Law Firms',
+            status: 'Understanding',
+            objectiveText: 'Acquire commercial cleaning customers in Manchester NH.',
+            updatedAt: new Date().toISOString(),
+          },
+        ],
+      }),
+    });
+
+    assert.equal(doc.activeMissions.length, 1);
+    assert.equal(doc.activeMissions[0].status, 'Understanding');
+
+    const brief = generateSessionBrief({ context: doc });
+    assert.match(brief.fullText, /Active mission: Manchester Law Firms \(Understanding\)/);
   });
 
   it('persists and versions operator context on rebuild', async () => {
@@ -211,6 +237,7 @@ describe('SPEC-104 startup loader and workspace open', () => {
       trigger: REBUILD_TRIGGERS.INITIAL,
       store: contextStore,
       cieOpts: { store: cieStore },
+      objectiveOpts: { store: createObjectiveStore() },
       listMissions: async () => [],
       loadOutcomes: async () => [],
     });
@@ -239,6 +266,7 @@ describe('SPEC-104 startup loader and workspace open', () => {
       trigger: REBUILD_TRIGGERS.INITIAL,
       store: contextStore,
       cieOpts: { store: cieStore },
+      objectiveOpts: { store: createObjectiveStore() },
       listMissions: async () => [],
       loadOutcomes: async () => [],
     });

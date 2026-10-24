@@ -9,6 +9,28 @@
 
 const { asText } = require('../../max/scoutAcquisition/Types');
 const { normalizeSegmentKey } = require('../coverage/ConceptLibrary');
+const {
+  inferTargetSegmentFromObjective,
+  segmentToSearchKey,
+} = require('../../acquisition-mission/MissionNaming');
+const {
+  FOUNDER_LED_SMALL_BUSINESS_VERTICALS,
+  SERVICE_TRADE_TAXONOMY,
+  serviceTradeVerticals,
+  serviceTradeMissionVerticals,
+  serviceTradeSearchTerms,
+  founderLedSmallBusinessSearchTerms,
+  founderLedSmallBusinessCustomerTypes,
+} = require('../../../utils/canonicalBusinessTaxonomy');
+
+/** ADR-093 / SPEC-178 — resolution sources in precedence order. */
+const SEGMENT_RESOLUTION_SOURCES = Object.freeze([
+  'operator_objective',
+  'mission_objective',
+  'evidence',
+  'mission_constraints',
+  'defaults',
+]);
 
 /**
  * @typedef {object} MarketDefinition
@@ -28,6 +50,17 @@ const { normalizeSegmentKey } = require('../coverage/ConceptLibrary');
  */
 
 const MARKET_SEMANTIC_MODELS = Object.freeze({
+  small_business_owners: Object.freeze({
+    market: 'Founder-Led Small Business Operations',
+    customerTypes: Object.freeze(founderLedSmallBusinessCustomerTypes()),
+    decisionMakers: Object.freeze(['Founder', 'Owner', 'Co-owner']),
+    businessModels: Object.freeze(['Founder-led', 'Owner-operated', 'Independent business']),
+    terminology: Object.freeze(founderLedSmallBusinessSearchTerms()),
+    adjacentMarkets: Object.freeze([]),
+    exclusions: Object.freeze(['National chains', 'Public companies', 'Franchisor corporate offices']),
+    buyingSignals: Object.freeze(['Founder identified', 'Owner-operated', 'Team growth', 'Operational complexity']),
+    expectedEvidence: Object.freeze(['website', 'contacts', 'business_fit', 'founder_identity']),
+  }),
   short_term_rental: Object.freeze({
     market: 'Short-Term Rental Operations',
     customerTypes: Object.freeze([
@@ -142,33 +175,122 @@ const DEFAULT_SEMANTIC_MODEL = Object.freeze({
   expectedEvidence: Object.freeze(['website', 'contacts', 'business_fit']),
 });
 
-function resolveSegmentKey(segments = [], mission = {}) {
-  const safeSegments = (segments || []).filter((s) => s != null && s !== '');
-  const fromSegments = safeSegments.map((s) => normalizeSegmentKey(s)).find((k) => k && MARKET_SEMANTIC_MODELS[k]);
-  if (fromSegments) return fromSegments;
-
-  const constraints = mission.constraints || {};
-  const hints = [
-    constraints.vertical,
-    constraints.industry,
-    mission.objectiveText,
-    mission.objective,
-    mission.title,
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
-
-  if (/short.term.rental|\bstr\b|vacation rental|airbnb|vrbo|holiday rental/.test(hints)) {
+function inferSegmentKeyFromText(text) {
+  const hay = asText(text);
+  if (!hay) return null;
+  const fromLabel = inferTargetSegmentFromObjective(hay);
+  if (fromLabel) return segmentToSearchKey(fromLabel);
+  if (/short.term.rental|\bstr\b|vacation rental|airbnb|vrbo|holiday rental/.test(hay.toLowerCase())) {
     return 'short_term_rental';
   }
-  if (/property manag/.test(hints)) return 'property_management';
-  if (/law firm|attorney|legal office/.test(hints)) return 'law_firm';
-  if (/accounting|cpa\b|bookkeeping/.test(hints)) return 'accounting';
-  if (/commercial cleaning|janitorial|office cleaning/.test(hints)) return 'commercial_cleaning';
+  if (/property manag/.test(hay.toLowerCase())) return 'property_management';
+  if (/law firm|attorney|legal office/.test(hay.toLowerCase())) return 'law_firm';
+  if (/accounting|cpa\b|bookkeeping/.test(hay.toLowerCase())) return 'accounting';
+  if (/commercial cleaning|janitorial|office cleaning/.test(hay.toLowerCase())) return 'commercial_cleaning';
+  return null;
+}
 
-  const first = safeSegments.length ? normalizeSegmentKey(safeSegments[0]) : '';
-  return first || 'general';
+function normalizeKnownSegmentKey(value) {
+  const key = normalizeSegmentKey(value);
+  if (['small_business_owner', 'founder_led_smb', 'founder_led_small_business'].includes(key)) {
+    return 'small_business_owners';
+  }
+  if (key && MARKET_SEMANTIC_MODELS[key]) return key;
+  const inferred = inferSegmentKeyFromText(value);
+  if (inferred && MARKET_SEMANTIC_MODELS[inferred]) return inferred;
+  return key || null;
+}
+
+function missionPlanFromInput(mission = {}) {
+  return (
+    mission.structuredMission ||
+    (mission.plan && mission.plan.missionPlan) ||
+    mission.missionPlan ||
+    {}
+  );
+}
+
+function constraintVertical(mission = {}) {
+  const constraints = mission.constraints;
+  if (!constraints || Array.isArray(constraints)) return null;
+  return asText(constraints.vertical) || asText(constraints.industry) || null;
+}
+
+/**
+ * ADR-093 — Canonical segment resolution.
+ * Operator objective is authoritative; mission constraints refine but never redefine.
+ *
+ * Resolution order:
+ *   1. Operator objective
+ *   2. Mission objective (locked plan segment)
+ *   3. Evidence (dominant terminology / evidence-driven segment)
+ *   4. Mission constraints (vertical/industry — refinement only when higher layers silent)
+ *   5. Defaults (supplied segments, delegation hints)
+ *
+ * @param {object} input
+ * @returns {{ segmentKey: string, source: string }}
+ */
+function resolveCanonicalSegmentKey(input = {}) {
+  const mission = input.mission || {};
+  const plan = missionPlanFromInput(mission);
+  const market = plan.market || {};
+
+  const operatorTexts = [
+    input.operatorObjective,
+    mission.objectiveText,
+    mission.objective,
+    input.operatorDirection,
+    mission.title,
+  ].filter(Boolean);
+
+  for (const text of operatorTexts) {
+    const key = inferSegmentKeyFromText(text);
+    if (key && MARKET_SEMANTIC_MODELS[key]) {
+      return { segmentKey: key, source: 'operator_objective' };
+    }
+  }
+
+  const missionSegment = asText(input.missionSegment) || asText(market.segment);
+  if (missionSegment) {
+    const key = normalizeKnownSegmentKey(missionSegment);
+    if (key && MARKET_SEMANTIC_MODELS[key]) {
+      return { segmentKey: key, source: 'mission_objective' };
+    }
+  }
+
+  const evidenceTexts = [input.dominantTerminology, input.evidenceSegment].filter(Boolean);
+  for (const text of evidenceTexts) {
+    const key = inferSegmentKeyFromText(text) || normalizeKnownSegmentKey(text);
+    if (key && MARKET_SEMANTIC_MODELS[key]) {
+      return { segmentKey: key, source: 'evidence' };
+    }
+  }
+
+  const vertical = asText(input.constraintVertical) || constraintVertical(mission);
+  if (vertical) {
+    const key = normalizeKnownSegmentKey(vertical);
+    if (key && MARKET_SEMANTIC_MODELS[key]) {
+      return { segmentKey: key, source: 'mission_constraints' };
+    }
+  }
+
+  const supplied = Array.isArray(input.segments) ? input.segments : [];
+  for (const segment of supplied) {
+    const key = normalizeKnownSegmentKey(segment);
+    if (key && MARKET_SEMANTIC_MODELS[key]) {
+      return { segmentKey: key, source: 'defaults' };
+    }
+  }
+
+  const fallback = supplied.length ? normalizeSegmentKey(supplied[0]) : '';
+  return { segmentKey: fallback || 'general', source: 'defaults' };
+}
+
+/**
+ * @deprecated Prefer resolveCanonicalSegmentKey — kept for callers that pass segments + mission only.
+ */
+function resolveSegmentKey(segments = [], mission = {}) {
+  return resolveCanonicalSegmentKey({ mission, segments }).segmentKey;
 }
 
 function cloneList(value) {
@@ -182,8 +304,59 @@ function cloneList(value) {
  */
 function buildSemanticMarketDefinition(input = {}) {
   const mission = input.mission || {};
-  const segments = Array.isArray(input.segments) ? input.segments.filter((s) => s != null && s !== '') : [];
-  const segmentKey = resolveSegmentKey(segments, mission);
+  const plan = missionPlanFromInput(mission);
+  const suppliedScope = input.eligibleSubsegments || plan.market?.eligibleSubsegments || input.segments;
+  const boundedSegments = Array.isArray(suppliedScope) ? suppliedScope : [];
+  const trades = serviceTradeMissionVerticals(boundedSegments);
+  const knownSegment = segment => serviceTradeVerticals(segment).length
+    || FOUNDER_LED_SMALL_BUSINESS_VERTICALS.includes(normalizeSegmentKey(segment))
+    || MARKET_SEMANTIC_MODELS[normalizeKnownSegmentKey(segment)]
+    || ['property_manager', 'str_manager', 'commercial_office', 'realtor', 'real_estate', 'restaurant_foh'].includes(normalizeSegmentKey(segment));
+  const unsupportedTradeScope = boundedSegments.some(segment => serviceTradeVerticals(segment).length)
+    && !boundedSegments.every(knownSegment);
+  // Mixed legacy audiences (for example Babrun's cleaning/painting/HVAC)
+  // retain their existing semantic model. Only an explicit trade-only scope
+  // selects this projection; unsupported additions fail closed.
+  if (trades.length || unsupportedTradeScope) {
+    return {
+      ...DEFAULT_SEMANTIC_MODEL,
+      market: 'Service Trade Businesses',
+      geography: asText(input.geography) || null,
+      customerTypes: trades.map(vertical => SERVICE_TRADE_TAXONOMY[vertical].customerType),
+      decisionMakers: ['Owner', 'Manager'],
+      businessModels: [],
+      terminology: serviceTradeSearchTerms(trades),
+      adjacentMarkets: [],
+      exclusions: [],
+      buyingSignals: [],
+      expectedEvidence: ['website', 'contacts', 'business_fit'],
+      operatorSegment: trades.join(', '),
+      segments: trades,
+      segmentKey: trades.join('_') || 'unsupported_service_trade_segment',
+      segmentResolutionSource: 'mission_objective',
+      source: 'explicit_service_trade_scope',
+      explicitTradeScope: true,
+      scopeError: trades.length ? null : 'Unsupported service trade segment.',
+      revisionHistory: [],
+    };
+  }
+  const canonical =
+    input.segmentKey && MARKET_SEMANTIC_MODELS[input.segmentKey]
+      ? { segmentKey: input.segmentKey, source: input.segmentSource || 'mission_objective' }
+      : resolveCanonicalSegmentKey({
+          mission,
+          segments: input.segments,
+          operatorObjective: input.operatorObjective,
+          operatorDirection: input.operatorDirection,
+          missionSegment: input.missionSegment,
+          dominantTerminology: input.dominantTerminology,
+          evidenceSegment: input.evidenceSegment,
+          constraintVertical: input.constraintVertical,
+        });
+  const segmentKey = canonical.segmentKey;
+  const segments = Array.isArray(input.segments)
+    ? input.segments.filter((s) => s != null && s !== '')
+    : [segmentKey];
   const template = MARKET_SEMANTIC_MODELS[segmentKey] || DEFAULT_SEMANTIC_MODEL;
 
   const operatorSegment =
@@ -222,8 +395,9 @@ function buildSemanticMarketDefinition(input = {}) {
     buyingSignals: cloneList(template.buyingSignals),
     expectedEvidence: cloneList(template.expectedEvidence),
     operatorSegment,
-    segments: segments.length ? segments : [segmentKey],
+    segments: [segmentKey],
     segmentKey,
+    segmentResolutionSource: canonical.source,
     source: 'semantic_model',
     revisionHistory: [],
   };
@@ -250,6 +424,19 @@ function reviseMarketDefinition(marketDefinition = {}, context = {}) {
     revisionHistory: cloneList(marketDefinition.revisionHistory),
   };
 
+  if (marketDefinition.explicitTradeScope) {
+    const allowed = marketDefinition.segments || [];
+    const inScope = value => {
+      const trades = serviceTradeVerticals(value);
+      return trades.length && trades.every(vertical => allowed.includes(vertical));
+    };
+    context = {
+      ...context,
+      dominantTerminology: inScope(context.dominantTerminology) ? context.dominantTerminology : null,
+      addedTerminology: (context.addedTerminology || []).filter(inScope),
+      promoteToCustomerType: inScope(context.promoteToCustomerType) ? context.promoteToCustomerType : null,
+    };
+  }
   const dominantTerminology = asText(context.dominantTerminology);
   const addedTerms = Array.isArray(context.addedTerminology) ? context.addedTerminology : [];
   const removedTerms = Array.isArray(context.removedTerminology) ? context.removedTerminology : [];
@@ -305,8 +492,11 @@ function conceptsFromMarketDefinition(marketDefinition = {}) {
 
 module.exports = {
   MARKET_SEMANTIC_MODELS,
+  SEGMENT_RESOLUTION_SOURCES,
   buildSemanticMarketDefinition,
   reviseMarketDefinition,
   conceptsFromMarketDefinition,
+  inferSegmentKeyFromText,
+  resolveCanonicalSegmentKey,
   resolveSegmentKey,
 };

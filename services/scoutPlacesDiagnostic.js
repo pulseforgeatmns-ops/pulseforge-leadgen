@@ -14,6 +14,10 @@ const {
   buildScoutPlacesTextSearchUrl,
   scoutPlacesUrlHostPath,
 } = require('./scoutPublicSourcing');
+const { PLACES_FEATURES, TRIGGER_MODES } = require('../utils/placesCostAttribution');
+const { legacyTextSearch } = require('../utils/placesApi');
+const { withResearchProviderScope, hasResearchProviderScope, assertResearchProviderAllowed,
+  rethrowResearchProviderControl } = require('../utils/anchorResearchProviderPause');
 
 const PLACES_NEW_ENDPOINT_FAMILY = 'places_api_new_search_text';
 const PLACES_NEW_AUTH_STYLE = 'header_x_goog_api_key';
@@ -82,6 +86,7 @@ async function probePlacesApiNew(apiKey, fetchImpl, probeQuery) {
   const hostPath = scoutPlacesUrlHostPath(PLACES_NEW_SEARCH_TEXT_URL);
   const startedAt = new Date().toISOString();
   try {
+    assertResearchProviderAllowed('google_places');
     const res = await fetchImpl(PLACES_NEW_SEARCH_TEXT_URL, {
       method: 'POST',
       headers: {
@@ -113,6 +118,7 @@ async function probePlacesApiNew(apiKey, fetchImpl, probeQuery) {
       note: 'Comparison only — Scout sourcing does not use Places API (New).',
     };
   } catch (err) {
+    rethrowResearchProviderControl(err);
     return {
       endpointFamily: PLACES_NEW_ENDPOINT_FAMILY,
       authStyle: PLACES_NEW_AUTH_STYLE,
@@ -132,6 +138,7 @@ async function probePlacesApiNew(apiKey, fetchImpl, probeQuery) {
  * Run a single Text Search against the Scout Places path.
  *
  * @param {object} [opts]
+ * @param {string|number} [opts.client_id] Explicit operator tenant (required while armed unless already scoped).
  * @param {string} [opts.apiKey]
  * @param {typeof fetch} [opts.fetchImpl]
  * @param {string} [opts.query]
@@ -139,6 +146,20 @@ async function probePlacesApiNew(apiKey, fetchImpl, probeQuery) {
  * @returns {Promise<object>}
  */
 async function diagnoseScoutPlaces(opts = {}) {
+  // Operator contract: explicit tenant or an existing trusted research scope.
+  // Attribution metadata and query/business text are never authority.
+  const tenants = [opts.client_id, opts.clientId, opts.tenantId].filter(value => value != null);
+  if (!tenants.length && hasResearchProviderScope()) {
+    assertResearchProviderAllowed('google_places');
+    return diagnoseScoutPlacesScoped(opts);
+  }
+  if (!tenants.length) tenants.push(undefined);
+  const run = tenants.reduceRight((next, tenant) => () => withResearchProviderScope(tenant, next),
+    () => diagnoseScoutPlacesScoped(opts));
+  return run();
+}
+
+async function diagnoseScoutPlacesScoped(opts) {
   const apiKey = opts.apiKey != null ? String(opts.apiKey) : String(process.env.GOOGLE_PLACES_KEY || '');
   const keyPresent = Boolean(apiKey && apiKey.trim());
   const fetchImpl =
@@ -193,13 +214,22 @@ async function diagnoseScoutPlaces(opts = {}) {
   }
 
   try {
-    const res = await fetchImpl(textSearchUrl.toString());
-    report.httpStatus = res.status;
-    const { data, parseError } = await readJsonSafe(res);
-    if (parseError) {
-      report.error = 'google_response_not_json';
-      report.googleErrorMessage = parseError;
-    } else if (data && typeof data === 'object') {
+    const traced = await legacyTextSearch({
+      query: probeQuery,
+      apiKey,
+      fetchImpl,
+      useCache: false,
+      record: {
+        caller: 'scoutPlacesDiagnostic.js',
+        feature: PLACES_FEATURES.DIAGNOSTIC,
+        triggerMode: TRIGGER_MODES.MANUAL,
+      },
+    });
+    report.httpStatus = traced.httpStatus;
+    const data = traced.data;
+    if (!data || typeof data !== 'object') {
+      report.error = 'google_response_empty';
+    } else {
       report.googleStatus = data.status || null;
       report.googleErrorMessage = data.error_message || null;
       report.resultCount = Array.isArray(data.results) ? data.results.length : null;
@@ -208,14 +238,13 @@ async function diagnoseScoutPlaces(opts = {}) {
       } else {
         report.error = `google_places_status_${data.status || 'unknown'}`;
       }
-    } else {
-      report.error = 'google_response_empty';
     }
 
-    if (!res.ok && !report.error) {
-      report.error = `google_places_http_${res.status}`;
+    if (!traced.ok && !report.error) {
+      report.error = `google_places_http_${traced.httpStatus}`;
     }
   } catch (err) {
+    rethrowResearchProviderControl(err);
     report.error = 'google_places_fetch_failed';
     report.googleErrorMessage = err && err.message ? String(err.message) : 'fetch_failed';
   }

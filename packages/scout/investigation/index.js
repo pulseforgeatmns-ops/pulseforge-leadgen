@@ -99,6 +99,8 @@ const {
   buildInvestigationState,
   createInvestigationState,
   serializeInvestigationState,
+  applyInvestigationPlan,
+  updateEvidenceTracking,
 } = require('./InvestigationState');
 
 const {
@@ -115,7 +117,9 @@ const {
 
 const {
   buildMissionIntelligenceReport,
+  buildPublicMissionIntelligenceReport,
   mergeIntoDiscoveryReport,
+  containsForbiddenReasoningKeys,
 } = require('./MissionIntelligenceReport');
 
 const {
@@ -206,6 +210,8 @@ module.exports = {
   buildInvestigationState,
   createInvestigationState,
   serializeInvestigationState,
+  applyInvestigationPlan,
+  updateEvidenceTracking,
   HYPOTHESIS_LIFECYCLE,
   buildHypothesisLifecycleRecord,
   summarizeHypothesisHistory,
@@ -213,7 +219,9 @@ module.exports = {
   runReasoningCycle,
   shouldStopInvestigation,
   buildMissionIntelligenceReport,
+  buildPublicMissionIntelligenceReport,
   mergeIntoDiscoveryReport,
+  containsForbiddenReasoningKeys,
   buildInvestigativeStrategy,
   recalculateStrategyAfterResolution,
   applyInvestigativeStrategy,

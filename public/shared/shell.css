@@ -585,3 +585,51 @@
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
+/* Living Command: three useful destinations, contextual workspace tools. */
+.pf-shell-nav.pf-living-shell { min-height: 76px; padding: 12px 4%; gap: 32px; border-bottom: 1px solid color-mix(in srgb, var(--pf-gold) 15%, transparent); background: var(--pf-nav-bg); box-sizing: border-box; font-family: var(--pf-font-body); text-transform: none; letter-spacing: 0; }
+.pf-living-shell .pf-nav-brand { font-family: var(--pf-font-body); font-weight: 700; font-size: 24px; text-transform: none; letter-spacing: -1.2px; color: var(--pf-nav-text); margin: 0; gap: 0; }
+.pf-living-shell .pf-nav-brand::before { margin-right: 10px; }
+.pf-living-shell .pf-nav-brand::after { content: '.'; color: var(--pf-gold); margin-left: 2px; }
+.pf-living-shell .pf-nav-links { gap: 5px; }
+.pf-living-shell .pf-nav-link { font-family: var(--pf-font-body); text-transform: none; letter-spacing: 0; font-size: 12px; padding: 10px 15px; border-radius: 10px; border: 1px solid transparent; }
+.pf-living-shell a.pf-nav-link[aria-current="page"] { background: color-mix(in srgb, var(--pf-nav-text) 5%, transparent); color: var(--pf-nav-text); border-color: color-mix(in srgb, var(--pf-gold) 25%, transparent); box-shadow: inset 0 0 15px var(--pf-gold-glow); }
+.pf-living-shell .pf-nav-group { margin-left: auto; gap: 16px; }
+.pf-living-shell .pf-nav-who, .pf-living-shell .pf-nav-tenant { display: none; }
+.pf-living-shell .pf-nav-workspace { display: block; }
+.pf-living-shell .pf-nav-tenant-select { max-width: 180px; background: transparent; color: var(--pf-nav-text); border: 1px solid color-mix(in srgb, var(--pf-nav-text) 13%, transparent); border-radius: 9px; font: 400 11px var(--pf-font-body); padding: 8px; }
+.pf-living-shell .pf-nav-tenant-select option { background: var(--pf-nav-bg); color: var(--pf-nav-text); }
+.pf-nav-needs { display: inline-flex; align-items: center; gap: 9px; white-space: nowrap; color: var(--pf-nav-text); text-decoration: none; font: 400 11px var(--pf-font-body); padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--pf-gold) 40%, transparent); border-radius: 10px; box-shadow: 0 0 20px var(--pf-gold-glow); }
+.pf-nav-needs::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--pf-gold); box-shadow: 0 0 9px var(--pf-gold); }
+#pfNeedsCount { background: var(--pf-gold-glow); color: var(--pf-gold); padding: 2px 6px; border-radius: 5px; }
+.pf-nav-tools { position: relative; }
+.pf-nav-tools summary { font: 400 11px var(--pf-font-body); cursor: pointer; padding: 10px 0; color: var(--pf-nav-text); white-space: nowrap; }
+.pf-nav-tools-panel { position: absolute; right: 0; top: calc(100% + 12px); width: 240px; max-height: 70vh; overflow: auto; padding: 10px; background: var(--pf-nav-bg); border: 1px solid color-mix(in srgb, var(--pf-gold) 30%, transparent); border-radius: 14px; box-shadow: 0 20px 60px #0005; z-index: 220; }
+.pf-living-shell .pf-nav-tools-panel a.pf-nav-link { display: block; white-space: normal; }
+.pf-nav-tools-panel .pf-nav-theme, .pf-nav-tools-panel .pf-nav-logout { display: inline-flex; margin: 12px 10px 4px; color: var(--pf-nav-text); }
+.pf-focused-workspace { grid-template-columns: minmax(0, 1fr); }
+.pf-focused-workspace .sidebar, .pf-focused-workspace .hamburger, .pf-focused-workspace #menuBtn { display: none !important; }
+.pf-focused-workspace .content-col { grid-column: 1 / -1; }
+.pf-living-shell a:focus-visible, .pf-living-shell summary:focus-visible, .pf-living-shell select:focus-visible { outline: 2px solid var(--pf-gold); outline-offset: 4px; }
+@media (max-width: 1150px) {
+  .pf-shell-nav.pf-living-shell { gap: 18px; padding-inline: 3%; }
+  .pf-living-shell .pf-nav-group { gap: 10px; }
+  .pf-living-shell .pf-nav-tenant-select { max-width: 140px; }
+}
+@media (max-width: 850px) {
+  .pf-shell-nav.pf-living-shell { flex-wrap: wrap; gap: 8px 18px; padding: 14px 5%; }
+  .pf-living-shell .pf-nav-brand { font-size: 22px; }
+  .pf-living-shell .pf-nav-links { order: 3; width: 100%; justify-content: flex-start; }
+  .pf-living-shell .pf-nav-group { flex-wrap: wrap; gap: 10px; }
+  .pf-nav-tools summary { font-size: 10px; }
+  .pf-nav-needs { padding: 8px; font-size: 10px; }
+  .pf-living-shell .pf-nav-tenant-wrap { order: 4; }
+  .pf-living-shell .pf-nav-tenant-select { max-width: 145px; }
+}
+@media (max-width: 540px) {
+  .pf-living-shell .pf-nav-group { display: contents; }
+  .pf-nav-needs { margin-left: auto; }
+  .pf-nav-tools { margin-left: auto; }
+  .pf-living-shell .pf-nav-links { width: auto; flex: 1; }
+  .pf-living-shell .pf-nav-tenant-wrap { margin-left: auto; }
+  .pf-living-shell .pf-nav-tenant-select { max-width: 155px; }
+}

@@ -1,0 +1,3 @@
+# Build tooling dependencies. The published site is index.html, assets/,
+# robots.txt and sitemap.xml — see README.md.
+build/node_modules/

@@ -1,0 +1,51 @@
+#!/usr/bin/env node
+'use strict';
+
+// Default is read-only status. Authorization is two-phase and sending has its own
+// explicit command, environment gate, active program and artifact-bound envelope.
+function parse(argv) {
+  const [command = 'status', ...rest] = argv;
+  const options = { 'tenant-id': process.env.GOVERNED_OUTBOUND_CLI_TENANT || '10' };
+  for (let i = 0; i < rest.length; i += 2) {
+    if (!rest[i].startsWith('--') || !rest[i + 1] || rest[i + 1].startsWith('--')) throw new Error('Expected --key value');
+    options[rest[i].slice(2)] = rest[i + 1];
+  }
+  if (!['status','review','authorize','mode','tick','poll','reconcile','preparation-init','replenish-review','replenish'].includes(command)) throw new Error('Unknown command');
+  return { command, options };
+}
+async function run(argv = process.argv.slice(2)) {
+  process.env.DOTENV_CONFIG_QUIET = 'true';
+  require('dotenv').config({ quiet: true });
+  const { command, options } = parse(argv);
+  const pool = require('../db');
+  const tenantId = String(options['tenant-id'] || '10');
+  const service = require('../services/governedOutbound').productionService(pool, { tenantId });
+  try {
+    if (command === 'status') return await service.status();
+    if (command === 'poll') return await require('../anchorDailyOutboundCron').poll({ pool, tenantIds: [tenantId] });
+    if (command === 'tick') {
+      const confirm = tenantId === '13' ? 'bounded-babrun-execution' : 'bounded-anchor-execution';
+      if (options.confirm !== confirm && options.confirm !== 'bounded-anchor-execution') {
+        throw new Error(`tick requires --confirm ${confirm}`);
+      }
+      return await service.tick();
+    }
+    if (!options.operator) throw new Error('--operator is required for audited changes');
+    const actor = { id: options.operator, role: 'admin' };
+    if (command === 'mode') return await service.setMode(options.id, options.mode, options['policy-hash'], actor);
+    if (command === 'reconcile') return await service.reconcile(options.item, options.outcome, options['provider-message-id'], options.evidence, actor);
+    const input = JSON.parse(require('fs').readFileSync(options.file, 'utf8'));
+    if (command === 'preparation-init') return await service.initializePreparation(input, actor);
+    if (command === 'replenish-review') return await service.replenish(input, actor, false);
+    if (command === 'replenish') {
+      if (options.confirm !== 'bounded-anchor-preparation') throw new Error('replenish requires --confirm bounded-anchor-preparation');
+      return await service.replenish(input, actor, true);
+    }
+    if (command === 'review') delete input.reviewHash;
+    return await service.authorize(input, actor);
+  } finally { await pool.end(); }
+}
+if (require.main === module) run().then(r => console.log(JSON.stringify(r, null, 2))).catch(e => {
+  console.error(JSON.stringify({ error: e.code || e.message })); process.exitCode = 1;
+});
+module.exports = { parse, run };

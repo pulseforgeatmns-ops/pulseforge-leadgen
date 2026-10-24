@@ -105,6 +105,15 @@ function templatesForMarket(marketDefinition = {}) {
  * @returns {object[]}
  */
 function generateInitialSearchHypotheses(marketDefinition = {}, opts = {}) {
+  if (marketDefinition.explicitTradeScope) {
+    if (!marketDefinition.terminology?.length) return [];
+    return [buildSearchHypothesis({
+      id: 'sh-explicit-trades',
+      text: 'Investigate only the explicitly approved service trades.',
+      searchTerms: (marketDefinition.terminology || []).slice(),
+      rationale: 'Explicit mission scope; broader historical terminology is not authority.',
+    })];
+  }
   const templates = templatesForMarket(marketDefinition);
   const hypotheses = [];
   const seen = new Set();
@@ -204,6 +213,7 @@ function evaluateHypothesisBranch(hypothesis, results = {}, opts = {}) {
  * @returns {object[]}
  */
 function generateFollowUpHypotheses(marketDefinition = {}, attemptedHypotheses = [], opts = {}) {
+  if (marketDefinition.explicitTradeScope) return [];
   const attemptedTerms = new Set();
   const attemptedTexts = new Set();
   for (const hyp of attemptedHypotheses) {

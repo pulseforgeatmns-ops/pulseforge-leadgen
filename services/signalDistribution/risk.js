@@ -1,0 +1,56 @@
+'use strict';
+const VERSION='distribution-v1.0';
+const STATES=['NORMAL','WATCH','HIGH','CRITICAL'];
+const numeric=value=>typeof value==='number' && Number.isFinite(value) && value>=0?value:null;
+function evaluate(previous={},snapshot,{now=new Date(),maxAgeMs=180000,milestoneMultiple=2}={}) {
+  const at=+now, observed=Date.parse(snapshot?.observedAt);
+  if(!snapshot || !Number.isFinite(observed) || observed>at || observed<=Date.parse(previous.lastObservedAt))return {ignored:true,reason:'invalid_or_replayed_observation'};
+  if(snapshot.provenance?.dataClass!=='EMPIRICAL' || snapshot.provenance?.synthetic || snapshot.provenance?.testOnly)throw new Error('distribution_requires_empirical_snapshot');
+  const price=numeric(snapshot.priceUsd)>0?numeric(snapshot.priceUsd):null,liquidity=numeric(snapshot.liquidityUsd),volume=numeric(snapshot.volume5mUsd);
+  const buys=numeric(snapshot.buys5m),sells=numeric(snapshot.sells5m);
+  const buyVolume=numeric(snapshot.buyVolume5mUsd),sellVolume=numeric(snapshot.sellVolume5mUsd);
+  const pairId=typeof snapshot.pairId==='string' && snapshot.pairId?snapshot.pairId:null;
+  const pairChanged=Boolean(previous.pairId && previous.pairId!==pairId);
+  const stale=at-observed>maxAgeMs;
+  const sourceAt=Date.parse(snapshot.providerTimestamp);
+  const sourceFreshness=!Number.isFinite(sourceAt)?'UNKNOWN':sourceAt>observed || sourceAt>at || at-sourceAt>maxAgeMs?'STALE':'FRESH';
+  const comparable=!pairChanged && !stale && sourceFreshness!=='STALE' && pairId!==null;
+  const baseline=previous.baseline || (comparable?{...snapshot}:null);
+  const priorPeak=numeric(previous.observedPeakPriceUsd);
+  const peak=comparable && price!==null?Math.max(priorPeak??price,price):priorPeak;
+  const drawdown=comparable && price!==null && peak>0?(peak-price)/peak:null;
+  const baselineLiquidity=numeric(baseline?.liquidityUsd);
+  const liquidityDecline=comparable && liquidity!==null && baselineLiquidity>0?(baselineLiquidity-liquidity)/baselineLiquidity:null;
+  const sellShare=comparable && sellVolume!==null && buyVolume!==null && buyVolume+sellVolume>0?sellVolume/(buyVolume+sellVolume):null;
+  const sellCountShare=comparable && buys!==null && sells!==null && buys+sells>0?sells/(buys+sells):null;
+  const pressure=sellShare??sellCountShare;
+  const activityKnown=(buyVolume!==null && sellVolume!==null)||(buys!==null && sells!==null);
+  const coverage={price:price===null?'UNKNOWN':'OBSERVED',marketCap:numeric(snapshot.marketCapUsd)===null?'UNKNOWN':'OBSERVED',liquidity:liquidity===null?'UNKNOWN':'OBSERVED',volume5m:volume===null?'UNKNOWN':'OBSERVED',buySellActivity:activityKnown?'OBSERVED':'UNKNOWN',walletDistribution:'UNKNOWN',developerIdentity:'UNKNOWN',sourceFreshness,observationFreshness:stale?'STALE':'FRESH',pair:pairChanged?'CHANGED':pairId?'PINNED':'UNKNOWN'};
+  const reasons=[];
+  let state='NORMAL';
+  const raise=(level,reason)=>{if(STATES.indexOf(level)>STATES.indexOf(state))state=level;reasons.push(reason);};
+  if(pairChanged)raise('WATCH','PAIR_CHANGED_COMPARISON_BLOCKED');
+  if(!pairId)raise('WATCH','PAIR_UNKNOWN');
+  if(stale || sourceFreshness==='STALE')raise('WATCH','STALE_MARKET_EVIDENCE');
+  if(sourceFreshness==='UNKNOWN')raise('WATCH','SOURCE_FRESHNESS_UNKNOWN');
+  for(const field of ['price','liquidity','volume5m','buySellActivity'])if(coverage[field]==='UNKNOWN')raise('WATCH',field.toUpperCase()+'_UNKNOWN');
+  if(drawdown>=0.1)raise('WATCH','PRICE_DRAWDOWN_10_PERCENT');
+  if(pressure>=0.6)raise('WATCH','SELL_PRESSURE_60_PERCENT');
+  if(liquidityDecline>=0.1)raise('WATCH','POOL_RESERVE_VALUE_DOWN_10_PERCENT');
+  if(drawdown>=0.2 && (pressure>=0.65 || liquidityDecline>=0.25))raise('HIGH','PRICE_DRAWDOWN_WITH_DISTRIBUTION_EVIDENCE');
+  if(drawdown>=0.35 && pressure>=0.8)raise('CRITICAL','SEVERE_PRICE_DRAWDOWN_WITH_SELL_PRESSURE');
+  if(drawdown>=0.35 && liquidityDecline>=0.4)raise('CRITICAL','SEVERE_PRICE_DRAWDOWN_WITH_RESERVE_DECLINE');
+  const complete=comparable && price!==null && liquidity!==null && volume!==null && activityKnown;
+  if(!complete && STATES.indexOf(previous.riskState)>STATES.indexOf(state)) {
+    state=previous.riskState;reasons.push('PRIOR_RISK_RETAINED_INCOMPLETE_EVIDENCE');
+  }
+  const ref=numeric(previous.reference?.priceUsd);
+  const refEligible=comparable && price!==null && ref>0 && observed>=Date.parse(previous.reference?.savedAt||previous.reference?.recordedAt);
+  const referencePeak=refEligible?Math.max(numeric(previous.referencePeakPriceUsd)??price,price):numeric(previous.referencePeakPriceUsd);
+  const multiple=refEligible?price/ref:null;
+  const milestone=Number.isFinite(milestoneMultiple)&&milestoneMultiple>=1?milestoneMultiple:2;
+  const milestoneReached=Boolean(previous.milestoneReached || (multiple!==null && multiple>=milestone));
+  const metrics={priceUsd:price,marketCapUsd:numeric(snapshot.marketCapUsd),liquidityUsd:liquidity,volume5mUsd:volume,buys5m:buys,sells5m:sells,buyVolume5mUsd:buyVolume,sellVolume5mUsd:sellVolume,sellShare,sellCountShare,observedPeakPriceUsd:peak,drawdownFromObservedPeak:drawdown,liquidityValueDeclineFromBaseline:liquidityDecline,referenceMultiple:multiple,observedMfeMultiple:referencePeak!==null&&ref>0?referencePeak/ref:null};
+  return {ignored:false,state:{...previous,lastPollError:null,lastPollErrorAt:null,riskState:state,reasons:[...new Set(reasons)].sort(),coverage,metrics,baseline,pairId:previous.pairId||pairId,lastObservedAt:snapshot.observedAt,lastEvaluatedAt:new Date(at).toISOString(),observedPeakPriceUsd:peak,referencePeakPriceUsd:referencePeak,milestoneReached,latestSnapshot:snapshot,version:VERSION},milestoneNew:!previous.milestoneReached&&milestoneReached};
+}
+module.exports={evaluate,numeric,VERSION,STATES};

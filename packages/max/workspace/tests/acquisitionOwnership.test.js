@@ -142,6 +142,7 @@ describe('SPEC-124 — Acquisition Ownership Convergence', () => {
       context: { tenantId: '10' },
       acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       persist: false,
+      cieService: { getApprovedClientBlueprint: async () => null },
     });
 
     assert.ok(turn);
@@ -201,6 +202,7 @@ describe('SPEC-124 — Acquisition Ownership Convergence', () => {
       context: { tenantId: '10' },
       acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       persist: false,
+      cieService: { getApprovedClientBlueprint: async () => null },
     });
 
     const events = listAcquisitionOwnershipAuditLog();

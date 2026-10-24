@@ -1,5 +1,14 @@
 # AUDIT-050 — Scout Execution Completion
 
+> **Historical audit — retained 2026-10-24.** Original audit date: 2026-08-25. This document records findings from the original PR revision and is **not a current production assessment**.
+>
+> Source: [PR #442](https://github.com/pulseforgeatmns-ops/pulseforge-leadgen/pull/442), head commit `ab52e08edc70831256887b2b3b3c6e6a89e2f56b`.
+>
+> Subsequent implementation / current reference: [SPEC-171 — Canonical Execution Router](../specs/SPEC-171_Canonical_Execution_Router.md) and [SPEC-170 — Mission Runtime Ownership Boundaries](../specs/SPEC-170_Mission_Runtime_Ownership_Boundaries.md).
+>
+> The original UI/dispatch findings predate canonical execution routing and approval-button wiring. The inspection endpoint is distinct from an execution endpoint. Historical local-run timings, outcomes and source line numbers are not current production verification.
+
+
 | Field | Value |
 |---|---|
 | **Status** | Completed (Read-Only) |
@@ -173,7 +182,7 @@ Scout.discover()
 
 | Question | Answer |
 |---|---|
-| Which stage is the final completed stage? | **Mission Report** — loop reaches `phase: 'complete'`. When stuck at "Waiting for Scout", the loop **never ran** because TME dispatch did not commit. |
+| Which stage is the final completed stage? | **Mission Report** — loop reaches `phase: 'complete'`. For the no-dispatch case (class A), the loop **never ran**. For rollback after Scout starts (class B), the loop may have run even though TME did not commit its output. |
 
 ---
 
@@ -203,7 +212,7 @@ DiscoveryPipeline
 | Question | Answer |
 |---|---|
 | Does Coverage finish? | **Yes** — returns blocked/incomplete, not hung. |
-| If not—where? | N/A for stuck missions; stuck missions never reach Coverage because TME never commits Scout output. |
+| If not—where? | In the no-dispatch case (class A), Coverage is never reached. In the rollback case (class B), Coverage may have run even though TME did not commit Scout output. |
 
 ---
 

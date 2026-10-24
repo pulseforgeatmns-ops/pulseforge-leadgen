@@ -4,19 +4,26 @@
  * SPEC-118 — shared mission context. The same mission follows every capability.
  */
 
-const { SPECIALISTS, clone, asText } = require('./types');
+const { SPECIALISTS, CONTRIBUTION_KINDS, clone, asText } = require('./types');
 const { formatMissionUnderstanding } = require('./StructuredMission');
+const { latestApproachDecision } = require('./AcquisitionApproach');
+const { selectCanonicalContribution } = require('./CanonicalContributionSelection');
+const { unwrapSpecialistPayload } = require('./ContributionSupersession');
 
-function latest(rows, specialist, kind) {
-  const match = [...rows].reverse().find((row) =>
-    row.specialist === specialist && (!kind || row.kind === kind)
-  );
-  return match ? match.payload || {} : {};
+function latestPayload(rows, specialist, kind, mission) {
+  const match = selectCanonicalContribution(rows, {
+    missionId: mission?.id,
+    specialist,
+    kind,
+    mission,
+  });
+  return match ? unwrapSpecialistPayload(match) : {};
 }
 
 function buildSharedContext(mission, contributions = []) {
-  const scout = latest(contributions, SPECIALISTS.SCOUT);
-  const max = latest(contributions, SPECIALISTS.MAX);
+  const scout = latestPayload(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY, mission);
+  const max = latestPayload(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION, mission);
+  const approachDecision = latestApproachDecision(contributions);
   const buyingSignals = scout.buyingSignals || scout.buying_signals || scout.signals || [];
   const evidence = scout.evidence || [];
   const constraints = [
@@ -68,6 +75,7 @@ function buildSharedContext(mission, contributions = []) {
       : mission.evaluationPolicy || null,
     buyingSignals: clone(buyingSignals),
     priorityReasoning: clone(max.recommendations || max.priorities || max.reasoning || []),
+    acquisitionApproach: approachDecision ? clone(approachDecision.decision) : null,
     evidence: clone(evidence),
     scout,
     max,
