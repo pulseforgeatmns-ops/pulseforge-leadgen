@@ -49,14 +49,16 @@ test('desktop: escaped reports/photos, selected demo badge and stale navigation'
 });
 test('mobile: issue photo preview, repeated submit lock, persisted render and cancel resolution',async t=>{
  const {page:p,mutations,errors}=await setup(t,{width:390});
- await tab(p,'report'); await p.waitForSelector('#issueRoom'); await p.type('#issueRoom','West corridor'); await p.type('#issueDesc','Dust at doorway');
+ await tab(p,'issues'); await p.waitForSelector('#issueRoom'); await p.type('#issueRoom','West corridor'); await p.type('#issueDesc','Dust at doorway');
  await p.evaluate(async data=>{const blob=await (await fetch(data)).blob();const dt=new DataTransfer();dt.items.add(new File([blob],'sample.png',{type:'image/png'}));const el=document.querySelector('#issuePhoto');el.files=dt.files;el.dispatchEvent(new Event('change'));},photo);
  await p.waitForFunction(()=>document.querySelector('#issuePhotoStatus').textContent.includes('ready'));
  await p.$eval('#portalForm',f=>{f.dispatchEvent(new Event('submit',{cancelable:true}));f.dispatchEvent(new Event('submit',{cancelable:true}));});
- await p.waitForFunction(()=>document.querySelector('#view h2')?.textContent==='Open Issues');
+ // The issue history is already visible beside the form before submission.
+ // Wait for the saved record and unlocked refreshed form, not the container.
+ await p.waitForFunction(()=>document.querySelector('#flash')?.textContent.includes('Problem submitted') && document.querySelector('.issue-history')?.textContent.includes('Dust at doorway') && document.querySelector('#issueDesc')?.value === '' && document.querySelector('#saveForm')?.disabled === false);
  assert.equal(mutations.filter(x=>x.path.endsWith('/issues')).length,1); assert.match(mutations[0].body.photo_data_url,/^data:image\/jpeg;base64,/); assert.match(mutations[0].body.request_id,/^[a-f0-9-]{36}$/);
  assert.equal(await p.evaluate(()=>window.injected),undefined); assert.ok(await p.$('[data-photo]'));
- await p.click('[data-resolve]');await p.waitForSelector('#resolution');await p.type('#resolution','Draft only');await p.click('#cancelForm');await p.waitForFunction(()=>document.querySelector('#view h2')?.textContent==='Open Issues'); assert.equal(mutations.length,1);
+ await p.click('[data-resolve]');await p.waitForSelector('#resolution');await p.type('#resolution','Draft only');await p.click('#cancelForm');await p.waitForFunction(()=>!document.querySelector('#resolution') && document.querySelector('.issue-history')?.textContent.includes('Dust at doorway')); assert.equal(mutations.length,1);
  assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth > innerWidth),false); assert.deepEqual(errors,[]);
 });
 test('operator authors report with areas and photos; invalid file blocks submission',async t=>{

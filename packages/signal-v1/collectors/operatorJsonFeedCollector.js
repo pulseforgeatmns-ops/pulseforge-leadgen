@@ -7,8 +7,17 @@
 function createOperatorJsonFeedCollector(options = {}) {
   const id = 'operator-json-feed';
   const feedUrl = options.feedUrl || process.env.SIGNAL_CALLER_FEED_URL || null;
+  const feedToken = options.feedToken || process.env.SIGNAL_OPERATOR_FEED_TOKEN || null;
   const fetchFn = options.fetchFn || global.fetch;
   let lastRemoteHealth = null;
+
+  function authHeaders() {
+    const headers = { Accept: 'application/json' };
+    if (typeof feedToken === 'string' && feedToken.length >= 32) {
+      headers.authorization = `Bearer ${feedToken}`;
+    }
+    return headers;
+  }
 
   function healthUrl() {
     if (!feedUrl) return null;
@@ -35,7 +44,7 @@ function createOperatorJsonFeedCollector(options = {}) {
     }
     try {
       const res = await fetchFn(remoteUrl, {
-        headers: { Accept: 'application/json' },
+        headers: authHeaders(),
         signal: AbortSignal.timeout(options.timeoutMs ?? 15000),
       });
       if (!res.ok) {
@@ -60,7 +69,7 @@ function createOperatorJsonFeedCollector(options = {}) {
     if (!h.available) return [];
 
     const res = await fetchFn(feedUrl, {
-      headers: { Accept: 'application/json' },
+      headers: authHeaders(),
       signal: AbortSignal.timeout(options.timeoutMs ?? 15000),
     });
     if (!res.ok) {

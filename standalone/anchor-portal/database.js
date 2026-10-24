@@ -24,6 +24,8 @@ async function verifyDatabase(pool, { requireAccounts = true } = {}) {
   if (markers.length !== 1 || markers[0].marker !== MARKER) throw new Error('Synthetic database marker missing');
   const { rows } = await pool.query("SELECT schemaname,tablename FROM pg_tables WHERE schemaname NOT IN ('pg_catalog','information_schema')");
   const allowed = new Set(['portal_demo_marker','portal_sessions','users', ...['locations','scope_sections','scope_items','user_locations','visits','visit_items','issues','evidence'].map(n => 'anchor_portal_' + n)]);
+  // The explicitly migrated request table is optional for pre-migration private setups.
+  if (rows.some(r => r.schemaname === 'public' && r.tablename === 'anchor_portal_service_requests')) allowed.add('anchor_portal_service_requests');
   if (rows.length !== allowed.size || rows.some(r => r.schemaname !== 'public' || !allowed.has(r.tablename))) throw new Error('Unexpected database tables');
   await require('../../utils/anchorPortalSchema').createPortalSchema(pool).verifyAnchorPortalUpgrade(pool);
   const { rows: bad } = await pool.query("SELECT 1 FROM users WHERE email NOT LIKE '%@exeter-fixture.invalid' OR role NOT IN ('manager','cleaner','facility_client') OR client_id NOT IN (10,11) OR password_hash !~ '^\\$2[aby]\\$12\\$[./A-Za-z0-9]{53}$' UNION ALL SELECT 1 FROM anchor_portal_locations WHERE is_demo IS NOT TRUE LIMIT 1");
