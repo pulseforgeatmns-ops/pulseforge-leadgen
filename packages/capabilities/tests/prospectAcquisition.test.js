@@ -203,7 +203,7 @@ describe('SPEC-060 verification pipeline', () => {
 describe('SPEC-060 capability registration', () => {
   it('registers prospect_acquisition as a ProspectList producer', () => {
     const registry = createBuiltinRegistry({ discovery: { useFixture: true } });
-    assert.equal(registry.list().length, 15);
+    assert.equal(registry.list().length, 17);
     const cap = registry.get(BUILTIN_IDS.PROSPECT_ACQUISITION);
     assert.ok(cap);
     assert.ok(cap.produces.includes('prospect_list'));

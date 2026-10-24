@@ -95,9 +95,113 @@ async function answerOperator(question, input = {}, opts = {}) {
   return runtime.answerOperator(question, input, opts);
 }
 
+async function executeCanonical(input = {}, opts = {}) {
+  const runtime = runtimeFromOpts(opts);
+  const tenantId = String(input.tenantId || opts.tenantId || '');
+  if (!tenantId) {
+    const err = new Error('No active client selected.');
+    err.code = 'no_tenant';
+    throw err;
+  }
+  await runtime.hydrate(tenantId, opts);
+  const engine = getEngine(opts);
+  const missionId = String(input.missionId || '').trim();
+  if (!missionId) {
+    throw amo.amoError('amo_mission_not_found', 'missionId is required.');
+  }
+  const mission = engine.get(missionId, tenantId);
+  if (!mission) {
+    throw amo.amoError('amo_mission_not_found', `Unknown mission: ${missionId}`);
+  }
+
+  const intent = input.intent
+    || amo.intentFromPendingDecision(mission.pendingOperatorDecision);
+  if (!intent) {
+    throw amo.amoError(
+      'cer_unknown_intent',
+      'No executable intent. Pass intent or wait for a pending operator decision.'
+    );
+  }
+  const source = input.source || amo.EXECUTION_SOURCES.API;
+  const factory = source === amo.EXECUTION_SOURCES.APPROVAL_BUTTON
+    ? amo.createExecutionRequestFromApprovalButton
+    : source === amo.EXECUTION_SOURCES.VOICE
+      ? amo.createExecutionRequestFromVoice
+      : source === amo.EXECUTION_SOURCES.COMMAND_DECK
+        ? amo.createExecutionRequestFromCommandDeck
+        : source === amo.EXECUTION_SOURCES.CHAT
+          ? amo.createExecutionRequestFromChat
+          : amo.createExecutionRequestFromApi;
+
+  const request = factory({
+    intent,
+    missionId: mission.id,
+    mission,
+    operatorId: input.operatorId || 'operator',
+    stage: mission.stage,
+    executionMode: input.executionMode || null,
+    objective: mission.objective,
+    runtimeOwner: amo.resolveMissionRuntimeOwner(mission),
+    permissions: input.permissions || { canExecute: true, role: input.role || null },
+    pendingOperatorDecision: mission.pendingOperatorDecision,
+    payload: {
+      question: input.question || input.intent || null,
+      ...(input.payload || {}),
+    },
+    metadata: input.metadata || {},
+    source,
+  });
+
+  let canonicalSender = input.canonicalSender || opts.canonicalSender || null;
+  if (!canonicalSender && (opts.pool || opts.client || input.client || typeof opts.loadClient === 'function')) {
+    const { resolveCanonicalSenderIdentity } = require('../utils/canonicalSenderIdentity');
+    const resolved = await resolveCanonicalSenderIdentity({
+      tenantId,
+      clientId: input.clientId || tenantId,
+      client: opts.client || input.client || null,
+      pool: opts.pool,
+      loadClient: opts.loadClient,
+    });
+    if (!resolved.ok) {
+      const err = amo.amoError(resolved.code || 'canonical_sender_incomplete', resolved.blockReason);
+      err.blockReason = resolved.blockReason;
+      throw err;
+    }
+    canonicalSender = resolved.identity;
+  }
+
+  const routed = await amo.routeExecutionRequest(request, {
+    engine,
+    tenantId,
+    question: input.question,
+    operatorId: request.operatorId,
+    runScout: input.runScout,
+    allowFixtureFallback: input.allowFixtureFallback,
+    persist: opts.persist,
+    pool: opts.pool,
+    persistStage: opts.persistStage,
+    missionEngine: opts.missionEngine,
+    sendEmail: input.sendEmail || opts.sendEmail,
+    resolveProspectAttributes: input.resolveProspectAttributes || opts.resolveProspectAttributes,
+    canonicalSender,
+    senderIdentity: canonicalSender,
+    client: opts.client || input.client,
+    loadClient: opts.loadClient,
+    brevoState: input.brevoState || opts.brevoState,
+    senderReadiness: input.senderReadiness || opts.senderReadiness,
+    requireProviderReadiness: input.requireProviderReadiness || opts.requireProviderReadiness,
+  });
+  // Cancellation is an operator edit, not a specialist TME stage. Persist it
+  // through the runtime's canonical commit path before a subsequent hydration.
+  if (intent === amo.EXECUTION_INTENTS.CANCEL_PLAN && !routed.executionResult?.rolledBack) {
+    await runtime.persistMissionState(mission.id, opts);
+  }
+  return routed;
+}
+
 function activeMissionFor(tenantId, opts = {}) {
   const runtime = runtimeFromOpts(opts);
-  const missions = runtime.engine().list(tenantId);
+  const missions = runtime.engine().list(tenantId).filter(mission => !mission.planCancelled);
   return missions.find((row) => row.stage !== 'improve') || missions[0] || null;
 }
 
@@ -223,6 +327,7 @@ module.exports = {
   progressMission,
   runAutonomousProgressionForMission,
   answerOperator,
+  executeCanonical,
   attachScoutDiscovery,
   attachPaigeVariants,
   attachEmmettCapacity,

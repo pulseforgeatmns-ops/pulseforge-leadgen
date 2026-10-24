@@ -6,7 +6,13 @@
  */
 
 const { asText, clone, isPlainObject, normalizeSignal, REJECTION_REASONS } = require('./Types');
+const { serviceTradeMissionVerticals } = require('../../../utils/canonicalBusinessTaxonomy');
+const { evaluateReplenishmentAdmission } = require('../../../utils/replenishmentVertical');
 const { parseGeographyList } = require('./InvestigationProvenance');
+const {
+  allowedCitiesFromGeographyLabel,
+  isLocationInMissionGeography,
+} = require('../../../utils/missionGeography');
 
 function tokenize(value) {
   return String(value || '')
@@ -17,12 +23,31 @@ function tokenize(value) {
     .filter((t) => t.length > 1);
 }
 
+function resolveGeographyAllowedCities(geography) {
+  if (!geography) return [];
+  if (Array.isArray(geography)) return geography.map(asText).filter(Boolean);
+  if (typeof geography === 'object') {
+    if (Array.isArray(geography.cities) && geography.cities.length) {
+      return geography.cities.map(asText).filter(Boolean);
+    }
+    return allowedCitiesFromGeographyLabel(geography.label);
+  }
+  return [
+    ...allowedCitiesFromGeographyLabel(geography),
+    ...parseGeographyList(geography),
+  ].filter(Boolean);
+}
+
 function matchesGeography(location, geography) {
   if (!geography) return true;
+  const allowedCities = resolveGeographyAllowedCities(geography);
+  if (allowedCities.length) {
+    return isLocationInMissionGeography({ location, allowedCities });
+  }
   const loc = String(location || '').toLowerCase();
   if (!loc) return false;
-  const parts = parseGeographyList(geography);
-  const haystacks = parts.length ? parts : [geography];
+  const parts = parseGeographyList(typeof geography === 'object' ? geography.label : geography);
+  const haystacks = parts.length ? parts : [typeof geography === 'object' ? geography.label : geography];
   return haystacks.some((part) => {
     const tokens = tokenize(part).filter(
       (t) => !['nh', 'tn', 'wv', 'area', 'greater', 'and'].includes(t)
@@ -32,8 +57,51 @@ function matchesGeography(location, geography) {
   });
 }
 
+const RELATED_SEGMENT_ALIASES = Object.freeze({
+  'short term rental': [
+    'str',
+    'vacation rental',
+    'property management',
+    'property manager',
+    'str manager',
+    'hospitality',
+  ],
+  'short term rental operators': [
+    'str',
+    'vacation rental',
+    'property management',
+    'property manager',
+  ],
+  'property management': [
+    'property manager',
+    'short term rental',
+    'str',
+    'vacation rental',
+    'str manager',
+  ],
+  'property manager': [
+    'property management',
+    'short term rental',
+    'str',
+  ],
+});
+
+function segmentNeedles(segment) {
+  const needle = String(segment || '')
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+    .trim();
+  if (!needle) return [];
+  return [needle, ...(RELATED_SEGMENT_ALIASES[needle] || [])];
+}
+
 function matchesSegment(record, segments) {
   if (!segments || !segments.length) return true;
+  // Concrete trade missions use the same evidence contract as replenishment.
+  // Substring matches such as HVAC software or search-query metadata are not fit.
+  if (serviceTradeMissionVerticals(segments).length) {
+    return evaluateReplenishmentAdmission(record, { missionSegments: segments }).admitted;
+  }
   const hay = [
     record.industry,
     record.vertical,
@@ -44,17 +112,15 @@ function matchesSegment(record, segments) {
     .map((v) => String(v || '').toLowerCase().replace(/[_-]+/g, ' '))
     .join(' ');
   return segments.some((seg) => {
-    const needle = String(seg || '')
-      .toLowerCase()
-      .replace(/[_-]+/g, ' ')
-      .trim();
-    if (!needle) return false;
-    const compact = needle.replace(/\s+/g, '');
-    return (
-      hay.includes(needle) ||
-      hay.replace(/\s+/g, '').includes(compact) ||
-      (needle.includes('property') && hay.includes('property'))
-    );
+    return segmentNeedles(seg).some((needle) => {
+      if (!needle) return false;
+      const compact = needle.replace(/\s+/g, '');
+      return (
+        hay.includes(needle) ||
+        hay.replace(/\s+/g, '').includes(compact) ||
+        (needle.includes('property') && hay.includes('property'))
+      );
+    });
   });
 }
 
@@ -71,6 +137,9 @@ function normalizeCompany(raw, tenantId) {
     industry: asText(raw.industry || raw.vertical || raw.segment),
     location: asText(raw.location || raw.geography || raw.city),
     website: asText(raw.website),
+    description: asText(raw.description),
+    snippet: asText(raw.snippet),
+    source: asText(raw.source),
     icpScore: raw.icp_score != null ? Number(raw.icp_score) : raw.icpScore,
     people: Array.isArray(raw.people) ? raw.people : [],
     signals: Array.isArray(raw.signals) ? raw.signals : [],
@@ -197,16 +266,22 @@ function retrieveExistingIntelligence(input = {}) {
   };
 }
 
-async function loadTenantRepository({ tenantId } = {}) {
+function repositoryUnavailable() {
+  const error = new Error('Existing tenant intelligence is unavailable.');
+  error.code = 'existing_intelligence_unavailable';
+  return error;
+}
+
+async function loadTenantRepository({ tenantId, pool } = {}) {
   const id = asText(tenantId);
-  if (!id || !process.env.DATABASE_URL) return { companies: [], people: [] };
+  if (!id || (!pool && !process.env.DATABASE_URL)) throw repositoryUnavailable();
   let db;
   try {
-    db = require('../../../db');
+    db = pool || require('../../../db');
   } catch {
-    return { companies: [], people: [] };
+    throw repositoryUnavailable();
   }
-  if (!db || typeof db.query !== 'function') return { companies: [], people: [] };
+  if (!db || typeof db.query !== 'function') throw repositoryUnavailable();
   try {
     const companies = await db.query(
       `SELECT id, client_id, name, industry, location, website, icp_score, created_at
@@ -225,8 +300,9 @@ async function loadTenantRepository({ tenantId } = {}) {
        LIMIT 500`,
       [id]
     );
+    if (!Array.isArray(companies?.rows) || !Array.isArray(prospects?.rows)) throw repositoryUnavailable();
     return {
-      companies: (companies.rows || []).map((row) => ({
+      companies: companies.rows.map((row) => ({
         id: String(row.id),
         tenantId: String(row.client_id),
         name: row.name,
@@ -237,7 +313,7 @@ async function loadTenantRepository({ tenantId } = {}) {
         updatedAt: row.created_at,
         source: 'existing_pf',
       })),
-      people: (prospects.rows || []).map((row) => ({
+      people: prospects.rows.map((row) => ({
         id: String(row.id),
         tenantId: String(row.client_id),
         companyId: row.company_id != null ? String(row.company_id) : null,
@@ -247,7 +323,7 @@ async function loadTenantRepository({ tenantId } = {}) {
       })),
     };
   } catch {
-    return { companies: [], people: [] };
+    throw repositoryUnavailable();
   }
 }
 
@@ -258,6 +334,8 @@ async function loadRepository(input = {}) {
       targetContext: input.targetContext,
       businessContext: input.businessContext,
     });
+    if (!Array.isArray(loaded) && !Array.isArray(loaded?.companies)) throw repositoryUnavailable();
+    if (loaded?.available === false) throw repositoryUnavailable();
     const companies = Array.isArray(loaded)
       ? loaded
       : (loaded && loaded.companies) || [];
@@ -268,7 +346,7 @@ async function loadRepository(input = {}) {
     const loaded = await loadTenantRepository({
       tenantId: input.authorizedTenantId || input.tenantId,
     });
-    if ((loaded.companies && loaded.companies.length) || (loaded.people && loaded.people.length)) {
+    if (loaded) {
       return retrieveExistingIntelligence({
         ...input,
         companies: loaded.companies,
@@ -290,6 +368,7 @@ module.exports = {
   loadTenantRepository,
   matchesGeography,
   matchesSegment,
+  segmentNeedles,
   normalizeCompany,
   normalizePerson,
   signalLabel,

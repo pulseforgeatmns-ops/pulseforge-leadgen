@@ -1,0 +1,85 @@
+name: Anchor service portal safety
+on:
+  pull_request:
+    paths:
+      - 'routes/anchorPortal.js'
+      - 'services/anchorPortal.js'
+      - 'utils/anchorPortalSchema.js'
+      - 'utils/anchorPortalImages.js'
+      - 'public/anchor-portal*'
+      - 'test/anchorPortal*'
+      - 'test/browser/anchorPortal*'
+      - 'standalone/anchor-portal/**'
+      - 'test/helpers/exeterPortalHarness.js'
+      - 'test/helpers/standaloneAcceptanceFixture.js'
+      - 'scripts/demoExeterPortalLocal.js'
+      - 'migrations/*anchor-portal*'
+      - 'server.js'
+      - 'middleware/auth.js'
+      - 'package*.json'
+      - '.github/workflows/anchor-portal.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  portal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: ./.github/actions/setup-postgres-environment
+      - run: npm ci --ignore-scripts
+      - name: Isolated portal persistence, security and UI state gate
+        run: npm run test:anchor-portal
+      - name: Standalone real authentication and synthetic persistence gate
+        run: npm run test:anchor-portal:standalone
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
+      - name: Standalone locked-dependency browser login and logout gate
+        env:
+          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          set -euo pipefail
+          isolated="$(mktemp -d "$RUNNER_TEMP/anchor-portal-browser.XXXXXX")"
+          trap 'rm -rf "$isolated"' EXIT
+          git archive HEAD standalone/anchor-portal services routes utils public \
+            test/helpers/disposablePostgres.js test/browser/anchorPortalStandaloneBrowser.test.js \
+            | tar -x -C "$isolated"
+          cp "$isolated/standalone/anchor-portal/"package{,-lock}.json "$isolated/"
+          npm ci --prefix "$isolated" --omit=dev --ignore-scripts
+          # The fixture lives outside the root checkout, so runtime modules resolve
+          # only from its standalone install. NODE_PATH supplies Puppeteer tooling.
+          PORTAL_BROWSER_ROOT="$isolated" node <<'NODE'
+          const assert = require('node:assert/strict');
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const { createRequire } = require('node:module');
+          const root = process.env.PORTAL_BROWSER_ROOT;
+          const runtimeRequire = createRequire(path.join(root, 'standalone/anchor-portal/runtime.js'));
+          const lock = runtimeRequire('./package-lock.json');
+          for (const name of [...Object.keys(lock.packages[''].dependencies), 'body-parser', 'qs', 'proxy-addr']) {
+            const packageRoot = fs.realpathSync(path.join(root, 'node_modules', name));
+            const file = fs.realpathSync(runtimeRequire.resolve(name));
+            assert.ok(file.startsWith(packageRoot + path.sep), `${name} escaped standalone install`);
+            const actual = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')).version;
+            assert.equal(actual, lock.packages[`node_modules/${name}`].version, `${name} differs from lockfile`);
+            console.log(`Standalone browser dependency: ${name}@${actual}`);
+          }
+          NODE
+          NODE_PATH="$GITHUB_WORKSPACE/node_modules" node --test "$isolated/test/browser/anchorPortalStandaloneBrowser.test.js"
+      - name: Dedicated image build (no push or deployment)
+        run: docker build -f standalone/anchor-portal/Dockerfile -t anchor-portal-ci .
+      - name: Dedicated image refuses missing configuration
+        run: |
+          set +e
+          output=$(docker run --rm anchor-portal-ci 2>&1)
+          status=$?
+          set -e
+          test "$status" -eq 1
+          printf '%s\n' "$output" | grep -F 'Portal startup refused.'
+      - name: Global entrypoint syntax smoke
+        run: npm run test:global-smoke

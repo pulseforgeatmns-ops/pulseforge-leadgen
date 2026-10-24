@@ -779,6 +779,10 @@ function acceptBrevoWebhook(req, res) {
         console.warn(`[Brevo] Skipped webhook event: ${result.reason || 'unknown'}`);
         return;
       }
+      if (result.sender_identity_status === 'mismatch') {
+        console.warn(`[Brevo] Quarantined foreign-domain event for client_id=${result.client_id} event_domain=${result.event_sending_domain} tenant_domain=${result.tenant_sending_domain}`);
+        return;
+      }
       await safeIngestBrevoSignal(result, payload);
       await processBrevoEventSideEffects(result, payload);
       try {
@@ -840,7 +844,7 @@ router.post('/webhooks/bland', async (req, res) => {
 
     if (!fullText || status !== 'completed') return;
 
-    const Anthropic = require('@anthropic-ai/sdk');
+    const Anthropic = require('../utils/meteredAnthropic').forAgent('call_webhook');
     const anthropic = new Anthropic();
 
     const parseRes = await anthropic.messages.create({
@@ -933,3 +937,4 @@ Respond with JSON only — no explanation:
 });
 
 module.exports = router;
+

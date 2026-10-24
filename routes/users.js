@@ -92,6 +92,7 @@ td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.04); color
 <div class="top">
   <div><div class="title">USER MANAGEMENT</div><div class="sub">Admin only · Pulseforge Lead Engine</div></div>
   <a href="/dashboard">Back to dashboard</a>
+  <a href="/admin/ao-impersonation" style="margin-left:12px">Act as AO</a>
 </div>
 <div class="msg" id="msg"></div>
 <div class="note">Use Client for external tenant access. Assign a tenant and a temporary password — the client must choose a new password on first login. Viewer is internal/admin-shared and is not tenant-locked.</div>
@@ -155,7 +156,7 @@ td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.04); color
   </form>
 </div>
 <script>
-	const roles = ['admin','manager','viewer','client','ao','setter','closer','sales'];
+	const roles = ['admin','manager','viewer','client','ao','setter','closer','sales','cleaner','facility_client'];
 const msg = document.getElementById('msg');
 let resetUserId = null;
 let editUser = null;

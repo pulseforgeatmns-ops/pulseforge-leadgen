@@ -96,11 +96,21 @@ function buildIntelligenceReport(input = {}) {
     kind: 'mission_intelligence_report',
     market: marketLabel,
     marketDefinition: {
+      market: marketDefinition.market,
       segment: marketDefinition.segment,
       geography: marketDefinition.geography,
       buyer: marketDefinition.buyer,
       industry: marketDefinition.industry,
       missionGoal: marketDefinition.missionGoal,
+      customerTypes: marketDefinition.customerTypes,
+      decisionMakers: marketDefinition.decisionMakers,
+      businessModels: marketDefinition.businessModels,
+      terminology: marketDefinition.terminology,
+      adjacentMarkets: marketDefinition.adjacentMarkets,
+      exclusions: marketDefinition.exclusions,
+      buyingSignals: marketDefinition.buyingSignals,
+      expectedEvidence: marketDefinition.expectedEvidence,
+      operatorSegment: marketDefinition.operatorSegment,
     },
     investigationStrategy,
     investigationStatus,
@@ -111,8 +121,21 @@ function buildIntelligenceReport(input = {}) {
     },
     remainingUnknowns: investigationStatus?.remainingUnknowns || [],
     recommendedNextInvestigation: investigationStatus?.recommendedNextInvestigation || null,
+    estimatedMarket: coverage.universeEstimate
+      ? {
+          minimum: coverage.universeEstimate.minimum,
+          expected: coverage.universeEstimate.expected,
+          maximum: coverage.universeEstimate.maximum,
+          confidence: coverage.universeEstimate.confidence,
+          reasoning: coverage.universeEstimate.reasoning || [],
+          revisionHistory: coverage.universeEstimate.revisionHistory || [],
+        }
+      : coverage.estimatedUniverse
+        ? { expected: coverage.estimatedUniverse }
+        : null,
     estimatedUniverse: coverage.estimatedUniverse,
     coverage: coverage.coveragePct,
+    coveragePct: coverage.coveragePct,
     qualified: coverage.qualified,
     strong: coverage.strong,
     immediate: coverage.immediate,
@@ -136,10 +159,18 @@ function buildIntelligenceReport(input = {}) {
 function buildSummary(marketLabel, coverage, ranking) {
   const parts = [];
   parts.push(`Market: ${marketLabel}.`);
-  if (coverage.estimatedUniverse) {
-    parts.push(
-      `Estimated universe ${coverage.estimatedUniverse}; investigated ${coverage.investigated} (${Math.round((coverage.coveragePct || 0) * 100)}% coverage).`
-    );
+  if (coverage.universeEstimate || coverage.estimatedUniverse) {
+    const expected =
+      (coverage.universeEstimate && coverage.universeEstimate.expected) || coverage.estimatedUniverse;
+    parts.push(`Estimated universe ${expected}; investigated ${coverage.investigated || 0}.`);
+    if (coverage.coveragePct != null) {
+      parts.push(`Coverage ${Math.round(coverage.coveragePct * 100)}%.`);
+    } else {
+      parts.push('Coverage unavailable — no universe estimate.');
+    }
+    if (coverage.universeEstimate && coverage.universeEstimate.confidence != null) {
+      parts.push(`Estimate confidence ${coverage.universeEstimate.confidence}.`);
+    }
   }
   parts.push(
     `Qualified ${coverage.qualified || 0}, strong ${coverage.strong || 0}, immediate ${coverage.immediate || 0}.`

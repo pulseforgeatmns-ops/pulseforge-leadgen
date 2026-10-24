@@ -38,6 +38,7 @@ class MissionEngine {
   /**
    * @param {object} [deps]
    * @param {object} [deps.registry]
+   * @param {object} [deps.scoutDiscoveryOpts] Construction-time Scout repository and isolated runtime dependencies.
    * @param {object} [deps.store]
    * @param {object} [deps.planner]
    * @param {object} [deps.executor]
@@ -47,6 +48,7 @@ class MissionEngine {
    */
   constructor(deps = {}) {
     this._registry = deps.registry || createBuiltinRegistry();
+    this._scoutDiscoveryOpts = deps.scoutDiscoveryOpts;
     this._store = deps.store || createInMemoryMissionStore();
     this._planner =
       deps.planner || createMissionPlanner({ registry: this._registry });
@@ -65,6 +67,10 @@ class MissionEngine {
         bindings: this._bindings,
         enabled: deps.resolverEnabled,
       });
+  }
+
+  get scoutDiscoveryOpts() {
+    return this._scoutDiscoveryOpts;
   }
 
   get registry() {

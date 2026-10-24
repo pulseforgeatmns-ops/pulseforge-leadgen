@@ -14,6 +14,14 @@ function createMemoryAmoStore(opts = {}) {
   const observations = [];
   const outcomes = [];
   const learning = [];
+  const predictions = [];
+  const evaluations = [];
+  const outcomeLearnings = [];
+  const executionRecords = [];
+  const interpretations = [];
+  const observeReactions = [];
+  const candidateObserveStates = new Map();
+  const acquisitionKnowledge = [];
 
   function putMission(mission) {
     const missionContributions = contributions.filter((row) => row.missionId === mission.id);
@@ -67,6 +75,15 @@ function createMemoryAmoStore(opts = {}) {
     return clone(row);
   }
 
+  function updateContribution(id, updater) {
+    const index = contributions.findIndex((row) => row.id === id);
+    if (index < 0) return null;
+    const current = clone(contributions[index]);
+    const updated = typeof updater === 'function' ? updater(current) : { ...current, ...updater };
+    contributions[index] = clone(updated);
+    return clone(updated);
+  }
+
   function listContributions(missionId) {
     return contributions.filter((row) => row.missionId === missionId).map(clone);
   }
@@ -109,6 +126,206 @@ function createMemoryAmoStore(opts = {}) {
     return learning.filter((row) => String(row.tenantId || '') === key).map(clone);
   }
 
+  function addPrediction(row) {
+    if (row && row.id && predictions.some((existing) => existing.id === row.id)) {
+      return clone(row);
+    }
+    predictions.push(clone(row));
+    return clone(row);
+  }
+
+  function listPredictions(missionId) {
+    if (missionId == null || missionId === '') return predictions.map(clone);
+    return predictions.filter((row) => row.missionId === missionId).map(clone);
+  }
+
+  function putPrediction(row) {
+    const idx = predictions.findIndex((existing) => existing.id === row.id);
+    if (idx >= 0) predictions[idx] = clone(row);
+    else predictions.push(clone(row));
+    return clone(row);
+  }
+
+  function addEvaluation(row) {
+    if (row && row.id && evaluations.some((existing) => existing.id === row.id)) {
+      return clone(row);
+    }
+    evaluations.push(clone(row));
+    return clone(row);
+  }
+
+  function listEvaluations(missionId) {
+    if (missionId == null || missionId === '') return evaluations.map(clone);
+    return evaluations.filter((row) => row.missionId === missionId).map(clone);
+  }
+
+  function addOutcomeLearning(row) {
+    if (row && row.id && outcomeLearnings.some((existing) => existing.id === row.id)) {
+      return clone(row);
+    }
+    outcomeLearnings.push(clone(row));
+    return clone(row);
+  }
+
+  function listOutcomeLearnings(tenantId, missionId = null) {
+    let rows = outcomeLearnings.map(clone);
+    if (tenantId != null && tenantId !== '') {
+      const key = String(tenantId);
+      rows = rows.filter((row) => String(row.tenantId || '') === key);
+    }
+    if (missionId != null && missionId !== '') {
+      rows = rows.filter((row) => row.missionId === missionId);
+    }
+    return rows;
+  }
+
+  function addExecutionRecord(row) {
+    if (!row || !row.id) return null;
+    const idx = executionRecords.findIndex((existing) => existing.id === row.id);
+    const copy = clone(row);
+    if (idx >= 0) executionRecords[idx] = copy;
+    else executionRecords.push(copy);
+    return clone(copy);
+  }
+
+  function listExecutionRecords(missionId, filter = {}) {
+    let rows = executionRecords.map(clone);
+    if (missionId != null && missionId !== '') {
+      rows = rows.filter((row) => row.missionId === missionId);
+    }
+    if (filter.prospectId) {
+      rows = rows.filter((row) => row.prospectId === filter.prospectId);
+    }
+    if (filter.executionIdentity) {
+      rows = rows.filter((row) => row.executionIdentity === filter.executionIdentity);
+    }
+    if (filter.status) {
+      rows = rows.filter((row) => row.status === filter.status);
+    }
+    return rows.sort((a, b) => String(a.attemptedAt || a.createdAt).localeCompare(String(b.attemptedAt || b.createdAt)));
+  }
+
+  function findExecutionRecordByIdentity(executionIdentity) {
+    return executionRecords.find((row) => row.executionIdentity === executionIdentity) || null;
+  }
+
+  function addInterpretation(row) {
+    if (row && row.id && interpretations.some((existing) => existing.id === row.id)) {
+      return clone(row);
+    }
+    interpretations.push(clone(row));
+    return clone(row);
+  }
+
+  function listInterpretations(missionId) {
+    return interpretations.filter((row) => row.missionId === missionId).map(clone);
+  }
+
+  function candidateObserveKey(missionId, prospectId) {
+    return `${asText(missionId)}::${asText(prospectId)}`;
+  }
+
+  function addObserveReaction(row) {
+    if (!row?.id) return null;
+    const existingById = observeReactions.find((item) => item.id === row.id);
+    if (existingById) return clone(existingById);
+
+    const evaluationKind = row.evaluationKind || 'initial';
+    if (evaluationKind === 'initial') {
+      const existingInitial = observeReactions.find(
+        (item) => item.observationId === row.observationId
+          && (item.evaluationKind || 'initial') === 'initial'
+      );
+      if (existingInitial) return clone(existingInitial);
+    }
+
+    if (row.reevaluationTriggerId) {
+      const existingReeval = observeReactions.find(
+        (item) => item.observationId === row.observationId
+          && item.reevaluationTriggerId === row.reevaluationTriggerId
+      );
+      if (existingReeval) return clone(existingReeval);
+    }
+
+    observeReactions.push(clone(row));
+    return clone(row);
+  }
+
+  function listObserveReactions(missionId) {
+    return observeReactions
+      .filter((row) => row.missionId === missionId)
+      .sort((a, b) => String(a.at).localeCompare(String(b.at)))
+      .map(clone);
+  }
+
+  function listEffectiveObserveReactions(missionId) {
+    const { listEffectiveObserveReactions: pickEffectiveRows } = require('./ObserveReaction');
+    return pickEffectiveRows(observeReactions, missionId);
+  }
+
+  function getObserveReactionByObservationId(observationId) {
+    const { pickEffectiveObserveReaction } = require('./ObserveReaction');
+    const matches = observeReactions.filter((row) => row.observationId === observationId);
+    const found = pickEffectiveObserveReaction(matches);
+    return found ? clone(found) : null;
+  }
+
+  function getCandidateObserveState(missionId, prospectId) {
+    const key = candidateObserveKey(missionId, prospectId);
+    const found = candidateObserveStates.get(key);
+    return found ? clone(found) : null;
+  }
+
+  function putCandidateObserveState(row) {
+    if (!row?.missionId || row.prospectId == null) return null;
+    const key = candidateObserveKey(row.missionId, row.prospectId);
+    const copy = clone(row);
+    candidateObserveStates.set(key, copy);
+    return clone(copy);
+  }
+
+  function listCandidateObserveStates(missionId) {
+    const prefix = `${asText(missionId)}::`;
+    return [...candidateObserveStates.entries()]
+      .filter(([key]) => key.startsWith(prefix))
+      .map(([, row]) => clone(row));
+  }
+
+  function putAcquisitionKnowledge(row) {
+    if (!row || !row.id) return null;
+    const idx = acquisitionKnowledge.findIndex((existing) => existing.id === row.id);
+    const copy = clone(row);
+    if (idx >= 0) acquisitionKnowledge[idx] = copy;
+    else acquisitionKnowledge.push(copy);
+    return clone(copy);
+  }
+
+  function replaceAcquisitionKnowledge(rows = []) {
+    acquisitionKnowledge.length = 0;
+    for (const row of rows || []) {
+      if (row && row.id) acquisitionKnowledge.push(clone(row));
+    }
+    return acquisitionKnowledge.map(clone);
+  }
+
+  function listAcquisitionKnowledge(tenantId, filter = {}) {
+    let rows = acquisitionKnowledge.map(clone);
+    if (tenantId != null && tenantId !== '') {
+      const key = String(tenantId);
+      rows = rows.filter((row) => String(row.tenantId || '') === key);
+    }
+    if (filter.missionId) {
+      rows = rows.filter((row) => !row.missionId || row.missionId === filter.missionId);
+    }
+    if (filter.objectType) {
+      rows = rows.filter((row) => row.objectType === filter.objectType);
+    }
+    if (filter.state) {
+      rows = rows.filter((row) => row.state === filter.state);
+    }
+    return rows;
+  }
+
   function snapshot() {
     return {
       missions: [...missions.entries()].map(([id, row]) => [id, clone(row)]),
@@ -117,6 +334,14 @@ function createMemoryAmoStore(opts = {}) {
       observations: observations.map(clone),
       outcomes: outcomes.map(clone),
       learning: learning.map(clone),
+      predictions: predictions.map(clone),
+      evaluations: evaluations.map(clone),
+      outcomeLearnings: outcomeLearnings.map(clone),
+      executionRecords: executionRecords.map(clone),
+      interpretations: interpretations.map(clone),
+      observeReactions: observeReactions.map(clone),
+      candidateObserveStates: [...candidateObserveStates.entries()],
+      acquisitionKnowledge: acquisitionKnowledge.map(clone),
     };
   }
 
@@ -136,6 +361,17 @@ function createMemoryAmoStore(opts = {}) {
     replaceArray(observations, snap.observations);
     replaceArray(outcomes, snap.outcomes);
     replaceArray(learning, snap.learning);
+    replaceArray(predictions, snap.predictions);
+    replaceArray(evaluations, snap.evaluations);
+    replaceArray(outcomeLearnings, snap.outcomeLearnings);
+    replaceArray(executionRecords, snap.executionRecords);
+    replaceArray(interpretations, snap.interpretations);
+    replaceArray(observeReactions, snap.observeReactions);
+    candidateObserveStates.clear();
+    for (const [key, row] of snap.candidateObserveStates || []) {
+      candidateObserveStates.set(key, clone(row));
+    }
+    replaceArray(acquisitionKnowledge, snap.acquisitionKnowledge);
   }
 
   for (const extra of opts.seeds || []) putMission(extra);
@@ -148,6 +384,7 @@ function createMemoryAmoStore(opts = {}) {
     addEvent,
     listEvents,
     addContribution,
+    updateContribution,
     listContributions,
     addObservation,
     listObservations,
@@ -155,6 +392,28 @@ function createMemoryAmoStore(opts = {}) {
     listOutcomes,
     addLearning,
     listLearning,
+    addPrediction,
+    listPredictions,
+    putPrediction,
+    addEvaluation,
+    listEvaluations,
+    addOutcomeLearning,
+    listOutcomeLearnings,
+    addExecutionRecord,
+    listExecutionRecords,
+    findExecutionRecordByIdentity,
+    addInterpretation,
+    listInterpretations,
+    addObserveReaction,
+    listObserveReactions,
+    listEffectiveObserveReactions,
+    getObserveReactionByObservationId,
+    getCandidateObserveState,
+    putCandidateObserveState,
+    listCandidateObserveStates,
+    putAcquisitionKnowledge,
+    replaceAcquisitionKnowledge,
+    listAcquisitionKnowledge,
     snapshot,
     restore,
   };

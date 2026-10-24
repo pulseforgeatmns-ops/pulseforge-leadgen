@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="same-origin">
+  <title>Clarity review · Pulseforge</title>
+  <link rel="stylesheet" href="/shared/tokens.css">
+  <link rel="stylesheet" href="/public/clarity-review.css">
+</head>
+<body>
+  <main class="clarity-main" id="clarityMain">
+    <header class="clarity-top"><a href="/command-deck" id="clarityBack">← Daily brief</a><span>Max · Website clarity</span></header>
+    <p class="clarity-kicker">Evidence before action</p>
+    <h1 id="clarityTitle">Loading recommendation…</h1>
+    <p class="clarity-boundary">This is a recommendation review, not permission to change your website. Implementation and deployment always require separate authorization.</p>
+    <p id="clarityStatus" role="status" aria-live="polite"></p>
+    <div id="clarityContent" hidden></div>
+    <div class="clarity-actions" id="clarityActions" hidden>
+      <button type="button" id="clarityApprove" class="primary">Approve recommendation</button>
+      <button type="button" id="clarityReject">Reject recommendation</button>
+    </div>
+    <button type="button" id="clarityReload">Reload latest evidence</button>
+  </main>
+  <dialog id="clarityConfirm" aria-labelledby="clarityConfirmTitle" aria-describedby="clarityConfirmCopy">
+    <h2 id="clarityConfirmTitle"></h2>
+    <p id="clarityConfirmCopy"></p>
+    <div class="clarity-actions">
+      <button type="button" id="clarityConfirmSubmit" class="primary">Record decision</button>
+      <button type="button" id="clarityCancel">Cancel</button>
+    </div>
+  </dialog>
+  <script src="/public/clarity-review.js" defer></script>
+</body>
+</html>

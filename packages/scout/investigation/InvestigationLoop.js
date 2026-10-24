@@ -236,6 +236,12 @@ async function runInvestigationEngine(input = {}) {
     scoutPayload: input.scoutPayload,
     opts,
   });
+  if (candidateUniverse.available === false || candidateUniverse.error) {
+    throw Object.assign(new Error('Existing tenant intelligence is unavailable.'), {
+      code: 'existing_intelligence_unavailable',
+    });
+  }
+
 
   let candidates = candidateUniverse.candidates || candidateUniverse.resolved || [];
 

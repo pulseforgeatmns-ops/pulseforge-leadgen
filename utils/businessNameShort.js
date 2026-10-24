@@ -76,21 +76,37 @@ function deriveBusinessNameShort(name) {
   };
 }
 
-let ensureBusinessNameShortColumnsPromise;
+// Share pending work only on the same query object. A client can be inside a
+// transaction whose successful DDL is later rolled back; settled success is never
+// a process-wide (or even client-lifetime) statement of committed schema readiness.
+const pendingBusinessNameShortColumns = new WeakMap();
 
-function ensureBusinessNameShortColumns(pool) {
-  if (!ensureBusinessNameShortColumnsPromise) {
-    ensureBusinessNameShortColumnsPromise = pool.query(`
-      ALTER TABLE companies
-        ADD COLUMN IF NOT EXISTS business_name_short TEXT,
-        ADD COLUMN IF NOT EXISTS business_name_short_confidence TEXT,
-        ADD COLUMN IF NOT EXISTS business_name_short_flags TEXT[] DEFAULT ARRAY[]::TEXT[]
-    `).catch(err => {
-      ensureBusinessNameShortColumnsPromise = null;
-      throw err;
+function ensureBusinessNameShortColumns(db) {
+  if (!pendingBusinessNameShortColumns.has(db)) {
+    const pending = Promise.resolve().then(async () => {
+      // Resolve the visible relation, including caller-owned transactions. Pools must
+      // use a consistent search_path across connections for this and the ALTER.
+      // Avoid ALTER's exclusive lock on a ready schema.
+      const { rows } = await db.query(`
+        SELECT count(*) = 3 AS ready
+        FROM pg_catalog.pg_attribute
+        WHERE attrelid = to_regclass('companies')
+          AND NOT attisdropped
+          AND attname IN ('business_name_short', 'business_name_short_confidence', 'business_name_short_flags')
+      `);
+      if (rows[0]?.ready) return;
+      await db.query(`
+        ALTER TABLE companies
+          ADD COLUMN IF NOT EXISTS business_name_short TEXT,
+          ADD COLUMN IF NOT EXISTS business_name_short_confidence TEXT,
+          ADD COLUMN IF NOT EXISTS business_name_short_flags TEXT[] DEFAULT ARRAY[]::TEXT[]
+      `);
+    }).finally(() => {
+      pendingBusinessNameShortColumns.delete(db);
     });
+    pendingBusinessNameShortColumns.set(db, pending);
   }
-  return ensureBusinessNameShortColumnsPromise;
+  return pendingBusinessNameShortColumns.get(db);
 }
 
 module.exports = {

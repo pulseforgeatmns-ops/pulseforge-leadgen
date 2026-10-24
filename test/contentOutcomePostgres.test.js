@@ -9,7 +9,7 @@ const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { Pool } = require('pg');
+const { createTrackedPostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
 
 const enabled = process.env.CONTENT_OUTCOME_TEST_POSTGRES === 'true';
 const root = path.join(__dirname, '..');
@@ -23,7 +23,17 @@ const root = path.join(__dirname, '..');
   let getPublicationOutcome;
   let createPostgresStore;
 
+  let originalDualWrite;
+  let previousDualWriteFlag;
+  const dualWritePath = require.resolve('../utils/knowledgeDualWrite');
   before(async () => {
+    // Keep fire-and-forget knowledge projection out of this disposable store test.
+    previousDualWriteFlag = process.env.KNOWLEDGE_DUAL_WRITE;
+    process.env.KNOWLEDGE_DUAL_WRITE = '0';
+    originalDualWrite = require.cache[dualWritePath];
+    require.cache[dualWritePath] = { id: dualWritePath, filename: dualWritePath, loaded: true, exports: { safeWriteOperational() {}, OPERATIONAL_EVENTS: {} } };
+    const { getKnowledgeBoot } = require('../utils/knowledgeRuntime');
+    await getKnowledgeBoot({ reset: true, inMemory: true });
     const { startDisposablePostgres } = require('./helpers/disposablePostgres');
     const instance = await startDisposablePostgres('content-outcome-pg-');
     stop = () => instance.stop();
@@ -32,7 +42,7 @@ const root = path.join(__dirname, '..');
     delete require.cache[require.resolve('../db')];
     delete require.cache[require.resolve('../services/contentOutcomeIntelligence')];
 
-    pool = new Pool({ connectionString: instance.connectionString });
+    pool = createTrackedPostgresPool({ connectionString: instance.connectionString });
     await pool.query('CREATE EXTENSION IF NOT EXISTS pgcrypto');
     await pool.query(
       fs.readFileSync(
@@ -51,8 +61,13 @@ const root = path.join(__dirname, '..');
   });
 
   after(async () => {
-    if (pool) await pool.end();
-    if (stop) await stop();
+    const { getKnowledgeBoot } = require('../utils/knowledgeRuntime');
+    await getKnowledgeBoot({ reset: true, inMemory: true });
+    if (pool) await closePostgresFixture(pool, { stop });
+    else if (stop) await stop();
+    if (originalDualWrite) require.cache[dualWritePath] = originalDualWrite; else delete require.cache[dualWritePath];
+    if (previousDualWriteFlag === undefined) delete process.env.KNOWLEDGE_DUAL_WRITE;
+    else process.env.KNOWLEDGE_DUAL_WRITE = previousDualWriteFlag;
   });
 
   it('persists publication + snapshots + outcomes with tenant isolation', async () => {
