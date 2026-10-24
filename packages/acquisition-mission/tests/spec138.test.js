@@ -76,7 +76,7 @@ describe('SPEC-138 — runtime version', () => {
       skipMissionPlanning: true,
     });
     assert.equal(mission.runtimeVersion, RUNTIME_VERSION);
-    assert.equal(RUNTIME_VERSION, 1);
+    assert.equal(RUNTIME_VERSION, 2);
   });
 
   it('allows explicit runtimeVersion override for migration tests', () => {
@@ -147,7 +147,7 @@ describe('SPEC-138 — production reset', () => {
     assert.deepEqual(missions, []);
   });
 
-  it('new missions after reset carry runtimeVersion 1', async () => {
+  it('new missions after reset carry current runtimeVersion', async () => {
     const pool = mockPool();
     await resetAmoRuntime({ pool, clearSessions: false });
     const mission = await createServiceMission({
@@ -155,7 +155,7 @@ describe('SPEC-138 — production reset', () => {
       objective: 'First production mission after reset.',
       skipMissionPlanning: true,
     }, { pool, persist: false });
-    assert.equal(mission.runtimeVersion, 1);
+    assert.equal(mission.runtimeVersion, RUNTIME_VERSION);
     assert.equal(mission.spec, 'SPEC-118');
     assert.ok(mission.pendingOperatorDecision == null || typeof mission.pendingOperatorDecision === 'object');
   });

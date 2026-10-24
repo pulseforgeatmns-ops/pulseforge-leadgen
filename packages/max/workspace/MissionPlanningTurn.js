@@ -3,7 +3,11 @@
 /**
  * SPEC-130 — Detect Mission Planning Engine turns without pulling Scout/approval.
  * Kept as a leaf module so ActiveMissionGuard can require it without a cycle.
+ * SPEC-153 — invoked only during analyzeOperatorIntent(); downstream consumers
+ * use OperatorIntent.planningRequested instead of re-parsing.
  */
+
+const { guardPostIntentParsing } = require('./audit/OperatorIntentAudit');
 
 const { OPERATOR_DECISION_KINDS } = require('../../acquisition-mission/types');
 
@@ -27,6 +31,7 @@ function looksLikeInspectionQuestion(text) {
  * Unmatched short answers still belong to the planner so Max can re-ask.
  */
 function isMissionPlanningTurn(missionOrSnapshot, question) {
+  guardPostIntentParsing('isMissionPlanningTurn');
   const mission = missionFrom(missionOrSnapshot);
   if (!mission || mission.planCancelled) return false;
   const pending = mission.pendingOperatorDecision;

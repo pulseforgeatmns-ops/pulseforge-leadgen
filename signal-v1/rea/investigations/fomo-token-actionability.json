@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "id": "signal-rea-fomo-token-actionability-001",
+  "title": "FOMO token identity and actionable deep-link contract",
+  "deadline": "2026-10-14",
+  "status": "COMPLETE_PUBLIC_WEB",
+  "purpose": "Determine how a user-owned FOMO client or public FOMO web surface represents a Solana token identity and opens the corresponding chart or action surface, so Signal can produce a reliable operator action without placing a trade.",
+  "target": {
+    "name": "FOMO",
+    "types": [
+      "user_owned_browser_page",
+      "user_owned_android_app"
+    ],
+    "selectionRule": "Use the browser page already open by the operator first. Inspect an Android package only when it is the operator's installed copy or another artifact the operator is authorized to examine.",
+    "allowedOrigins": [
+      "https://fomo.family"
+    ]
+  },
+  "questions": [
+    {
+      "id": "Q1",
+      "text": "Which exact identifier is authoritative for the selected Solana token: contract address, pool address, route parameter, or another value?",
+      "requiredEvidence": [
+        "observed UI state",
+        "network or route observation",
+        "source location when available"
+      ]
+    },
+    {
+      "id": "Q2",
+      "text": "What URL, application link, or intent opens the same token state from an external alert?",
+      "requiredEvidence": [
+        "observed navigation",
+        "exact parameter shape",
+        "negative case with an invalid identifier"
+      ]
+    },
+    {
+      "id": "Q3",
+      "text": "Which fields can Signal safely show before the destination loads, and which fields must remain unknown until the destination confirms them?",
+      "requiredEvidence": [
+        "field provenance",
+        "timing boundary",
+        "remaining unknowns"
+      ]
+    }
+  ],
+  "constraints": {
+    "passiveByDefault": true,
+    "allowAuthenticatedRead": true,
+    "allowTrade": false,
+    "allowWalletConnection": false,
+    "allowWalletSignature": false,
+    "allowMessageSend": false,
+    "allowCredentialCapture": false,
+    "allowEntitlementBypass": false,
+    "feedProspectiveResearch": false
+  },
+  "deliverables": [
+    "REA Evidence bundle or inline Evidence references",
+    "finding ledger mapping Q1-Q3 to evidence, confidence, and unresolved gaps",
+    "implementation decision for Signal operator alerts",
+    "fixture-based verification of any implemented deep-link builder"
+  ],
+  "acceptance": [
+    "Every conclusion cites captured evidence and distinguishes observation from design choice.",
+    "The authoritative token identifier and destination parameter shape are answered or explicitly unresolved.",
+    "No trade, wallet connection, wallet signature, message, or prospective cohort write occurs.",
+    "Any Signal implementation fails closed when token identity is ambiguous."
+  ]
+}

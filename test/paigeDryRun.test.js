@@ -49,14 +49,14 @@ require.cache[dbPath] = {
   },
 };
 
-const anthropicPath = require.resolve('@anthropic-ai/sdk');
+const anthropicPath = require.resolve('../utils/meteredAnthropic');
 class FakeAnthropic {
   constructor() {
     this.messages = {
       create: async request => {
         const prompt = request.messages?.[0]?.content || '';
         if (/Score this social media post/i.test(prompt)) {
-          return { content: [{ text: JSON.stringify({
+          return { content: [{ type: 'text', text: JSON.stringify({
             specificity: 9,
             originality: 9,
             hook_strength: 9,
@@ -65,7 +65,7 @@ class FakeAnthropic {
             reason: 'Specific, grounded, and direct.',
           }) }] };
         }
-        return { content: [{ text: JSON.stringify({
+        return { content: [{ type: 'text', text: JSON.stringify({
           format: 'dialogue',
           post_body: 'Practice Manager: "Ten sends means the pipeline is fixed."\n\nMe: [pause] "Two replies means we have a signal, not a guarantee."\n\nPractice Manager: "So what changes?"\n\nMe: "We keep the scope narrow and own the NEXT step."',
           hashtags: [],
@@ -79,10 +79,14 @@ require.cache[anthropicPath] = {
   id: anthropicPath,
   filename: anthropicPath,
   loaded: true,
-  exports: FakeAnthropic,
+  exports: { forAgent: () => FakeAnthropic },
 };
 
-const { run } = require('../paigeAgent');
+const { run, generateSocialContent } = require('../paigeAgent');
+
+test.beforeEach(() => {
+  writes.length = 0;
+});
 
 test('Paige dry-run generates Anchor content without any database write', async () => {
   const result = await run({ client_id: 10, dryRun: true, channel: 'linkedin_page', format: 'dialogue' });
@@ -97,9 +101,9 @@ test('Paige dry-run generates Anchor content without any database write', async 
 });
 
 test('Anchor production generation remains blocked while enabled_agents is Scout-only', async () => {
-  const result = await run({ client_id: 10, dryRun: false, channel: 'linkedin_page' });
+  const result = await generateSocialContent({ client_id: 10, dryRun: false, channel: 'linkedin_page' });
   assert.equal(result.skipped, true);
-  assert.equal(result.reason, 'anchor_dry_run_only');
+  assert.equal(result.reason, 'paige_not_enabled');
   assert.deepEqual(writes, []);
 });
 
@@ -123,3 +127,39 @@ test('Mira-unavailable dry-run aborts without generating or writing', async () =
   assert.match(result.channels_failed[0], /facebook_page/);
   assert.deepEqual(writes, []);
 });
+
+test('Mira-unavailable dry-run returns structured skip reason without provider calls', async () => {
+  let providerCalls = 0;
+  const anthropicPath = require.resolve('../utils/meteredAnthropic');
+  class CountingAnthropic {
+    constructor() {
+      this.messages = {
+        create: async () => {
+          providerCalls += 1;
+          return { content: [{ type: 'text', text: 'should not run' }] };
+        },
+      };
+    }
+  }
+  require.cache[anthropicPath] = {
+    id: anthropicPath,
+    filename: anthropicPath,
+    loaded: true,
+    exports: { forAgent: () => CountingAnthropic },
+  };
+  delete require.cache[require.resolve('../paigeAgent')];
+  delete require.cache[require.resolve('../services/paigeSocialContentExecution')];
+  const paige = require('../paigeAgent');
+
+  const result = await paige.generateSocialContent({
+    client_id: 10,
+    dryRun: true,
+    channel: 'facebook_page',
+    simulateMiraUnavailable: true,
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.outputs.length, 0);
+  assert.equal(providerCalls, 0);
+});
+

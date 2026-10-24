@@ -37,7 +37,7 @@
   const CALIBRATE_SETTLE_MS = 1400;
   const HALO_EXTENT_PX = 8;
   const PROTECTED_GAP_PX = 12;
-  const NODE_ESTIMATE = Object.freeze({ w: 132, h: 72 });
+  const NODE_ESTIMATE = Object.freeze({ w: 124, h: 124 });
 
   /** Desktop center-to-center band targets. Urgent is 24px closer than 097B (SPEC-097D). */
   const BAND_DESKTOP = Object.freeze({
@@ -92,6 +92,7 @@
     els.drawerEyebrow = document.getElementById('cdDomainDrawerEyebrow');
     els.drawerBody = document.getElementById('cdDomainDrawerBody');
     els.drawerDiscuss = document.getElementById('cdDomainDiscussMax');
+    els.drawerReview = document.getElementById('cdDomainReviewContent');
     els.explain = document.getElementById('cdPriorityExplain');
     els.explainBody = document.getElementById('cdPriorityExplainBody');
     els.recentSelect = document.getElementById('cdRecentConversations');
@@ -754,6 +755,13 @@
       els.drawerEyebrow.textContent = PRIORITY_LABELS[domain.priority] || domain.priority;
     }
     if (els.drawerBody) els.drawerBody.innerHTML = renderDrawerBody(domain);
+    if (els.drawerReview) {
+      els.drawerReview.hidden = domainId !== 'content';
+      els.drawerReview.onclick = () => {
+        closeDomainDrawer();
+        document.dispatchEvent(new CustomEvent('pulseforge:content-review'));
+      };
+    }
 
     els.drawer.hidden = false;
     document.body.classList.add('cd-domain-open');

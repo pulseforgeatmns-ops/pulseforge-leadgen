@@ -1,5 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { ENRICHABLE_SCOUT_VERTICALS } = require('../utils/replenishmentVertical');
+const { FOUNDER_LED_SMALL_BUSINESS_VERTICALS } = require('../utils/canonicalBusinessTaxonomy');
 const { _test } = require('../scoutUnenrichedEnrichmentAgent');
 
 test('Anchor unenriched retry worker runs only after 5 PM ET on weekdays', () => {
@@ -8,6 +10,10 @@ test('Anchor unenriched retry worker runs only after 5 PM ET on weekdays', () =>
   assert.equal(_test.scheduledWindowOpen(new Date('2026-07-25T21:00:00.000Z')), false); // Sat 5:00 PM ET
 });
 
-test('Anchor retry worker is limited to the current priority verticals', () => {
-  assert.deepEqual(_test.ANCHOR_PRIORITY_VERTICALS, ['property_manager', 'str_manager', 'commercial_office']);
+test('Anchor retry worker is limited to the shared enrichable vertical contract', () => {
+  assert.deepEqual(_test.ANCHOR_PRIORITY_VERTICALS, ENRICHABLE_SCOUT_VERTICALS);
+  assert.deepEqual(_test.ANCHOR_PRIORITY_VERTICALS, [
+    'property_manager', 'str_manager', 'commercial_office', 'realtor',
+    ...FOUNDER_LED_SMALL_BUSINESS_VERTICALS,
+  ]);
 });

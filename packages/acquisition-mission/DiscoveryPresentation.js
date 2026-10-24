@@ -6,6 +6,11 @@
  */
 
 const { formatSignalLabel, sourceLabel } = require('./DiscoveryPayload');
+const {
+  normalizeProviderExecution,
+  formatProviderExecutionLines,
+} = require('../scout/coverage/ProviderExecution');
+const { selectCanonicalContribution } = require('./CanonicalContributionSelection');
 
 /**
  * @param {unknown} item
@@ -92,6 +97,21 @@ function presentationFromDiscoveryPayload(payload = {}) {
     payload.missionObjective != null && String(payload.missionObjective).trim()
       ? String(payload.missionObjective).trim()
       : null;
+  const coverage =
+    payload.coverage && typeof payload.coverage === 'object' ? payload.coverage : null;
+  const discoveryReport =
+    payload.discoveryReport && typeof payload.discoveryReport === 'object'
+      ? payload.discoveryReport
+      : null;
+  const discoveryStatus =
+    payload.discoveryStatus != null ? String(payload.discoveryStatus) : null;
+  const candidateUniverseCount =
+    payload.candidateUniverseCount != null
+      ? Number(payload.candidateUniverseCount)
+      : discoveryReport && discoveryReport.candidateUniverse != null
+        ? Number(discoveryReport.candidateUniverse)
+        : null;
+  const providerExecution = normalizeProviderExecution(payload.providerExecution || []);
 
   let rankedProspects = Array.isArray(payload.rankedProspects)
     ? payload.rankedProspects.map((row) => ({ ...row }))
@@ -146,6 +166,11 @@ function presentationFromDiscoveryPayload(payload = {}) {
     missionObjective,
     outcome: payload.outcome || null,
     blocked: Boolean(payload.blocked),
+    coverage,
+    discoveryReport,
+    discoveryStatus,
+    candidateUniverseCount,
+    providerExecution,
   };
 }
 
@@ -181,11 +206,51 @@ function formatDiscoveryResultsLines(presentation) {
     for (const row of presentation.rankedProspects) {
       lines.push(`${row.rank}. ${row.name}`);
       if (row.rationale) lines.push(`   Why: ${row.rationale}`);
+      if (row.intelligenceBrief && row.intelligenceBrief.whyRankedHere) {
+        lines.push(`   Because: ${row.intelligenceBrief.whyRankedHere}`);
+      }
+      if (row.confidenceExplanation) {
+        lines.push(`   Confidence: ${row.confidenceExplanation.score}`);
+        if (row.confidenceExplanation.basedOn && row.confidenceExplanation.basedOn.length) {
+          lines.push(
+            `   Based on: ${row.confidenceExplanation.basedOn.map((b) => b.label).join(', ')}`
+          );
+        }
+        if (row.confidenceExplanation.missing && row.confidenceExplanation.missing.length) {
+          lines.push(
+            `   Missing: ${row.confidenceExplanation.missing
+              .slice(0, 3)
+              .map((m) => m.label)
+              .join(', ')}`
+          );
+        }
+        if (row.confidenceExplanation.contradictionNote) {
+          lines.push(`   ${row.confidenceExplanation.contradictionNote}`);
+        }
+      } else if (row.confidence != null) {
+        lines.push(`   Confidence: ${Number(row.confidence).toFixed(2)}`);
+      }
+      if (row.trust) {
+        lines.push(`   Trust: ${row.trust.label} — ${row.trust.reason}`);
+      }
       if (row.fit != null) lines.push(`   Fit: ${Number(row.fit).toFixed(2)}`);
       if (row.timing != null) lines.push(`   Timing: ${Number(row.timing).toFixed(2)}`);
       if (row.title) lines.push(`   Role: ${row.title}`);
-      if (row.unknowns && row.unknowns.length) {
+      if (row.intelligenceBrief && row.intelligenceBrief.competingHypotheses?.length) {
+        lines.push('   Competing hypotheses:');
+        for (const hyp of row.intelligenceBrief.competingHypotheses.slice(0, 3)) {
+          lines.push(`     • ${hyp.text} (${hyp.confidence})`);
+        }
+      }
+      if (row.highestRemainingUnknowns && row.highestRemainingUnknowns.length) {
+        const top = row.highestRemainingUnknowns[0];
+        lines.push(`   Highest unknown: ${top.unknown} (${top.impact} impact)`);
+        lines.push(`   Verify via: ${top.howToVerify}`);
+      } else if (row.unknowns && row.unknowns.length) {
         lines.push(`   Unknowns: ${row.unknowns.slice(0, 2).join('; ')}`);
+      }
+      if (row.recommendedNextInvestigation && row.recommendedNextInvestigation.action) {
+        lines.push(`   Next verification: ${row.recommendedNextInvestigation.action}`);
       }
       lines.push('');
     }
@@ -249,6 +314,53 @@ function formatDiscoveryResultsLines(presentation) {
     lines.push('');
   }
 
+  if (presentation.providerExecution && presentation.providerExecution.length) {
+    lines.push(...formatProviderExecutionLines(presentation.providerExecution));
+    lines.push('');
+  }
+
+  if (presentation.coverage || presentation.discoveryReport) {
+    lines.push('Coverage');
+    lines.push('');
+    const report = presentation.discoveryReport || {};
+    const cov = presentation.coverage || {};
+    const citiesLine =
+      report.coverage && report.coverage.cities
+        ? report.coverage.cities
+        : cov.cities
+          ? `${cov.cities.searched}/${cov.cities.planned}`
+          : '—';
+    const conceptsLine =
+      report.coverage && report.coverage.concepts
+        ? report.coverage.concepts
+        : cov.concepts
+          ? `${cov.concepts.searched}/${cov.concepts.planned}`
+          : '—';
+    const sourcesLine =
+      report.coverage && report.coverage.sources
+        ? report.coverage.sources
+        : cov.sources
+          ? `${cov.sources.searched}/${cov.sources.planned}`
+          : '—';
+    lines.push(`Cities searched: ${citiesLine}`);
+    lines.push(`Concepts: ${conceptsLine}`);
+    lines.push(`Sources: ${sourcesLine}`);
+    if (presentation.candidateUniverseCount != null) {
+      lines.push(`Candidate Universe: ${presentation.candidateUniverseCount}`);
+    }
+    lines.push(`Qualified: ${presentation.qualifiedCount || 0}`);
+    if (presentation.confidence != null) {
+      lines.push(`Confidence: ${Number(presentation.confidence).toFixed(2)}`);
+    }
+    if (presentation.discoveryStatus === 'incomplete') {
+      lines.push('');
+      lines.push('Coverage Warning');
+      const warnings = (report.warnings || cov.warnings || []).slice(0, 3);
+      for (const warning of warnings) lines.push(`• ${warning}`);
+    }
+    lines.push('');
+  }
+
   return lines;
 }
 
@@ -267,10 +379,13 @@ function formatDiscoveryResultsProse(payload) {
  * @param {object[]} contributions
  * @returns {object|null}
  */
-function findLatestDiscoveryContribution(contributions = []) {
-  return [...contributions]
-    .reverse()
-    .find((row) => row.specialist === 'scout' && row.kind === 'discovery') || null;
+function findLatestDiscoveryContribution(contributions = [], mission = null) {
+  return selectCanonicalContribution(contributions, {
+    missionId: mission?.id,
+    specialist: 'scout',
+    kind: 'discovery',
+    mission,
+  });
 }
 
 module.exports = {

@@ -10,6 +10,9 @@
     campaign: document.getElementById('mabCampaign'),
     escalations: document.getElementById('mabEscalations'),
     escFilter: document.getElementById('mabEscFilter'),
+    flags: document.getElementById('mabFlags'),
+    flagsFilter: document.getElementById('mabFlagsFilter'),
+    flagsBadge: document.getElementById('mabFlagsBadge'),
     warm: document.getElementById('mabWarm'),
     intel: document.getElementById('mabIntel'),
     jake: document.getElementById('mabJakeActions'),
@@ -22,9 +25,32 @@
     askHistory: document.getElementById('mabAskHistory'),
   };
 
-  let clientId = 10;
+  const tenantApi = window.MaxAoBriefingTenantApi;
+  let clientId = tenantApi?.PAGE_DEFAULT_CLIENT_ID ?? 10;
+  let loadedClients = [];
   let briefing = null;
   let escalations = [];
+  let aoFlags = [];
+
+  function getActiveClientId() {
+    const urlClientId = new URLSearchParams(window.location.search).get('client_id');
+    if (tenantApi?.resolveMaxBriefingClientId) {
+      return tenantApi.resolveMaxBriefingClientId({
+        urlClientId,
+        selectValue: els.clientSelect?.value,
+        clients: loadedClients,
+        pageDefault: tenantApi.PAGE_DEFAULT_CLIENT_ID ?? 10,
+      });
+    }
+    return Number(clientId) || 10;
+  }
+
+  function syncClientIdFromPage() {
+    clientId = getActiveClientId();
+    if (els.clientSelect && String(els.clientSelect.value) !== String(clientId)) {
+      els.clientSelect.value = String(clientId);
+    }
+  }
 
   function esc(text) {
     return String(text == null ? '' : text)
@@ -49,13 +75,16 @@
     }
   }
 
-  function api(path, options) {
-    const sep = path.includes('?') ? '&' : '?';
-    const url = `${path}${sep}client_id=${encodeURIComponent(clientId)}`;
-    return fetch(url, {
+  function api(path, options = {}) {
+    syncClientIdFromPage();
+    const scopedPath = tenantApi?.withMaxBriefingClientId
+      ? tenantApi.withMaxBriefingClientId(path, clientId)
+      : `${path}${path.includes('?') ? '&' : '?'}client_id=${encodeURIComponent(clientId)}`;
+    const { headers: optionHeaders, ...rest } = options;
+    return fetch(scopedPath, {
       credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      ...options,
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...(optionHeaders || {}) },
+      ...rest,
     }).then(async (res) => {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || data.message || res.statusText);
@@ -101,6 +130,87 @@
   function statusBadge(s) {
     const cls = s === 'new' ? 'mab-badge-new' : 'mab-badge-seen';
     return `<span class="mab-badge ${cls}">${esc(s)}</span>`;
+  }
+
+  function flagStatusBadge(f) {
+    const cls = f.unread ? 'mab-badge-new' : 'mab-badge-seen';
+    return `<span class="mab-badge ${cls}">${esc(f.status)}</span>`;
+  }
+
+  function renderFlags(items) {
+    if (!els.flags) return;
+    if (!items.length) {
+      els.flags.innerHTML = '<p class="mab-empty">No flags in this view.</p>';
+      return;
+    }
+    const rows = items.map((f) => {
+      const href = f.href || (f.account_id ? `/ao/crm/manager#${f.account_id}` : '#');
+      const when = f.created_at ? new Date(f.created_at).toLocaleString() : '';
+      return `
+      <tr data-flag-id="${esc(f.id)}">
+        <td>${flagStatusBadge(f)}</td>
+        <td><strong>${esc(f.ao_name || 'AO')}</strong></td>
+        <td>${esc(f.business_name || f.company_name || (f.source_type === 'conversation' ? 'Conversation' : 'Account'))}${f.source_unavailable ? '<br><span class="mab-card-meta">Legacy — source context unavailable</span>' : ''}<br><span class="mab-card-meta">${esc(f.source_type_label || f.source_type || '')}</span></td>
+        <td>${esc(f.reason_label || f.reason)}${f.note ? `<br><span class="mab-card-meta">${esc(f.note)}</span>` : ''}</td>
+        <td><span class="mab-card-meta">${esc(when)}</span></td>
+        <td>
+          <div class="mab-actions">
+            <a class="mab-action-btn" href="${esc(href)}">Open</a>
+            ${f.status === 'open' ? `<button type="button" class="mab-action-btn" data-flag-act="reviewed">Mark reviewed</button>` : ''}
+            ${f.status !== 'resolved' ? `<button type="button" class="mab-action-btn" data-flag-act="resolved">Resolve</button>` : ''}
+          </div>
+        </td>
+      </tr>`;
+    }).join('');
+
+    els.flags.innerHTML = `
+      <table class="mab-table">
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>AO</th>
+            <th>Account</th>
+            <th>Reason</th>
+            <th>Flagged</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
+  async function refreshFlagsBadge() {
+    if (!els.flagsBadge) return;
+    try {
+      const data = await api('/api/v1/max/ao-flags/unread-count');
+      const n = data.unread_count || 0;
+      if (n > 0) {
+        els.flagsBadge.hidden = false;
+        els.flagsBadge.textContent = String(n);
+      } else {
+        els.flagsBadge.hidden = true;
+        els.flagsBadge.textContent = '';
+      }
+    } catch {
+      els.flagsBadge.hidden = true;
+    }
+  }
+
+  async function loadFlags(status) {
+    const filter = status || els.flagsFilter?.value || 'open';
+    const data = await api(`/api/v1/max/ao-flags?status=${encodeURIComponent(filter)}`);
+    aoFlags = data.flags || [];
+    renderFlags(aoFlags);
+    await refreshFlagsBadge();
+  }
+
+  async function patchFlag(id, status) {
+    await api(`/api/v1/max/ao-flags/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    });
+    await loadFlags();
+    await loadBriefing();
   }
 
   function renderEscalations(items) {
@@ -240,6 +350,7 @@
       escalations = escData.escalations || [];
       data.needs_jake = escalations;
       renderBriefing(data);
+      await loadFlags();
       setStatus('');
     } catch (err) {
       setError(err.message);
@@ -248,10 +359,8 @@
   }
 
   async function patchEscalation(id, status) {
-    await fetch(`/api/v1/max/ao-escalations/${id}?client_id=${clientId}`, {
+    await api(`/api/v1/max/ao-escalations/${encodeURIComponent(id)}`, {
       method: 'PATCH',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status }),
     });
     await loadBriefing();
@@ -261,7 +370,11 @@
     if (!window.confirm('Promote this AO lead to CRM? This requires manual approval.')) return;
     setStatus('Promoting to CRM…');
     try {
-      const res = await fetch(`/api/v1/max/ao-leads/${leadId}/promote?client_id=${clientId}`, {
+      syncClientIdFromPage();
+      const promotePath = tenantApi?.withMaxBriefingClientId
+        ? tenantApi.withMaxBriefingClientId(`/api/v1/max/ao-leads/${encodeURIComponent(leadId)}/promote`, clientId)
+        : `/api/v1/max/ao-leads/${encodeURIComponent(leadId)}/promote?client_id=${encodeURIComponent(clientId)}`;
+      const res = await fetch(promotePath, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
@@ -304,24 +417,47 @@
     try {
       const res = await fetch('/api/clients', { credentials: 'same-origin' });
       if (!res.ok) return;
-      const clients = await res.json();
-      if (!els.clientSelect || !Array.isArray(clients)) return;
+      const payload = await res.json();
+      const clients = Array.isArray(payload) ? payload : (payload.clients || []);
+      loadedClients = clients;
+      if (!els.clientSelect || !clients.length) {
+        syncClientIdFromPage();
+        return;
+      }
       els.clientSelect.innerHTML = clients
         .map((c) => `<option value="${c.id}">${esc(c.name || c.slug || c.id)}</option>`)
         .join('');
-      const anchor = clients.find((c) => c.id === 10);
-      clientId = anchor ? 10 : (clients[0]?.id || 10);
-      els.clientSelect.value = String(clientId);
+      syncClientIdFromPage();
     } catch {
-      /* optional */
+      syncClientIdFromPage();
     }
   }
 
   els.refresh?.addEventListener('click', loadBriefing);
 
   els.clientSelect?.addEventListener('change', () => {
-    clientId = Number(els.clientSelect.value) || 10;
+    syncClientIdFromPage();
     loadBriefing();
+  });
+
+  document.addEventListener('pulseforge:tenant-changed', (ev) => {
+    const nextId = ev.detail?.active_client_id;
+    if (nextId == null || !els.clientSelect) return;
+    if (!loadedClients.some((c) => Number(c.id) === Number(nextId))) return;
+    els.clientSelect.value = String(nextId);
+    syncClientIdFromPage();
+    loadBriefing();
+  });
+
+  els.flagsFilter?.addEventListener('change', () => loadFlags());
+
+  els.flags?.addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('[data-flag-act]');
+    if (!btn) return;
+    const row = btn.closest('tr');
+    const id = row?.dataset?.flagId;
+    if (!id) return;
+    await patchFlag(id, btn.dataset.flagAct);
   });
 
   els.escFilter?.addEventListener('change', async () => {
@@ -339,10 +475,8 @@
     if (act === 'seen') await patchEscalation(id, 'seen');
     if (act === 'resolve') await patchEscalation(id, 'resolved');
     if (act === 'assign') {
-      await fetch(`/api/v1/max/ao-escalations/${id}/assign-follow-up?client_id=${clientId}`, {
+      await api(`/api/v1/max/ao-escalations/${encodeURIComponent(id)}/assign-follow-up`, {
         method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ nextAction: 'Jake follow-up assigned from escalation inbox' }),
       });
       await loadBriefing();

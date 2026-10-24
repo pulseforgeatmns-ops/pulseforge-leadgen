@@ -14,9 +14,14 @@ const {
   SPECIALISTS,
   round2,
 } = require('./types');
+const { NEXT_ACTIONS, EVIDENCE_TYPES } = require('./ObserveReaction');
 const { specialistContext, progressPercent } = require('./Lifecycle');
 const { currentBlocker } = require('./Blockers');
 const { collectEvidence } = require('./Explain');
+const {
+  answerOperatorQuestion,
+  deserializeGraph,
+} = require('../scout/explainability/ExplainabilityGraph');
 
 const INSPECTION_PROPERTIES = Object.freeze({
   PROGRESS: 'progress',
@@ -28,8 +33,10 @@ const INSPECTION_PROPERTIES = Object.freeze({
   TIMELINE: 'timeline',
   NEXT: 'next',
   RECOMMENDATION: 'recommendation',
+  OUTCOME_LEARNING: 'outcome_learning',
   EXPLAIN: 'explain',
   WORKSPACE: 'workspace',
+  OBSERVE_MEANING: 'observe_meaning',
 });
 
 const PLANNING_REQUIREMENTS = Object.freeze([
@@ -67,10 +74,21 @@ function capitalize(value) {
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
 }
 
+function referencesSpecialistState(question) {
+  const q = String(question || '').trim().toLowerCase();
+  if (!q) return false;
+  return (
+    /\bwhy did (?:scout|paige|penny|emmett|max)\b/.test(q) ||
+    /\bwhy (?:has|hasn't|did|didn't) (?:scout|paige|penny|emmett|max)\b/.test(q) ||
+    /\bwhy (?:did|has) scout (?:stop|pause|halt|fail)\b/.test(q)
+  );
+}
+
 function referencesMissionState(question) {
   const q = String(question || '').trim().toLowerCase();
   if (!q) return false;
   return (
+    referencesSpecialistState(q) ||
     /\b(?:why|what).*\b(?:progress|mission progress)\b/.test(q) ||
     /\bprogress\b.*\bbased\b|\bwhat is the \d+\s*%/.test(q) ||
     /\d+\s*%\s*(?:progress|complete|done)\b/.test(q) ||
@@ -82,13 +100,24 @@ function referencesMissionState(question) {
     /\bwhat changed\b|\bwhat(?:'s| has) changed\b/.test(q) ||
     /\bwhat happens next\b|\bnext step\b|\bwhat(?:'s| is) next\b/.test(q) ||
     /\bwhy this recommendation\b/.test(q) ||
-    /why is this mission|why (?:does|do) this mission exist|why are we (?:doing|running) this mission|how is (?:the )?mission\b|mission workspace|where are we\b|mission progress|mission status/.test(q)
+    /why is this mission|why (?:does|do) this mission exist|why are we (?:doing|running) this mission|how is (?:the )?mission\b|mission workspace|where are we\b|mission progress|mission status/.test(q) ||
+    /\b(?:current\s+)?status\s+and\s+confidence\b|\bwhat(?:'s| is)\s+(?:the\s+)?(?:current\s+)?status\b.*\bmission\b|\bmission\b.*\b(?:current\s+)?status\s+and\s+confidence\b/.test(q)
   );
 }
 
 function classifyInspectionQuestion(question) {
   const q = String(question || '').trim().toLowerCase();
   if (!q) return null;
+
+  if (referencesSpecialistState(q)) {
+    if (/\b(?:stop|pause|halt|fail|error|block|wait)\b/.test(q)) {
+      return INSPECTION_PROPERTIES.BLOCKER;
+    }
+    if (/\b(?:wait|pending|approval)\b/.test(q)) {
+      return INSPECTION_PROPERTIES.WAITING;
+    }
+    return INSPECTION_PROPERTIES.BLOCKER;
+  }
 
   if (/why is this mission|why (?:does|do) this mission exist|why are we (?:doing|running) this\b/.test(q)) {
     return INSPECTION_PROPERTIES.EXPLAIN;
@@ -114,11 +143,32 @@ function classifyInspectionQuestion(question) {
   if (/\bwhat changed\b|\bwhat(?:'s| has) changed\b|\bwhat(?:'s| is) new\b/.test(q)) {
     return INSPECTION_PROPERTIES.TIMELINE;
   }
+  if (/\bwhat does the open mean\b|\bwhat does (?:this|that|the) open mean\b|\bopen mean\b/.test(q)) {
+    return INSPECTION_PROPERTIES.OBSERVE_MEANING;
+  }
+  if (/\bwhen should we follow up\b|\bwhen to follow up\b|\bfollow[- ]?up timing\b/.test(q)) {
+    return INSPECTION_PROPERTIES.NEXT;
+  }
   if (/\bwhat happens next\b|\bnext step\b|\bwhat(?:'s| is) next\b|\bwhat comes next\b/.test(q)) {
     return INSPECTION_PROPERTIES.NEXT;
   }
   if (/\bwhy this recommendation\b|\bwhy (?:that|this) recommend/.test(q)) {
     return INSPECTION_PROPERTIES.RECOMMENDATION;
+  }
+  if (
+    /\bwhy.*\b(?:linkedin|google places|website|provider)\b|\bwhy (?:this|that) evidence\b|\bwhy.*\breject|\bwhat terminology\b|\bwhat would change\b|\bwhy not another company\b/.test(q)
+  ) {
+    return INSPECTION_PROPERTIES.RECOMMENDATION;
+  }
+  if (
+    /what have we learned|organizational learning|prediction accuracy|outcome learning|what surprised us|what prediction failed|what should change|what should never happen again/.test(q)
+  ) {
+    return INSPECTION_PROPERTIES.OUTCOME_LEARNING;
+  }
+  if (
+    /\b(?:current\s+)?status\s+and\s+confidence\b|\bwhat(?:'s| is)\s+(?:the\s+)?(?:current\s+)?status\b.*\bmission\b/.test(q)
+  ) {
+    return INSPECTION_PROPERTIES.WORKSPACE;
   }
   if (/mission workspace|mission status|mission progress|where are we\b/.test(q)) {
     return INSPECTION_PROPERTIES.WORKSPACE;
@@ -130,6 +180,12 @@ function resolveExecutor(ctx, mission) {
   if (!ctx.scoutComplete) return { current: 'ScoutDiscoveryExecutor', next: 'ScoutDiscoveryExecutor' };
   if (!ctx.maxComplete && mission.stage === STAGES.PLAN) {
     return { current: 'MaxPrioritizationExecutor', next: 'MaxPrioritizationExecutor' };
+  }
+  if (
+    !ctx.paidAcquisitionComplete &&
+    (ctx.acquisitionApproach === 'paid' || ctx.acquisitionApproach === 'both')
+  ) {
+    return { current: 'PennyPaidAcquisitionExecutor', next: 'PennyPaidAcquisitionExecutor' };
   }
   if (!ctx.paigeComplete && (mission.stage === STAGES.PREPARE || mission.stage === STAGES.PLAN)) {
     return { current: 'PaigeVariantExecutor', next: 'PaigeVariantExecutor' };
@@ -259,7 +315,18 @@ function explainConfidenceBasis(mission, snapshot) {
   } else if (snapshot.why && snapshot.why.reasons && snapshot.why.reasons.some((r) => /reply rate/i.test(r))) {
     factors.push({ label: 'Historical evidence', detail: 'Prior campaign reply rate referenced' });
   }
-  if (!snapshot.outcomes || !snapshot.outcomes.length) {
+  const observeAssessment = snapshot.observeAssessment || {};
+  const observeReactions = snapshot.observeReactions || [];
+  if (mission.stage === STAGES.OBSERVE && (observeReactions.length || observeAssessment.evidenceTier)) {
+    factors.push({
+      label: 'Observe evidence tier',
+      detail: observeAssessment.evidenceTier || 'transport/engagement evidence recorded',
+    });
+    factors.push({
+      label: 'Planning confidence unchanged',
+      detail: observeAssessment.confidenceBasis || 'Opens and engagement do not mutate Scout planning confidence',
+    });
+  } else if (!snapshot.outcomes || !snapshot.outcomes.length) {
     factors.push({ label: 'No campaign results yet', detail: 'Confidence reflects planning evidence, not live send outcomes' });
   }
 
@@ -366,7 +433,52 @@ function explainStage(snapshot) {
   };
 }
 
-function explainBlocker(snapshot) {
+function explainSpecialistStop(snapshot, question = '') {
+  const q = String(question || '').toLowerCase();
+  const workspace = snapshot.workspace || {};
+  const scout = workspace.scout || {};
+  const mission = snapshot.mission || {};
+  const blocker = snapshot.blocker || currentBlocker(mission.blockers || []);
+  const specialist = /\bpaige\b/.test(q)
+    ? 'Paige'
+    : /\bpenny\b/.test(q)
+      ? 'Penny'
+    : /\bemmett\b/.test(q)
+      ? 'Emmett'
+      : 'Scout';
+
+  let summary = blocker
+    ? blocker.reason || blocker.label
+    : scout.state === 'waiting'
+      ? `${specialist} completed its stage and the mission is waiting on the next gate.`
+      : scout.state === 'complete'
+        ? `${specialist} finished discovery; the mission awaits operator review before advancing.`
+        : `${specialist} is idle at the current lifecycle gate.`;
+
+  if (mission.pendingOperatorDecision && mission.pendingOperatorDecision.prompt) {
+    summary = `${specialist} stopped because the mission requires operator input: ${mission.pendingOperatorDecision.prompt}`;
+  }
+
+  return {
+    property: INSPECTION_PROPERTIES.BLOCKER,
+    value: blocker ? blocker.label : `${specialist} gate`,
+    summary,
+    derivedFrom: [
+      { label: 'Specialist', detail: specialist },
+      { label: 'Scout state', detail: scout.state || 'unknown' },
+      ...(blocker ? [{ label: blocker.label, detail: blocker.reason || blocker.label }] : []),
+      ...(mission.pendingOperatorDecision
+        ? [{ label: 'Pending decision', detail: mission.pendingOperatorDecision.prompt }]
+        : []),
+    ],
+    headline: `Why ${specialist} Stopped`,
+  };
+}
+
+function explainBlocker(snapshot, question = '') {
+  if (referencesSpecialistState(question)) {
+    return explainSpecialistStop(snapshot, question);
+  }
   const blocker = snapshot.blocker || currentBlocker((snapshot.mission || {}).blockers || []);
   return {
     property: INSPECTION_PROPERTIES.BLOCKER,
@@ -382,14 +494,100 @@ function explainBlocker(snapshot) {
 function explainTimeline(snapshot) {
   const timeline = snapshot.timeline || [];
   const recent = timeline.slice(-5);
+  const reaction = latestObserveReaction(snapshot);
+  const derivedFrom = recent.map((row) => ({ label: row.clock || row.at, detail: row.label }));
+  if (reaction) {
+    derivedFrom.push({
+      label: 'Latest observe reaction',
+      detail: `${reaction.evidenceType} → ${reaction.updatedDisposition}: ${reaction.rationale}`,
+    });
+  }
   return {
     property: INSPECTION_PROPERTIES.TIMELINE,
-    value: recent.length ? recent[recent.length - 1].label : 'No events',
-    summary: recent.length
-      ? `${recent.length} recent mission event(s) on timeline`
-      : 'No timeline events recorded yet',
-    derivedFrom: recent.map((row) => ({ label: row.clock || row.at, detail: row.label })),
+    value: reaction
+      ? `${reaction.evidenceType} (${reaction.updatedDisposition})`
+      : (recent.length ? recent[recent.length - 1].label : 'No events'),
+    summary: reaction
+      ? reaction.rationale
+      : (recent.length
+        ? `${recent.length} recent mission event(s) on timeline`
+        : 'No timeline events recorded yet'),
+    derivedFrom,
     headline: 'What Changed',
+  };
+}
+
+function latestObserveReaction(snapshot = {}) {
+  const reactions = snapshot.observeReactions || [];
+  return reactions.length ? reactions[reactions.length - 1] : null;
+}
+
+function explainObserveAssessment(snapshot = {}) {
+  const assessment = snapshot.observeAssessment || {};
+  const reaction = latestObserveReaction(snapshot);
+  const action = assessment.recommendedNextAction || reaction?.recommendedNextAction || NEXT_ACTIONS.WAIT;
+  const timing = assessment.recommendedTiming || reaction?.recommendedTiming || {};
+  const lines = [];
+
+  if (reaction?.rationale) lines.push(reaction.rationale);
+  if (action === NEXT_ACTIONS.WAIT) {
+    lines.push('Remain in OBSERVE — no external action permitted.');
+    if (timing.kind === 'unresolved') {
+      lines.push('Follow-up cadence is unresolved; continue waiting without autosend.');
+    } else if (timing.dueAt) {
+      lines.push(`Wait until ${timing.dueAt} before proposing follow-up.`);
+    }
+  } else if (action === NEXT_ACTIONS.PROPOSE_FOLLOW_UP) {
+    lines.push('Cadence threshold reached — propose follow-up for operator approval.');
+    lines.push('Human approval required; external action is not permitted automatically.');
+  } else if (action === NEXT_ACTIONS.REVIEW_REPLY) {
+    lines.push('Review the reply before any outbound action.');
+  } else if (action === NEXT_ACTIONS.PROPOSE_END_CANDIDATE) {
+    lines.push('Candidate appears terminal — propose ending outreach for this prospect.');
+  }
+
+  return {
+    action,
+    timing,
+    humanApprovalRequired: assessment.humanApprovalRequired === true || reaction?.humanApprovalRequired === true,
+    externalActionPermitted: false,
+    summary: lines.join(' '),
+    reaction,
+    assessment,
+  };
+}
+
+function explainObserveMeaning(snapshot = {}) {
+  const reaction = latestObserveReaction(snapshot);
+  const assessment = snapshot.observeAssessment || {};
+  let summary = 'No observe reaction on file yet.';
+  const derivedFrom = [];
+
+  if (reaction) {
+    if (reaction.evidenceType === EVIDENCE_TYPES.HUMAN_OPEN) {
+      summary = 'Human open is engagement evidence — stronger than delivery or proxy opens — but not buying intent.';
+    } else if (reaction.evidenceType === EVIDENCE_TYPES.PROXY_OPEN) {
+      summary = 'Proxy/batch open is weak engagement — possible prefetch — and is not buying intent.';
+    } else if (reaction.evidenceType === EVIDENCE_TYPES.CLICKED) {
+      summary = 'Link click is stronger engagement than an open, but still not interest without a reply.';
+    } else {
+      summary = reaction.rationale || summary;
+    }
+    derivedFrom.push({ label: 'Evidence type', detail: reaction.evidenceType });
+    derivedFrom.push({ label: 'Evidence strength', detail: reaction.evidenceStrength });
+    derivedFrom.push({ label: 'Disposition', detail: reaction.updatedDisposition });
+  } else if (assessment.evidenceTier) {
+    summary = `Observe evidence tier ${assessment.evidenceTier}; planning confidence unchanged.`;
+    derivedFrom.push({ label: 'Evidence tier', detail: assessment.evidenceTier });
+  }
+
+  return {
+    property: INSPECTION_PROPERTIES.OBSERVE_MEANING,
+    value: reaction?.evidenceType || assessment.evidenceTier || 'none',
+    summary,
+    derivedFrom,
+    headline: 'What The Open Means',
+    structured: { reaction, assessment },
   };
 }
 
@@ -397,6 +595,29 @@ function explainNext(snapshot) {
   const mission = snapshot.mission || {};
   const workspace = snapshot.workspace || {};
   const blocker = snapshot.blocker;
+
+  if (mission.stage === STAGES.OBSERVE) {
+    const observe = explainObserveAssessment(snapshot);
+    return {
+      property: INSPECTION_PROPERTIES.NEXT,
+      value: observe.action,
+      summary: observe.summary,
+      derivedFrom: [
+        { label: 'Recommended next action', detail: observe.action },
+        { label: 'External action permitted', detail: 'false' },
+        { label: 'Human approval required', detail: String(observe.humanApprovalRequired) },
+        ...(observe.timing?.dueAt
+          ? [{ label: 'Recommended timing', detail: observe.timing.dueAt }]
+          : [{ label: 'Timing', detail: observe.timing?.kind || 'unresolved' }]),
+        ...(observe.reaction?.rationale
+          ? [{ label: 'Rationale', detail: observe.reaction.rationale }]
+          : []),
+      ],
+      headline: 'What Happens Next',
+      structured: observe,
+    };
+  }
+
   let next = 'Continue in mission workspace.';
   if (blocker) {
     next = `Resolve: ${blocker.label}`;
@@ -423,7 +644,55 @@ function explainNext(snapshot) {
   };
 }
 
-function explainRecommendation(snapshot) {
+function explainOutcomeLearning(snapshot) {
+  const outcomeLearning = snapshot.outcomeLearning || {};
+  const org = outcomeLearning.organizationalLearning || {};
+  const derivedFrom = [];
+
+  if (outcomeLearning.accuracy?.label) {
+    derivedFrom.push({ label: 'Prediction accuracy', detail: outcomeLearning.accuracy.label });
+  }
+  for (const lesson of (outcomeLearning.lessons || []).slice(0, 5)) {
+    derivedFrom.push({ label: capitalize(lesson.kind || 'lesson'), detail: lesson.statement });
+  }
+  for (const row of (org.whatPredictionFailed || []).slice(0, 3)) {
+    derivedFrom.push({
+      label: 'Failed prediction',
+      detail: `${row.prediction || '—'} — expected ${row.expected || '—'}, got ${row.actual || '—'}`,
+    });
+  }
+
+  return {
+    property: INSPECTION_PROPERTIES.OUTCOME_LEARNING,
+    value: org.summary || outcomeLearning.accuracy?.label || 'No outcome learning on file yet',
+    summary: org.summary || 'Predictions will be compared once business outcomes are observed.',
+    derivedFrom: derivedFrom.length
+      ? derivedFrom
+      : [{ label: 'Pending', detail: 'Complete a mission cycle to capture outcome learning' }],
+    headline: 'Outcome Learning',
+    structured: outcomeLearning,
+  };
+}
+
+function resolveScoutCognitiveTrace(snapshot = {}) {
+  const contributions = snapshot.contributions || [];
+  const scoutDiscovery = [...contributions]
+    .reverse()
+    .find((row) => row.specialist === SPECIALISTS.SCOUT && row.kind === 'discovery');
+  const payload = scoutDiscovery?.payload || {};
+  if (payload.cognitiveTrace) return payload.cognitiveTrace;
+
+  const serialized = payload.explainabilityGraph || scoutDiscovery?.payload?.discoveryArtifact?.explainabilityGraph;
+  if (serialized && Array.isArray(serialized.nodes)) {
+    const graph = deserializeGraph(serialized);
+    const { serializeForAmo } = require('../scout/explainability/ExplainabilityGraph');
+    return serializeForAmo(graph);
+  }
+
+  return null;
+}
+
+function explainRecommendation(snapshot, question = '') {
   const learning = snapshot.learning || {};
   const max = [...(snapshot.contributions || [])].reverse().find((row) => row.specialist === SPECIALISTS.MAX);
   const recommendations = [];
@@ -432,18 +701,57 @@ function explainRecommendation(snapshot) {
     recommendations.push(...max.payload.recommendations);
   }
 
+  const cognitiveTrace = resolveScoutCognitiveTrace(snapshot);
+  const derivedFrom = [];
+
+  if (cognitiveTrace?.chain?.length) {
+    for (const node of cognitiveTrace.chain) {
+      derivedFrom.push({
+        label: node.kind.replace(/_/g, ' '),
+        detail: node.rationale || node.label,
+      });
+    }
+  } else if (recommendations.length) {
+    for (const row of recommendations) {
+      derivedFrom.push({ label: 'Recommendation', detail: String(row) });
+    }
+  } else {
+    derivedFrom.push({ label: 'Pending', detail: 'Awaiting Max prioritization or learning outcomes' });
+  }
+
+  let summary = recommendations[0] || cognitiveTrace?.recommendation?.label || 'Max has not recorded a segment recommendation yet';
+  if (question) {
+    const graphData = scoutGraphFromSnapshot(snapshot);
+    if (graphData) {
+      const answer = answerOperatorQuestion(graphData, question);
+      if (answer) summary = answer;
+    }
+  }
+
   return {
     property: INSPECTION_PROPERTIES.RECOMMENDATION,
-    value: recommendations[0] || 'No recommendation on file',
-    summary: recommendations[0] || 'Max has not recorded a segment recommendation yet',
-    derivedFrom: recommendations.length
-      ? recommendations.map((row) => ({ label: 'Recommendation', detail: String(row) }))
-      : [{ label: 'Pending', detail: 'Awaiting Max prioritization or learning outcomes' }],
+    value: recommendations[0] || cognitiveTrace?.recommendation?.label || 'No recommendation on file',
+    summary,
+    derivedFrom,
     headline: 'Recommendation',
+    cognitiveTrace: cognitiveTrace || null,
+    terminatesAtObjective: cognitiveTrace?.terminatesAtObjective === true,
   };
 }
 
-function explainMetric(property, snapshot) {
+function scoutGraphFromSnapshot(snapshot = {}) {
+  const contributions = snapshot.contributions || [];
+  const scoutDiscovery = [...contributions]
+    .reverse()
+    .find((row) => row.specialist === SPECIALISTS.SCOUT && row.kind === 'discovery');
+  const serialized =
+    scoutDiscovery?.payload?.explainabilityGraph ||
+    scoutDiscovery?.payload?.discoveryArtifact?.explainabilityGraph;
+  if (!serialized || !Array.isArray(serialized.nodes)) return null;
+  return deserializeGraph(serialized);
+}
+
+function explainMetric(property, snapshot, question = '') {
   switch (property) {
     case INSPECTION_PROPERTIES.PROGRESS:
       return explainProgressBasis(snapshot.mission, specialistContext(snapshot.contributions || [], {}));
@@ -456,13 +764,17 @@ function explainMetric(property, snapshot) {
     case INSPECTION_PROPERTIES.WAITING:
       return explainWaiting(snapshot);
     case INSPECTION_PROPERTIES.BLOCKER:
-      return explainBlocker(snapshot);
+      return explainBlocker(snapshot, question);
     case INSPECTION_PROPERTIES.TIMELINE:
       return explainTimeline(snapshot);
     case INSPECTION_PROPERTIES.NEXT:
       return explainNext(snapshot);
     case INSPECTION_PROPERTIES.RECOMMENDATION:
-      return explainRecommendation(snapshot);
+      return explainRecommendation(snapshot, question);
+    case INSPECTION_PROPERTIES.OUTCOME_LEARNING:
+      return explainOutcomeLearning(snapshot);
+    case INSPECTION_PROPERTIES.OBSERVE_MEANING:
+      return explainObserveMeaning(snapshot);
     default:
       return null;
   }
@@ -587,7 +899,7 @@ function inspectQuestion(question, snapshot, opts = {}) {
     return result;
   }
 
-  const explanation = explainMetric(property, snapshot);
+  const explanation = explainMetric(property, snapshot, question);
   const result = {
     resolved: true,
     property,
@@ -609,12 +921,18 @@ function inspectQuestion(question, snapshot, opts = {}) {
 module.exports = {
   INSPECTION_PROPERTIES,
   referencesMissionState,
+  referencesSpecialistState,
   classifyInspectionQuestion,
   buildMissionContext,
   explainMetric,
   explainProgressBasis,
   explainConfidenceBasis,
   explainHealthBasis,
+  explainRecommendation,
+  explainObserveMeaning,
+  explainObserveAssessment,
+  latestObserveReaction,
+  resolveScoutCognitiveTrace,
   formatInspection,
   inspectQuestion,
   emitMissionInspection,

@@ -4,19 +4,26 @@
  * SPEC-118 — shared mission context. The same mission follows every capability.
  */
 
-const { SPECIALISTS, clone, asText } = require('./types');
+const { SPECIALISTS, CONTRIBUTION_KINDS, clone, asText } = require('./types');
 const { formatMissionUnderstanding } = require('./StructuredMission');
+const { latestApproachDecision } = require('./AcquisitionApproach');
+const { selectCanonicalContribution } = require('./CanonicalContributionSelection');
+const { unwrapSpecialistPayload } = require('./ContributionSupersession');
 
-function latest(rows, specialist, kind) {
-  const match = [...rows].reverse().find((row) =>
-    row.specialist === specialist && (!kind || row.kind === kind)
-  );
-  return match ? match.payload || {} : {};
+function latestPayload(rows, specialist, kind, mission) {
+  const match = selectCanonicalContribution(rows, {
+    missionId: mission?.id,
+    specialist,
+    kind,
+    mission,
+  });
+  return match ? unwrapSpecialistPayload(match) : {};
 }
 
 function buildSharedContext(mission, contributions = []) {
-  const scout = latest(contributions, SPECIALISTS.SCOUT);
-  const max = latest(contributions, SPECIALISTS.MAX);
+  const scout = latestPayload(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY, mission);
+  const max = latestPayload(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION, mission);
+  const approachDecision = latestApproachDecision(contributions);
   const buyingSignals = scout.buyingSignals || scout.buying_signals || scout.signals || [];
   const evidence = scout.evidence || [];
   const constraints = [
@@ -24,6 +31,10 @@ function buildSharedContext(mission, contributions = []) {
     ...((max.constraints || []).map((row) => (typeof row === 'string' ? row : row.label || row.text)).filter(Boolean)),
   ];
   const structuredMission = mission.structuredMission || mission.missionPlanDraft || null;
+  const resolvedObjective = mission.resolvedObjective || null;
+  const canonicalObjective = resolvedObjective && resolvedObjective.objective
+    ? resolvedObjective.objective
+    : mission.objective;
 
   return {
     spec: 'SPEC-118',
@@ -31,7 +42,7 @@ function buildSharedContext(mission, contributions = []) {
       id: mission.id,
       title: mission.title,
       targetSegment: mission.targetSegment,
-      objective: mission.objective,
+      objective: canonicalObjective,
       campaign: mission.campaign,
       priority: mission.priority,
       status: mission.status,
@@ -41,9 +52,30 @@ function buildSharedContext(mission, contributions = []) {
       missionUnderstanding: structuredMission
         ? formatMissionUnderstanding(structuredMission)
         : null,
+      resolvedObjective: resolvedObjective ? clone(resolvedObjective) : null,
+      executionPolicy: resolvedObjective
+        ? resolvedObjective.executionPolicy
+        : mission.executionPolicy || null,
+      communicationPolicy: resolvedObjective
+        ? resolvedObjective.communicationPolicy
+        : mission.communicationPolicy || null,
+      evaluationPolicy: resolvedObjective
+        ? resolvedObjective.evaluationPolicy
+        : mission.evaluationPolicy || null,
     },
+    objective: canonicalObjective,
+    executionPolicy: resolvedObjective
+      ? resolvedObjective.executionPolicy
+      : mission.executionPolicy || null,
+    communicationPolicy: resolvedObjective
+      ? resolvedObjective.communicationPolicy
+      : mission.communicationPolicy || null,
+    evaluationPolicy: resolvedObjective
+      ? resolvedObjective.evaluationPolicy
+      : mission.evaluationPolicy || null,
     buyingSignals: clone(buyingSignals),
     priorityReasoning: clone(max.recommendations || max.priorities || max.reasoning || []),
+    acquisitionApproach: approachDecision ? clone(approachDecision.decision) : null,
     evidence: clone(evidence),
     scout,
     max,

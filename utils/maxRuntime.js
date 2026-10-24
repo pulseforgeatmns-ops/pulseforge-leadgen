@@ -8,6 +8,10 @@
 
 const { getKnowledgeBoot } = require('./knowledgeRuntime');
 const { getMissionEngine, missionEnabled } = require('./missionRuntime');
+const {
+  bootAcquisitionMissionRuntime,
+  assertSingleRuntime,
+} = require('../services/acquisitionMissionRuntime');
 
 let runtimePromise = null;
 
@@ -58,19 +62,28 @@ function getMaxRuntime(options = {}) {
 
       if (max.workspace) {
         max.workspace._loadOperatorContext = true;
-        if (!max.workspace._operatorContextOpts) {
+        const pool = options.pool || (() => {
           try {
-            const pool = options.pool || require('../db');
-            max.workspace._operatorContextOpts = {
-              pool,
-              missionEngine: missionEngine || null,
-            };
+            return require('../db');
           } catch (_) {
-            max.workspace._operatorContextOpts = {
-              missionEngine: missionEngine || null,
-            };
+            return null;
           }
+        })();
+
+        if (!max.workspace._operatorContextOpts) {
+          max.workspace._operatorContextOpts = {
+            pool,
+            missionEngine: missionEngine || null,
+          };
         }
+
+        const amoRuntime = bootAcquisitionMissionRuntime({
+          pool,
+          persist: options.inMemory !== true,
+        });
+        assertSingleRuntime();
+        max.workspace._runtimeProvider = () => amoRuntime;
+        max.acquisitionMissionRuntime = amoRuntime;
       }
       return max;
     })();

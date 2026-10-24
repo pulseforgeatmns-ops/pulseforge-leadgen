@@ -2,7 +2,9 @@
 
 /**
  * AUDIT-022 — Workspace ask request/response identity fingerprints.
- * Stable checksum over fields that must survive browser → Express → DOM.
+ * Selected-field checksum for fixture comparisons, not full response identity.
+ * Hashes the first nonblank prose line only; body-only changes are not detected.
+ * identitySnapshot permits caller-supplied context and is not independent evidence.
  */
 
 const crypto = require('crypto');

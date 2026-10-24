@@ -3,15 +3,22 @@
 /**
  * AUDIT-022 — Workspace Request / Response Identity
  * Verifies the discovery-approval "approved" turn preserves payload identity
- * from WorkspaceEngine.ask() through HTTP simulation to DOM prose extraction.
+ * from WorkspaceEngine.ask() through simulated JSON and prose extraction.
+ * Not an actual HTTP/browser integration test or full-payload comparison.
  */
 
-const { describe, it, beforeEach } = require('node:test');
+const { describe, it, beforeEach, after } = require('node:test');
 const assert = require('node:assert/strict');
 
 const amo = require('../../../acquisition-mission');
 const { STAGES } = amo;
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
+const { createTestAmoRuntime } = require('./amoTestRuntime');
+const approval = require('../AmoOperatorApproval');
+const realAdvance = approval.advanceDiscoveryAfterApproval;
+let fixtureCalls = 0;
+approval.advanceDiscoveryAfterApproval = input => realAdvance({ ...input, runScout: async () => { fixtureCalls += 1; return approval.fixtureScoutDiscoveryResult(); } });
+after(() => { approval.advanceDiscoveryAfterApproval = realAdvance; });
 const { advancePlanAfterApproval } = require('../AmoOperatorApproval');
 const {
   identitySnapshot,
@@ -48,6 +55,7 @@ describe('AUDIT-022 workspace ask request/response identity', { concurrency: fal
   let sessionId;
 
   beforeEach(async () => {
+    fixtureCalls = 0;
     amoEngine = amo.createAcquisitionMissionEngine();
     mission = amoEngine.create({
       tenantId: '10',
@@ -68,7 +76,7 @@ describe('AUDIT-022 workspace ask request/response identity', { concurrency: fal
     assert.equal(snapshot.mission.pendingOperatorDecision.kind, 'discovery_approval');
 
     workspace = createWorkspaceEngine({
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       missionsEnabled: true,
       resolverEnabled: true,
       disableLlm: true,
@@ -88,7 +96,8 @@ describe('AUDIT-022 workspace ask request/response identity', { concurrency: fal
       question: 'approved',
     });
 
-    assert.equal(partC.resolution.action, 'executed');
+    assert.ok(fixtureCalls > 0, 'Explicit Scout fixture was called');
+    assert.equal(partC.resolution.action, 'discovery_approved');
     assert.equal(partC.resolution.reason, 'acquisition_mission_discovery_approved');
     assert.equal(
       partC.structured.metadata.missionCommunicationPayload.headline,
@@ -131,7 +140,7 @@ describe('AUDIT-022 workspace ask request/response identity', { concurrency: fal
     });
 
     const freshWorkspace = createWorkspaceEngine({
-      acquisitionMissionEngine: freshEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: freshEngine }),
       missionsEnabled: true,
       resolverEnabled: true,
       disableLlm: true,
@@ -172,14 +181,37 @@ describe('AUDIT-022 workspace ask request/response identity', { concurrency: fal
       require('path').join(__dirname, '../../../../public/command-deck/command-deck.js'),
       'utf8'
     );
-    const fn = deckSrc.slice(
-      deckSrc.indexOf('async function appendMaxResponse'),
-      deckSrc.indexOf('async function askWorkspace')
-    );
+    const start = deckSrc.indexOf('async function appendMaxResponse');
+    const end = deckSrc.indexOf('async function askWorkspace', start + 1);
+    assert.ok(start >= 0, 'appendMaxResponse boundary exists');
+    assert.ok(end > start, 'askWorkspace boundary follows appendMaxResponse');
+    const fn = deckSrc.slice(start, end);
+    assert.ok(fn.trim().length > 0, 'renderer source slice is nonempty');
     assert.doesNotMatch(fn, /apiRequest\(/);
     assert.doesNotMatch(fn, /fetch\(/);
     assert.doesNotMatch(fn, /loadDeck\(/);
     assert.doesNotMatch(fn, /openMissionWorkspace\(/);
     assert.match(fn, /result\.prose/);
+  });
+});
+
+
+describe('AUDIT-022 selected-field fingerprint scope', () => {
+  it('ignores body-only prose changes with the same headline', () => {
+    const original = { sessionId: 'fixture-session', prose: 'Mission Updated\nOriginal body' };
+    const edited = { ...original, prose: 'Mission Updated\nDifferent body' };
+    assert.equal(responseHash(original), responseHash(edited));
+  });
+
+  it('detects a changed selected field and reports the fingerprint mismatch', () => {
+    const original = { sessionId: 'fixture-session', prose: 'Mission Updated\nBody' };
+    const edited = { ...original, sessionId: 'other-session' };
+    assert.notEqual(responseHash(original), responseHash(edited));
+    assert.throws(
+      () => assertIdentityEqual(identitySnapshot(original), identitySnapshot(edited), 'selected field'),
+      error => error.code === 'AUDIT_022_IDENTITY_MISMATCH'
+        && error.mismatches.some(row => row.field === 'sessionId')
+        && error.mismatches.some(row => row.field === 'responseHash')
+    );
   });
 });

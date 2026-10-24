@@ -1,5 +1,10 @@
 # AUDIT-022 — Workspace Request / Response Identity
 
+> **Historical audit — August 22, 2026. Not a current production incident verdict.**
+> The report below preserves the original analysis and historical line references. Its tests simulate the HTTP JSON round-trip and inspect DOM-renderer source; they do not exercise a real browser or Express request. Local validation on October 24, 2026 uses an explicit in-memory runtime and injected Scout fixtures with network denied. Current discovery approval remains at `discover` pending prioritization review, rather than guaranteeing advancement to `understand`.
+>
+> **Fingerprint scope:** `WorkspaceAskIdentityAudit` hashes selected identity fields and the first nonblank prose line, not the entire response or prose body. Body-only changes can have the same hash, and `identitySnapshot` accepts caller-supplied context. Passing these checks is not proof of exact end-to-end response identity or production incident provenance.
+
 | Field | Value |
 |---|---|
 | **Scope** | Browser → `POST /api/v1/max/workspace/ask` → Express → `WorkspaceEngine.ask()` → `res.json()` → browser → `appendMaxResponse()` → DOM |

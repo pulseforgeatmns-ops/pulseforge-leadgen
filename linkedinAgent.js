@@ -2,7 +2,7 @@ require('dotenv').config();
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
-const Anthropic = require('@anthropic-ai/sdk');
+const Anthropic = require('./utils/meteredAnthropic').forAgent('link');
 const db = require('./dbClient');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { buildVoiceConstraintBlock } = require('./utils/voiceRules');
@@ -13,7 +13,7 @@ const AGENT_NAME = 'link';
 const SESSION_FILE = './linkedin_session.json';
 const CLIENT_ID = getRuntimeClientId();
 
-const client = new Anthropic();
+const client = new Anthropic(undefined, { tenantId: () => CLIENT_ID });
 
 const agentPersona = {
   name: 'Jake Maynard',
@@ -353,3 +353,4 @@ if (require.main === module) {
     process.exit(1);
   });
 }
+

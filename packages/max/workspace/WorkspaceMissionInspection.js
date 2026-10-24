@@ -7,17 +7,20 @@
 
 const { buildStructuredResponse } = require('./WorkspaceTypes');
 const {
-  buildAcquisitionMissionCommunication,
-  formatMissionProse,
-  applyMissionCommunication,
   looksLikeReasoningRequest,
 } = require('./MissionCommunication');
+const {
+  composeConversationalResponse,
+  applyConversationalPresentation,
+} = require('./ConversationLayer');
 const {
   INSPECTION_PROPERTIES,
   inspectQuestion,
   classifyInspectionQuestion,
   formatInspection,
   referencesMissionState,
+  referencesSpecialistState,
+  buildMissionContext,
 } = require('../../acquisition-mission/Inspection');
 const { formatExplain } = require('../../acquisition-mission/Explain');
 const { formatWorkspace } = require('../../acquisition-mission/Workspace');
@@ -40,14 +43,38 @@ const PIPELINE_RETRIEVAL = 'Retrieval';
 function looksLikeAcquisitionMissionQuestion(question) {
   const q = String(question || '').trim();
   if (!q) return false;
-  return /why is this mission|why (?:does|do) this mission exist|why are we (?:doing|running) this mission|how is outreach|mission health|how is (?:the )?mission\b|what(?:'s| is) blocking (?:the )?mission|mission workspace|where are we\b|mission progress|mission status/i.test(
+  return /why is this mission|why (?:does|do) this mission exist|why are we (?:doing|running) this mission|how is outreach|mission health|how is (?:the )?mission\b|what(?:'s| is) blocking (?:the )?mission|mission workspace|where are we\b|mission progress|mission status|current status|status and confidence/i.test(
     q
   );
 }
 
-function shouldInspectActiveMission(question, hasActiveMission) {
+const CONVERSATIONAL_MISSION_MODES = Object.freeze([
+  'inspect',
+  'explain',
+  'challenge',
+  'compare',
+  'strategy',
+  'brainstorm',
+  'teach',
+  'resume',
+]);
+
+function shouldInspectActiveMission(question, hasActiveMission, conversationIntent = null) {
+  if (
+    conversationIntent &&
+    CONVERSATIONAL_MISSION_MODES.includes(conversationIntent.intent)
+  ) {
+    if (hasActiveMission || looksLikeAcquisitionMissionQuestion(question) || referencesSpecialistState(question)) {
+      return true;
+    }
+  }
   if (!hasActiveMission) return looksLikeAcquisitionMissionQuestion(question);
-  return Boolean(classifyInspectionQuestion(question));
+  return Boolean(classifyInspectionQuestion(question)) || referencesSpecialistState(question);
+}
+
+function isConversationalFallbackMode(conversationIntent) {
+  if (!conversationIntent || !conversationIntent.intent) return false;
+  return ['strategy', 'brainstorm', 'teach'].includes(conversationIntent.intent);
 }
 
 function resolveTenantId(input = {}) {
@@ -73,19 +100,17 @@ function resolveMissionId(input = {}, missions = []) {
   );
 }
 
-function resolveAcquisitionEngine(input = {}) {
-  if (input.acquisitionMissionEngine) return input.acquisitionMissionEngine;
-  let service = input.acquisitionMissionService;
-  if (!service) {
-    try {
-      service = require('../../../services/acquisitionMission');
-    } catch (_) {
-      return null;
-    }
-  }
-  if (!service) return null;
-  return service.getEngine && service.getEngine();
-}
+const {
+  resolveAcquisitionMissionRuntime,
+  resolveAcquisitionEngine,
+  assertRuntimeEngine,
+} = require('../../../services/acquisitionMissionRuntime');
+const { resolveInspectionMission } = require('../../acquisition-mission/resolveInspectionMission');
+const {
+  buildMissionInspectionSnapshot,
+  validateMissionInspectionSnapshot,
+  logMissionInspectionInconsistency,
+} = require('../../acquisition-mission/MissionInspectionSnapshot');
 
 function buildAnswerFromInspection(question, snapshot, mission, inspection) {
   if (inspection && inspection.resolved) {
@@ -186,31 +211,24 @@ function buildAnswerFromInspection(question, snapshot, mission, inspection) {
   return null;
 }
 
-function buildMissionInspectionResponse(question, answered) {
+function buildMissionInspectionResponse(question, answered, input = {}) {
   const explicitReasoning = looksLikeReasoningRequest(question);
   const inspectionProperty =
     answered.inspection && answered.inspection.property
       ? answered.inspection.property
       : classifyInspectionQuestion(question);
 
-  const missionComm = buildAcquisitionMissionCommunication(
-    {
-      mission: answered.mission,
-      workspace: answered.kind === 'workspace' ? answered.structured : answered.missionContext,
-      blocker: answered.kind === 'blocker' ? answered.structured : null,
-      health: answered.kind === 'health' ? answered.structured : null,
-      why: answered.kind === 'explain' ? answered.structured : null,
-      inspection: answered.kind === 'inspection' ? answered.structured : null,
-      missionContext: answered.missionContext || null,
-    },
-    {
-      kind: answered.kind,
-      includeReasoning: explicitReasoning,
-    }
-  );
-  const prose = answered.prose || formatMissionProse(missionComm, {
-    explicitReasoningRequest: explicitReasoning,
+  const conversational = composeConversationalResponse({
+    question,
+    conversationIntent: input.conversationIntent || null,
+    snapshot: input.snapshot || {},
+    answered,
+    session: input.session || null,
+    explicitReasoning,
+    inspectionSnapshot: input.inspectionSnapshot || null,
+    inspectionValidation: input.inspectionValidation || null,
   });
+  const prose = conversational.prose;
 
   const base = buildStructuredResponse({
     answer: prose,
@@ -218,11 +236,15 @@ function buildMissionInspectionResponse(question, answered) {
     supportingEvidence: [],
     contradictingEvidence: [],
     confidence:
-      answered.structured && answered.structured.confidence != null
-        ? answered.structured.confidence
-        : (answered.mission && answered.mission.confidence) ||
-          (answered.missionContext && answered.missionContext.confidence) ||
-          0.7,
+      input.inspectionSnapshot && input.inspectionSnapshot.confidence_available
+        ? input.inspectionSnapshot.confidence
+        : input.inspectionSnapshot && !input.inspectionSnapshot.confidence_available
+          ? null
+          : answered.structured && answered.structured.confidence != null
+            ? answered.structured.confidence
+            : (answered.mission && answered.mission.confidence) ||
+              (answered.missionContext && answered.missionContext.confidence) ||
+              null,
     nextInvestigations: [],
     recommendedActions: [{ id: 'inspect_mission', type: 'review', label: 'Open mission workspace' }],
     confidenceContributors: [],
@@ -234,7 +256,7 @@ function buildMissionInspectionResponse(question, answered) {
       sourcesUsed: {
         briefing: false,
         reasoning: false,
-        memory: false,
+        memory: Boolean(input.session && input.session.conversationMemory),
         policy: false,
         knowledge: false,
         missionState: true,
@@ -251,11 +273,9 @@ function buildMissionInspectionResponse(question, answered) {
     },
   });
 
-  const structured = applyMissionCommunication(base, missionComm, {
-    includeReasoningInStructured: explicitReasoning,
-  });
+  const structured = applyConversationalPresentation(base, conversational);
 
-  return { structured, prose, inspectionProperty };
+  return { structured, prose, inspectionProperty, conversational };
 }
 
 /**
@@ -302,28 +322,40 @@ async function maybeHandleWorkspaceMissionInspection(input = {}) {
     return null;
   }
 
-  const engine = resolveAcquisitionEngine(input);
-  if (!engine || typeof engine.inspect !== 'function' || typeof engine.list !== 'function') {
-    emitActiveMission({ missionFound: false, reason: 'no_acquisition_engine' });
-    emitInspection({ attempted: false, reason: 'no_acquisition_engine' });
-    return null;
-  }
+  const runtime = resolveAcquisitionMissionRuntime(input);
+  const engine = runtime.engine();
+  assertRuntimeEngine(engine, runtime);
 
   const missions = engine.list(tenantId);
   const hasActiveMission = missions.length > 0;
-  const missionId = resolveMissionId(input, missions);
-  const mission = missionId
-    ? missions.find((row) => row.id === missionId) || (engine.get && engine.get(missionId))
-    : missions[0];
+  const contextMissionId =
+    (input.context && (input.context.missionId || input.context.acquisitionMissionId)) ||
+    (input.session && input.session.context && input.session.context.missionId) ||
+    null;
+  const activeMission = contextMissionId
+    ? missions.find((row) => row.id === contextMissionId) ||
+      (engine.get && engine.get(contextMissionId))
+    : missions[0] || null;
+
+  const resolution = resolveInspectionMission({
+    tenantId,
+    operatorMessage: question,
+    activeMission,
+    candidateMissions: missions,
+    getMission: (id) => (engine.get ? engine.get(id) : null),
+  });
+  const mission = resolution.mission;
 
   emitActiveMission({
     missionFound: Boolean(mission),
-    missionId: mission ? mission.id : missionId,
+    missionId: mission ? mission.id : contextMissionId,
     stage: mission ? mission.stage : null,
     status: mission ? mission.status : null,
+    resolutionType: resolution.resolution_type,
+    requestedMissionLabel: resolution.requested_mission_label,
   });
 
-  if (!shouldInspectActiveMission(question, hasActiveMission)) {
+  if (!shouldInspectActiveMission(question, hasActiveMission, input.conversationIntent || null)) {
     emitInspection({ attempted: false, reason: 'not_inspection_question', missionId: mission && mission.id });
     return null;
   }
@@ -350,6 +382,9 @@ async function maybeHandleWorkspaceMissionInspection(input = {}) {
     tenantId,
     previousReplyRate: input.previousReplyRate,
   });
+  const inspectionSnapshot = buildMissionInspectionSnapshot(snapshot, resolution);
+  const inspectionValidation = validateMissionInspectionSnapshot(inspectionSnapshot);
+  logMissionInspectionInconsistency(inspectionSnapshot, inspectionValidation, input.logger || console);
   const inspection = inspectQuestion(question, snapshot, {
     silent: input.silentInspection === true,
     logger: input.inspectionLogger,
@@ -357,6 +392,60 @@ async function maybeHandleWorkspaceMissionInspection(input = {}) {
   const answered = buildAnswerFromInspection(question, snapshot, mission, inspection);
 
   if (!answered || answered.kind === 'inspection_fallback') {
+    if (isConversationalFallbackMode(input.conversationIntent)) {
+      const missionContext = buildMissionContext(snapshot);
+      const fallbackAnswered = {
+        kind: 'conversational',
+        prose: null,
+        structured: missionContext,
+        mission,
+        missionContext,
+        inspection: {
+          property: null,
+          pipeline: PIPELINE_MISSION_INSPECTION,
+          resolved: true,
+        },
+        invented: false,
+      };
+      const { structured, prose, inspectionProperty } = buildMissionInspectionResponse(
+        question,
+        fallbackAnswered,
+        {
+          conversationIntent: input.conversationIntent,
+          snapshot,
+          session: input.session,
+          inspectionSnapshot,
+          inspectionValidation,
+        }
+      );
+      emitInspectionResult({
+        claimed: true,
+        property: inspectionProperty,
+        confidence: mission.confidence,
+        missionId: mission.id,
+        reason: 'conversational_fallback',
+      });
+      emitPipeline({
+        selectedPipeline: PIPELINE_MISSION_INSPECTION,
+        reason: 'conversational_fallback',
+        missionId: mission.id,
+      });
+      emitResponse({
+        selectedPipeline: PIPELINE_MISSION_INSPECTION,
+        missionId: mission.id,
+        inspectionProperty,
+        reason: 'conversational_fallback_complete',
+      });
+      return {
+        reason: 'conversational_fallback',
+        structured,
+        prose,
+        answered: fallbackAnswered,
+        ownershipTrace: traceOwnership(),
+        audit,
+      };
+    }
+
     emitInspectionResult({
       claimed: false,
       property: inspection && inspection.property ? inspection.property : null,
@@ -394,7 +483,17 @@ async function maybeHandleWorkspaceMissionInspection(input = {}) {
     missionId: mission.id,
   });
 
-  const { structured, prose, inspectionProperty } = buildMissionInspectionResponse(question, answered);
+  const { structured, prose, inspectionProperty } = buildMissionInspectionResponse(
+    question,
+    answered,
+    {
+      conversationIntent: input.conversationIntent,
+      snapshot,
+      session: input.session,
+      inspectionSnapshot,
+      inspectionValidation,
+    }
+  );
 
   emitResponse({
     selectedPipeline: PIPELINE_MISSION_INSPECTION,
@@ -408,6 +507,9 @@ async function maybeHandleWorkspaceMissionInspection(input = {}) {
     structured,
     prose,
     answered,
+    inspectionSnapshot,
+    inspectionValidation,
+    missionResolution: resolution,
     ownershipTrace: traceOwnership(),
     audit,
   };
@@ -416,13 +518,17 @@ async function maybeHandleWorkspaceMissionInspection(input = {}) {
 module.exports = {
   PIPELINE_MISSION_INSPECTION,
   PIPELINE_RETRIEVAL,
+  CONVERSATIONAL_MISSION_MODES,
   resolveMissionId,
+  resolveAcquisitionMissionRuntime,
   resolveAcquisitionEngine,
+  assertRuntimeEngine,
   buildAnswerFromInspection,
   buildMissionInspectionResponse,
   maybeHandleWorkspaceMissionInspection,
   looksLikeAcquisitionMissionQuestion,
   referencesMissionState,
   shouldInspectActiveMission,
+  isConversationalFallbackMode,
   resolveTenantId,
 };

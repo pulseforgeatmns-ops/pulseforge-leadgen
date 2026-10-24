@@ -785,6 +785,7 @@ function hasProspectRowSeparators(text) {
 function isInstructionOrChecklistLine(line) {
   const text = String(line || '').trim();
   if (!text) return false;
+  if (looksLikeOperatorStrategyLine(text)) return true;
   if (isFillableTableFieldAssignmentLine(text)) return true;
   if (INSTRUCTION_LINE.test(text)) return true;
   if (OBJECTIVE_ONLY_LINE.test(text) && !hasProspectRowSeparators(text)) {
@@ -967,6 +968,7 @@ function looksLikeNumberedProspectRow(line) {
 function looksLikeDelimitedDataRow(line) {
   const text = String(line || '').trim();
   if (!text) return false;
+  if (looksLikeOperatorStrategyLine(text)) return false;
   if (INSTRUCTION_LINE.test(text)) return false;
   if (isInstructionOrChecklistLine(text)) return false;
   if (looksLikeNumberedProspectRow(text)) return true;
@@ -1245,6 +1247,72 @@ function looksLikeDelimitedRow(line) {
   return looksLikeDelimitedDataRow(line) || looksLikeNumberedProspectRow(line);
 }
 
+const ICP_DECISION_SIGNALS_RE =
+  /\b(?:\bicp\b|ideal customer|prospecting criteria|scoring rule|deprioriti|priority lanes?|target segments?|need-threshold|refining anchor|controlled batch)\b/i;
+
+const SCOUT_DISCOVERY_EXECUTION_RE =
+  /\b(?:\bscout\b|run discovery|build a batch|controlled batch|find prospects|return prospects|execute discovery|create prospect batch)\b/i;
+
+const CATEGORY_SEGMENT_RE =
+  /\b(?:daycares?|schools?|industrial|warehouses?|manufacturers?|property managers?|professional offices?|childcare|property operators?)\b/i;
+
+const OPERATOR_STRATEGY_LINE_RE =
+  /^(?:decision|region|first controlled batch|scoring rule|priority lanes?|outreach|scout)\s*:/i;
+
+function hasExplicitCompanyProspectRecords(text) {
+  const raw = String(text || '');
+  if (/\bcompany\s+name\b[\s\S]{0,80}\b(?:website|address|phone)\b/i.test(raw)) {
+    return true;
+  }
+  if (
+    /^\d+[\.)]\s+[A-Z0-9_-]+\s*[—–-]\s+[A-Z]/m.test(raw) &&
+    /\b(?:properties|law|llc|cpa|management)\b/i.test(raw)
+  ) {
+    return true;
+  }
+  if (
+    (raw.match(/https?:\/\/[^\s]+/gi) || []).length >= 2 &&
+    /\b(?:law|llc|inc|cpa|properties)\b/i.test(raw)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function isScoutDiscoveryExecutionMessage(text) {
+  return SCOUT_DISCOVERY_EXECUTION_RE.test(String(text || ''));
+}
+
+/**
+ * Operator ICP / batch-composition strategy — not an embedded ProspectList.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function looksLikeProspectingCriteriaMessage(text) {
+  const raw = String(text || '').trim();
+  if (!raw || hasExplicitCompanyProspectRecords(raw)) return false;
+  const hasDecision =
+    ICP_DECISION_SIGNALS_RE.test(raw) ||
+    /^\s*scout\s*:\s*update\b/im.test(raw);
+  if (!hasDecision) return false;
+  return (
+    CATEGORY_SEGMENT_RE.test(raw) ||
+    /\b(?:first\s+)?controlled\s+batch\b/i.test(raw) ||
+    /\boutreach\s+remains\s+disabled\b/i.test(raw)
+  );
+}
+
+function looksLikeOperatorStrategyLine(line) {
+  const text = String(line || '').trim();
+  if (!text) return false;
+  if (OPERATOR_STRATEGY_LINE_RE.test(text)) return true;
+  if (/\b(?:first\s+)?controlled\s+batch\s*:/i.test(text)) return true;
+  if (/^\d+\s+(?:daycares?|schools?|industrial|property managers?|warehouses?|manufacturers?)\b/i.test(text)) {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Detect operator-supplied ProspectList data embedded in a Mission prompt.
  * High confidence → autoInject; medium → prompt operator to import.
@@ -1283,6 +1351,15 @@ function detectOperatorProspectListInMessage(text) {
       suppressedFillableVerificationTable: looksLikeFillableVerificationTablePaste(
         raw
       ),
+      objectiveText: raw.trim(),
+    };
+  }
+
+  if (looksLikeProspectingCriteriaMessage(raw)) {
+    return {
+      ...empty,
+      rejectedAsProspectingCriteria: true,
+      remainsPlainText: true,
       objectiveText: raw.trim(),
     };
   }
@@ -1425,4 +1502,7 @@ module.exports = {
   looksLikeFillableTableMutationMessage,
   looksLikeFillableVerificationTablePaste,
   isFillableTableFieldAssignmentLine,
+  looksLikeProspectingCriteriaMessage,
+  isScoutDiscoveryExecutionMessage,
+  looksLikeOperatorStrategyLine,
 };

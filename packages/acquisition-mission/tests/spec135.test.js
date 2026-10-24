@@ -1,4 +1,5 @@
 'use strict';
+const { createTestAmoRuntime } = require('../../max/workspace/tests/amoTestRuntime');
 
 /**
  * SPEC-135 — Mission Planning Gate Before Discovery.
@@ -135,7 +136,7 @@ describe('SPEC-135 — Mission Planning Gate Before Discovery', () => {
     const turn = await maybeHandleAcquisitionMissionExecution({
       question: 'Begin discovery.',
       context: { tenantId: '10', missionId: mission.id },
-      acquisitionMissionEngine: engine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: engine }),
       allowFixtureFallback: true,
     });
 
@@ -160,7 +161,7 @@ describe('SPEC-135 — Mission Planning Gate Before Discovery', () => {
     const turn = await maybeHandleAcquisitionMissionExecution({
       question: 'Approved. Begin Discovery.',
       context: { tenantId: '10', missionId: mission.id },
-      acquisitionMissionEngine: engine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: engine }),
       allowFixtureFallback: true,
     });
 

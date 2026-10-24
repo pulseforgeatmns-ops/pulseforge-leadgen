@@ -2,7 +2,7 @@
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
-const { createWorkspaceEngine } = require('../index');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { selectExecutionDomain } = require('../ExecutionDomain');
 const {
   createMemoryStore,
@@ -15,16 +15,27 @@ const delegation = require('../../../../services/maxPaigeCampaignDelegation');
 describe('SPEC-095 durable operator objectives in WorkspaceEngine', () => {
   /** @type {ReturnType<typeof createMemoryStore>} */
   let store;
+  let objectiveOpts;
 
   beforeEach(() => {
     store = createMemoryStore();
+    objectiveOpts = {
+      store,
+      operatorContextOpts: {
+        store: require('../../../../services/operatorContext').createMemoryStore(),
+        objectiveOpts: { store },
+        cieOpts: { store: require('../../../../services/clientIntelligenceInterview').createMemoryStore() },
+        listMissions: async () => [],
+        loadOutcomes: async () => [],
+      },
+    };
   });
 
   function engine(extra = {}) {
     return createWorkspaceEngine({
       disableLlm: true,
       missionsEnabled: false,
-      operatorObjectiveOpts: { store },
+      operatorObjectiveOpts: objectiveOpts,
       ...extra,
     });
   }
@@ -53,7 +64,7 @@ describe('SPEC-095 durable operator objectives in WorkspaceEngine', () => {
   });
 
   it('recovers the launch in a fresh session without prior messages', async () => {
-    await ensurePublicMaxLaunchObjective({ store, tenantId: '1' });
+    await ensurePublicMaxLaunchObjective({ ...objectiveOpts, tenantId: '1' });
 
     const workspace = engine();
     const result = await workspace.ask({
@@ -70,12 +81,12 @@ describe('SPEC-095 durable operator objectives in WorkspaceEngine', () => {
   });
 
   it('does not route Max launch campaign status into Mission / cleaning campaign', async () => {
-    await ensurePublicMaxLaunchObjective({ store, tenantId: '1' });
+    await ensurePublicMaxLaunchObjective({ ...objectiveOpts, tenantId: '1' });
     let missionCreated = false;
     const workspace = createWorkspaceEngine({
       disableLlm: true,
       missionsEnabled: true,
-      operatorObjectiveOpts: { store },
+      operatorObjectiveOpts: objectiveOpts,
       missionEngine: {
         createFromObjective: async () => {
           missionCreated = true;
@@ -103,13 +114,13 @@ describe('SPEC-095 durable operator objectives in WorkspaceEngine', () => {
   });
 
   it('still routes explicit new campaign creation to Mission Engine', async () => {
-    await ensurePublicMaxLaunchObjective({ store, tenantId: '1' });
+    await ensurePublicMaxLaunchObjective({ ...objectiveOpts, tenantId: '1' });
     let createdObjective = null;
     const workspace = createWorkspaceEngine({
       disableLlm: true,
       missionsEnabled: true,
       resolverEnabled: false,
-      operatorObjectiveOpts: { store },
+      operatorObjectiveOpts: objectiveOpts,
       missionEngine: {
         createFromObjective: async (input) => {
           createdObjective = input.objective;
@@ -145,12 +156,12 @@ describe('SPEC-095 durable operator objectives in WorkspaceEngine', () => {
   });
 
   it('delegates content asks to Paige with recovered objective context', async () => {
-    await ensurePublicMaxLaunchObjective({ store, tenantId: '1' });
+    await ensurePublicMaxLaunchObjective({ ...objectiveOpts, tenantId: '1' });
     let seenContext = null;
     const workspace = createWorkspaceEngine({
       disableLlm: true,
       missionsEnabled: false,
-      operatorObjectiveOpts: { store },
+      operatorObjectiveOpts: objectiveOpts,
       paigeCampaignDelegationService: {
         shouldDelegateToPaige: delegation.shouldDelegateToPaige,
         delegateCampaignContentRecommendation: async (input) => {
@@ -212,7 +223,7 @@ describe('SPEC-095 durable operator objectives in WorkspaceEngine', () => {
         objectiveText: 'a',
         aliases: ['the launch', 'launch'],
       },
-      { store }
+      objectiveOpts
     );
     await createOperatorObjective(
       {
@@ -222,7 +233,7 @@ describe('SPEC-095 durable operator objectives in WorkspaceEngine', () => {
         objectiveText: 'b',
         aliases: ['the launch', 'market launch'],
       },
-      { store }
+      objectiveOpts
     );
 
     const workspace = engine();
@@ -239,7 +250,7 @@ describe('SPEC-095 durable operator objectives in WorkspaceEngine', () => {
   });
 
   it('survives process-local SessionStore reset (conversation independence)', async () => {
-    await ensurePublicMaxLaunchObjective({ store, tenantId: '1' });
+    await ensurePublicMaxLaunchObjective({ ...objectiveOpts, tenantId: '1' });
 
     const first = engine();
     await first.ask({
@@ -297,7 +308,7 @@ describe('SPEC-095 durable operator objectives in WorkspaceEngine', () => {
   });
 
   it('enforces tenant isolation on objective recovery', async () => {
-    await ensurePublicMaxLaunchObjective({ store, tenantId: '1' });
+    await ensurePublicMaxLaunchObjective({ ...objectiveOpts, tenantId: '1' });
     const workspace = engine();
     const result = await workspace.ask({
       question: 'Where are we with the launch?',

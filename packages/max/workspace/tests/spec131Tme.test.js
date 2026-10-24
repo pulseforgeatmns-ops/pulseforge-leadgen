@@ -1,4 +1,5 @@
 'use strict';
+const { createTestAmoRuntime, runtimeProviderFromEngine, createHydratingTestRuntime } = require('./amoTestRuntime');
 
 /**
  * SPEC-131 — Operator approval is consumed only when the stage commits.
@@ -139,7 +140,7 @@ describe('SPEC-131 — approval consumption is part of the commit', () => {
     const turn = await maybeHandleAcquisitionMissionExecution({
       question: 'Approved. Begin Discovery.',
       context: { tenantId: '10', missionId: mission.id },
-      acquisitionMissionEngine: engine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: engine }),
       allowFixtureFallback: false,
       runScout: async () => {
         throw new Error('scout crashed');

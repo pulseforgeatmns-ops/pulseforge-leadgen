@@ -22,12 +22,14 @@ const {
   EVENT_KINDS,
 } = amo;
 const { persistStageCommit } = require('../../../services/acquisitionMissionPersistence');
+const { resetMissionDurableLocksForTests } = require('../TransactionalPersistence');
 
 const OBJECTIVE = 'Acquire commercial cleaning customers in Manchester NH for law firms.';
 
 describe('SPEC-131 — Transactional Mission Execution', () => {
   beforeEach(() => {
     clearExecutionAudit();
+    resetMissionDurableLocksForTests();
   });
 
   function engineWithApprovedPlan() {

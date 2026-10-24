@@ -2,17 +2,16 @@
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
-const {
-  normalizeContext,
+const { normalizeContext,
   contextFingerprint,
   buildOpeningState,
   buildSuggestions,
   composeResponse,
   formatDeterministicProse,
   PresentationEngine,
-  createWorkspaceEngine,
-  PAGE_TYPES,
-} = require('..');
+
+  PAGE_TYPES } = require('..');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 
 function sampleDeckContext(overrides = {}) {
   return normalizeContext({
