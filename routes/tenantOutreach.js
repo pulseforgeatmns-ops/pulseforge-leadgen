@@ -196,4 +196,26 @@ router.post('/api/v1/tenant-outreach/anchor-program/authorize', requireAnchorOpe
   anchorOperation((service, req, actor) => service.authorize(req.body || {}, actor)));
 router.post('/api/v1/tenant-outreach/anchor-program/:id/mode', requireAnchorOperator,
   anchorOperation((service, req, actor) => service.setMode(req.params.id, req.body?.mode, req.body?.policyHash, actor)));
+// Preparation only: no send, approval, freeze, activation, or recovery mutation.
+router.post('/api/v1/tenant-outreach/anchor-program/prepare-drafts',
+  (req, res, next) => {
+    noStore(res);
+    // Reject even malformed active impersonation before generic auth cleans it up.
+    if (req.session?.impersonation?.active) return res.status(403).json({ error: 'anchor_crm_action_forbidden', retryAllowed: false });
+    next();
+  },
+  requireAuth, requireRole('admin'), async (req, res) => {
+    noStore(res);
+    const action = require('../services/anchorCrmPreparationAction');
+    let actor;
+    try {
+      actor = action.actorFromRequest(req);
+      const expected = new URL(process.env.APP_URL);
+      if (!['http:', 'https:'].includes(expected.protocol) || req.get('origin') !== expected.origin
+        || req.get('sec-fetch-site') === 'cross-site' || !req.is('application/json')) throw new Error('forbidden');
+    } catch { return res.status(403).json({ error: 'anchor_crm_action_forbidden', retryAllowed: false }); }
+    try { return res.json(await action.prepareDrafts(pool, req.body, actor)); }
+    catch (error) { return res.status(409).json({ error: 'anchor_crm_action_rejected',
+      status: error.status || 'rejected', writesMayHaveOccurred: error.writesMayHaveOccurred === true, retryAllowed: false }); }
+  });
 module.exports = router;
