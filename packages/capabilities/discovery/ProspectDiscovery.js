@@ -26,6 +26,7 @@ const { rankAgainstProfile } = require('./ranking');
 const { verifyCandidate } = require('./verification');
 const { dedupeCandidates, flagCrmDuplicates } = require('./dedupe');
 const { createPlacesProvider } = require('./providers/PlacesProvider');
+const { withResearchProviderScope, assertResearchProviderAllowed, rethrowResearchProviderControl } = require('../../../utils/anchorResearchProviderPause');
 
 /**
  * @param {object} [deps]
@@ -80,6 +81,7 @@ function createProspectDiscoveryCapability(deps = {}) {
     },
 
     async execute(context) {
+      const researchTenants = Object.freeze([context.tenantId, context.clientId, context.client_id].filter(value => value != null));
       const emit = makeEmitter(context);
       const warnings = [];
       const rejected = [];
@@ -174,10 +176,13 @@ function createProspectDiscoveryCapability(deps = {}) {
       for (const industry of industries.length ? industries : ['professional offices']) {
         for (const provider of available) {
           try {
-            const hits = await provider.search(
-              { industry, location, limit: perIndustry },
-              profile
-            );
+            const hits = await withResearchProviderScope(researchTenants[0], () => {
+              for (const tenant of researchTenants) assertResearchProviderAllowed('discovery', tenant);
+              return provider.search(
+                { industry, location, limit: perIndustry },
+                profile
+              );
+            });
             for (const hit of hits || []) {
               raw.push({
                 ...hit,
@@ -186,6 +191,7 @@ function createProspectDiscoveryCapability(deps = {}) {
               });
             }
           } catch (err) {
+            rethrowResearchProviderControl(err);
             warnings.push(
               `Provider ${provider.id} failed for ${industry}: ${err.message || err}`
             );

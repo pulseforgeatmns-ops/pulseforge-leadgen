@@ -200,6 +200,18 @@ function createAmoMemoryPool() {
       return { rows: [] };
     }
 
+    if (/SELECT payload FROM acquisition_mission_predictions/i.test(sql)) {
+      return { rows: [] };
+    }
+
+    if (/SELECT payload FROM acquisition_mission_outcome_evaluations/i.test(sql)) {
+      return { rows: [] };
+    }
+
+    if (/SELECT payload FROM acquisition_mission_outcome_learnings/i.test(sql)) {
+      return { rows: [] };
+    }
+
     throw new Error(`Unhandled SQL in amo memory pool: ${trimmed.split('\n')[0]}`);
   }
 

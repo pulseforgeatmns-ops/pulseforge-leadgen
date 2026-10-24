@@ -1,6 +1,7 @@
 'use strict';
 
 const pool = require('../db');
+const { listOpenAccountFlags } = require('./aoAccountFlagService');
 const { addProspect, addCompany } = require('../dbClient');
 const {
   deriveOperationalState,
@@ -24,6 +25,8 @@ function todayISO(date = new Date()) {
 }
 
 function mapLeadRow(row) {
+  const callProhibited = !row.crm_call_allowed;
+  if (callProhibited && row.open_next_action === 'phone_follow_up') row = { ...row, open_next_action: 'identity_or_call_permission_review', contact_phone: null };
   const operationalState = deriveOperationalState(row);
   const intel = buildRelationshipIntel(row);
   const promotion = recommendCrmPromotion(row);
@@ -43,7 +46,8 @@ function mapLeadRow(row) {
     crm_prospect_id: row.crm_prospect_id || null,
     contact_name: row.contact_name,
     contact_title: row.contact_title,
-    contact_phone: row.contact_phone,
+    contact_phone: callProhibited ? null : row.contact_phone,
+    call_prohibited: callProhibited,
     contact_email: row.contact_email,
     is_decision_maker: row.is_decision_maker,
     original_visit_note: row.original_visit_note,
@@ -90,6 +94,10 @@ async function fetchEnrichedLeads(clientId, { campaignName = null, aoOwnerId = n
     SELECT
       l.*,
       u.name AS ao_name,
+      EXISTS (SELECT 1 FROM prospects p WHERE p.id = l.crm_prospect_id AND p.client_id = l.client_id
+        AND COALESCE(p.ao_call_suppressed, false) = false
+        AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
+        AND COALESCE(p.do_not_contact, false) = false AND COALESCE(p.is_synthetic, false) = false) AS crm_call_allowed,
       c.contact_name, c.contact_title, c.phone AS contact_phone, c.email AS contact_email,
       c.is_decision_maker,
       ot.id AS open_task_id,
@@ -288,9 +296,21 @@ function sortCountMap(map) {
     .map(([text, count]) => ({ text, count }));
 }
 
-function buildRecommendedActions(leads, escalations, campaign) {
+function buildRecommendedActions(leads, escalations, campaign, aoCrmFlags = []) {
   const jakeActions = [];
   const mikeActions = [];
+
+  for (const flag of aoCrmFlags.slice(0, 5)) {
+    jakeActions.push({
+      priority: 1,
+      action: flag.recommended_action || 'Review AO CRM flag',
+      business: flag.business_name,
+      contact: flag.ao_name ? `AO: ${flag.ao_name}` : null,
+      reason: [flag.reason, flag.note].filter(Boolean).join(' — '),
+      flag_id: flag.id,
+      account_id: flag.account_id,
+    });
+  }
 
   for (const esc of escalations.filter(e => ['new', 'seen', 'in_progress'].includes(e.status)).slice(0, 5)) {
     jakeActions.push({
@@ -361,11 +381,12 @@ function buildRecommendedActions(leads, escalations, campaign) {
 }
 
 async function buildBriefing(clientId, { asOf = todayISO() } = {}) {
-  const [today, leads, escalations, campaign] = await Promise.all([
+  const [today, leads, escalations, campaign, aoAccountFlags] = await Promise.all([
     getTodayActivity(clientId, asOf),
     fetchEnrichedLeads(clientId),
     listEscalationInbox(clientId),
     getCampaign001Progress(clientId),
+    listOpenAccountFlags(clientId).catch(() => []),
   ]);
 
   const campaignLeads = leads.filter(l => l.campaign_name === CAMPAIGN_001);
@@ -390,9 +411,30 @@ async function buildBriefing(clientId, { asOf = todayISO() } = {}) {
     .filter(e => ['new', 'seen', 'in_progress'].includes(e.status))
     .slice(0, 10);
 
+  const aoFlagsForJake = (aoAccountFlags || []).slice(0, 10).map(flag => ({
+    id: flag.id,
+    account_id: flag.account_id,
+    business_name: flag.company_name || 'CRM account',
+    ao_name: flag.ao_name,
+    reason: flag.reason_label || flag.reason,
+    note: flag.note,
+    recommended_action: flag.recommended_action,
+    created_at: flag.created_at,
+    source: 'ao_crm_flag',
+  }));
+
   const fieldIntel = buildFieldIntelligence(leads);
-  const recommendations = buildRecommendedActions(leads, escalations, campaign);
-  const digest = buildDailyDigestText({ today, leads, escalations, campaign, warmOpportunities, recommendations, asOf });
+  const recommendations = buildRecommendedActions(leads, escalations, campaign, aoFlagsForJake);
+  const digest = buildDailyDigestText({
+    today,
+    leads,
+    escalations,
+    campaign,
+    warmOpportunities,
+    recommendations,
+    aoAccountFlags: aoFlagsForJake,
+    asOf,
+  });
 
   const categorized = {
     walkthrough_requested: leads.filter(l => l.operational_state === 'walkthrough_requested'),
@@ -409,6 +451,7 @@ async function buildBriefing(clientId, { asOf = todayISO() } = {}) {
     client_id: clientId,
     today,
     needs_jake: needsJake,
+    ao_account_flags: aoFlagsForJake,
     warm_opportunities: warmOpportunities,
     campaign_001: campaign,
     field_intelligence: fieldIntel,
@@ -461,7 +504,16 @@ function recommendNextStep(lead) {
 }
 
 function buildDailyDigestText(ctx) {
-  const { today, leads, escalations, campaign, warmOpportunities, recommendations, asOf } = ctx;
+  const {
+    today,
+    leads,
+    escalations,
+    campaign,
+    warmOpportunities,
+    recommendations,
+    aoAccountFlags = [],
+    asOf,
+  } = ctx;
   const dmCount = leads.filter(l => l.operational_state === 'decision_maker_reached'
     || l.operational_state === 'walkthrough_requested'
     || l.operational_state === 'jake_action_needed').length;
@@ -469,7 +521,21 @@ function buildDailyDigestText(ctx) {
   const top = warmOpportunities[0];
   const vendorMentions = leads.filter(l => l.relationship.vendor_complaints.length).length;
 
+  const flagDigestLines = [];
+  if (aoAccountFlags.length) {
+    flagDigestLines.push(
+      `${aoAccountFlags.length} AO flag${aoAccountFlags.length === 1 ? '' : 's'} need your attention.`
+    );
+    for (const flag of aoAccountFlags.slice(0, 3)) {
+      const who = flag.ao_name || 'AO';
+      const account = flag.business_name || 'account';
+      const reason = flag.reason || flag.reason_label || 'escalation';
+      flagDigestLines.push(`- ${who} — ${account} — ${String(reason).toLowerCase()}`);
+    }
+  }
+
   const lines = [];
+  if (flagDigestLines.length) lines.push(...flagDigestLines);
   lines.push(
     `Today Mike logged ${today.visits_today || 0} visit${(today.visits_today || 0) === 1 ? '' : 's'}`
     + (today.calls_today ? ` and ${today.calls_today} phone follow-up${today.calls_today === 1 ? '' : 's'}` : '')

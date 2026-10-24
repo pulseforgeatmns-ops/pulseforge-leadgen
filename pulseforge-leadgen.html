@@ -1084,7 +1084,7 @@ function updateStats(leads, duped) {
   document.getElementById('stat-total-d').textContent = 'this run';
   const withEmail = leads.filter(l => l.email && l.email !== '—').length;
   document.getElementById('stat-emails').textContent = withEmail;
-  document.getElementById('stat-emails-d').textContent = Math.round(withEmail/leads.length*100) + '% hit rate';
+  document.getElementById('stat-emails-d').textContent = leads.length ? Math.round(withEmail/leads.length*100) + '% hit rate' : '0% hit rate';
   const high = leads.filter(l => l.score >= 70).length;
   document.getElementById('stat-high').textContent = high;
   document.getElementById('stat-high-d').textContent = 'ready to outreach';

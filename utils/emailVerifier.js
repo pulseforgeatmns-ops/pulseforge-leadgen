@@ -1,3 +1,4 @@
+const { withResearchProviderScope, assertResearchProviderAllowed, rethrowResearchProviderControl } = require('./anchorResearchProviderPause');
 const pool = require('../db');
 const { validateEmail } = require('./emailValidation');
 
@@ -55,6 +56,7 @@ async function logVerifierCall({ email, status, raw, durationMs }) {
       VALUES ($1, $2, $3, $4::jsonb, $5)
     `, [method, email, status, JSON.stringify(raw || null), durationMs]);
   } catch (err) {
+    rethrowResearchProviderControl(err);
     console.error(`[EmailVerifier] verifier_call_log insert failed: ${err.message}`);
   }
 }
@@ -109,7 +111,16 @@ async function verifyWithMx(normalizedEmail, startedAt) {
   return result;
 }
 
-async function verifyEmail(email) {
+async function verifyEmail(email, options = {}) {
+  const tenants = [options?.tenantId, options?.clientId, options?.client_id].filter(value => value != null);
+  return withResearchProviderScope(tenants[0], () => {
+    for (const tenant of tenants) assertResearchProviderAllowed('bouncer', tenant);
+    return verifyEmailScoped(email);
+  });
+}
+
+async function verifyEmailScoped(email) {
+  assertResearchProviderAllowed('bouncer');
   const normalizedEmail = normalizeEmail(email);
   if (!normalizedEmail || !normalizedEmail.includes('@')) {
     const result = {
@@ -165,6 +176,7 @@ async function verifyEmail(email) {
 
     const verifyUrl = new URL(BOUNCER_VERIFY_URL);
     verifyUrl.searchParams.set('email', normalizedEmail);
+    assertResearchProviderAllowed('bouncer');
     const response = await fetchImpl(verifyUrl.toString(), {
       method: 'GET',
       headers: {
@@ -202,6 +214,7 @@ async function verifyEmail(email) {
     setCached(normalizedEmail, result);
     return result;
   } catch (err) {
+    rethrowResearchProviderControl(err);
     const reason = err?.name === 'AbortError' ? 'verifier_timeout' : 'verifier_timeout';
     raw = { status: 'unknown', reason, error: err?.message || reason, method: 'bouncer' };
     const result = { status: 'unknown', valid: false, reason, raw, vendor: 'bouncer', method: 'bouncer' };

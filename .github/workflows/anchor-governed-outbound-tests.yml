@@ -1,0 +1,34 @@
+name: Anchor governed outbound safety
+# PR path: .github/workflows/pr-ci-lean.yml (domain anchor-outbound)
+# Broad regression: .github/workflows/full-regression.yml
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  governed-outbound:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: ./.github/actions/setup-postgres-environment
+      - run: npm ci --ignore-scripts
+      - run: npm run test:anchor-outbound
+      - name: Mailbox and scheduling regressions
+        env:
+          DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
+          DATABASE_SSL: 'false'
+        run: >-
+          node --test test/governedMailboxBridge.test.js test/acquisitionMissionInventory.test.js test/tenantMailbox.test.js test/tenantMailboxImapRuntime.test.js
+          test/tenantMailboxPollExecutor.test.js test/tenantOutreachScheduler.test.js
+          test/emmettTenantMailboxCapacity.test.js test/mailHeaders.test.js
+          test/maxScoutReplenishment.test.js
+          test/governedPreparationRetry.test.js test/governedOutboundRefill.test.js
+          test/sameCompanyContactRecovery.test.js test/outboundInventory.test.js test/scoutRecoveryDiscovery.test.js test/websiteEnrichmentCrawl.test.js
+          test/governedOutboundExecutionClock.test.js test/governedOutboundStartup.test.js
+          test/scoutReplenishmentTenantGeneralization.test.js
+          packages/acquisition-mission/tests/spec215PreparedOutreachRevision.test.js

@@ -11,6 +11,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 const express = require('express');
 
+// Synthetic accounting alongside the existing intercepted HTTP transport.
+// Diagnostics must not reach the process DB merely to record this unit fixture.
+const spend = require('../utils/apiSpendControl');
+const attribution = require('../utils/placesCostAttribution');
+const originalAccounting = [spend.reserveApiCall, spend.settleApiCall, attribution.recordPlacesRequest];
+spend.reserveApiCall = async () => 'synthetic-diagnostic-reservation';
+spend.settleApiCall = async () => {};
+attribution.recordPlacesRequest = async () => {};
+require('node:test').after(() => {
+  [spend.reserveApiCall, spend.settleApiCall, attribution.recordPlacesRequest] = originalAccounting;
+});
+
 const cronSourcePath = path.join(__dirname, '..', 'routes', 'cron.js');
 const cronSource = fs.readFileSync(cronSourcePath, 'utf8');
 

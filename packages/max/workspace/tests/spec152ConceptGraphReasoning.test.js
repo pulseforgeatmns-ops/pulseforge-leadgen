@@ -41,7 +41,7 @@ const {
   resolveWorkspaceOwner,
   WORKSPACE_OWNERS,
 } = require('../WorkspaceOwnershipResolver');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 
 function seedIdentityState(session, depth = 1, activeConcepts = null) {
   setConversationalState(session, {

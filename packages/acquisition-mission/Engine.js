@@ -29,6 +29,7 @@ const {
   assertActorCanProgress,
   progressPercent,
   applyStageTransition,
+  derivePendingOperatorDecisionForStage,
 } = require('./Lifecycle');
 const { createEvent, formatTimeline } = require('./Timeline');
 const { buildSharedContext, formatSharedContext } = require('./Context');
@@ -36,8 +37,38 @@ const { buildWorkspace, formatWorkspace } = require('./Workspace');
 const { createBlocker, inferBlockers, currentBlocker } = require('./Blockers');
 const { buildHealth, formatHealth } = require('./Health');
 const { recordSegmentOutcome, summarizeLearning, formatLearning } = require('./Learning');
+const {
+  capturePrediction,
+  resolvePrediction,
+  buildOutcomeReviewSection,
+  summarizeOrganizationalLearning,
+  formatOutcomeLearningReport,
+  isTerminalOutcomeType,
+  pendingPredictionsForMission,
+} = require('./OutcomeLearning');
 const { explainWhy, formatExplain } = require('./Explain');
 const { createObservation, formatMemory } = require('./Memory');
+const {
+  createCommunicationObservation,
+  isCommunicationObservation,
+} = require('./CommunicationObservation');
+const {
+  evaluateObserveReaction,
+  buildObserveAssessmentForMission,
+} = require('./ObserveEvaluator');
+const {
+  foldCandidateObserveState,
+} = require('./ObserveReaction');
+const {
+  buildMissionInterpretationContext,
+  interpretMissionObservation,
+  interpretRileyReply,
+  interpretBookingEvidence,
+  shouldCreateOutcome,
+  buildOutcomePayload,
+  createInterpretationRecord,
+  hasMeaningfulBusinessOutcome,
+} = require('./ObservationInterpretation');
 const { createMemoryAmoStore } = require('./Store');
 const {
   INSPECTION_PROPERTIES,
@@ -54,7 +85,13 @@ const {
   hasPendingPrioritizationApproval,
 } = require('./PendingOperatorDecision');
 const { isStructuredMissionApproved } = require('./StructuredMission');
-const { OPERATOR_DECISION_KINDS } = require('./types');
+const { buildPostDiscoveryPendingDecision } = require('./DecisionReadiness');
+const { buildExecutionReview, isExecutionApproved } = require('./ExecutionApproval');
+const { hasMeaningfulLearning, learningEligibilityFromStore } = require('./MeaningfulLearning');
+const {
+  latestApproachDecision,
+  buildApproachBlocker,
+} = require('./AcquisitionApproach');
 
 function actorRole(actor) {
   if (!actor) return '';
@@ -67,6 +104,10 @@ function contributionLabel(specialist, kind, payload = {}) {
   if (specialist === SPECIALISTS.MAX && kind === CONTRIBUTION_KINDS.PRIORITIZATION) {
     return 'Max ranked prospects';
   }
+  if (specialist === SPECIALISTS.MAX && kind === CONTRIBUTION_KINDS.ACQUISITION_APPROACH) {
+    return 'Max selected acquisition approach';
+  }
+  if (specialist === SPECIALISTS.PENNY) return 'Penny assessed paid acquisition';
   if (specialist === SPECIALISTS.PAIGE) {
     const variant = payload.variantLabel || payload.variant || (payload.variants && payload.variants[0] && payload.variants[0].label);
     return variant ? `Paige generated ${variant}` : 'Paige generated variants';
@@ -85,7 +126,13 @@ function extrasFrom(store, mission) {
   const contributions = store.listContributions(mission.id);
   const outcomes = store.listOutcomes(mission.id);
   const events = store.listEvents(mission.id);
-  const learning = store.listLearning(mission.tenantId).filter((row) => !row.missionId || row.missionId === mission.id);
+  const meaningfulLearning = hasMeaningfulLearning(store, mission);
+  const approachDecision = latestApproachDecision(contributions);
+  const penny = [...contributions].reverse().find(
+    (row) =>
+      row.specialist === SPECIALISTS.PENNY &&
+      row.kind === CONTRIBUTION_KINDS.PAID_ACQUISITION_RECOMMENDATION
+  );
   const emmett = [...contributions].reverse().find((row) => row.specialist === SPECIALISTS.EMMETT);
   const capacity = emmett && emmett.payload && emmett.payload.capacity;
   const warmup = emmett && emmett.payload && (emmett.payload.warmup || emmett.payload.deliverability);
@@ -102,27 +149,71 @@ function extrasFrom(store, mission) {
     warmupRequired: Boolean(warmup && (warmup.status === 'warming' || warmup.warmup === true)),
     queuedOrLaunched: queued,
     hasOutcomes: outcomes.length > 0,
-    hasLearning: learning.length > 0,
+    hasMeaningfulBusinessOutcome: hasMeaningfulBusinessOutcome(outcomes),
+    hasMeaningfulLearning: meaningfulLearning,
+    hasLearning: meaningfulLearning,
     replies,
     meetings,
     capacityRemaining: capacity && (capacity.remaining != null ? capacity.remaining : capacity.recommended),
     capacityAvailable: Boolean(capacity && (capacity.recommended || capacity.available)),
+    acquisitionApproachComplete: Boolean(approachDecision),
+    acquisitionApproach: approachDecision ? approachDecision.selected : null,
+    acquisitionApproachDecision: approachDecision ? approachDecision.decision : null,
+    acquisitionApproachPermitsOutbound: approachDecision
+      ? (approachDecision.selected === 'outbound' || approachDecision.selected === 'both')
+      : false,
+    paidAcquisitionComplete: Boolean(penny),
+    paidAcquisitionRecommendation: penny ? penny.payload?.paidAcquisitionRecommendation || penny.payload : null,
+    acquisitionApproachBlocker: buildApproachBlocker(approachDecision, contributions),
     qualifiedCount: null,
+    missionId: mission.id,
   };
 }
 
+function maybeAutoAdvanceToReady(store, mission, contributions, ctx, extra) {
+  if (mission.stage !== STAGES.PREPARE) return null;
+  const combined = { ...ctx, ...extra, missionId: mission.id };
+  const gate = canEnter(STAGES.READY, combined);
+  if (!gate.ok) return null;
+  const { from } = applyStageTransition(mission, STAGES.READY, { contributions });
+  store.addEvent(createEvent({
+    missionId: mission.id,
+    kind: EVENT_KINDS.STAGE_TRANSITION,
+    specialist: SPECIALISTS.MAX,
+    label: `${from} → ${STAGES.READY}`,
+    payload: { from, to: STAGES.READY, automatic: true },
+  }));
+  return { from, to: STAGES.READY };
+}
+
 function refresh(store, mission) {
+  if (mission.planCancelled) {
+    mission.status = 'Cancelled';
+    mission.pendingOperatorDecision = null;
+    return { mission: store.putMission(mission), ctx: {}, contributions: store.listContributions(mission.id) };
+  }
   const contributions = store.listContributions(mission.id);
   const extra = extrasFrom(store, mission);
   const ctx = specialistContext(contributions, extra);
   if (extra.qualifiedCount == null) extra.qualifiedCount = ctx.prospectCount;
-  const inferred = inferBlockers(mission, { ...ctx, ...extra });
+  maybeAutoAdvanceToReady(store, mission, contributions, ctx, extra);
+  const missionExtras = { ...extra, missionId: mission.id };
+  if (mission.stage === STAGES.READY) {
+    if (isExecutionApproved(contributions, mission.id, missionExtras)) {
+      mission.pendingOperatorDecision = null;
+    } else {
+      const pending = derivePendingOperatorDecisionForStage(mission, STAGES.READY, contributions);
+      mission.pendingOperatorDecision = pending || null;
+    }
+  }
+  const refreshedCtx = specialistContext(contributions, missionExtras);
+  const inferred = inferBlockers(mission, { ...refreshedCtx, ...extra });
   const manual = (mission.blockers || []).filter((row) => row.manual);
   mission.blockers = [...manual, ...inferred.filter((row) => !manual.some((m) => m.kind === row.kind))];
-  mission.progressPercent = progressPercent(mission.stage, ctx);
-  mission.status = mission.status;
+  mission.progressPercent = progressPercent(mission.stage, refreshedCtx);
+  mission.status = STAGE_LABELS[mission.stage] || mission.status;
   mission.updatedAt = nowIso();
-  return { mission: store.putMission(mission), ctx: { ...ctx, ...extra }, contributions };
+  return { mission: store.putMission(mission), ctx: { ...refreshedCtx, ...extra }, contributions };
 }
 
 function createAcquisitionMissionEngine(opts = {}) {
@@ -221,12 +312,29 @@ function createAcquisitionMissionEngine(opts = {}) {
       if (payload.confidence != null) {
         mission.confidence = round2(payload.confidence);
       }
+      const mir = payload.missionIntelligenceReport || payload.missionReport;
+      if (mir && mir.recommendation) {
+        const prediction = capturePrediction({
+          tenantId: mission.tenantId,
+          missionId: mission.id,
+          recommendation: mir.recommendation,
+          strategicDecision: mir.strategicDecision,
+          opportunity: mir.opportunityIntelligence?.topOpportunity || mir.topOpportunities?.[0],
+          judgmentResult: mir.judgmentResult,
+          expectedOutcome: mir.strategicDecision?.expectedBusinessOutcome,
+          confidence: mir.recommendation.confidence ?? mir.strategicDecision?.tradeoff?.confidencePercent,
+        });
+        store.addPrediction(prediction);
+        store.addEvent(createEvent({
+          missionId: mission.id,
+          kind: EVENT_KINDS.LEARNING,
+          specialist: SPECIALISTS.MAX,
+          label: 'Prediction captured',
+          payload: { predictionId: prediction.id, summary: prediction.recommendation.summary },
+        }));
+      }
       if (mission.stage === STAGES.DISCOVER && isStructuredMissionApproved(mission)) {
-        mission.pendingOperatorDecision = {
-          stage: STAGES.DISCOVER,
-          kind: OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL,
-          prompt: 'Approve prioritization?',
-        };
+        mission.pendingOperatorDecision = buildPostDiscoveryPendingDecision(payload);
       }
       store.putMission(mission);
     }
@@ -266,6 +374,54 @@ function createAcquisitionMissionEngine(opts = {}) {
     }));
     refresh(store, mission);
     return store.getMission(mission.id);
+  }
+
+  function tryAutoAdvanceToLearn(missionId, learnOpts = {}) {
+    const mission = get(missionId, learnOpts.tenantId);
+    if (!mission || mission.stage !== STAGES.OBSERVE) {
+      return { progressed: false };
+    }
+    const extra = extrasFrom(store, mission);
+    if (!extra.hasMeaningfulBusinessOutcome) {
+      return { progressed: false };
+    }
+    const contributions = store.listContributions(mission.id);
+    const ctx = specialistContext(contributions, extra);
+    const gate = canEnter(STAGES.LEARN, { ...ctx, ...extra });
+    if (!gate.ok) {
+      return { progressed: false, reason: gate.reason };
+    }
+    const updated = progress(missionId, { role: SPECIALISTS.MAX }, {
+      stage: STAGES.LEARN,
+      tenantId: learnOpts.tenantId,
+    });
+    return { progressed: true, mission: updated };
+  }
+
+  function tryAutoAdvanceToImprove(missionId, improveOpts = {}) {
+    const mission = get(missionId, improveOpts.tenantId);
+    if (!mission || mission.stage !== STAGES.LEARN) {
+      return { progressed: false };
+    }
+    const extra = extrasFrom(store, mission);
+    if (!extra.hasMeaningfulLearning) {
+      return { progressed: false };
+    }
+    const contributions = store.listContributions(mission.id);
+    const ctx = specialistContext(contributions, extra);
+    const gate = canEnter(STAGES.IMPROVE, { ...ctx, ...extra });
+    if (!gate.ok) {
+      return { progressed: false, reason: gate.reason };
+    }
+    const updated = progress(missionId, { role: SPECIALISTS.MAX }, {
+      stage: STAGES.IMPROVE,
+      tenantId: improveOpts.tenantId,
+    });
+    return { progressed: true, mission: updated };
+  }
+
+  function tryAutoAdvanceAfterLearning(missionId, opts = {}) {
+    return tryAutoAdvanceToImprove(missionId, opts);
   }
 
   function setBlocker(missionId, input = {}, blockerOpts = {}) {
@@ -311,9 +467,179 @@ function createAcquisitionMissionEngine(opts = {}) {
       specialist: row.specialist,
       at: row.at,
       label: `${row.specialist} observed`,
-      payload: { observation: row.observation },
+      payload: isCommunicationObservation(row)
+        ? {
+          kind: row.kind,
+          category: row.category,
+          eventType: row.eventType,
+          prospectId: row.prospectId,
+          evidence: row.evidence,
+        }
+        : { observation: row.observation },
     }));
     return row;
+  }
+
+  function recordCommunicationObservation(missionId, providerEvent = {}, obsOpts = {}) {
+    const structured = createCommunicationObservation(providerEvent);
+    if (!structured) return null;
+    const mission = requireMission(missionId, obsOpts.tenantId);
+    const existing = store.listObservations(mission.id).find((row) => row.id === structured.id);
+    if (existing) return existing;
+    const observation = recordObservation(mission.id, structured, obsOpts);
+    if (obsOpts.skipInterpretation !== true) {
+      applyCommunicationObservationInterpretation(mission.id, observation, obsOpts);
+    }
+    return observation;
+  }
+
+  function recordInterpretation(missionId, result = {}, interpOpts = {}) {
+    const mission = requireMission(missionId, interpOpts.tenantId);
+    const row = createInterpretationRecord({ ...result, missionId: mission.id });
+    store.addInterpretation(row);
+    store.addEvent(createEvent({
+      missionId: mission.id,
+      kind: EVENT_KINDS.OBSERVATION,
+      specialist: SPECIALISTS.MAX,
+      at: row.at,
+      label: `Interpreted: ${row.type}`,
+      payload: {
+        interpretationId: row.id,
+        observationId: row.observationId,
+        type: row.type,
+        confidence: row.confidence,
+        recommendedOutcome: row.recommendedOutcome,
+        requiresHumanConfirmation: row.requiresHumanConfirmation,
+      },
+    }));
+    return row;
+  }
+
+  function applyInterpretationResult(result = {}, applyOpts = {}) {
+    if (!result || !result.missionId) return { skipped: true, reason: 'missing_result' };
+    const mission = requireMission(result.missionId, applyOpts.tenantId);
+    const interpretationRow = recordInterpretation(mission.id, result, applyOpts);
+
+    let outcome = null;
+    if (shouldCreateOutcome(result, applyOpts)) {
+      outcome = recordOutcome(mission.id, {
+        type: result.recommendedOutcome.type,
+        prospectId: result.prospectId,
+        specialist: SPECIALISTS.MAX,
+        payload: buildOutcomePayload(result, interpretationRow),
+      }, applyOpts);
+    }
+
+    if (result.observationId) {
+      const observation = store.listObservations(mission.id)
+        .find((row) => row.id === result.observationId);
+      if (observation) {
+        applyObserveReaction({
+          missionId: mission.id,
+          observation,
+          interpretation: result.interpretation,
+        }, applyOpts);
+      }
+    }
+
+    return { interpretation: interpretationRow, outcome };
+  }
+
+  function applyCommunicationObservationInterpretation(missionId, observation, interpOpts = {}) {
+    const mission = requireMission(missionId, interpOpts.tenantId);
+    const missionContext = buildMissionInterpretationContext(mission, store);
+    const result = interpretMissionObservation({
+      missionId: mission.id,
+      prospectId: observation.prospectId,
+      observation,
+      missionContext,
+    });
+    if (!result) return null;
+    return applyInterpretationResult(result, interpOpts);
+  }
+
+  function applyObserveReaction(input = {}, reactOpts = {}) {
+    const missionId = input.missionId;
+    const observation = input.observation;
+    if (!missionId || !observation?.id) {
+      return { skipped: true, reason: 'missing_observation' };
+    }
+
+    const mission = requireMission(missionId, reactOpts.tenantId);
+    const existing = store.getObserveReactionByObservationId
+      ? store.getObserveReactionByObservationId(observation.id)
+      : null;
+    if (existing) {
+      return { reaction: existing, duplicate: true };
+    }
+
+    const prospectId = observation.prospectId != null ? String(observation.prospectId) : null;
+    const priorState = prospectId && store.getCandidateObserveState
+      ? (store.getCandidateObserveState(mission.id, prospectId) || {})
+      : {};
+
+    const executionRecords = store.listExecutionRecords
+      ? store.listExecutionRecords(mission.id, { prospectId })
+      : [];
+    const executionRecord = executionRecords.length
+      ? executionRecords[executionRecords.length - 1]
+      : null;
+
+    const evaluated = evaluateObserveReaction({
+      mission,
+      observation,
+      interpretation: input.interpretation || null,
+      priorState,
+      store,
+      outcomes: store.listOutcomes(mission.id),
+      executionRecord,
+      now: reactOpts.now,
+    });
+
+    if (evaluated.skipped || !evaluated.reaction) {
+      return evaluated;
+    }
+
+    const reaction = store.addObserveReaction(evaluated.reaction);
+    if (prospectId && store.putCandidateObserveState) {
+      const folded = foldCandidateObserveState(priorState, reaction);
+      store.putCandidateObserveState({
+        missionId: mission.id,
+        tenantId: mission.tenantId,
+        prospectId,
+        ...folded,
+        updatedAt: reaction.at,
+      });
+    }
+
+    store.addEvent(createEvent({
+      missionId: mission.id,
+      kind: EVENT_KINDS.OBSERVATION,
+      specialist: SPECIALISTS.MAX,
+      at: reaction.at,
+      label: `Observe reaction: ${reaction.evidenceType}`,
+      payload: {
+        observeReactionId: reaction.id,
+        observationId: reaction.observationId,
+        evidenceType: reaction.evidenceType,
+        updatedDisposition: reaction.updatedDisposition,
+        recommendedNextAction: reaction.recommendedNextAction,
+      },
+    }));
+
+    return { reaction, candidateState: evaluated.candidateState, duplicate: false };
+  }
+
+  function applyRileyReplyInterpretation(input = {}, applyOpts = {}) {
+    const result = interpretRileyReply(input);
+    if (!result.missionId) return { skipped: true, reason: 'missing_mission_id' };
+    return applyInterpretationResult(result, applyOpts);
+  }
+
+  function applyBookingInterpretation(input = {}, applyOpts = {}) {
+    const result = interpretBookingEvidence(input);
+    if (!result.missionId) return { skipped: true, reason: 'missing_mission_id' };
+    return applyInterpretationResult(result, applyOpts);
   }
 
   function recordOutcome(missionId, input = {}, outcomeOpts = {}) {
@@ -342,8 +668,99 @@ function createAcquisitionMissionEngine(opts = {}) {
       at: row.at,
       label: asText(input.label) || labels[row.type] || `Outcome: ${row.type}`,
     }));
-    refresh(store, mission);
+    if (isTerminalOutcomeType(row.type)) {
+      autoEvaluatePendingPredictions(mission, row, input);
+    }
+    const learnAdvance = tryAutoAdvanceToLearn(mission.id, outcomeOpts);
+    const improveAdvance = tryAutoAdvanceToImprove(mission.id, outcomeOpts);
+    if (!learnAdvance.progressed && !improveAdvance.progressed) {
+      refresh(store, mission);
+    }
     return row;
+  }
+
+  function autoEvaluatePendingPredictions(mission, outcomeRow, input = {}) {
+    const pending = pendingPredictionsForMission(store.listPredictions(mission.id), mission.id);
+    for (const prediction of pending) {
+      const result = resolvePrediction(prediction, {
+        actualOutcome: outcomeRow.type,
+        at: outcomeRow.at,
+        prospectId: outcomeRow.prospectId,
+        notes: input.notes || (outcomeRow.payload && outcomeRow.payload.notes),
+        primaryCause: input.primaryCause,
+        secondaryCause: input.secondaryCause,
+        lesson: input.lesson,
+      });
+      store.putPrediction(result.prediction);
+      store.addEvaluation(result.evaluation);
+      for (const learning of result.learnings) store.addOutcomeLearning(learning);
+      store.addEvent(createEvent({
+        missionId: mission.id,
+        kind: EVENT_KINDS.LEARNING,
+        specialist: SPECIALISTS.MAX,
+        at: result.evaluation.evaluatedAt,
+        label: `Outcome evaluated: ${result.evaluation.accuracy}`,
+        payload: {
+          evaluationId: result.evaluation.id,
+          predictionId: prediction.id,
+          accuracy: result.evaluation.accuracy,
+          autoApplied: false,
+        },
+      }));
+    }
+    tryAutoAdvanceToImprove(mission.id, { tenantId: mission.tenantId });
+  }
+
+  function captureMissionPrediction(missionId, input = {}, opts = {}) {
+    const mission = requireMission(missionId, opts.tenantId);
+    const prediction = capturePrediction({
+      ...input,
+      tenantId: mission.tenantId,
+      missionId: mission.id,
+    });
+    store.addPrediction(prediction);
+    store.addEvent(createEvent({
+      missionId: mission.id,
+      kind: EVENT_KINDS.LEARNING,
+      specialist: SPECIALISTS.MAX,
+      label: 'Prediction captured',
+      payload: { predictionId: prediction.id, summary: prediction.recommendation.summary },
+    }));
+    return prediction;
+  }
+
+  function evaluateOutcomeLearning(missionId, input = {}, opts = {}) {
+    const mission = requireMission(missionId, opts.tenantId);
+    const predictionId = asText(input.predictionId);
+    const pending = pendingPredictionsForMission(store.listPredictions(mission.id), mission.id);
+    const prediction = predictionId
+      ? pending.find((p) => p.id === predictionId) || store.listPredictions(mission.id).find((p) => p.id === predictionId)
+      : pending[0];
+    if (!prediction) {
+      throw amoError('amo_prediction_not_found', 'No pending prediction to evaluate.');
+    }
+    const result = resolvePrediction(prediction, input);
+    store.putPrediction(result.prediction);
+    store.addEvaluation(result.evaluation);
+    for (const learning of result.learnings) store.addOutcomeLearning(learning);
+    store.addEvent(createEvent({
+      missionId: mission.id,
+      kind: EVENT_KINDS.LEARNING,
+      specialist: SPECIALISTS.MAX,
+      at: result.evaluation.evaluatedAt,
+      label: `Outcome evaluated: ${result.evaluation.accuracy}`,
+      payload: {
+        evaluationId: result.evaluation.id,
+        predictionId: prediction.id,
+        accuracy: result.evaluation.accuracy,
+        autoApplied: false,
+      },
+    }));
+    const improveAdvance = tryAutoAdvanceToImprove(mission.id, opts);
+    if (!improveAdvance.progressed) {
+      refresh(store, mission);
+    }
+    return result;
   }
 
   function recordLearning(missionId, input = {}, learnOpts = {}) {
@@ -362,7 +779,10 @@ function createAcquisitionMissionEngine(opts = {}) {
         label: `Learning: ${row.segment}`,
         payload: { learningId: row.id, autoApplied: false },
       }));
-      refresh(store, mission);
+      const improveAdvance = tryAutoAdvanceToImprove(mission.id, learnOpts);
+      if (!improveAdvance.progressed) {
+        refresh(store, mission);
+      }
     }
     return row;
   }
@@ -374,6 +794,12 @@ function createAcquisitionMissionEngine(opts = {}) {
     const ctx = specialistContext(contributions, extra);
     const learningRows = store.listLearning(mission.tenantId);
     const learning = summarizeLearning(learningRows);
+    const outcomeLearning = buildOutcomeReviewSection({
+      predictions: store.listPredictions(mission.id),
+      evaluations: store.listEvaluations(mission.id),
+      outcomeLearnings: store.listOutcomeLearnings(mission.tenantId, mission.id),
+      allowPending: true,
+    });
     const explainExtras = {
       ...extra,
       previousReplyRate: inspectOpts.previousReplyRate,
@@ -391,42 +817,74 @@ function createAcquisitionMissionEngine(opts = {}) {
     const timeline = formatTimeline(store.listEvents(mission.id));
     const why = explainWhy(mission, contributions, explainExtras);
     const discoveryContribution = findLatestDiscoveryContribution(contributions);
+    const acquisitionApproach = latestApproachDecision(contributions);
+    const paidAcquisition = [...contributions].reverse().find(
+      (row) =>
+        row.specialist === SPECIALISTS.PENNY &&
+        row.kind === CONTRIBUTION_KINDS.PAID_ACQUISITION_RECOMMENDATION
+    );
     const discoveryArtifact = discoveryContribution
       ? presentationFromDiscoveryPayload(discoveryContribution.payload || {})
       : null;
     assertMissionStateConsistent(mission, { contributions });
     const progression = require('./MissionProgression');
+    const progressionState = progression.resolveProgressionState({ mission, contributions });
     const { buildWorkspaceContext } = require('./WorkspaceMode');
     const progressionSnapshot = {
       mission,
       contributions,
       progression: {
-        stage: progression.deriveProgressionStage({ mission, contributions }),
-        pause: progression.deriveMissionPause({ mission, contributions }),
-        block: progression.deriveExecutionBlock({ mission, contributions }),
-        presentation: progression.formatMissionProgressPresentation({ mission, contributions }),
+        stage: progressionState.progressionStage,
+        contract: progressionState.contract,
+        outcome: progressionState.outcome,
+        pause: progressionState.pause,
+        block: progressionState.block,
+        presentation: progression.formatMissionProgressPresentation({ mission, contributions }, progressionState),
       },
     };
     const workspaceContext = buildWorkspaceContext({
       missionId: mission.id,
       snapshot: progressionSnapshot,
     });
+    const observeReactions = store.listObserveReactions
+      ? store.listObserveReactions(mission.id)
+      : [];
+    const candidateObserveStates = store.listCandidateObserveStates
+      ? store.listCandidateObserveStates(mission.id)
+      : [];
+    const observeAssessment = buildObserveAssessmentForMission(mission, store);
+
     return {
       spec: 'SPEC-118',
       mission,
+      observeReactions,
+      candidateObserveStates,
+      observeAssessment,
+      lifecycleLearning: learningEligibilityFromStore(store, mission),
       workspaceContext,
       executableDecision: presentableOperatorDecision({ mission, contributions }),
+      executionReview: mission.stage === STAGES.READY
+        ? buildExecutionReview(mission, contributions)
+        : null,
       workspace,
       health,
       context,
       timeline,
       why,
       learning,
+      outcomeLearning,
       observations: formatMemory(store.listObservations(mission.id)),
       contributions,
       outcomes: store.listOutcomes(mission.id),
+      executionRecords: store.listExecutionRecords
+        ? store.listExecutionRecords(mission.id)
+        : [],
       blocker: currentBlocker(mission.blockers),
       discoveryArtifact,
+      acquisitionApproach: acquisitionApproach ? acquisitionApproach.decision : null,
+      paidAcquisitionRecommendation: paidAcquisition
+        ? paidAcquisition.payload?.paidAcquisitionRecommendation || paidAcquisition.payload
+        : null,
       progression: progressionSnapshot.progression,
     };
   }
@@ -567,15 +1025,32 @@ function createAcquisitionMissionEngine(opts = {}) {
     setBlocker,
     clearBlocker,
     recordObservation,
+    recordCommunicationObservation,
+    recordInterpretation,
+    applyInterpretationResult,
+    applyCommunicationObservationInterpretation,
+    applyObserveReaction,
+    applyRileyReplyInterpretation,
+    applyBookingInterpretation,
     recordOutcome,
     recordLearning,
+    capturePrediction: captureMissionPrediction,
+    evaluateOutcomeLearning,
+    outcomeLearning: (id, o) => inspect(id, o).outcomeLearning,
     inspect,
     workspace: (id, o) => inspect(id, o).workspace,
     health: (id, o) => inspect(id, o).health,
     context: (id, o) => inspect(id, o).context,
     timeline: (id, o) => inspect(id, o).timeline,
     explainWhy: (id, o) => inspect(id, o).why,
-    learning: (tenantId) => summarizeLearning(store.listLearning(tenantId)),
+    learning: (tenantId) => ({
+      ...summarizeLearning(store.listLearning(tenantId)),
+      outcomeLearning: summarizeOrganizationalLearning(
+        store.listEvaluations(null).filter((row) => String(row.tenantId) === String(tenantId)),
+        store.listOutcomeLearnings(tenantId)
+      ),
+    }),
+    formatOutcomeLearningReport,
     answerOperator,
     formatWorkspace,
     formatHealth,

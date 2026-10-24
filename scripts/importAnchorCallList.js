@@ -7,6 +7,8 @@ const pool = require('../db');
 const { scoreCleaningLead } = require('../leadgen');
 const { applyProspectDisposition, resolveCallbackAt } = require('../utils/callDispositions');
 const { setSetterVisibility } = require('../utils/setterVisibility');
+const { withResearchProviderScope, assertResearchProviderAllowed,
+  rethrowResearchProviderControl } = require('../utils/anchorResearchProviderPause');
 
 const CLIENT_ID = 10;
 const APPLY_CONFIRMATION = 'client_10-anchor-phase3b';
@@ -113,14 +115,17 @@ async function verifyPlace(row) {
   const key = process.env.GOOGLE_PLACES_KEY;
   if (!key) throw new Error('GOOGLE_PLACES_KEY is required');
   const query = [row.firm, row.address, row.city, 'NH'].filter(Boolean).join(' ');
-  const request = textQuery => axios.post(PLACES_URL, { textQuery, maxResultCount: 5 }, {
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Goog-Api-Key': key,
-      'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.internationalPhoneNumber,places.websiteUri,places.rating,places.userRatingCount,places.primaryType,places.primaryTypeDisplayName,places.types',
-    },
-    timeout: 30000,
-  });
+  const request = textQuery => {
+    assertResearchProviderAllowed('google_places', CLIENT_ID);
+    return axios.post(PLACES_URL, { textQuery, maxResultCount: 5 }, {
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': key,
+        'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.internationalPhoneNumber,places.websiteUri,places.rating,places.userRatingCount,places.primaryType,places.primaryTypeDisplayName,places.types',
+      },
+      timeout: 30000,
+    });
+  };
   const response = await request(query);
   const primary = { query, ...choosePlace(row, response.data?.places || []) };
   if (primary.verified || !row.address) return primary;
@@ -396,7 +401,12 @@ async function processGroupCRow(row, apply, existingSnapshot) {
   }
 }
 
-async function run({ apply = false, firm = null } = {}) {
+async function run(options = {}) {
+  // REVIEW_ONLY also makes paid verification calls.
+  return withResearchProviderScope(CLIENT_ID, () => runScoped(options));
+}
+
+async function runScoped({ apply = false, firm = null } = {}) {
   const results = [];
   const planned = [];
   const existingSnapshot = await loadClientProspects(pool);
@@ -408,6 +418,7 @@ async function run({ apply = false, firm = null } = {}) {
         ? await processGroupCRow(row, apply, existingSnapshot)
         : await processImportRow(row, apply, planned, existingSnapshot));
     } catch (err) {
+      rethrowResearchProviderControl(err);
       results.push({ firm: row.firm, group: row.group, action: 'error', error: err.message });
     }
   }

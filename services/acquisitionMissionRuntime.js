@@ -10,14 +10,20 @@ const crypto = require('crypto');
 const amo = require('../packages/acquisition-mission');
 const { MISSION_STATE_INCONSISTENT } = amo;
 const {
-  persistMission,
   persistLearning,
+  persistPrediction,
+  persistOutcomeEvaluation,
+  persistOutcomeLearning,
   persistStageCommit,
   loadTenantMissions,
   deleteAllAmoData,
   clearAmoSessionBindings,
 } = require('./acquisitionMissionPersistence');
-const { shouldSuppressLegacyDurableWrite } = require('../packages/acquisition-mission/TransactionalPersistence');
+const {
+  shouldSuppressLegacyDurableWrite,
+  acquireMissionDurableLock,
+  releaseMissionDurableLock,
+} = require('../packages/acquisition-mission/TransactionalPersistence');
 
 const MULTIPLE_ACQUISITION_RUNTIMES = 'MULTIPLE_ACQUISITION_RUNTIMES';
 
@@ -107,6 +113,10 @@ function createAcquisitionMissionRuntime(opts = {}) {
       return state.engine.store;
     },
 
+    get pool() {
+      return pool;
+    },
+
     persistOpts(overrides = {}) {
       const mergedPool = overrides.pool || pool;
       let mergedPersist;
@@ -152,11 +162,15 @@ function createAcquisitionMissionRuntime(opts = {}) {
       if (effectivePersist === false || !effectivePool) return state.engine;
 
       try {
-        const loaded = await loadTenantMissions(tenantId, effectivePool);
+        const loaded = await loadTenantMissions(tenantId, effectivePool, { skipEnsure: hydrateOpts.preinitializedSchema === true });
+        // Contributions must hydrate before missions: putMission runs SPEC-136
+        // consistency checks (e.g. execution_approval requires Paige + Emmett rows).
+        for (const row of loaded.contributions) if (row) state.engine.store.addContribution(row);
         for (const mission of loaded.missions) {
           try {
             state.engine.store.putMission(mission);
           } catch (putErr) {
+            if (hydrateOpts.preinitializedSchema === true) throw putErr;
             if (putErr && putErr.code === MISSION_STATE_INCONSISTENT) {
               console.error('[amo] hydrate skip inconsistent mission', mission && mission.id, putErr.message);
               continue;
@@ -176,11 +190,35 @@ function createAcquisitionMissionRuntime(opts = {}) {
             payload: payload.payload || {},
           });
         }
-        for (const row of loaded.contributions) if (row) state.engine.store.addContribution(row);
         for (const row of loaded.observations) if (row) state.engine.store.addObservation(row);
+        for (const row of loaded.observeReactions || []) {
+          if (row && state.engine.store.addObserveReaction) state.engine.store.addObserveReaction(row);
+        }
+        for (const row of loaded.candidateObserveStates || []) {
+          if (row && state.engine.store.putCandidateObserveState) {
+            state.engine.store.putCandidateObserveState(row);
+          }
+        }
         for (const row of loaded.outcomes) if (row) state.engine.store.addOutcome(row);
         for (const row of loaded.learning) if (row) state.engine.store.addLearning(row);
+        for (const row of loaded.predictions || []) if (row) state.engine.store.addPrediction(row);
+        for (const row of loaded.evaluations || []) if (row) state.engine.store.addEvaluation(row);
+        for (const row of loaded.outcomeLearnings || []) if (row) state.engine.store.addOutcomeLearning(row);
+        // Recovery approval uses only frozen current artifacts; knowledge hydration
+        // bootstraps its own schema and is intentionally excluded from this path.
+        if (hydrateOpts.preinitializedSchema !== true && typeof state.engine.store.replaceAcquisitionKnowledge === 'function') {
+          try {
+            const { loadTenantKnowledge } = require('./acquisitionKnowledgePersistence');
+            const knowledge = await loadTenantKnowledge(tenantId, effectivePool, { limit: 100 });
+            state.engine.store.replaceAcquisitionKnowledge(knowledge);
+          } catch (knowledgeErr) {
+            if (!/relation .* does not exist/i.test(String(knowledgeErr.message))) {
+              console.error('[amo] hydrate acquisition knowledge:', knowledgeErr.message);
+            }
+          }
+        }
       } catch (err) {
+        if (hydrateOpts.preinitializedSchema === true) throw err;
         if (!/relation .* does not exist/i.test(String(err.message))) {
           console.error('[amo] hydrate:', err.message);
         }
@@ -188,19 +226,14 @@ function createAcquisitionMissionRuntime(opts = {}) {
       return state.engine;
     },
 
+    /**
+     * ADR-075 — in-memory only. Durable writes route through persistMissionState → persistStageCommit.
+     */
     async rememberMission(mission, rememberOpts = {}) {
       if (!mission) return mission;
       state.engine.store.putMission(mission);
       if (shouldSuppressLegacyDurableWrite(mission.id)) {
         return mission;
-      }
-      const { persist: effectivePersist, pool: effectivePool } = this.persistOpts(rememberOpts);
-      if (effectivePersist !== false && effectivePool) {
-        try {
-          await persistMission(mission, effectivePool);
-        } catch (err) {
-          console.error('[amo] persist mission:', err.message);
-        }
       }
       return mission;
     },
@@ -218,6 +251,7 @@ function createAcquisitionMissionRuntime(opts = {}) {
 
     /**
      * ADR-075 — single durable writer for non-TME mission state mutations.
+     * Routes exclusively through persistStageCommit().
      */
     async persistMissionState(missionId, sideOpts = {}) {
       if (shouldSuppressLegacyDurableWrite(missionId)) {
@@ -229,19 +263,36 @@ function createAcquisitionMissionRuntime(opts = {}) {
       const mission = state.engine.store.getMission(missionId);
       if (!mission) return;
 
+      let lockHeld = false;
       try {
+        const lockResult = await acquireMissionDurableLock(missionId, effectivePool, { tryOnly: true });
+        lockHeld = lockResult.acquired === true && lockResult.reentrant !== true;
         await persistStageCommit({
           mission,
           events: state.engine.store.listEvents(missionId),
           contributions: state.engine.store.listContributions(missionId),
           observations: state.engine.store.listObservations(missionId),
           outcomes: state.engine.store.listOutcomes(missionId),
-        }, effectivePool);
+        }, effectivePool, { skipGlobalLock: true });
         for (const row of state.engine.store.listLearning(mission.tenantId)) {
           await persistLearning(row, effectivePool);
         }
+        for (const row of state.engine.store.listPredictions(missionId)) {
+          await persistPrediction(row, effectivePool);
+        }
+        for (const row of state.engine.store.listEvaluations(missionId)) {
+          await persistOutcomeEvaluation(row, effectivePool);
+        }
+        for (const row of state.engine.store.listOutcomeLearnings(mission.tenantId, missionId)) {
+          await persistOutcomeLearning(row, effectivePool);
+        }
       } catch (err) {
         console.error('[amo] persist mission state:', err.message);
+        throw err;
+      } finally {
+        if (lockHeld) {
+          await releaseMissionDurableLock(missionId, effectivePool);
+        }
       }
     },
 
@@ -249,9 +300,8 @@ function createAcquisitionMissionRuntime(opts = {}) {
       await this.hydrate(input.tenantId || input.clientId, createOpts);
       const mission = state.engine.create(input);
       const autonomous = input.autonomous === true || createOpts.autonomous === true;
-      // ADR-075 — defer durable writes until TME stages commit (autonomous) or explicit persist.
+      // ADR-075 — defer durable writes until persistStageCommit (autonomous TME or explicit persist).
       if (!autonomous) {
-        await this.rememberMission(mission, createOpts);
         await this.persistMissionState(mission.id, createOpts);
       }
       if (autonomous) {

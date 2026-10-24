@@ -1,5 +1,13 @@
 # ADR-076 — Coverage Before Conclusion
 
+## Historical record notice — 2026-10-24
+
+This document preserves the 2026-08-25 record from [PR #421](https://github.com/pulseforgeatmns-ops/pulseforge-leadgen/pull/421), source commit `efae395a89c1d06cabd7be5878061ae015c93511`. The source's **Accepted** label and unchecked follow-ups below describe that historical draft; this archival restoration does not newly accept an architectural decision, reopen its backlog, or authorize implementation, provider usage, or production changes.
+
+[SPEC-153](../specs/SPEC-153_Discovery_Coverage_Engine.md) already references ADR-076. Subsequent [DiscoveryPipeline unification](https://github.com/pulseforgeatmns-ops/pulseforge-leadgen/commit/ee32309b3eb5009ebb287ecbff1fbdd26ac1daa1) and [candidate-universe estimation](../specs/SPEC-155A_Candidate_Universe_Estimation.md) address parts of the historical follow-up list. See the [AUDIT-044 historical notice](../architecture/AUDIT-044_Discovery_Coverage_Investigative_Reasoning.md) for context. This is not a fresh assessment of every current execution path.
+
+## Original record — 2026-08-25
+
 | Field | Value |
 |---|---|
 | **Status** | Accepted |

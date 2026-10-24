@@ -284,12 +284,13 @@ describe('SPEC-143 — Scout Acquisition Intelligence Memory', () => {
     assert.ok(events.some((e) => e.event === MEMORY_EVENTS.LOADED));
   });
 
-  it('Scout.investigate returns memory metadata', async () => {
+  it('investigate() returns memory metadata', async () => {
+    const { investigate } = require('../packages/scout');
     const mission = sampleMission();
     const candidates = sampleCandidates();
     const memoryStore = createMemoryIntelligenceStore();
 
-    const result = await Scout.investigate({
+    const result = await investigate({
       mission,
       opts: {
         discover: async () => candidates,

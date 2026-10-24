@@ -63,9 +63,20 @@ ADRs capture **why** we locked an architectural choice. They are permanent. Stat
 | [ADR-069](ADR-069_Classify_Communication_Before_Cognition.md) | Classify Communication Before Cognition | Accepted |
 | [ADR-070](ADR-070_Session_State_Is_Inspectable.md) | Session State Is Inspectable | Accepted |
 | [ADR-071](ADR-071_Session_Directive_Registry.md) | Session Directive Registry | Accepted |
-| [ADR-076](ADR-076_Coverage_Before_Conclusion.md) | Coverage Before Conclusion | Accepted |
+| [ADR-072](ADR-072_Operator_Messages_May_Contain_Multiple_Intents.md) | Operator Messages May Contain Multiple Intents | Accepted |
+| [ADR-075](ADR-075_Transactional_Persistence_Exclusivity.md) | Transactional Persistence Exclusivity | Accepted |
+| [ADR-076](ADR-076_Coverage_Before_Conclusion.md) | Coverage Before Conclusion | Historical record (2026-08-25; source labeled Accepted) |
+| [ADR-087](ADR-087_Operator_Objective_Takes_Precedence.md) | Operator Objective Takes Precedence | Accepted |
+| [ADR-088](ADR-088_Canonical_Mission_Projection_Is_The_Verification_Contract.md) | Canonical Mission Projection Is The Verification Contract | Accepted |
+| [ADR-089](ADR-089_Mission_Ownership_Shall_Not_Cross_Runtime_Boundaries.md) | Mission Ownership Shall Not Cross Runtime Boundaries | Accepted |
+| [ADR-090](ADR-090_Canonical_Execution_Routing.md) | Canonical Execution Routing | Accepted |
+| [ADR-092](ADR-092_Identity_Before_Enrichment.md) | Identity Before Enrichment | Accepted |
 
 Also listed in root [`DECISIONS.md`](../../DECISIONS.md).
+
+## Local proposals
+
+- [ADR-102: Explicit immutable legacy coverage epoch](ADR-102_Explicit_Immutable_Legacy_Coverage_Epoch.md) — Proposed; locally implemented, production approval pending.
 
 ## When to write an ADR
 

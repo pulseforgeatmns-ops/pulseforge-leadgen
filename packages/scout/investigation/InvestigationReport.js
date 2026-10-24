@@ -10,6 +10,11 @@ const {
   buildIntelligenceBriefs,
   validateBriefAcceptance,
 } = require('../credibility/CredibilityFramework');
+const {
+  computeCoverageFromEstimate,
+  normalizeCandidateUniverseEstimate,
+  extractExpectedValue,
+} = require('../universe/CandidateUniverseEstimate');
 
 function buildSixQuestions(recommendation, context = {}) {
   const claim = context.claim || {};
@@ -128,8 +133,12 @@ function buildInvestigationReport(input = {}) {
   const marketLabel = [marketDefinition.geography, marketDefinition.segment].filter(Boolean).join(' ');
 
   const investigated = (candidateUniverse.candidates || []).length;
-  const estimated = candidateUniverse.estimatedMarket || candidateUniverse.discovered || investigated;
-  const coveragePct = estimated > 0 ? Number((investigated / estimated).toFixed(2)) : 0;
+  const universeEstimate =
+    normalizeCandidateUniverseEstimate(input.universeEstimate) ||
+    normalizeCandidateUniverseEstimate(candidateUniverse.universeEstimate) ||
+    normalizeCandidateUniverseEstimate(candidateUniverse.estimatedMarket);
+  const estimated = extractExpectedValue(universeEstimate);
+  const coveragePct = computeCoverageFromEstimate(investigated, universeEstimate);
 
   const investigationPlan = input.investigationPlan || null;
   const investigationStatus = input.investigationStatus || null;
@@ -179,6 +188,9 @@ function buildInvestigationReport(input = {}) {
     missionIntelligence: {
       market: marketLabel || 'Target market',
       coverage: coveragePct,
+      estimatedUniverse: estimated,
+      universeEstimate,
+      investigated,
       claims: claims.length,
       highConfidence,
       needsInvestigation,
@@ -236,9 +248,11 @@ function buildInvestigationReport(input = {}) {
 
 function buildSummary({ marketLabel, missionIntelligence }) {
   const mi = missionIntelligence;
+  const coverageText =
+    mi.coverage != null ? `${Math.round(mi.coverage * 100)}%` : 'unavailable (no universe estimate)';
   return [
     `Market: ${marketLabel}.`,
-    `Coverage ${Math.round((mi.coverage || 0) * 100)}%.`,
+    `Coverage ${coverageText}.`,
     `Claims ${mi.claims}: ${mi.highConfidence} high confidence, ${mi.needsInvestigation} need investigation, ${mi.conflicts} conflicts.`,
     `Recommendations ${mi.recommendations}. Overall confidence ${mi.overallConfidence}.`,
   ].join(' ');

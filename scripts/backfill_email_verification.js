@@ -6,6 +6,7 @@
 require('dotenv').config();
 const pool = require('../db');
 const { verifyEmail } = require('../utils/emailVerifier');
+const { withResearchProviderScope } = require('../utils/anchorResearchProviderPause');
 
 const MAX_CALLS = 2000;
 const DEFAULT_COST_PER_CHECK = 0.008;
@@ -72,6 +73,13 @@ async function updateProspect(row, result) {
 }
 
 async function run() {
+  const flag = process.argv.slice(2).find(arg => arg.startsWith('--client_id='));
+  // Validate the raw explicit identity; preserve the legacy parsing when unarmed.
+  // An unfiltered batch is bound independently to each authoritative DB row.
+  return flag == null ? runScoped() : withResearchProviderScope(flag.slice('--client_id='.length), runScoped);
+}
+
+async function runScoped() {
   const argv = process.argv.slice(2);
   const clientId = parseClientId(argv);
   const statuses = parseStatuses(argv);
@@ -91,7 +99,7 @@ async function run() {
   const limitPlaceholder = `$${params.length}`;
 
   const { rows } = await pool.query(`
-    SELECT id, email
+    SELECT id, client_id, email
     FROM prospects
     WHERE email IS NOT NULL
       AND TRIM(email) <> ''
@@ -117,8 +125,10 @@ async function run() {
     }
 
     const row = rows[i];
-    calls++;
-    const result = await verifyEmail(row.email);
+    const result = await withResearchProviderScope(row.client_id, async () => {
+      calls++;
+      return verifyEmail(row.email);
+    });
     const didMarkDnc = await updateProspect(row, result);
 
     verified++;
@@ -140,9 +150,13 @@ async function run() {
   console.log(`Estimated cost: $${estimatedCost.toFixed(2)} at $${costPerCheck.toFixed(4)} per check`);
 }
 
-run()
-  .then(() => process.exit(0))
-  .catch(err => {
-    console.error(`[backfill_email_verification] Fatal: ${err.message}`);
-    process.exit(1);
-  });
+module.exports = { run };
+
+if (require.main === module) {
+  run()
+    .then(() => process.exit(0))
+    .catch(err => {
+      console.error(`[backfill_email_verification] Fatal: ${err.message}`);
+      process.exit(1);
+    });
+}

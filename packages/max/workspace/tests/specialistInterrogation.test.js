@@ -2,8 +2,6 @@
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 
 const {
   maybeHandleSpecialistInterrogationTurn,
@@ -116,20 +114,23 @@ describe('SPEC-101 Max workspace specialist interrogation', () => {
     assert.equal(turn, null);
   });
 
-  it('WorkspaceEngine includes the interrogation seam before Scout routing', () => {
-    const engineSrc = fs.readFileSync(
-      path.join(__dirname, '..', 'WorkspaceEngine.js'),
-      'utf8'
-    );
-    const interrogateAt = engineSrc.indexOf(
-      'const interrogationTurn = await maybeHandleSpecialistInterrogationTurn'
-    );
-    const retrieveAt = engineSrc.indexOf(
-      'const retrievalTurn = await maybeHandleRetrievalBeforeDelegationTurn'
-    );
-    const scoutAt = engineSrc.indexOf('await maybeHandleScoutAcquisitionTurn');
-    assert.ok(interrogateAt > 0);
-    assert.ok(retrieveAt > interrogateAt);
-    assert.ok(scoutAt > retrieveAt);
+  it('WorkspaceEngine answers an existing specialist trace without rerunning Scout', async () => {
+    await seedScout();
+    const before = (await store.listDelegations({ tenantId: '10' })).length;
+    let scoutCalls = 0;
+    const engine = require('./workspaceTestHarness').createHermeticWorkspaceEngine({
+      disableLlm: true,
+      missionsEnabled: false,
+      specialistDelegationService: service,
+      specialistDelegationOpts: { store },
+      scoutAcquisitionOpts: { runLoop: async () => { scoutCalls += 1; throw new Error('Unexpected Scout delegation'); } },
+    });
+    const result = await engine.ask({ question: GEO_QUESTION, context: session.context });
+    assert.ok(result.interrogation);
+    assert.equal(result.interrogation.rerun, false);
+    assert.match(result.prose, /Manchester|did not include|supplied|can't tell|don't have enough/i);
+    assert.equal(result.mission, null);
+    assert.equal(scoutCalls, 0);
+    assert.equal((await store.listDelegations({ tenantId: '10' })).length, before);
   });
 });

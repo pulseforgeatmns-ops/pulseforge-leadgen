@@ -1,8 +1,9 @@
 const bcrypt = require('bcryptjs');
 const pool = require('../db');
 
-const ROLES = ['admin', 'manager', 'setter', 'closer', 'sales', 'viewer', 'client', 'ao'];
-const ROLE_CHECK = ROLES.map(role => `'${role}'`).join(', ');
+const { USER_ROLES: ROLES, ROLE_CHECK } = require('../utils/userRoles');
+const { refreshUsersRoleConstraint } = require('../utils/usersRoleConstraint');
+const { bindRequestIdentity } = require('../utils/requestIdentity');
 let initPromise;
 
 function isApiRequest(req) {
@@ -34,26 +35,7 @@ async function ensureUsersTable() {
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ');
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS password_change_required BOOLEAN NOT NULL DEFAULT FALSE');
   await pool.query('UPDATE users SET email_verified = TRUE WHERE email_verified IS NULL');
-  await pool.query('SELECT pg_advisory_lock(91720260517)');
-  try {
-    const { rows: existing } = await pool.query(`
-      SELECT con.conname
-      FROM pg_constraint con
-      JOIN pg_class cls ON cls.oid = con.conrelid
-      WHERE cls.relname = 'users'
-        AND con.contype = 'c'
-        AND pg_get_constraintdef(con.oid) ILIKE '%role%'
-    `);
-    for (const row of existing) {
-      await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS "${row.conname}"`);
-    }
-    await pool.query(`
-      ALTER TABLE users ADD CONSTRAINT users_role_check
-      CHECK (role IN (${ROLE_CHECK}))
-    `);
-  } finally {
-    await pool.query('SELECT pg_advisory_unlock(91720260517)');
-  }
+  await refreshUsersRoleConstraint(pool);
 }
 
 async function getUserCount() {
@@ -88,6 +70,10 @@ const PASSWORD_CHANGE_PATHS = new Set([
   '/api/me/password',
   '/logout',
   '/api/me',
+  '/api/v1/admin/impersonation',
+  '/api/v1/admin/impersonation/start',
+  '/api/v1/admin/impersonation/stop',
+  '/api/v1/admin/impersonation/targets',
 ]);
 
 function requestPath(req) {
@@ -116,6 +102,11 @@ function sendPasswordChangeRequired(req, res) {
 function requireAuth(req, res, next) {
   if (req.session?.user) {
     req.user = req.session.user;
+    bindRequestIdentity(req);
+    if (req.session?.impersonation?.active && !req.session.impersonation.effectiveUser) {
+      delete req.session.impersonation;
+      bindRequestIdentity(req);
+    }
     if (passwordChangeRequired(req.user) && !isPasswordChangeExempt(req)) {
       return sendPasswordChangeRequired(req, res);
     }
@@ -125,6 +116,7 @@ function requireAuth(req, res, next) {
   if (req.session?.authenticated) {
     req.user = { id: null, name: 'Legacy Admin', email: 'legacy@pulseforge.local', role: 'admin' };
     req.session.user = req.user;
+    bindRequestIdentity(req);
     return next();
   }
 
@@ -140,6 +132,8 @@ function requireRole(...roles) {
       if (req.user?.role === 'setter' && !isApiRequest(req)) return res.redirect('/setter');
       if (req.user?.role === 'closer' && !isApiRequest(req)) return res.redirect('/closer');
       if (req.user?.role === 'ao' && !isApiRequest(req)) return res.redirect('/ao');
+      if (req.user?.role === 'cleaner' && !isApiRequest(req)) return res.redirect('/portal/anchor');
+      if (req.user?.role === 'facility_client' && !isApiRequest(req)) return res.redirect('/portal/anchor');
       if (['admin', 'manager', 'viewer', 'client'].includes(req.user?.role) && !isApiRequest(req)) return res.redirect('/dashboard');
       return res.status(403).json({ error: 'Forbidden' });
     };

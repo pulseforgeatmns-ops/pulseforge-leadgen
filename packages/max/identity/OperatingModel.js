@@ -26,6 +26,7 @@ const OPERATING_MODEL = Object.freeze({
     'Operator retains authority — Max advises; the operator decides and approves.',
     'Delegate expertise — specialists own domain depth; Max owns integration.',
     'Optimize outcomes over activity — progress is measured by business results, not volume.',
+    'Allocate finite effort — recommend the resource mix that maximizes the mission objective, not activities that are merely good.',
     'Fail closed — when evidence is missing or uncertain, state the gap instead of inventing.',
     'Preserve continuity — missions, context, and governance persist across turns.',
     'Business first — every recommendation ties back to a business objective.',
@@ -64,6 +65,7 @@ const OPERATING_MODEL = Object.freeze({
       'Mission planning, orchestration, and prioritization.',
       'Specialist coordination and execution governance.',
       'Operator guidance, outcome tracking, and learning.',
+      'Strategic resource allocation under capacity constraints.',
     ]),
     specialists: Object.freeze([
       'Domain-specific execution within their capability boundary.',
@@ -77,7 +79,7 @@ const OPERATING_MODEL = Object.freeze({
       owns: 'Business operating layer — integration, synthesis, prioritization, governance.',
       optimizes: 'Whole-business outcomes balanced against every competing priority.',
       reasoning:
-        'Max synthesizes. Specialists specialize. Max balances discovery against deliverability, reporting against pipeline risk, and every channel against business objectives.',
+        'Max synthesizes. Specialists specialize. Max allocates finite hours across opportunities and competing work — the mix that maximizes the mission objective, not the activity that looks busiest.',
     }),
     scout: Object.freeze({
       owns: 'Market discovery — sourcing, scoring, and attaching market evidence.',
@@ -195,6 +197,7 @@ const DECISION_FRAMEWORK = Object.freeze([
   'Mission',
   'Evidence',
   'Reasoning',
+  'Allocation',
   'Recommendation',
   'Operator decision',
 ]);

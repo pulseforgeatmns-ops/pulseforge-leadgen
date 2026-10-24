@@ -1,10 +1,24 @@
 # AUDIT-044 — Discovery Coverage & Investigative Reasoning
 
+## Historical audit notice — 2026-10-24
+
+This is the 2026-08-25 audit from [PR #421](https://github.com/pulseforgeatmns-ops/pulseforge-leadgen/pull/421), source commit `efae395a89c1d06cabd7be5878061ae015c93511`. Verdicts, reported test counts, the referenced live trace, and recommendations below are historical source claims, not newly verified production findings or a current implementation backlog.
+
+Later work materially changed the audited paths:
+
+- [DiscoveryPipeline unification](https://github.com/pulseforgeatmns-ops/pulseforge-leadgen/commit/ee32309b3eb5009ebb287ecbff1fbdd26ac1daa1) routes `Scout.discover()` through the coverage-backed pipeline and rejects an explicit coverage-engine bypass.
+- [Candidate Universe Estimation](../specs/SPEC-155A_Candidate_Universe_Estimation.md) adds the pre-search estimate that this audit reported missing.
+- [SPEC-158](../specs/SPEC-158_Market_Definition_Hypothesis_Engine.md) and [SPEC-159](../specs/SPEC-159_Investigative_Reasoning_Loop.md) document later market-definition and investigation changes. These references do not establish that every historical issue, optional source, or legacy cron path is resolved.
+
+The original body is retained below. Its SPEC-142 link is corrected to the existing Evidence-Driven Investigation Engine document; no current architecture or business strategy is changed by preserving this record.
+
+## Original audit — 2026-08-25
+
 | Field | Value |
 |---|---|
 | **Status** | Completed |
 | **Date** | 2026-08-25 |
-| **Related** | [SPEC-153](../specs/SPEC-153_Discovery_Coverage_Engine.md), [SPEC-141](../specs/SPEC-141_Scout_Intelligence_Pipeline.md), [SPEC-142](../specs/SPEC-142_Scout_Investigation_Engine.md), [SPEC-123](../specs/SPEC-123_Unified_Scout_Discovery_Pipeline.md), [ADR-076](../adr/ADR-076_Coverage_Before_Conclusion.md), [AUDIT-006](AUDIT-006_Scout_Discovery_Execution_Audit.md) |
+| **Related** | [SPEC-153](../specs/SPEC-153_Discovery_Coverage_Engine.md), [SPEC-141](../specs/SPEC-141_Scout_Intelligence_Pipeline.md), [SPEC-142](../specs/SPEC-142_Evidence_Driven_Investigation_Engine.md), [SPEC-123](../specs/SPEC-123_Unified_Scout_Discovery_Pipeline.md), [ADR-076](../adr/ADR-076_Coverage_Before_Conclusion.md), [AUDIT-006](AUDIT-006_Scout_Discovery_Execution_Audit.md) |
 | **Scope** | Verify Scout does not conclude market discovery until sufficient evidence exists that the target market was investigated. Evaluates **reasoning quality**, not search vendor implementation. |
 | **Principle** | **ADR-076 — Discovery Is Investigation:** Discovery is not the act of searching. Discovery is the process of reducing uncertainty about a market until Max can make evidence-based business decisions. |
 

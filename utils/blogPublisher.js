@@ -257,10 +257,36 @@ async function savePostAnalytics(item, platformPostId = null) {
 }
 
 // ── PUBLISH ─────────────────────────────────────────────────────────
+function publishSuccess(platform, partial = {}) {
+  return {
+    success: true,
+    externalPlatform: platform,
+    externalAccountId: partial.externalAccountId ?? null,
+    externalPostId: partial.externalPostId ?? null,
+    externalUrl: partial.externalUrl ?? null,
+    raw: partial.raw && typeof partial.raw === 'object' ? partial.raw : {},
+  };
+}
+
+function publishFailure(platform, partial = {}) {
+  return {
+    success: false,
+    externalPlatform: platform,
+    errorCode: partial.errorCode || 'publish_failed',
+    errorMessage: partial.errorMessage || partial.message || 'publish_failed',
+    retryable: partial.retryable !== false,
+    raw: partial.raw && typeof partial.raw === 'object' ? partial.raw : {},
+  };
+}
+
 async function publishBlogPost(item) {
   if (!GITHUB_TOKEN || !GITHUB_REPO) {
     console.warn('[BlogPublisher] GITHUB_TOKEN or GITHUB_REPO not set — skipping');
-    return;
+    return publishFailure('blog', {
+      errorCode: 'credentials_missing',
+      errorMessage: 'GITHUB_TOKEN or GITHUB_REPO not set',
+      retryable: false,
+    });
   }
 
   const md      = item.comment || '';
@@ -316,6 +342,14 @@ async function publishBlogPost(item) {
   const currentIdx = await ghGet('blog/index.html');
   await ghPut('blog/index.html', indexHtml, `Update blog index (${posts.length} post${posts.length !== 1 ? 's' : ''})`, currentIdx?.sha);
   console.log(`[BlogPublisher] Index updated — ${posts.length} post${posts.length !== 1 ? 's' : ''}`);
+
+  const externalUrl = `https://github.com/${GITHUB_REPO}/blob/main/${postPath}`;
+  return publishSuccess('blog', {
+    externalAccountId: GITHUB_REPO,
+    externalPostId: postPath,
+    externalUrl,
+    raw: { postPath, title },
+  });
 }
 
 module.exports = { publishBlogPost };

@@ -95,6 +95,42 @@ const {
   PROVIDER_STATUS,
 } = require('./InvestigationPlanBuilder');
 
+const {
+  buildInvestigationState,
+  createInvestigationState,
+  serializeInvestigationState,
+  applyInvestigationPlan,
+  updateEvidenceTracking,
+} = require('./InvestigationState');
+
+const {
+  HYPOTHESIS_LIFECYCLE,
+  buildHypothesisLifecycleRecord,
+  summarizeHypothesisHistory,
+} = require('./HypothesisLifecycle');
+
+const {
+  runInvestigativeReasoningLoop,
+  runReasoningCycle,
+  shouldStopInvestigation,
+} = require('./InvestigativeReasoningLoop');
+
+const {
+  buildMissionIntelligenceReport,
+  buildPublicMissionIntelligenceReport,
+  mergeIntoDiscoveryReport,
+  containsForbiddenReasoningKeys,
+} = require('./MissionIntelligenceReport');
+
+const {
+  buildInvestigativeStrategy,
+  recalculateStrategyAfterResolution,
+  applyInvestigativeStrategy,
+  explainInvestigationChoice,
+  buildInvestigativeStrategyReport,
+  evaluateStrategyStoppingConditions,
+} = require('./InvestigativeStrategyEngine');
+
 module.exports = {
   INVESTIGATION_PHASES,
   GRAPH_NODE_TYPES,
@@ -169,4 +205,27 @@ module.exports = {
   findReplacementProviders,
   buildStoppingConditions,
   PROVIDER_STATUS,
+  ...require('./SearchHypothesisEngine'),
+  ...require('./InvestigationTree'),
+  buildInvestigationState,
+  createInvestigationState,
+  serializeInvestigationState,
+  applyInvestigationPlan,
+  updateEvidenceTracking,
+  HYPOTHESIS_LIFECYCLE,
+  buildHypothesisLifecycleRecord,
+  summarizeHypothesisHistory,
+  runInvestigativeReasoningLoop,
+  runReasoningCycle,
+  shouldStopInvestigation,
+  buildMissionIntelligenceReport,
+  buildPublicMissionIntelligenceReport,
+  mergeIntoDiscoveryReport,
+  containsForbiddenReasoningKeys,
+  buildInvestigativeStrategy,
+  recalculateStrategyAfterResolution,
+  applyInvestigativeStrategy,
+  explainInvestigationChoice,
+  buildInvestigativeStrategyReport,
+  evaluateStrategyStoppingConditions,
 };

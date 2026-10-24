@@ -189,6 +189,15 @@ const {
   detectDrift,
   buildReviewDashboard,
 } = require('./outcome');
+const {
+  buildStrategicDecision,
+  attachStrategicDecision,
+  ensureStrategicDecision,
+  evaluateTradeoff,
+  allocateResources,
+  ACTIVITY_TYPES,
+  ALLOCATION_KINDS,
+} = require('./decision');
 
 /**
  * Create a Max reasoning + memory + briefing + policy + command-deck runtime.
@@ -224,6 +233,14 @@ function createMaxReasoningRuntime(options = {}) {
   }
   const commandDeck = createCommandDeckComposer({ briefing, policy });
   const workspace = createWorkspaceEngine({
+    // Construction-time dependencies only; request/context fields never enter
+    // this wiring. Undefined options retain WorkspaceEngine's defaults.
+    acquisitionMissionRuntime: options.acquisitionMissionRuntime,
+    runtimeProvider: options.runtimeProvider,
+    clientIntelligenceService: options.clientIntelligenceService,
+    clientIntelligenceOpts: options.clientIntelligenceOpts,
+    operatorObjectiveService: options.operatorObjectiveService,
+    operatorObjectiveOpts: options.operatorObjectiveOpts,
     anthropic: options.anthropic,
     disableLlm: options.disableLlm,
     model: options.workspaceModel,
@@ -604,4 +621,11 @@ module.exports = {
   buildStrategyPerformance,
   detectDrift,
   buildReviewDashboard,
+  buildStrategicDecision,
+  attachStrategicDecision,
+  ensureStrategicDecision,
+  evaluateTradeoff,
+  allocateResources,
+  ACTIVITY_TYPES,
+  ALLOCATION_KINDS,
 };

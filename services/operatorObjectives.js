@@ -384,7 +384,7 @@ function resolveStore(opts = {}) {
   return createMemoryStore();
 }
 
-function scheduleOperatorContextRebuildForObjective(objective) {
+function scheduleOperatorContextRebuildForObjective(objective, opts = {}) {
   if (!objective) return;
   const clientId =
     objective.clientId != null
@@ -395,7 +395,18 @@ function scheduleOperatorContextRebuildForObjective(objective) {
   if (clientId == null) return;
   try {
     const { onOperatorObjectiveChanged } = require('./operatorContextEvents');
-    onOperatorObjectiveChanged(clientId, { objectiveId: objective.id });
+    // Only dependencies may cross this seam. Event identity and metadata belong
+    // to the saved objective, never to caller-supplied rebuild options.
+    const dependencies = {};
+    const supplied = opts.operatorContextOpts || {};
+    for (const key of ['store', 'objectiveService', 'objectiveOpts', 'cieService', 'cieOpts', 'listMissions', 'loadOutcomes']) {
+      if (Object.prototype.hasOwnProperty.call(supplied, key)) dependencies[key] = supplied[key];
+    }
+    onOperatorObjectiveChanged(
+      clientId,
+      { objectiveId: objective.id },
+      dependencies
+    );
   } catch (_) {
     /* fail soft */
   }
@@ -463,7 +474,7 @@ async function createOperatorObjective(input = {}, opts = {}) {
 
   const store = resolveStore(opts);
   const saved = await store.insert(row);
-  scheduleOperatorContextRebuildForObjective(saved);
+  scheduleOperatorContextRebuildForObjective(saved, opts);
   return toPublicObjective(saved);
 }
 
@@ -513,7 +524,7 @@ async function updateOperatorObjective(id, patch = {}, opts = {}) {
   next.updatedAt = nowIso();
 
   const saved = await store.update(next);
-  scheduleOperatorContextRebuildForObjective(saved);
+  scheduleOperatorContextRebuildForObjective(saved, opts);
   return toPublicObjective(saved);
 }
 
@@ -1183,7 +1194,7 @@ async function ensurePublicMaxLaunchObjective(opts = {}) {
       },
       createdBy: 'spec_095_seed',
     },
-    { store }
+    { ...opts, store }
   );
 }
 

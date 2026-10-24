@@ -3,20 +3,17 @@ const crypto = require('crypto');
 const router = express.Router();
 const pool = require('../db');
 const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
-const { ensureClientArchitecture, getActiveClients, getClientConfig, getRequestClientId, normalizeClientId } = require('../utils/clientContext');
+const {
+  ensureClientArchitecture,
+  getOperatorSwitchableClients,
+  getClientConfig,
+  getRequestClientId,
+  normalizeClientId,
+} = require('../utils/clientContext');
 const { workspaceDisplayName } = require('../utils/clientFacingPresentation');
 const { featuresFromFlag } = require('../utils/pipelineExperience');
 const { ensureCloserSchema } = require('../utils/closerSchema');
 const { buildMiraContext } = require('../utils/miraContext');
-const { publishBlogPost } = require('../utils/blogPublisher');
-const {
-  publishToGoogleBusiness,
-  publishToFacebookPage,
-  publishFayeComment,
-  publishToLinkedInPage,
-  publishToLinkedInPersonal,
-  publishLinkComment,
-} = require('../utils/publishPipeline');
 const { normalizeVertical } = require('../utils/normalize');
 const { setSetterVisibility } = require('../utils/setterVisibility');
 const { ensureTieredEnrichmentSchema } = require('../utils/tieredEnrichmentSchema');
@@ -34,8 +31,11 @@ const {
 const {
   assertAuthorizedClientSwitch,
   filterClientsForUser,
+  reconcileOperatorActiveClient,
 } = require('../utils/tenantAuthorization');
 const { getTenantWorkspace } = require('../services/tenantWorkspace');
+
+router.use(require('./paigeSocial').createPaigeSocialRouter());
 
 const requireOperator = [sessionAuth, requireRole('admin', 'manager')];
 const requireDashboardRead = [sessionAuth, requireRole('admin', 'manager', 'viewer', 'client')];
@@ -218,6 +218,7 @@ router.get('/api/emmett/autorun', async (req, res) => {
 });
 
 router.get('/api/me', sessionAuth, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
   const role = req.user?.role || null;
   // SPEC-099 / SPEC-096 — client identity is authoritative from session user.client_id.
   // Never honor query/body client_id for client-role workspace display.
@@ -244,8 +245,14 @@ router.get('/api/me', sessionAuth, async (req, res) => {
     }
   }
 
+  const { getEffectiveActor, isImpersonating } = require('../utils/requestIdentity');
+  const { publicImpersonationState } = require('../services/aoImpersonationService');
+  const effectiveUser = getEffectiveActor(req);
+
   res.json({
     user: req.user,
+    effective_user: isImpersonating(req) ? effectiveUser : null,
+    impersonation: publicImpersonationState(req.session, req.user),
     active_client_id: activeClientId,
     client,
   });
@@ -253,12 +260,12 @@ router.get('/api/me', sessionAuth, async (req, res) => {
 
 router.get('/api/clients', requireOperator, async (req, res) => {
   try {
-    const allClients = await getActiveClients();
+    const allClients = await getOperatorSwitchableClients();
     const clients = filterClientsForUser(allClients, req.user);
-    const activeClientId = normalizeClientId(req.session.active_client_id || 1);
+    const activeClientId = reconcileOperatorActiveClient(req.session, clients);
     const active = clients.find(c => Number(c.id) === Number(activeClientId)) || null;
     res.json({
-      active_client_id: active ? activeClientId : (clients[0]?.id ?? activeClientId),
+      active_client_id: activeClientId,
       clients,
       // Canonical tenant-feature snapshot for the active client. Dashboard
       // Pipeline hydration must use this (or /setter/api/features) — never a
@@ -280,7 +287,7 @@ router.post('/api/clients/active', requireOperator, async (req, res) => {
         message: auth.message || 'Tenant switch not authorized',
       });
     }
-    const clients = filterClientsForUser(await getActiveClients(), req.user);
+    const clients = filterClientsForUser(await getOperatorSwitchableClients(), req.user);
     const active = clients.find(c => Number(c.id) === Number(clientId));
     if (!active) {
       return res.status(404).json({ error: 'Client not found' });
@@ -681,6 +688,24 @@ router.get('/api/approvals', requireOperator, async (req, res) => {
   }
 });
 
+// Paige canonical social content inspection (database-backed status)
+router.get('/api/paige/social-content/status', requireDashboardRead, async (req, res) => {
+  try {
+    const clientId = getRequestClientId(req);
+    const access = assertAuthorizedClientSwitch(req.user, clientId);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
+    const { inspectPaigeSocialContentStatus } = require('../services/paigeSocialContentInspection');
+    const status = await inspectPaigeSocialContentStatus({
+      clientId,
+      tenantId: String(clientId),
+      missionId: req.query.mission_id || req.query.missionId || null,
+    });
+    res.json(status);
+  } catch (err) {
+    res.status(err.message === 'tenant_scope_required' ? 400 : 500).json({ error: err.message });
+  }
+});
+
 // Approve or reject a comment
 router.post('/api/approvals/:id', requireOperator, async (req, res) => {
   const { id } = req.params;
@@ -690,30 +715,28 @@ router.post('/api/approvals/:id', requireOperator, async (req, res) => {
   }
   try {
     const clientId = getRequestClientId(req);
-    const result = await pool.query(
-      'UPDATE pending_comments SET status = $1 WHERE id = $2 AND client_id = $3 RETURNING *',
-      [action, id, clientId]
-    );
-    res.json({ success: true, id, action });
-
-    const item = result.rows[0];
-    if (item && action === 'approved') {
-      const publishers = {
-        blog:             () => publishBlogPost(item),
-        google_business:  () => publishToGoogleBusiness(item),
-        facebook_page:    () => publishToFacebookPage(item),
-        facebook:         () => publishFayeComment(item),
-        linkedin_page:    () => publishToLinkedInPage(item),
-        linkedin_personal:() => publishToLinkedInPersonal(item),
-        linkedin:         () => publishLinkComment(item),
-      };
-      const publish = publishers[item.channel];
-      if (publish) {
-        publish().catch(err =>
-          console.error(`[Publisher:${item.channel}] Unhandled error:`, err.message)
-        );
-      }
+    const { applyPendingCommentApprovalAction } = require('../services/paigeSocialContentApprovalFlow');
+    const result = await applyPendingCommentApprovalAction({
+      clientId,
+      pendingCommentId: id,
+      action,
+      source: 'dashboard_api',
+    });
+    if (!result.ok) {
+      return res.status(result.statusCode || 500).json({
+        error: result.error || 'approval_failed',
+        message: result.message || null,
+        mode: result.mode || null,
+      });
     }
+    res.json({
+      success: true,
+      id,
+      action,
+      mode: result.mode,
+      artifact_id: result.artifact?.id || null,
+      publication: result.publication || null,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2895,7 +2918,7 @@ router.post('/api/run/:agent', requireOperator, async (req, res) => {
     return res.json({ success: false, message: `${agent} requires local execution — run from your terminal` });
   }
   const agentModules = {
-    scout: '../leadgen', emmett: '../emmettAgent',
+    scout: '../leadgen', emmett: '../emmettSchedulerCron',
     max: '../maxAgent', rex: '../rexAgent', sketch: '../sketchAgent',
     paige: '../paigeAgent', faye: '../facebookAgent', link: '../linkedinAgent',
     sam: '../samAgent', vera: '../veraAgent', cal: '../calAgent', ivy: '../ivyAgent',
@@ -2959,13 +2982,21 @@ router.post('/api/run/:agent', requireOperator, async (req, res) => {
         : agent === 'emmett'
           ? await mod.run({ client_id: clientId, triggered_by: 'dashboard' })
           : agent === 'paige'
-            ? await mod.run({
+            ? await require('../services/paigeSocialContentExecution').routePaigeSocialContentExecution({
                 client_id: clientId,
+                tenantId: String(clientId),
                 dryRun: req.body?.dryRun ?? req.body?.dry_run,
                 channel: req.body?.channel,
+                platform: req.body?.platform || req.body?.channel,
                 format: req.body?.format,
                 count: req.body?.count,
                 simulateMiraUnavailable: req.body?.simulateMiraUnavailable,
+                contentObjective: req.body?.contentObjective || req.body?.content_objective,
+                workspaceContext: req.body?.workspaceContext || req.body?.workspace_context,
+                missionContext: req.body?.missionContext || req.body?.mission_context,
+                evidence: req.body?.evidence,
+                cadenceContext: req.body?.cadenceContext || req.body?.cadence_context,
+                source: 'dashboard',
               })
           : agent === 'paige_reflection'
             ? await mod.run({

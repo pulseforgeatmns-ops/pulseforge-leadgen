@@ -21,7 +21,7 @@ const { createTestAmoRuntime, installTestAmoRuntime } = require('./amoTestRuntim
 const {
   advancePlanAfterApproval,
 } = require('../AmoOperatorApproval');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 
 const OBJECTIVE =
   'Acquire commercial cleaning customers in Manchester NH for law firms.';
