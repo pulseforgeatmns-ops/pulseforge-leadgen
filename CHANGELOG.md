@@ -1,3 +1,8 @@
+## Unreleased — AUDIT-062 offline observation safety (2026-10-24)
+
+- Preserve [AUDIT-062](docs/architecture/AUDIT-062_Warm_Routing_Necessity.md) as an explicitly dated historical report; its conclusions are not current production evidence or removal authorization.
+- Replace the manual observation with pre-import DB/provider/environment isolation, three explicit fixture paths, transport denial, deterministic cleanup and an explicit non-overwriting output path. Add focused offline regressions for the [SPEC-171](docs/specs/SPEC-171_Canonical_Execution_Router.md) routing observation. No production wiring, scheduler activation or live provider/DB execution.
+
 ## Unreleased — PF-CLARITY-001
 
 - Add default-off tenant-10 Gmail readonly Clarity digest ingestion with separately consented, encrypted credentials, bounded retry/backfill and tenant-scoped historical snapshots.
