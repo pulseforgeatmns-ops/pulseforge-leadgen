@@ -428,6 +428,20 @@ async function routeExecutionRequest(request, context = {}) {
   assertPermissions(request);
   assertExecutionPolicy(request);
 
+  // PF-CLARITY-001: a review-only resource intent, never a synthetic mission.
+  // This fixed handler cannot dispatch specialists, TME, publishing or deployment.
+  // All existing mission intents continue through ownership resolution below.
+  if (request.intent === EXECUTION_INTENTS.REVIEW_CLARITY_RECOMMENDATION) {
+    const executionResult = await require('../../services/clarityRecommendations')
+      .routeClarityDecision(request, context);
+    const audit = recordRouterAudit({ requestId: request.id, source: request.source,
+      intent: request.intent, operatorId: request.operatorId, runtimeOwner: 'clarity_review',
+      specialist: 'operator', action: 'clarity_recommendation_reviewed',
+      outcome: executionResult.replay ? 'already_executed' : 'review_recorded', request });
+    return { spec: 'SPEC-171', request, executionResult, audit, routed: true,
+      runtimeOwner: 'clarity_review', specialist: 'operator', action: 'clarity_recommendation_reviewed' };
+  }
+
   const mission = resolveMission(request, context);
   const runtimeOwner = assertRuntimeOwnership(request, mission);
   const handlers = context.handlers || defaultHandlers();

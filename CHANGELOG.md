@@ -1,3 +1,9 @@
+## Unreleased — PF-CLARITY-001
+
+- Add default-off tenant-10 Gmail readonly Clarity digest ingestion with separately consented, encrypted credentials, bounded retry/backfill and tenant-scoped historical snapshots.
+- Max daily brief surfaces at most three evidence-backed hypotheses with visual, digest-bound approve/reject review through SPEC-171. Approval records review only; website changes and deployments remain separately gated.
+- Add synthetic parser, OAuth, ingestion, PostgreSQL isolation/concurrency, router/CSRF and browser acceptance coverage. Live authorized-digest acceptance remains blocked on owner OAuth consent and separately approved deployment. See [spec](docs/specs/PF-CLARITY-001_Google_Workspace_Clarity.md) and [runbook](docs/clarity-runbook.md).
+
 ## Local-only: PR960 managed-facilities enrichment boundary (2026-10-20)
 
 - Keep portal-copy experimentation off by default. Require explicit hash-bound approved tenant-10 mission opt-in; preserve legacy copy for existing high-score prospects, with no successor auto-opt-in or refill behavior expansion.

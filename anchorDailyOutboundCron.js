@@ -9,7 +9,13 @@ async function run(options = {}) {
   }
   const results = {};
   for (const tenantId of tenantIds) {
-    results[tenantId] = await require('./services/governedOutbound').productionService(pool, { tenantId }).tick();
+    try {
+      results[tenantId] = await require('./services/governedOutbound').productionService(pool, { tenantId }).tick();
+    } catch (error) {
+      // One tenant's failure must not suppress another tenant's independent gates.
+      results[tenantId] = { status: 'failed', halted: 'tenant_tick_failed', error: error.code || 'tick_failed' };
+      options.logger?.error?.('[governed-outbound-tick] tenant failed', { tenantId, code: error.code || 'tick_failed' });
+    }
   }
   return { tenants: results };
 }

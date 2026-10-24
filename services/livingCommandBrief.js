@@ -10,7 +10,7 @@ async function resolveLivingGoogleAds({ clientId, pool, operatorBrief, loadGoogl
 }
 
 // Read-only, tenant-scoped facts for Max's opening brief. Unavailable is never zero.
-async function buildLivingCommandBrief({ clientId, pool, googleAds, now = new Date() }) {
+async function buildLivingCommandBrief({ clientId, pool, googleAds, clarityAuthorized = false, now = new Date() }) {
   const tenantId = Number(clientId);
   if (!Number.isSafeInteger(tenantId) || tenantId <= 0) throw new Error('An active workspace is required');
   const results = await Promise.allSettled([
@@ -37,6 +37,7 @@ async function buildLivingCommandBrief({ clientId, pool, googleAds, now = new Da
     } : null,
     approvals: approvals ? { pending: Number(approvals.pending) } : null,
     googleAds: googleAds?.live || null,
+    clarity: clarityAuthorized ? await require('./clarityRecommendations').readClarityBrief({ clientId: tenantId, pool, now }) : { available: false, reason: 'not_authorized' },
   };
 }
 

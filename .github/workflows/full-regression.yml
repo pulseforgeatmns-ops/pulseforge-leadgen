@@ -54,7 +54,7 @@ jobs:
             postgres: true
           - id: max
             label: Max orchestration
-            run: npm run test:max && npm run test:max:expectations:postgres && npm run test:max:attention:postgres
+            run: npm run test:max && npm run test:clarity && npm run test:max:expectations:postgres && npm run test:max:attention:postgres
             postgres: true
           - id: studio-substral
             label: Studio Substral

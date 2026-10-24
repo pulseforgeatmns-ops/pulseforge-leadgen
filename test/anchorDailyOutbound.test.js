@@ -92,7 +92,7 @@ test('canonical approval binds the daily manifest and plain execution cannot use
   const steps = require('../packages/max/workspace/AmoOperatorApproval');
   const engine = amo.createAcquisitionMissionEngine();
   const mission = engine.create({ tenantId: '10', objective: 'Acquire commercial cleaning customers in Manchester NH for law firms.', targetSegment: 'Law Firms' });
-  const opts = () => ({ engine, mission: engine.get(mission.id, '10'), tenantId: '10', question: 'Approved.', allowFixtureFallback: true });
+  const opts = () => ({ engine, mission: engine.get(mission.id, '10'), tenantId: '10', question: 'Approved.', allowFixtureFallback: true, scoutCompanies: [] });
   for (const step of ['advancePlanAfterApproval','advanceDiscoveryAfterApproval','advancePrioritizationAfterApproval',
     'advanceMaxPrioritization','advanceAcquisitionApproach','advancePaigeVariants','advanceEmmettCapacity']) await steps[step](opts());
   // Supply verified recipients to the in-memory fixture before its approval.

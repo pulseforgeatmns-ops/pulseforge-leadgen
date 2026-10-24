@@ -4,7 +4,7 @@ const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const amo = require('../../../acquisition-mission');
 const { createTestAmoRuntime } = require('./amoTestRuntime');
-const { maybeHandleAcquisitionOwnershipTurn } = require('../AcquisitionOwnership');
+const { maybeHandleAcquisitionOwnershipTurn: rawCieHandler } = require('../AcquisitionOwnership');
 const {
   assessMissionResumeCompatibility,
   missionsMateriallyCompatible,
@@ -209,3 +209,6 @@ describe('SPEC-201 — Mission resume material compatibility', () => {
     assert.equal(typeof missionsMateriallyCompatible, 'function');
   });
 });
+
+const { createHermeticRetrievalHandler } = require('./workspaceTestHarness');
+const maybeHandleAcquisitionOwnershipTurn = createHermeticRetrievalHandler(rawCieHandler);

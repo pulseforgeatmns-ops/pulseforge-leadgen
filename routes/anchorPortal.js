@@ -26,6 +26,7 @@ const {
   updateIssue,
   getClientHome,
   getOperatorSummary,
+  listServiceRequests, createServiceRequest, updateServiceRequest,
 } = service;
 
 const router = express.Router();
@@ -258,6 +259,19 @@ router.patch('/api/anchor-portal/issues/:id', ...portalAuth, async (req, res) =>
   } catch (err) {
     return handleError(res, err);
   }
+});
+
+router.get('/api/anchor-portal/service-requests', ...portalAuth, async (req,res) => {
+  try { return res.json({requests:await listServiceRequests(req.user,req.query.location_id)}); }
+  catch (err) { return handleError(res,err); }
+});
+router.post('/api/anchor-portal/service-requests', ...portalAuth, async (req,res) => {
+  try { return res.status(201).json({request:await createServiceRequest(req.user,req.body || {})}); }
+  catch (err) { return handleError(res,err); }
+});
+router.patch('/api/anchor-portal/service-requests/:id', ...portalAuth, async (req,res) => {
+  try { return res.json({request:await updateServiceRequest(req.user,req.params.id,req.body || {})}); }
+  catch (err) { return handleError(res,err); }
 });
 
 router.expectedOrigin = expectedOrigin;

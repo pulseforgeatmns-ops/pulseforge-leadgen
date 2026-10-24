@@ -10,7 +10,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine, unavailableOperatingEvidence } = require('./workspaceTestHarness');
 const {
   maybeHandleClientIntelligenceTurn,
   isClientContextReasoningRequest,
@@ -562,6 +562,7 @@ describe('SPEC-103B end-to-end routing', () => {
     const store = createMemoryStore();
     await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
     const engine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: false,
       clientIntelligenceOpts: { store },
@@ -589,6 +590,7 @@ describe('SPEC-103B end-to-end routing', () => {
     const store = createMemoryStore();
     await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
     const engine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: false,
       clientIntelligenceOpts: { store },
@@ -626,6 +628,7 @@ describe('SPEC-103B end-to-end routing', () => {
     const store = createMemoryStore();
     await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
     const engine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: false,
       clientIntelligenceOpts: { store },
@@ -650,6 +653,7 @@ describe('SPEC-103B end-to-end routing', () => {
     const store = createMemoryStore();
     await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
     const engine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: false,
       clientIntelligenceOpts: { store },
@@ -670,6 +674,7 @@ describe('SPEC-103B end-to-end routing', () => {
     const store = createMemoryStore();
     await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
     const engine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: true,
       clientIntelligenceOpts: { store },
@@ -701,6 +706,7 @@ describe('SPEC-103B end-to-end routing', () => {
     const store = createMemoryStore();
     await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
     const engine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: true,
       clientIntelligenceOpts: { store },
@@ -734,6 +740,7 @@ describe('SPEC-103B end-to-end routing', () => {
     const store = createMemoryStore();
     await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
     const engine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: false,
       clientIntelligenceOpts: { store },
@@ -784,6 +791,7 @@ describe('SPEC-103B end-to-end routing', () => {
   it('no approved Blueprint does not fabricate; pending is non-authoritative', async () => {
     const store = createMemoryStore();
     const engine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: false,
       clientIntelligenceOpts: { store },
@@ -814,6 +822,7 @@ describe('SPEC-103B end-to-end routing', () => {
     assert.notEqual(String(turn.blueprint.status).toLowerCase(), 'approved');
 
     const pendingEngine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: false,
       clientIntelligenceOpts: { store },
@@ -849,6 +858,7 @@ describe('SPEC-103B end-to-end routing', () => {
       'Clearer path to commercial opportunities in 90 days.',
     ]);
     const engine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: false,
       clientIntelligenceOpts: { store },
@@ -885,6 +895,7 @@ describe('SPEC-103B end-to-end routing', () => {
       'Walkthroughs completed and recurring revenue created.',
     ]);
     const engine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: true,
       clientIntelligenceOpts: { store },
@@ -1015,6 +1026,7 @@ describe('SPEC-103B specificity escalation (SPEC-103B PATCH)', () => {
     const store = createMemoryStore();
     await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
     const engine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: true,
       clientIntelligenceOpts: { store },
@@ -1090,6 +1102,7 @@ describe('SPEC-103B specificity escalation (SPEC-103B PATCH)', () => {
     const store = createMemoryStore();
     await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
     const engine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: true,
       clientIntelligenceOpts: { store },
