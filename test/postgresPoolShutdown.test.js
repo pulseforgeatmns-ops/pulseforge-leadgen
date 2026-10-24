@@ -62,6 +62,29 @@ test('already evicted client is tracked even when totalCount is zero before shut
   noListeners(pool);
 });
 
+test('fixture stop waits for both approval-style discarded and pooled client sockets', async () => {
+  const pool = createTrackedPostgresPool({ Client: DeferredClient, idleTimeoutMillis: 0 });
+  const discarded = await pool.connect();
+  const pooled = await pool.connect();
+  // Canonical approval deliberately discards its independently committed client.
+  discarded.release(true);
+  pooled.release();
+  assert.equal(pool.totalCount, 1, 'discarded client is already absent from pool bookkeeping');
+  let stops = 0;
+  const shutdown = closePostgresFixture(pool, { stop: async () => { stops += 1; } });
+  await nextTurn();
+  assert.equal(pool.ended, true);
+  assert.equal(pool.totalCount, 0);
+  assert.equal(stops, 0, 'pool.end() alone must not allow pg_ctl stop');
+  pooled.finishClose();
+  await nextTurn();
+  assert.equal(stops, 0, 'the discarded socket must close too');
+  discarded.finishClose();
+  await shutdown;
+  assert.equal(stops, 1);
+  noListeners(pool);
+});
+
 test('preexisting eviction cannot be mistaken for a different client closure', async () => {
   const pool = createTrackedPostgresPool({ Client: DeferredClient, idleTimeoutMillis: 1 });
   const evicted = await pool.connect();

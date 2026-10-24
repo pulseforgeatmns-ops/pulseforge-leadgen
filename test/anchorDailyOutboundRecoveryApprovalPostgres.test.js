@@ -2,7 +2,7 @@
 // Actual canonical APPROVE_EXECUTION and disposable PostgreSQL; fake provider only.
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const {createHash}=require('node:crypto');
-const {Pool}=require('pg');
+const {createTrackedPostgresPool,closePostgresFixture}=require('./helpers/closePostgresPool');
 const {startDisposablePostgres}=require('./helpers/disposablePostgres');
 const {seedPrepareExisting}=require('./helpers/anchorRecoveryPrepareExistingPostgresFixture');
 const {hash}=require('../packages/acquisition-mission/DailyOutboundPolicy');
@@ -63,8 +63,8 @@ function authorize(pool,f,input,dispatch){
 }
 test('native recovery freeze to canonical approval and one-shot leaf',{timeout:120000},async t=>{
   const pg=await startDisposablePostgres('anchor-recovery-approval-');
-  const pool=new Pool({connectionString:pg.connectionString,max:12});
-  t.after(async()=>{resetAcquisitionMissionRuntime();await pool.end();await pg.stop();});
+  const pool=createTrackedPostgresPool({connectionString:pg.connectionString,max:12});
+  t.after(async()=>{resetAcquisitionMissionRuntime();await closePostgresFixture(pool,pg);});
   await t.test('actual canonical approval creates no DDL and remains closed until separately activated',async()=>{
     const f=await setup(pool);const before=(await pool.query('SELECT row_to_json(i) AS row FROM acquisition_outbound_items i WHERE id=$1',[f.quarantine.item_id])).rows[0].row;
     const frozenResult=await frozen(pool,f);const calls=[];const audited=auditPool(pool,calls);const adapter=adapters(audited,{tenantId:'10'});
