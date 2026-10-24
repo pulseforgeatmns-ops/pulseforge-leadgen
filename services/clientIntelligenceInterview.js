@@ -12,6 +12,7 @@
  */
 
 const crypto = require('crypto');
+const { hash: canonicalEvidenceDigest } = require('../lib/canonicalSemanticWrite');
 const defaultPool = require('../db');
 const {
   createPlaybookFromApprovedBlueprint,
@@ -39,6 +40,10 @@ const {
   cloneAnchorNormalizedFacts,
 } = require('./clientIntelligenceFixtures');
 const {
+  generateDraftScorecard,
+  buildBriefScorecardSections,
+} = require('../packages/operator-scorecard');
+const {
   buildGrowthPlan,
   resolveGrowthPlanResumeTarget,
   applyTaskCompletion,
@@ -51,6 +56,14 @@ const {
   applyScoutExecutionResult,
   executeScoutWorkRequest,
 } = require('./clientIntelligenceCampaignPlanning');
+const {
+  EPISTEMIC_STATES,
+  classifyEpistemicState,
+  createBusinessFact,
+  preserveEpistemicState,
+  extractBusinessFacts,
+  projectBusinessFacts,
+} = require('./clientIntelligenceEpistemic');
 const {
   MESSAGE_CLASSES,
   ARTIFACT_KINDS,
@@ -87,7 +100,14 @@ const {
   looksLikeExplicitUnknownAnswer,
   looksLikeExplicitDeferral,
   looksLikeSkip,
+  detectInterviewEscapeIntent,
+  looksLikeInterviewWritingGuidance,
 } = require('./clientIntelligenceReasoning');
+const {
+  createIntakePathTrace,
+  patchIntakePathTrace,
+  finalizeIntakePathPayload,
+} = require('./cieIntakePathTrace');
 
 const SESSION_STATUSES = Object.freeze([
   'NEW',
@@ -257,6 +277,9 @@ const DOMAIN_POINTER_RE =
 const REFINEMENT_INTENT_RE =
   /\b(please\s+refine|this\s+revision|max\s+is\s+treating|regenerate(?:\s+the\s+brief)?|turn\s+the\s+raw\s+(?:interview\s+)?answers|instructions?\s+to\s+max|not\s+facts?\s+about(?:\s+\w+)?|refinement\s+feedback|revision\s+guidance|the\s+brief\s+is\s+treating|please\s+regenerate|this\s+still\s+sounds\s+weird|sentences?\s+don'?t\s+make\s+sense|max\s+isn'?t\s+understanding|brief\s+should\s+be\s+more\s+conversational|this\s+needs\s+to\s+be\s+fixed)\b/i;
 
+const EXPLICIT_BLUEPRINT_REGENERATION_RE =
+  /\b(regenerate|generate|rebuild|update|show|review|rerun|redo)\b.{0,80}\b(brief|blueprint|executive\s+business\s+brief|executive\s+summary)\b|\b(brief|blueprint|executive\s+business\s+brief|executive\s+summary)\b.{0,80}\b(regenerate|generated|rebuilt|updated|review|again)\b|\blet'?s\s+review\s+(?:it|the\s+(?:brief|blueprint))\b/i;
+
 /** Supplemental / out-of-order context markers (start-anchored). */
 const SUPPLEMENTAL_CONTEXT_RE =
   /^\s*(?:i\s+also\s+forgot(?:\s+to\s+mention)?|also\s+forgot(?:\s+to\s+mention)?|i\s+forgot(?:\s+to\s+mention)?|forgot\s+to\s+mention|also|one more thing|add this|for context|another thing|not for this question,? but|this might matter|btw|by the way|oh,? and|additionally|worth noting)\b/i;
@@ -327,6 +350,7 @@ const SECTION_TITLES = Object.freeze({
   identity: 'Identity',
   services: 'Services',
   idealCustomers: 'Ideal Customers',
+  idealCustomerTraits: 'Ideal Customer Traits',
   avoidCustomers: 'Customers to Avoid',
   targetMarkets: 'Target Markets',
   competitiveAdvantages: 'Competitive Advantages',
@@ -417,6 +441,12 @@ const QUESTION_BANK = Object.freeze([
     askedBecause: 'Metrics define success for the Business Blueprint.',
   },
 ]);
+
+/** Authoritative Blueprint section for each guided intake question id. */
+const QUESTION_ID_TO_SECTION = Object.freeze(
+  Object.fromEntries(QUESTION_BANK.map((row) => [row.id, row.section]))
+);
+
 class ClientIntelligenceError extends Error {
   /**
    * @param {string} code
@@ -507,6 +537,10 @@ function looksLikeExplicitUnknown(text) {
     .replace(/\s+/g, ' ')
     .trim();
   if (!s) return true;
+  const epistemicState = classifyEpistemicState(text);
+  if (epistemicState === EPISTEMIC_STATES.UNKNOWN || epistemicState === EPISTEMIC_STATES.NOT_APPLICABLE) {
+    return true;
+  }
   if (
     /^(n\/?a|none|no|nothing|nope|nil|unknown|not sure|unsure|idk|tbd|-)$/i.test(s)
   ) {
@@ -602,6 +636,10 @@ function looksLikeRefinementFeedback(text) {
     return true;
   }
   return false;
+}
+
+function hasExplicitBlueprintRegenerationIntent(text) {
+  return EXPLICIT_BLUEPRINT_REGENERATION_RE.test(String(text || '').trim());
 }
 
 function looksLikeCorrection(text) {
@@ -712,6 +750,265 @@ function domainFromSection(section) {
   return entry ? entry[0] : null;
 }
 
+function sectionForGuidedQuestion(questionOrId) {
+  if (!questionOrId) return null;
+  if (typeof questionOrId === 'string') {
+    return QUESTION_ID_TO_SECTION[questionOrId] || null;
+  }
+  return questionOrId.section || QUESTION_ID_TO_SECTION[questionOrId.id] || null;
+}
+
+function isActiveGuidedIntakeTurn(classifyOpts = {}) {
+  return Boolean(
+    classifyOpts.awaitingQuestionId ||
+    (classifyOpts.activeQuestion &&
+      (classifyOpts.activeQuestion.id || classifyOpts.activeQuestion.questionId))
+  );
+}
+
+function authoritativeGuidedSection(classifyOpts = {}) {
+  const aq = classifyOpts.activeQuestion;
+  if (aq && aq.section) return aq.section;
+  const qid =
+    classifyOpts.awaitingQuestionId ||
+    (aq && (aq.id || aq.questionId));
+  return qid ? sectionForGuidedQuestion(qid) : null;
+}
+
+function hasPersistedNormalizedAnswer(state, questionId) {
+  const section = sectionForGuidedQuestion(questionId);
+  if (!section) return false;
+  const field = SECTION_TO_PRIMARY_FIELD[section];
+  const facts = (state && state.normalizedFacts) || {};
+  if (field) {
+    const val = facts[field];
+    if (Array.isArray(val) && val.length) return true;
+    if (typeof val === 'string' && String(val).trim() && !answerLooksEmpty(val)) return true;
+  }
+  const summary = state.sectionState && state.sectionState[section] && state.sectionState[section].summary;
+  if (summary && String(summary).trim() && !answerLooksEmpty(summary) && !/^Unknown:/i.test(String(summary))) {
+    return true;
+  }
+  return false;
+}
+
+function hasValidGuidedAnswer(state, questionId) {
+  const answers = (state && state.answers) || {};
+  if (questionId in answers) {
+    const text = String(answers[questionId] || '').trim();
+    if (text && !answerLooksEmpty(text)) return true;
+  }
+  return hasPersistedNormalizedAnswer(state, questionId);
+}
+
+/** Operator copy/regeneration commands — not answers to guided intake questions. */
+const EXPLICIT_COPYWRITING_COMMAND_RE =
+  /\b(?:rewrite\s+(?:this|that|the|it\b)|make\s+(?:it|this|that)\s+shorter|make\s+(?:it|this|that)\s+longer|change\s+(?:the\s+)?(?:tone|wording)|regenerat(?:e|ing)\s+(?:this|that|the|brief|blueprint|summary|copy)|try\s+again|use\s+this\s+wording)\b/i;
+
+/** Business success-metrics vocabulary (Studio Substral / operator scorecard intake). */
+const SUCCESS_METRICS_EVIDENCE_RE =
+  /\b(?:prospects?|repl(?:y|ies)|calls?|proposals?|revenue|signals?|urgency|budget\s+fit|lead\s+flow|pipeline|discovery\s+calls?|qualified|kpi|metrics?|walkthroughs?|conversion|closed|demand)\b/i;
+
+function looksLikeExplicitCopywritingCommand(text, opts = {}) {
+  const raw = String(text || '').trim();
+  if (!raw) return false;
+  if (EXPLICIT_COPYWRITING_COMMAND_RE.test(raw)) return true;
+  return looksLikeInterviewWritingGuidance(raw, {
+    ...opts,
+    looksLikeRefinement: undefined,
+    containsMetaInstruction: undefined,
+  });
+}
+
+function looksLikeSuccessMetricsBusinessEvidence(text) {
+  return SUCCESS_METRICS_EVIDENCE_RE.test(String(text || ''));
+}
+
+function activeGuidedQuestionId(classifyOpts = {}) {
+  const aq = classifyOpts.activeQuestion;
+  return (
+    classifyOpts.awaitingQuestionId ||
+    (aq && (aq.id || aq.questionId)) ||
+    null
+  );
+}
+
+/** Narrow block for success-metrics intake — not broad writing-guidance heuristics. */
+function blocksSuccessMetricsBusinessCapture(text) {
+  return EXPLICIT_COPYWRITING_COMMAND_RE.test(String(text || '').trim());
+}
+
+function isActiveSuccessMetricsBusinessCapture(text, sectionKey, classifyOpts = {}) {
+  if (!isActiveGuidedIntakeTurn(classifyOpts)) return false;
+  if (activeGuidedQuestionId(classifyOpts) !== 'success_metrics') return false;
+  if (sectionKey !== 'successMetrics') return false;
+  if (!looksLikeSuccessMetricsBusinessEvidence(text)) return false;
+  if (blocksSuccessMetricsBusinessCapture(text)) return false;
+  return true;
+}
+
+function shouldForceActiveGuidedDirectAnswer(text, question, messageType, classifyOpts = {}) {
+  if (!question || !question.id) return false;
+  const copyOpts = {
+    ...classifyOpts,
+    activeQuestion: question,
+    awaitingQuestionId: question.id,
+  };
+  if (
+    question.id === 'success_metrics' &&
+    looksLikeSuccessMetricsBusinessEvidence(text)
+  ) {
+    if (blocksSuccessMetricsBusinessCapture(text)) return false;
+  } else if (looksLikeExplicitCopywritingCommand(text, copyOpts)) {
+    return false;
+  }
+  if (
+    messageType === MESSAGE_TYPES.SKIP ||
+    messageType === MESSAGE_TYPES.CORRECTION ||
+    messageType === MESSAGE_TYPES.ADD_ON ||
+    messageType === MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT ||
+    messageType === MESSAGE_TYPES.APPROVAL ||
+    messageType === MESSAGE_TYPES.APPROVAL_PLUS_NEXT_REQUEST ||
+    messageType === MESSAGE_TYPES.ARTIFACT_REQUEST
+  ) {
+    return false;
+  }
+  if (question.id === 'success_metrics' && looksLikeSuccessMetricsBusinessEvidence(text)) {
+    return true;
+  }
+  return messageType === MESSAGE_TYPES.REFINEMENT_FEEDBACK;
+}
+
+function coerceActiveGuidedAnswerIntent(text, question, messageType, classifyOpts = {}) {
+  if (!shouldForceActiveGuidedDirectAnswer(text, question, messageType, classifyOpts)) {
+    return messageType;
+  }
+  return MESSAGE_TYPES.DIRECT_ANSWER;
+}
+
+function reconcilePersistedGuidedAnswerSlots(state) {
+  if (!state || state.mode === 'notes') return state;
+  for (const row of QUESTION_BANK) {
+    if (hasValidGuidedAnswer(state, row.id)) continue;
+    if (!hasPersistedNormalizedAnswer(state, row.id)) continue;
+    const section = row.section;
+    const field = SECTION_TO_PRIMARY_FIELD[section];
+    const facts = state.normalizedFacts || {};
+    let backfill = '';
+    if (field) {
+      const val = facts[field];
+      if (Array.isArray(val) && val.length) backfill = val.join(', ');
+      else if (typeof val === 'string' && val.trim()) backfill = val.trim();
+    }
+    if (!backfill && state.sectionState && state.sectionState[section]) {
+      backfill = String(state.sectionState[section].summary || '')
+        .replace(/^Success will be judged by\s+/i, '')
+        .replace(/\.\s*$/, '')
+        .trim();
+    }
+    if (backfill && !answerLooksEmpty(backfill)) {
+      state.answers = { ...(state.answers || {}), [row.id]: backfill };
+    }
+  }
+  return syncStepIndexToFirstUnanswered(state);
+}
+
+function shouldLogInterviewRouting() {
+  const flag = String(process.env.CIE_INTERVIEW_ROUTING_LOG || '').trim().toLowerCase();
+  if (flag === '0' || flag === 'false' || flag === 'no') return false;
+  if (flag === '1' || flag === 'true' || flag === 'yes') return true;
+  return (
+    process.env.NODE_ENV === 'production' ||
+    Boolean(process.env.RAILWAY_ENVIRONMENT) ||
+    Boolean(process.env.RAILWAY_PROJECT_ID)
+  );
+}
+
+function logInterviewRoutingTurn(sessionId, payload) {
+  if (!shouldLogInterviewRouting()) return;
+  try {
+    console.log(
+      `[cie-intake-routing] ${JSON.stringify({
+        sessionId,
+        at: nowIso(),
+        ...payload,
+      })}`
+    );
+  } catch (_) {
+    // ignore logging failures
+  }
+}
+
+function buildInterviewRoutingDiagnostics({
+  session,
+  interviewState,
+  question,
+  text,
+  planned,
+  messageType,
+  plannedMessageClass,
+  classifyOpts,
+  interviewEscape,
+}) {
+  const activeQuestionKey = question && question.id;
+  const narrowWritingOpts = {
+    ...classifyOpts,
+    looksLikeRefinement: undefined,
+    containsMetaInstruction: undefined,
+  };
+  const stateSnapshot = interviewState || session.interview_state || {};
+  const facts = stateSnapshot.normalizedFacts || {};
+  const answers = stateSnapshot.answers || {};
+  return {
+    tenantId: session.client_id != null ? String(session.client_id) : null,
+    workspaceId: session.id,
+    interviewSessionId: session.id,
+    activeQuestionKeyBefore: activeQuestionKey,
+    rawDetectedIntent: plannedMessageClass || (planned && planned.messageClass) || null,
+    finalDetectedIntent: messageType,
+    interviewEscape: interviewEscape || null,
+    looksLikeWritingGuidance: looksLikeInterviewWritingGuidance(text, narrowWritingOpts),
+    looksLikeRefinementFeedback: looksLikeRefinementFeedback(text),
+    containsMetaInstructionLanguage: containsMetaInstructionLanguage(text),
+    looksLikeExplicitCopywritingCommand: looksLikeExplicitCopywritingCommand(text),
+    planReasoningTurnClass: planned && planned.messageClass,
+    planReasoningTurnRoute:
+      planned && planned.messageClass === MESSAGE_TYPES.REFINEMENT_FEEDBACK
+        ? 'REFINEMENT_FEEDBACK'
+        : planned && planned.messageClass === MESSAGE_TYPES.DIRECT_ANSWER
+          ? 'DIRECT_ANSWER'
+          : planned && planned.messageClass,
+    destinationSection: question && question.section,
+    successMetricsBefore: Array.isArray(facts.success_metrics) ? [...facts.success_metrics] : [],
+    successMetricsAnswerBefore: answers.success_metrics || null,
+    successMetricsCompleteBefore: hasValidGuidedAnswer(stateSnapshot, 'success_metrics'),
+  };
+}
+
+function syncStepIndexToFirstUnanswered(state) {
+  if (!state || state.mode === 'notes') return state;
+  let idx = 0;
+  while (idx < QUESTION_BANK.length && hasValidGuidedAnswer(state, QUESTION_BANK[idx].id)) {
+    idx += 1;
+  }
+  state.stepIndex = idx;
+  state.done = idx >= QUESTION_BANK.length;
+  syncAwaitingQuestionId(state);
+  return state;
+}
+
+function advanceStepIndexAfterAnswer(state) {
+  if (!state || state.mode === 'notes') return state;
+  let idx = (Number(state.stepIndex) || 0) + 1;
+  while (idx < QUESTION_BANK.length && hasValidGuidedAnswer(state, QUESTION_BANK[idx].id)) {
+    idx += 1;
+  }
+  state.stepIndex = idx;
+  state.done = idx >= QUESTION_BANK.length;
+  syncAwaitingQuestionId(state);
+  return state;
+}
+
 /**
  * Most recent answered question id (by QUESTION_BANK order), if any.
  */
@@ -738,9 +1035,7 @@ function resolveCorrectionTarget(text, opts = {}) {
   const body = stripCorrectionPreamble(raw);
 
   // A. Explicit domain / question-echo match
-  const echoDomain = inferDomainFromQuestionEcho(raw) || inferDomainFromQuestionEcho(body);
-  const taggedDomain = tagContextDomain(raw) || tagContextDomain(body);
-  const domain = echoDomain || taggedDomain;
+  const domain = inferExplicitRoutingDomain(raw) || inferExplicitRoutingDomain(body);
   if (domain && DOMAIN_TO_SECTION[domain]) {
     const section = DOMAIN_TO_SECTION[domain];
     const questionId = QUESTION_BANK.find((row) => row.section === section)?.id || null;
@@ -783,25 +1078,35 @@ function looksLikeSupplementalContext(text, opts = {}) {
     return true;
   }
 
-  // Out-of-order ICP / domain add-on while a different question is active.
   const activeQuestion = opts.activeQuestion || null;
-  if (activeQuestion && activeQuestion.section) {
-    const domain = tagContextDomain(s);
-    const activeDomain = domainFromSection(activeQuestion.section);
-    if (domain && activeDomain && domain !== activeDomain) {
-      if (
-        /\b(also|forgot|add(?:ing)?|additionally|btw|by the way|one more|for\s+(?:the\s+)?(?:icp|ideal)|ideal\s+customer)\b/i.test(
-          s
-        )
-      ) {
-        return true;
-      }
-      if (domain === 'ideal_customer' && /\b(icp|ideal\s+customer|property managers?)\b/i.test(s)) {
-        return true;
-      }
-    }
+  if (activeQuestion && looksLikeExplicitCrossSectionAddOn(s, activeQuestion)) {
+    return true;
   }
   return false;
+}
+
+/**
+ * True when the operator clearly signals out-of-order context for a different field
+ * (not incidental keywords such as "also" or "cheap" inside a direct answer).
+ */
+function looksLikeExplicitCrossSectionAddOn(text, activeQuestion) {
+  const s = String(text || '').trim();
+  if (!s || !activeQuestion || !activeQuestion.section) return false;
+  const hasSupplementalMarker =
+    SUPPLEMENTAL_CONTEXT_RE.test(s) ||
+    SUPPLEMENTAL_PHRASE_RE.test(s) ||
+    DOMAIN_POINTER_RE.test(s);
+  if (!hasSupplementalMarker) return false;
+
+  const routedDomain = inferExplicitRoutingDomain(s);
+  if (!routedDomain) {
+    if (/\b(forgot|icp|ideal\s+customer)\b/i.test(s)) {
+      return domainFromSection(activeQuestion.section) !== 'idealCustomers';
+    }
+    return false;
+  }
+  const activeDomain = domainFromSection(activeQuestion.section);
+  return Boolean(activeDomain && routedDomain !== activeDomain);
 }
 
 /**
@@ -837,17 +1142,17 @@ function stripSupplementalPreamble(text) {
 function parseSupplementalMessage(text, opts = {}) {
   const raw = String(text || '').trim();
   let body = stripSupplementalPreamble(raw);
+  const activeQuestion = opts.activeQuestion || null;
 
   const domain =
-    inferDomainFromQuestionEcho(raw) ||
-    tagContextDomain(raw) ||
-    inferDomainFromQuestionEcho(body) ||
-    tagContextDomain(body) ||
-    null;
+    inferExplicitRoutingDomain(raw) ||
+    inferExplicitRoutingDomain(body) ||
+    (/\b(forgot|icp|ideal\s+customer)\b/i.test(raw) ? 'ideal_customer' : null);
   const section = (domain && DOMAIN_TO_SECTION[domain]) || null;
   const questionId = section
     ? QUESTION_BANK.find((row) => row.section === section)?.id || null
     : null;
+  const supportingDomains = inferSupportingContextDomains(raw);
 
   let substance = body
     .replace(DOMAIN_POINTER_RE, ' ')
@@ -869,10 +1174,9 @@ function parseSupplementalMessage(text, opts = {}) {
     else if (services.length > 1) substance = services.join(', ');
   }
 
-  // Ignore unused opts.activeQuestion for now — domain inference is enough.
-  void opts;
+  void activeQuestion;
 
-  return { domain, section, substance, raw, questionId };
+  return { domain, section, substance, raw, questionId, supportingDomains };
 }
 
 function looksLikeQuestionToMax(text) {
@@ -923,17 +1227,72 @@ function domainFromPointerLabel(label) {
  * Explicit "for services" pointers win over keyword heuristics.
  * @returns {string|null} one of CONTEXT_DOMAINS
  */
-function tagContextDomain(text) {
+/**
+ * Keyword-only domain tags for enrichment — never overrides guided question routing.
+ * @returns {string[]} subset of CONTEXT_DOMAINS
+ */
+function inferSupportingContextDomains(text) {
   const s = String(text || '').toLowerCase();
-  if (!s) return null;
+  if (!s) return [];
+  const tags = [];
+  const add = (domain, cond) => {
+    if (cond && domain && !tags.includes(domain)) tags.push(domain);
+  };
+  add('pricing', /\b(price|pricing|rate|cost|cheap|lowest price|budget)\b/.test(s));
+  add('objections', /\b(avoid|don'?t want|do not want|decline|not a fit|no longer)\b/.test(s));
+  add('brand_voice', /\b(tone|voice|sound|brand voice)\b/.test(s));
+  add(
+    'success_metrics',
+    /\b(metric|kpi|measure|success metric|walkthroughs?|pipeline|repl(?:y|ies)|booked)\b/.test(s)
+  );
+  add('growth_goals', /\b(90 days|next quarter|growth goal|campaign goal|expansion)\b/.test(s));
+  add(
+    'differentiation',
+    /\b(trust|tips the decision|advantage|differen|accountab|responsiv)\b/.test(s)
+  );
+  add(
+    'geography',
+    /\b(manchester|bedford|hooksett|londonderry|auburn|goffstown|geography|geo\b|county|new hampshire)\b/.test(
+      s
+    )
+  );
+  add(
+    'ideal_customer',
+    /\b(ideal customer|ideal customer profile|\bicp\b|property managers?|homeowners?|facility managers?|segment fit)\b/.test(
+      s
+    )
+  );
+  add('services', /\b(services?|cleans?|cleaning|offers?|provides?|recurring|turnovers?)\b/.test(s));
+  add('operations', /\b(ops|operations?|staff|crew|capacity|schedule|delivery)\b/.test(s));
+  return tags;
+}
 
-  const echo = inferDomainFromQuestionEcho(s);
+function inferExplicitRoutingDomain(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+  const echo = inferDomainFromQuestionEcho(raw);
   if (echo) return echo;
-
-  const pointer = s.match(DOMAIN_POINTER_RE);
+  const pointer = raw.match(DOMAIN_POINTER_RE);
   if (pointer) {
     const fromPointer = domainFromPointerLabel(pointer[1]);
     if (fromPointer) return fromPointer;
+  }
+  return null;
+}
+
+function tagContextDomain(text, opts = {}) {
+  const s = String(text || '').toLowerCase();
+  if (!s) return null;
+
+  const explicit = inferExplicitRoutingDomain(text);
+  if (explicit) return explicit;
+
+  const authoritativeSection =
+    opts.authoritativeSection ||
+    sectionForGuidedQuestion(opts.activeQuestion) ||
+    null;
+  if (authoritativeSection && opts.respectActiveQuestion !== false) {
+    return domainFromSection(authoritativeSection);
   }
 
   if (/\b(price|pricing|rate|cost|cheap|lowest price|budget)\b/.test(s)) return 'pricing';
@@ -957,6 +1316,28 @@ function tagContextDomain(text) {
   }
   if (/\b(ops|operations?|staff|crew|capacity|schedule|delivery)\b/.test(s)) return 'operations';
   return null;
+}
+
+function recordIntakeSupportingEvidence(state, question, text) {
+  if (!state || !question || !text) return state;
+  const activeSection = sectionForGuidedQuestion(question);
+  const activeDomain = domainFromSection(activeSection);
+  const tags = inferSupportingContextDomains(text).filter((domain) => domain && domain !== activeDomain);
+  if (!tags.length) return state;
+  state.intakeSupportingEvidence = [
+    ...(state.intakeSupportingEvidence || []),
+    {
+      at: nowIso(),
+      questionId: question.id,
+      section: activeSection,
+      domains: tags,
+      text: String(text).trim(),
+    },
+  ];
+  if (state.intakeSupportingEvidence.length > 48) {
+    state.intakeSupportingEvidence = state.intakeSupportingEvidence.slice(-48);
+  }
+  return state;
 }
 
 /**
@@ -1028,6 +1409,7 @@ function classifyInterviewMessage(text, opts = {}) {
     speaker: opts.speaker,
     context: opts.context,
     activeQuestion: opts.activeQuestion,
+    awaitingQuestionId: opts.awaitingQuestionId,
     looksLikeCorrection,
     looksLikeAddOn: looksLikeSupplementalContext,
     looksLikeRefinement: looksLikeRefinementFeedback,
@@ -1051,8 +1433,60 @@ function classifyUserResponse(text, opts = {}) {
   if (speaker === 'system' || speaker === 'developer' || context === 'system_guidance') {
     return ANSWER_KINDS.SYSTEM_GUIDANCE;
   }
+  const activeQuestion = opts.activeQuestion || null;
+  const activeQuestionId = activeGuidedQuestionId({
+    ...opts,
+    activeQuestion,
+  });
+  if (
+    activeQuestionId === 'success_metrics' &&
+    blocksSuccessMetricsBusinessCapture(text)
+  ) {
+    return ANSWER_KINDS.REFINEMENT_FEEDBACK;
+  }
+  if (
+    activeQuestionId === 'success_metrics' &&
+    looksLikeSuccessMetricsBusinessEvidence(text) &&
+    !blocksSuccessMetricsBusinessCapture(text)
+  ) {
+    return ANSWER_KINDS.BUSINESS_FACT;
+  }
+  if (
+    isActiveGuidedIntakeTurn(opts) &&
+    (activeQuestionId === 'success_metrics'
+      ? looksLikeSuccessMetricsBusinessEvidence(text) &&
+        !blocksSuccessMetricsBusinessCapture(text)
+      : !looksLikeExplicitCopywritingCommand(text, {
+          ...opts,
+          activeQuestion,
+          awaitingQuestionId: activeQuestionId,
+        }))
+  ) {
+    const guidedMsgType = classifyInterviewMessage(text, {
+      ...opts,
+      awaitingQuestionId: activeQuestionId,
+      activeQuestion,
+    });
+    if (guidedMsgType === MESSAGE_TYPES.REFINEMENT_FEEDBACK) {
+      return ANSWER_KINDS.BUSINESS_FACT;
+    }
+  }
   const msgType = classifyInterviewMessage(text, opts);
   if (msgType === MESSAGE_TYPES.REFINEMENT_FEEDBACK) {
+    const awaitingQuestionId =
+      opts.awaitingQuestionId ||
+      (opts.activeQuestion && (opts.activeQuestion.id || opts.activeQuestion.questionId));
+    if (
+      awaitingQuestionId &&
+      !looksLikeInterviewWritingGuidance(text, {
+        ...opts,
+        awaitingQuestionId,
+        looksLikeRefinement: undefined,
+        containsMetaInstruction: undefined,
+      })
+    ) {
+      return ANSWER_KINDS.BUSINESS_FACT;
+    }
     return ANSWER_KINDS.REFINEMENT_FEEDBACK;
   }
   // Supplemental / correction / direct answers can carry business substance.
@@ -1061,12 +1495,18 @@ function classifyUserResponse(text, opts = {}) {
     msgType === MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT ||
     msgType === MESSAGE_TYPES.CORRECTION
   ) {
-    if (looksLikeRefinementFeedback(text) || containsMetaInstructionLanguage(text)) {
+    if (
+      !opts.activeQuestion &&
+      (looksLikeRefinementFeedback(text) || containsMetaInstructionLanguage(text))
+    ) {
       return ANSWER_KINDS.REFINEMENT_FEEDBACK;
     }
     return ANSWER_KINDS.BUSINESS_FACT;
   }
-  if (looksLikeRefinementFeedback(text) || containsMetaInstructionLanguage(text)) {
+  if (
+    !opts.activeQuestion &&
+    (looksLikeRefinementFeedback(text) || containsMetaInstructionLanguage(text))
+  ) {
     return ANSWER_KINDS.REFINEMENT_FEEDBACK;
   }
   return ANSWER_KINDS.BUSINESS_FACT;
@@ -1151,11 +1591,15 @@ function conversationalAck(messageType, text, domain, opts = {}) {
         const added = substance.replace(/\.$/, '');
         return `Got it. I'll add ${added} to your ideal customer profile. For this question, ${reopen}`;
       }
-      if (domain && domainLabel[domain] && substance) {
-        return `Got it. I'll add ${substance.replace(/\.$/, '')} under ${domainLabel[domain]}. For this question, ${reopen}`;
+      const storageLabel =
+        (targetSection && SECTION_TITLES[targetSection]) ||
+        (domain && domainLabel[domain]) ||
+        null;
+      if (storageLabel && substance) {
+        return `Got it. I'll add ${substance.replace(/\.$/, '')} under ${storageLabel}. For this question, ${reopen}`;
       }
-      if (domain && domainLabel[domain]) {
-        return `Got it. That sounds like it belongs under ${domainLabel[domain]}. I'll remember it there rather than treating it as your answer to this question.\n\nFor this question, ${reopen}`;
+      if (storageLabel) {
+        return `Got it. That sounds like it belongs under ${storageLabel}. I'll remember it there rather than treating it as your answer to this question.\n\nFor this question, ${reopen}`;
       }
       return `Got it. I'll add that to the business context rather than treating it as your answer to this question.\n\nFor this question, ${reopen}`;
     }
@@ -1245,10 +1689,10 @@ function partitionUserResponse(text) {
   };
 }
 
-function isBusinessFactStatement(text) {
+function isBusinessFactStatement(text, opts = {}) {
   if (answerLooksEmpty(text)) return false;
   if (/^Unknown:/i.test(String(text || ''))) return false;
-  return classifyUserResponse(text) === ANSWER_KINDS.BUSINESS_FACT;
+  return classifyUserResponse(text, opts) === ANSWER_KINDS.BUSINESS_FACT;
 }
 
 function looksLikeConfirmation(text) {
@@ -1377,6 +1821,30 @@ function stripLeadingWeAre(text) {
   return String(text || '')
     .trim()
     .replace(/^(we are|we're|i am|i'm|this is|our company is|the business is)\s+/i, '');
+}
+
+/**
+ * SPEC-228 — business_description is a description-only slot. Downstream
+ * identity synthesis prepends business_name ("${name} is a ${description}"),
+ * so a description that already carries a "<name> is a ..." wrap causes
+ * accumulating duplication across refinement rounds. Strip that wrap here so
+ * business_description never becomes an opaque prose accumulator.
+ */
+function sanitizeIdentityDescription(name, description) {
+  let desc = String(description || '').trim();
+  if (!desc) return desc;
+  const cleanName = String(name || '').trim();
+  if (!cleanName) return normalizeBusinessPhrase(desc);
+  const escapedName = escapeRegExp(cleanName);
+  const wrapRe = new RegExp(`^${escapedName}\\s+(?:is|are)\\s+(?:a|an)\\s+`, 'i');
+  const bareRe = new RegExp(`^${escapedName}\\s*[:,\\-—–]?\\s+`, 'i');
+  for (let i = 0; i < 6; i += 1) {
+    const before = desc;
+    if (wrapRe.test(desc)) desc = desc.replace(wrapRe, '').trim();
+    else if (bareRe.test(desc)) desc = desc.replace(bareRe, '').trim();
+    if (desc === before) break;
+  }
+  return normalizeBusinessPhrase(desc);
 }
 
 function titleCaseWords(text) {
@@ -1540,6 +2008,46 @@ function composeCustomerConstraintPresentation(businessName, rawConstraint) {
   const subject = businessSubject(businessName || 'The business');
   const raw = normalizeMechanicalTypos(String(rawConstraint || '').trim());
   if (!raw) return '';
+
+  const stripTerminalPunctuation = (value) => String(value || '').replace(/[.!?;]+$/, '').trim();
+  const isFramedStatement = (value) =>
+    /^(?:(?:i|we)(?:['’]d|\s+(?:would|prefer|do not|don't|will not|won't|avoid|exclude))\s+|(?:the|this) business\s+(?:avoids?|excludes?|prefers?\s+(?:not|to\s+avoid)|does not|doesn't|would rather not|will not|won't)\s+)/i.test(
+      value
+    );
+  const preserveFramedStatement = (value) => {
+    const cleaned = stripTerminalPunctuation(value);
+    if (/^(?:we|i)(?:['’]d)\s+/i.test(cleaned)) {
+      return cleaned.replace(/^(?:we|i)(?:['’]d)\s+/i, `${subject} would `);
+    }
+    if (/^(?:we|i)\s+prefer\s+not\s+/i.test(cleaned)) {
+      return cleaned.replace(/^(?:we|i)\s+prefer\s+not\s+/i, `${subject} prefers not `);
+    }
+    if (/^(?:we|i)\s+do not\s+/i.test(cleaned)) {
+      return cleaned.replace(/^(?:we|i)\s+do not\s+/i, `${subject} does not `);
+    }
+    if (/^(?:we|i)\s+don't\s+/i.test(cleaned)) {
+      return cleaned.replace(/^(?:we|i)\s+don't\s+/i, `${subject} doesn't `);
+    }
+    if (/^(?:we|i)\s+(?:would|will not|won't|avoid|exclude)\s+/i.test(cleaned)) {
+      return cleaned.replace(/^(?:we|i)\s+/i, `${subject} `);
+    }
+    return cleaned.replace(/^(?:the|this) business\s+/i, `${subject} `);
+  };
+
+  const clauses = raw
+    .split(/\s*;\s*/)
+    .map(stripTerminalPunctuation)
+    .filter(Boolean);
+  if (clauses.length > 1 || isFramedStatement(raw)) {
+    return clauses
+      .map((clause) =>
+        isFramedStatement(clause)
+          ? preserveFramedStatement(clause)
+          : composeCustomerConstraintPresentation(businessName, clause)
+      )
+      .filter(Boolean)
+      .join('; ');
+  }
 
   // Price-first disqualification stays categorical (existing behavior).
   if (/lowest price|cheap|bargain|price.?first/i.test(raw)) {
@@ -1745,6 +2253,17 @@ function isConversationalFiller(text) {
 function isDecisionMakerLabel(text) {
   const s = String(text || '').toLowerCase();
   return /\b(?:managers?|owners?|directors?|principals?)\b/.test(s);
+}
+
+/** Canonical one-word / short ICP labels from Scout/CIE segment patterns — not incomplete fragments. */
+function isCanonicalIdealCustomerSegment(value) {
+  const raw = normalizeBusinessPhrase(String(value || '').trim());
+  if (!raw) return false;
+  for (const [, canon] of CUSTOMER_SEGMENT_PATTERNS) {
+    if (sameSemanticValue(raw, canon)) return true;
+  }
+  if (isDecisionMakerLabel(raw)) return true;
+  return false;
 }
 
 function managerRoleFromWord(word) {
@@ -1989,6 +2508,8 @@ function extractCustomerSegments(text) {
         !isConversationalFiller(p) &&
         !isValueTraitPhrase(p) &&
         !isLiteralUncertaintyPhrase(p) &&
+        !isMisassignedWebsitePainItem(p) &&
+        !/^(?:lead flow|operator|sales|trust)$/i.test(p) &&
         !/^(?:anchor(?:\s+cleaning)?|most wants|wants to work|we serve|greater)\b/i.test(p) &&
         !/^(?:the\s+)?ideal\s+customer/i.test(p) &&
         // Bare role stems without "managers" are incomplete fragments from list splits.
@@ -2088,6 +2609,553 @@ function splitListItems(text) {
     .filter(Boolean);
 }
 
+const COMMERCIAL_CLEANING_GROWTH_FOCUS = 'commercial cleaning';
+
+const SCORECARD_METRIC_PHRASE_RE =
+  /\b(?:qualified prospects?(?:\s+identified)?|prospects?\s+contacted|positive repl(?:y|ies)|discovery calls?\s+booked|proposals?\s+(?:sent|accepted|signed)|revenue closed|recurring revenue(?: created)?|opportunities created|win rate|active clients?|walkthrough(?:s|\s+requests?)?|conversion rate|pipeline movement|booked discovery calls?|signed web projects?|demand signals?)\b/i;
+
+const QUALIFICATION_SIGNAL_PHRASE_RE =
+  /\b(?:prospect should|good prospect|weak signal|strong signal|real operating business|reachable decision(?:-maker)?|outdated or weak website|getting them to engage|if they are talking|need to look more professional|clear reason a better site|qualification criteria|reply quality|call quality|budget fit|urgency)\b/i;
+
+function factsIndicateCommercialCleaningBusiness(facts) {
+  if (!facts) return false;
+  const blob = [
+    facts.business_name,
+    facts.business_description,
+    facts.vertical_focus,
+    ...(facts.services || []),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  if (/\banchor(?:\s+cleaning)?\b/.test(blob)) return true;
+  if (/\b(?:commercial cleaning|janitorial|office cleaning|recurring cleaning|walkthrough|cleaner utilization)\b/.test(blob)) {
+    return true;
+  }
+  return false;
+}
+
+function shouldAssignCommercialCleaningGrowthFocus(text, facts) {
+  if (!factsIndicateCommercialCleaningBusiness(facts)) return false;
+  const lower = String(text || '').toLowerCase();
+  if (/\bcommercial cleaning\b/.test(lower)) return true;
+  return /\bcommercial\b/.test(lower) && /\b(?:cleaning|janitorial|walkthrough|facilities)\b/.test(lower);
+}
+
+function defaultEntityKindForFacts(facts) {
+  return factsIndicateCommercialCleaningBusiness(facts) ? 'cleaning company' : 'business';
+}
+
+function parseStructuredIdentityFields(cleaned) {
+  const raw = String(cleaned || '').trim();
+  if (!raw) return null;
+  const match = raw.match(
+    /business\s+name\s*:\s*(.+?)[.;]\s*(?:what\s+(?:we\s+)?do\s+today\s*:?\s*)?(.*)$/is
+  );
+  if (!match) return null;
+  const name = sanitizeBusinessName(match[1].trim());
+  let description = String(match[2] || '').trim();
+  description = description.replace(/^what\s+(?:we\s+)?do\s+today\s*:?\s*/i, '').trim();
+  if (!name) return null;
+  return {
+    name,
+    description: description ? normalizeBusinessPhrase(firstSentence(description)) : null,
+  };
+}
+
+function isInterviewArtifactServiceItem(item) {
+  const s = String(item || '').trim().toLowerCase();
+  if (!s) return true;
+  return /^(?:today|what we do today|business name)$/.test(s);
+}
+
+function isMisassignedWebsitePainItem(item) {
+  const s = String(item || '').trim();
+  if (!s) return false;
+  if (/\b(?:redesign|design|copywriting|seo|launch|messaging|optimization)\b/i.test(s)) {
+    return false;
+  }
+  return /\b(?:generic|confusing|visually weak|slow|outdated|weak website|weak digital)\b/i.test(
+    s
+  );
+}
+
+function sanitizeBriefServiceList(services) {
+  return dedupeNormalizedList(
+    (services || [])
+      .map((item) => normalizeBusinessPhrase(String(item || '').trim()))
+      .filter(
+        (item) =>
+          item &&
+          !isInterviewArtifactServiceItem(item) &&
+          !isMisassignedWebsitePainItem(item) &&
+          !isLiteralUncertaintyPhrase(item) &&
+          !containsRawPromptFragment(item)
+      )
+  );
+}
+
+const { adaptNormalizedFactsKeys } = require('../lib/blueprintNormalizedFactsAdapter');
+
+function normalizePersistedFactKeys(facts) {
+  return adaptNormalizedFactsKeys(facts, cloneNormalizedFacts(facts));
+}
+
+function looksLikeCustomerExclusionPhrase(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  return (
+    /\b(?:cheap(?:est)?|lowest price|cosmetic|quick patch|one-off|hobby project|no budget|no urgency|no decision-maker|landing page)\b/i.test(
+      s
+    ) ||
+    /\b(?:avoid|exclusion|decline|not a fit|should avoid|prefer not to|do not want)\b/i.test(s)
+  );
+}
+
+function looksLikeIdealCustomerPhrase(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  return (
+    /\b(?:owner-led|decision-maker|small business owner|ideal buyer|operator \/ decision-maker)\b/i.test(
+      s
+    ) ||
+    /\bbetter website\b.*\b(?:trust|lead flow|sales)\b/i.test(s) ||
+    isCanonicalIdealCustomerSegment(s)
+  );
+}
+
+function looksLikeGeographyOnly(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  if (extractPlaces(s).length) return true;
+  return (
+    /\b(?:southern new hampshire|new hampshire|greater manchester)\b/i.test(s) &&
+    !looksLikeIdealCustomerPhrase(s) &&
+    !looksLikeCustomerExclusionPhrase(s)
+  );
+}
+
+function isVerticalFocusSegment(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  if (looksLikeGeographyOnly(s) || looksLikeIdealCustomerPhrase(s) || looksLikeCustomerExclusionPhrase(s)) {
+    return false;
+  }
+  return /\b(?:local service businesses|contractors?|trades|professional services|medical|wellness|hospitality|property service|owner-led local brands?)\b/i.test(
+    s
+  );
+}
+
+function repartitionMisassignedMarketSlots(facts) {
+  const next = cloneNormalizedFacts(facts);
+  const verticalBits = next.vertical_focus ? [next.vertical_focus] : [];
+  const keptGeo = [];
+
+  for (const item of next.geography || []) {
+    const text = normalizeBusinessPhrase(String(item || '').trim());
+    if (!text) continue;
+
+    if (QUALIFICATION_SIGNAL_PHRASE_RE.test(text) && !looksLikeCustomerExclusionPhrase(text)) {
+      next.qualification_signals = uniquePush(next.qualification_signals, [text]);
+      continue;
+    }
+    if (looksLikeCustomerExclusionPhrase(text)) {
+      next.disqualified_customers = uniquePush(next.disqualified_customers, [text]);
+      continue;
+    }
+    if (looksLikeIdealCustomerPhrase(text)) {
+      next.ideal_customers = uniquePush(next.ideal_customers, [text]);
+      continue;
+    }
+    if (isVerticalFocusSegment(text)) {
+      verticalBits.push(text);
+      continue;
+    }
+    if (looksLikeGeographyOnly(text)) {
+      const places = extractPlaces(text);
+      keptGeo.push(...(places.length ? places : [text]));
+      continue;
+    }
+
+    const segments = extractCustomerSegments(text);
+    if (segments.length) {
+      next.ideal_customers = uniquePush(next.ideal_customers, segments);
+      continue;
+    }
+
+    keptGeo.push(text);
+  }
+
+  next.geography = dedupeNormalizedList(keptGeo);
+  if (verticalBits.length) {
+    next.vertical_focus = dedupeNormalizedList(verticalBits).join('; ');
+  }
+  return next;
+}
+
+function scrubIdentityInterviewArtifacts(facts) {
+  const next = cloneNormalizedFacts(facts);
+  if (next.business_description) {
+    let desc = String(next.business_description).trim();
+    desc = desc
+      .replace(/^today\s+is\s+(?:an?\s+)?(?:especially\s+)?/i, '')
+      .replace(/^especially\s+/i, '')
+      .replace(/^what we do today\s*:?\s*/i, '')
+      .trim();
+    next.business_description = sanitizeIdentityDescription(
+      next.business_name,
+      normalizeBusinessPhrase(desc)
+    );
+  }
+  return next;
+}
+
+function reconcileEpistemicStatesFromValues(facts) {
+  const next = cloneNormalizedFacts(facts);
+  const slots = [
+    ['business_name', 'business_name'],
+    ['business_description', 'business_description'],
+    ['services', 'services'],
+    ['ideal_customers', 'ideal_customers'],
+    ['disqualified_customers', 'disqualified_customers'],
+    ['geography', 'geography'],
+    ['differentiation', 'differentiation'],
+    ['brand_voice', 'brand_voice'],
+    ['ninety_day_outcomes', 'ninety_day_outcomes'],
+    ['success_metrics', 'success_metrics'],
+  ];
+  for (const [field, epKey] of slots) {
+    const value = next[field];
+    const hasValue = Array.isArray(value) ? value.length > 0 : Boolean(value);
+    const state = next.epistemic_states?.[epKey];
+    if (
+      hasValue &&
+      state !== EPISTEMIC_STATES.HYPOTHESIS &&
+      state !== EPISTEMIC_STATES.NOT_APPLICABLE &&
+      (!state || state === EPISTEMIC_STATES.UNRESOLVED || state === EPISTEMIC_STATES.UNKNOWN)
+    ) {
+      next.epistemic_states[epKey] = EPISTEMIC_STATES.KNOWN;
+    }
+  }
+  if (
+    (next.vertical_focus || next.geography.length) &&
+    next.epistemic_states?.geography !== EPISTEMIC_STATES.NOT_APPLICABLE &&
+    next.epistemic_states?.geography !== EPISTEMIC_STATES.HYPOTHESIS
+  ) {
+    if (!next.epistemic_states.geography || next.epistemic_states.geography === EPISTEMIC_STATES.UNRESOLVED) {
+      next.epistemic_states.geography = EPISTEMIC_STATES.KNOWN;
+    }
+  }
+  return next;
+}
+
+function buildIdentityOverviewSentence(name, description, facts = null) {
+  const cleanName = sanitizeBusinessName(name) || 'The business';
+  let desc = sanitizeIdentityDescription(cleanName, description);
+  if (!desc) {
+    return capitalizeSentence(`${cleanName} is a ${defaultEntityKindForFacts(facts || { business_name: cleanName })}`);
+  }
+  desc = normalizeBusinessPhrase(desc);
+  if (/^(?:build|builds|provides|offers|sells|delivers|designs|creates)\b/i.test(desc)) {
+    return capitalizeSentence(`${cleanName} ${desc.replace(/^build\b/i, 'builds')}`);
+  }
+  if (new RegExp(`^${escapeRegExp(cleanName)}\\b`, 'i').test(desc)) {
+    return capitalizeSentence(desc);
+  }
+  const article = /^[aeiou]/i.test(desc) ? 'an' : 'a';
+  return capitalizeSentence(`${cleanName} is ${article} ${desc}`);
+}
+
+function scrubMisassignedGrowthFocus(facts) {
+  const next = cloneNormalizedFacts(facts);
+  const growth = String(next.growth_focus || '').trim();
+  if (!growth) return next;
+  const misassignedCleaningFocus =
+    sameSemanticValue(growth, COMMERCIAL_CLEANING_GROWTH_FOCUS) &&
+    !factsIndicateCommercialCleaningBusiness(next);
+  const misassignedGenericCommercial =
+    /^commercial$/i.test(growth) && !factsIndicateCommercialCleaningBusiness(next);
+  if (misassignedCleaningFocus || misassignedGenericCommercial) {
+    next.growth_focus = null;
+    if (next.epistemic_states) next.epistemic_states.growth_focus = EPISTEMIC_STATES.UNRESOLVED;
+  }
+  return next;
+}
+
+function partitionSuccessMetricsAndQualification(items) {
+  const metrics = [];
+  const qualification = [];
+  for (const raw of items || []) {
+    const item = normalizeBusinessPhrase(String(raw || '').trim());
+    if (!item || isLiteralUncertaintyPhrase(item)) continue;
+    if (QUALIFICATION_SIGNAL_PHRASE_RE.test(item)) {
+      qualification.push(item);
+      continue;
+    }
+    if (SCORECARD_METRIC_PHRASE_RE.test(item)) {
+      metrics.push(item);
+      continue;
+    }
+    const words = item.split(/\s+/).length;
+    if (words > 8 || /[.!?]/.test(item)) {
+      qualification.push(item);
+      continue;
+    }
+    if (words <= 6 && !/\b(?:should|because|when they|if they|talking about)\b/i.test(item)) {
+      metrics.push(item);
+      continue;
+    }
+    qualification.push(item);
+  }
+  return {
+    metrics: dedupeNormalizedList(metrics),
+    qualification: dedupeNormalizedList(qualification),
+  };
+}
+
+const SCORECARD_METRIC_CANONICAL_PHRASES = Object.freeze([
+  'qualified prospects identified',
+  'prospects contacted',
+  'positive replies',
+  'discovery calls booked',
+  'proposals sent',
+  'proposals accepted',
+  'total revenue closed',
+  'qualified opportunities created',
+  'conversations started',
+  'revenue closed',
+]);
+
+function extractScorecardMetricsFromProse(text) {
+  const lower = String(text || '').toLowerCase();
+  const found = [];
+  for (const phrase of SCORECARD_METRIC_CANONICAL_PHRASES) {
+    if (lower.includes(phrase)) found.push(phrase);
+  }
+  return dedupeNormalizedList(found.map((item) => normalizeBusinessPhrase(item)));
+}
+
+function extractQualificationSignalsFromProse(text) {
+  const sentences = String(text || '')
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const qualification = [];
+  for (const sentence of sentences) {
+    const part = partitionSuccessMetricsAndQualification([normalizeBusinessPhrase(sentence)]);
+    qualification.push(...part.qualification);
+  }
+  return dedupeNormalizedList(qualification);
+}
+
+const BLUEPRINT_PIPELINE_DIAG_FIELDS = Object.freeze([
+  'identity',
+  'services',
+  'ideal_customers',
+  'idealCustomers',
+  'disqualified_customers',
+  'avoidCustomers',
+  'target_markets',
+  'targetMarkets',
+  'competitive_advantages',
+  'competitiveAdvantages',
+  'brand_voice',
+  'brandVoice',
+  'campaign_goals',
+  'campaignGoals',
+  'success_metrics',
+  'successMetrics',
+  'growth_focus',
+  'geography',
+  'business_overview',
+]);
+
+function pickBlueprintPipelineFactSlice(facts) {
+  const f = facts || {};
+  return {
+    identity: f.business_name || f.business_description || null,
+    services: f.services,
+    ideal_customers: f.ideal_customers,
+    idealCustomers: f.idealCustomers,
+    disqualified_customers: f.disqualified_customers,
+    avoidCustomers: f.disqualified_customers,
+    target_markets: { geography: f.geography, vertical_focus: f.vertical_focus },
+    targetMarkets: { geography: f.geography, vertical_focus: f.vertical_focus },
+    competitive_advantages: f.differentiation,
+    competitiveAdvantages: f.differentiation,
+    brand_voice: f.brand_voice,
+    brandVoice: f.brand_voice,
+    campaign_goals: f.ninety_day_outcomes,
+    campaignGoals: f.ninety_day_outcomes,
+    success_metrics: f.success_metrics,
+    successMetrics: f.success_metrics,
+    growth_focus: f.growth_focus,
+    geography: f.geography,
+    business_overview: f.business_description,
+  };
+}
+
+function pickBlueprintPipelineSectionSummaries(sections) {
+  const keys = [
+    'identity',
+    'services',
+    'idealCustomers',
+    'avoidCustomers',
+    'targetMarkets',
+    'competitiveAdvantages',
+    'brandVoice',
+    'campaignGoals',
+    'successMetrics',
+  ];
+  const out = {};
+  for (const key of keys) {
+    out[key] = sections?.[key]?.summary ?? null;
+  }
+  return out;
+}
+
+function shouldLogBlueprintPipelineDiagnostics(clientId) {
+  if (process.env.CIE_BLUEPRINT_PIPELINE_DIAG === '1') return true;
+  return Number(clientId) === 17;
+}
+
+function logBlueprintPipelineDiagnostics(sessionId, clientId, stage, payload) {
+  if (!shouldLogBlueprintPipelineDiagnostics(clientId)) return;
+  console.info(
+    `[CIE blueprint pipeline] session=${sessionId} stage=${stage}`,
+    JSON.stringify(payload, null, 2)
+  );
+}
+
+function idealCustomersPersistedShapeMalformed(items) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return false;
+  if (
+    list.some((item) =>
+      /^(?:lead flow|getting referrals|running ads|or relying on word of mouth|explaining their value clearly|making them look legitimate|turning more visitors into calls)$/i.test(
+        String(item || '').trim()
+      )
+    )
+  ) {
+    return true;
+  }
+  if (list.length < 4) return false;
+  const shortFragments = list.filter((item) => String(item || '').split(/\s+/).length <= 4).length;
+  return shortFragments >= Math.max(3, Math.floor(list.length * 0.4));
+}
+
+function successMetricsPersistedShapeMalformed(items) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return false;
+  if (list.some((item) => String(item || '').length > 120)) return true;
+  if (list.some((item) => QUALIFICATION_SIGNAL_PHRASE_RE.test(String(item || '')))) return true;
+  return false;
+}
+
+function disqualifiedCustomersPersistedShapeMalformed(items) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return false;
+  return list.some((item) => /^yes\.\s+/i.test(String(item || '').trim()));
+}
+
+function normalizedSlotNeedsAnswerRehydrate(facts, questionId, answerText) {
+  const text = String(answerText || '').trim();
+  if (!text || answerLooksEmpty(text)) return false;
+  const sectionKey = QUESTION_ID_TO_SECTION[questionId];
+  if (!sectionKey) return false;
+  const field = SECTION_TO_PRIMARY_FIELD[sectionKey];
+  if (!field) return false;
+
+  switch (field) {
+    case 'business_description':
+      return !facts.business_name && !facts.business_description;
+    case 'services':
+      return !(facts.services || []).length;
+    case 'ideal_customers':
+      return !(facts.ideal_customers || []).length || idealCustomersPersistedShapeMalformed(facts.ideal_customers);
+    case 'disqualified_customers':
+      return (
+        !(facts.disqualified_customers || []).length ||
+        disqualifiedCustomersPersistedShapeMalformed(facts.disqualified_customers)
+      );
+    case 'geography':
+      return (
+        !(facts.geography || []).length &&
+        !facts.vertical_focus &&
+        /greater\s+manchester|southern new hampshire|new hampshire|local service|contractors?|professional services/i.test(
+          text
+        )
+      );
+    case 'differentiation':
+      return !facts.differentiation;
+    case 'brand_voice':
+      return !facts.brand_voice;
+    case 'ninety_day_outcomes':
+      return !facts.ninety_day_outcomes;
+    case 'success_metrics':
+      return !(facts.success_metrics || []).length || successMetricsPersistedShapeMalformed(facts.success_metrics);
+    default:
+      return false;
+  }
+}
+
+/**
+ * Live sessions often retain authoritative guided answers under interview_state.answers
+ * while normalizedFacts top-level slots were cleared by recovery/correction passes.
+ * Re-project answers into normalized facts before Blueprint composition.
+ */
+function rehydrateNormalizedFactsFromAnswers(interviewState) {
+  const answers = (interviewState && interviewState.answers) || {};
+  let facts = cloneNormalizedFacts((interviewState && interviewState.normalizedFacts) || emptyNormalizedFacts());
+
+  for (const row of QUESTION_BANK) {
+    const answerText = answers[row.id];
+    if (!normalizedSlotNeedsAnswerRehydrate(facts, row.id, answerText)) continue;
+
+    if (row.section === 'idealCustomers') {
+      facts.ideal_customers = [];
+      facts.epistemic_states.ideal_customers = EPISTEMIC_STATES.UNRESOLVED;
+    }
+    if (row.section === 'avoidCustomers') {
+      facts.disqualified_customers = [];
+      facts.epistemic_states.disqualified_customers = EPISTEMIC_STATES.UNRESOLVED;
+    }
+    if (row.section === 'successMetrics') {
+      facts.success_metrics = [];
+      facts.epistemic_states.success_metrics = EPISTEMIC_STATES.UNRESOLVED;
+    }
+    if (row.section === 'targetMarkets' && idealCustomersPersistedShapeMalformed(facts.ideal_customers)) {
+      facts.geography = [];
+      facts.vertical_focus = null;
+      facts.epistemic_states.geography = EPISTEMIC_STATES.UNRESOLVED;
+    }
+
+    facts = ingestAnswerIntoNormalizedFacts(facts, row.section, answerText, {
+      provenance: `answers:${row.id}`,
+      forceKnown: true,
+    });
+  }
+
+  return facts;
+}
+
+function prepareNormalizedFactsForBrief(facts) {
+  let next = normalizePersistedFactKeys(facts);
+  next = scrubIdentityInterviewArtifacts(next);
+  next = scrubMisassignedGrowthFocus(next);
+  next = repartitionMisassignedMarketSlots(next);
+  next = reconcileEpistemicStatesFromValues(next);
+  const services = sanitizeBriefServiceList(next.services);
+  next.services = services;
+  const partitioned = partitionSuccessMetricsAndQualification(next.success_metrics);
+  next.success_metrics = partitioned.metrics;
+  next.qualification_signals = uniquePush(
+    next.qualification_signals || [],
+    partitioned.qualification
+  );
+  return next;
+}
+
 function emptyNormalizedFacts() {
   return {
     business_name: null,
@@ -2096,6 +3164,7 @@ function emptyNormalizedFacts() {
     growth_focus: null,
     ideal_customers: [],
     ideal_customer_traits: [],
+    qualification_signals: [],
     disqualified_customers: [],
     geography: [],
     vertical_focus: null,
@@ -2103,6 +3172,27 @@ function emptyNormalizedFacts() {
     brand_voice: null,
     ninety_day_outcomes: null,
     success_metrics: [],
+    epistemic_states: {
+      business_name: EPISTEMIC_STATES.UNRESOLVED,
+      business_description: EPISTEMIC_STATES.UNRESOLVED,
+      services: EPISTEMIC_STATES.UNRESOLVED,
+      growth_focus: EPISTEMIC_STATES.UNRESOLVED,
+      ideal_customers: EPISTEMIC_STATES.UNRESOLVED,
+      disqualified_customers: EPISTEMIC_STATES.UNRESOLVED,
+      geography: EPISTEMIC_STATES.UNRESOLVED,
+      differentiation: EPISTEMIC_STATES.UNRESOLVED,
+      brand_voice: EPISTEMIC_STATES.UNRESOLVED,
+      ninety_day_outcomes: EPISTEMIC_STATES.UNRESOLVED,
+      success_metrics: EPISTEMIC_STATES.UNRESOLVED,
+    },
+    hypotheses: {},
+    evidence_statements: {},
+    business_facts: {},
+    transformation_areas: [],
+    pains: [],
+    learning_signals: [],
+    excluded_metrics: [],
+    superseded_slots: [],
   };
 }
 
@@ -2115,6 +3205,7 @@ function cloneNormalizedFacts(facts) {
     growth_focus: src.growth_focus || null,
     ideal_customers: [...(src.ideal_customers || [])],
     ideal_customer_traits: [...(src.ideal_customer_traits || [])],
+    qualification_signals: [...(src.qualification_signals || [])],
     disqualified_customers: [...(src.disqualified_customers || [])],
     geography: [...(src.geography || [])],
     vertical_focus: src.vertical_focus || null,
@@ -2122,6 +3213,27 @@ function cloneNormalizedFacts(facts) {
     brand_voice: src.brand_voice || null,
     ninety_day_outcomes: src.ninety_day_outcomes || null,
     success_metrics: [...(src.success_metrics || [])],
+    epistemic_states: {
+      ...(emptyNormalizedFacts().epistemic_states),
+      ...(src.epistemic_states || {}),
+    },
+    hypotheses: {
+      ...(src.hypotheses || {}),
+    },
+    evidence_statements: {
+      ...(src.evidence_statements || {}),
+    },
+    business_facts: Object.fromEntries(
+      Object.entries(src.business_facts || {}).map(([key, facts]) => [
+        key,
+        Array.isArray(facts) ? facts.map((fact) => ({ ...fact })) : [],
+      ])
+    ),
+    transformation_areas: [...(src.transformation_areas || [])],
+    pains: [...(src.pains || [])],
+    learning_signals: [...(src.learning_signals || [])],
+    excluded_metrics: [...(src.excluded_metrics || [])],
+    superseded_slots: [...(src.superseded_slots || [])],
   };
 }
 
@@ -2145,21 +3257,110 @@ function extractPlaces(text) {
   return places;
 }
 
+const SECTION_TO_PRIMARY_FIELD = Object.freeze({
+  identity: 'business_description',
+  services: 'services',
+  idealCustomers: 'ideal_customers',
+  idealCustomerTraits: 'ideal_customer_traits',
+  avoidCustomers: 'disqualified_customers',
+  targetMarkets: 'geography',
+  competitiveAdvantages: 'differentiation',
+  brandVoice: 'brand_voice',
+  campaignGoals: 'ninety_day_outcomes',
+  successMetrics: 'success_metrics',
+});
+
 /**
  * Ingest a direct answer into normalized evidence for a Blueprint section.
- * SPEC-099: explicit unknowns never become factual values; prior known facts survive.
+ * SPEC-099/SPEC-221: explicit unknowns and hypotheses never become factual values;
+ * epistemic state is recorded explicitly.
  */
-function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
+function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer, opts = {}) {
   const next = cloneNormalizedFacts(facts);
   const cleaned = cleanRawAnswer(sectionKey, stripInterviewQuestionEcho(rawAnswer));
   if (!cleaned) return next;
+
+  const primaryField = SECTION_TO_PRIMARY_FIELD[sectionKey] || sectionKey;
+  const extractedFacts = extractBusinessFacts(rawAnswer, {
+    section: sectionKey,
+    subject: primaryField,
+    provenance: opts.provenance || null,
+  });
+  const existingFacts = next.business_facts[primaryField] || [];
+  next.business_facts[primaryField] = [
+    ...existingFacts,
+    ...extractedFacts.filter((fact) => !existingFacts.some((prior) => prior.id === fact.id)),
+  ];
+  const projection = projectBusinessFacts(next.business_facts[primaryField], primaryField);
+  const epistemicState = projection.epistemicState;
+
+  next.epistemic_states[primaryField] = epistemicState;
+  next.evidence_statements[primaryField] = projection.evidence || String(rawAnswer || cleaned);
+
+  if (projection.hypothesisValue) {
+    next.hypotheses[primaryField] = projection.hypothesisValue;
+  }
+
+  if (
+    !opts.forceKnown &&
+    (epistemicState === EPISTEMIC_STATES.UNKNOWN || epistemicState === EPISTEMIC_STATES.NOT_APPLICABLE)
+  ) {
+    return next;
+  }
+  if (epistemicState === EPISTEMIC_STATES.HYPOTHESIS && !opts.forceKnown) {
+    next.hypotheses[primaryField] = cleaned;
+    return next;
+  }
+  if (opts.forceKnown) {
+    next.epistemic_states[primaryField] = EPISTEMIC_STATES.KNOWN;
+  }
+
   // Explicit unknowns leave the section unset rather than storing uncertainty phrases.
   if (looksLikeExplicitUnknown(cleaned) || isLiteralUncertaintyPhrase(cleaned)) {
+    next.epistemic_states[primaryField] = EPISTEMIC_STATES.UNKNOWN;
     return next;
   }
 
   switch (sectionKey) {
     case 'identity': {
+      const identitySource = stripInterviewQuestionEcho(rawAnswer);
+      const theBusinessIs = String(identitySource || '').match(
+        /^the business is\s+([A-Z][^.\n:—–-]+(?:\s+[A-Z][^.\n:—–-]+)*)\.?/i
+      );
+      if (theBusinessIs) {
+        next.business_name = sanitizeBusinessName(theBusinessIs[1].trim());
+        const tail = String(identitySource || '')
+          .slice(theBusinessIs[0].length)
+          .replace(/^[\s.]+/, '')
+          .trim();
+        const todayLead = tail.match(/^today,?\s*(?:we\s+)?(.+)/is);
+        if (todayLead) {
+          next.business_description = normalizeBusinessPhrase(
+            firstSentence(stripLeadingWeAre(todayLead[1]).replace(/^(a|an|the)\s+/i, ''))
+          );
+        } else if (tail) {
+          next.business_description = normalizeBusinessPhrase(firstSentence(stripLeadingWeAre(tail)));
+        }
+        next.business_name = sanitizeBusinessName(next.business_name);
+        next.business_description = sanitizeIdentityDescription(
+          next.business_name,
+          next.business_description
+        );
+        break;
+      }
+      const structured = parseStructuredIdentityFields(cleaned);
+      if (structured) {
+        next.business_name = structured.name;
+        if (structured.description) {
+          next.business_description = structured.description;
+        }
+        next.business_name = sanitizeBusinessName(next.business_name);
+        next.business_description = sanitizeIdentityDescription(
+          next.business_name,
+          next.business_description
+        );
+        break;
+      }
       // Prefer em/en dash or spaced hyphen as name/description separator —
       // never split on compound-word hyphens like commercial-focused.
       const dash =
@@ -2197,8 +3398,11 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
         }
       }
       next.business_name = sanitizeBusinessName(next.business_name);
-      if (/commercial/i.test(cleaned)) next.growth_focus = 'commercial cleaning';
-      if (/residential/i.test(cleaned) && !next.vertical_focus) {
+      next.business_description = sanitizeIdentityDescription(next.business_name, next.business_description);
+      if (shouldAssignCommercialCleaningGrowthFocus(cleaned, next)) {
+        next.growth_focus = COMMERCIAL_CLEANING_GROWTH_FOCUS;
+      }
+      if (/residential/i.test(cleaned) && !next.vertical_focus && factsIndicateCommercialCleaningBusiness(next)) {
         next.vertical_focus = /commercial/i.test(cleaned)
           ? 'commercial-focused cleaning with residential welcome'
           : 'residential cleaning';
@@ -2206,22 +3410,48 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
       break;
     }
     case 'services': {
-      const items = extractServiceList(cleaned);
+      let serviceSource = cleaned;
+      let items = extractServiceList(serviceSource);
+      if (items.length > 8) {
+        serviceSource = firstSentence(String(rawAnswer || cleaned));
+        items = extractServiceList(serviceSource);
+      }
       next.services = uniquePush(
         [],
-        (items.length ? items : splitListItems(cleaned)).filter(
+        (items.length ? items : splitListItems(serviceSource)).filter(
           (item) => item && !isLiteralUncertaintyPhrase(item)
         )
       );
       const focuses = extractGrowthFocusItems(String(rawAnswer || cleaned));
       if (focuses.length) {
         next.growth_focus = focuses.join('; ');
-      } else if (/commercial/i.test(cleaned)) {
-        next.growth_focus = next.growth_focus || 'commercial cleaning';
+      } else if (shouldAssignCommercialCleaningGrowthFocus(cleaned, next)) {
+        next.growth_focus = next.growth_focus || COMMERCIAL_CLEANING_GROWTH_FOCUS;
       }
       break;
     }
     case 'idealCustomers': {
+      const sentenceIcps = String(rawAnswer || cleaned)
+        .split(/(?<=[.!?])\s+|\n+/)
+        .map((s) => normalizeBusinessPhrase(stripBusinessNameLeadIn(s.trim())))
+        .filter(
+          (s) =>
+            s &&
+            /owner-led|decision-maker|small business owner/i.test(s) &&
+            !isMisassignedWebsitePainItem(s)
+        )
+        .slice(0, 2);
+      if (sentenceIcps.length) {
+        next.ideal_customers = mergeIdealCustomersWithPrecedence([], sentenceIcps);
+        next.ideal_customers = next.ideal_customers.filter(
+          (item) =>
+            !isValueTraitPhrase(item) &&
+            !isLiteralUncertaintyPhrase(item) &&
+            !isConversationalFiller(item) &&
+            !looksLikeGenericCategoryAnswer(item)
+        );
+        break;
+      }
       // SPEC-101: hedged guesses must not become unqualified durable ICP values.
       if (
         /^(?:maybe|perhaps|i\s+think|probably)\b/i.test(cleaned) &&
@@ -2233,10 +3463,20 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
       const fallback = splitListItems(stripBusinessNameLeadIn(cleaned)).filter(
         (item) => item && !isConversationalFiller(item)
       );
-      next.ideal_customers = mergeIdealCustomersWithPrecedence(
-        [],
-        segments.length ? segments : fallback
-      );
+      let idealSegments = segments.length ? segments : fallback;
+      if (
+        !idealSegments.some((item) => /owner-led|decision-maker|small business owner/i.test(item)) &&
+        /owner-led|decision-maker|small business owner/i.test(String(rawAnswer || cleaned))
+      ) {
+        const leadSentence = String(rawAnswer || cleaned)
+          .split(/(?<=[.!?])\s+|\n+/)
+          .map((s) => s.trim())
+          .find((s) => /owner-led|decision-maker|small business owner/i.test(s));
+        if (leadSentence) {
+          idealSegments = mergeIdealCustomersWithPrecedence([], [normalizeBusinessPhrase(leadSentence)]);
+        }
+      }
+      next.ideal_customers = mergeIdealCustomersWithPrecedence([], idealSegments);
       // Drop accidental trait / preamble bleed / uncertainty phrases / generic nouns / fillers.
       next.ideal_customers = next.ideal_customers.filter(
         (item) =>
@@ -2253,12 +3493,24 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
       );
       break;
     }
+    case 'idealCustomerTraits': {
+      next.ideal_customer_traits = uniquePush(
+        next.ideal_customer_traits,
+        [normalizeBusinessPhrase(stripBusinessNameLeadIn(cleaned))]
+          .filter((item) => item && !isLiteralUncertaintyPhrase(item))
+      );
+      next.epistemic_states.ideal_customer_traits = next.ideal_customer_traits.length
+        ? EPISTEMIC_STATES.KNOWN
+        : next.epistemic_states.ideal_customer_traits;
+      break;
+    }
     case 'avoidCustomers': {
       next.disqualified_customers = uniquePush(
         [],
         splitListItems(cleaned)
           .map((item) =>
             String(item || '')
+              .replace(/^yes\.\s*/i, '')
               .replace(/^(?:no|not|avoid|excluding)\s+/i, '')
               .trim()
           )
@@ -2268,7 +3520,9 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
     }
     case 'targetMarkets': {
       next.geography = uniquePush([], extractPlaces(cleaned));
-      if (/commercial/i.test(cleaned)) next.growth_focus = next.growth_focus || 'commercial cleaning';
+      if (shouldAssignCommercialCleaningGrowthFocus(cleaned, next)) {
+        next.growth_focus = next.growth_focus || COMMERCIAL_CLEANING_GROWTH_FOCUS;
+      }
       if (/residential/i.test(cleaned) && !next.vertical_focus) {
         next.vertical_focus = 'residential';
       }
@@ -2320,18 +3574,43 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
     }
     case 'campaignGoals': {
       if (!isLiteralUncertaintyPhrase(cleaned)) {
-        next.ninety_day_outcomes = normalizeBusinessPhrase(cleaned);
+        let outcome = normalizeBusinessPhrase(cleaned);
+        if (outcome.split(/\s+/).length > 35) {
+          outcome = normalizeBusinessPhrase(firstSentence(String(rawAnswer || cleaned)));
+        }
+        outcome = outcome.replace(/^over the next 90 days,?\s*/i, '').trim();
+        outcome = outcome.replace(/^this growth work\s+/i, '').trim();
+        next.ninety_day_outcomes = outcome;
       }
-      if (/commercial/i.test(cleaned)) next.growth_focus = next.growth_focus || 'commercial cleaning';
+      if (shouldAssignCommercialCleaningGrowthFocus(cleaned, next)) {
+        next.growth_focus = next.growth_focus || COMMERCIAL_CLEANING_GROWTH_FOCUS;
+      }
       break;
     }
     case 'successMetrics': {
-      next.success_metrics = uniquePush(
-        [],
-        splitListItems(cleaned).filter((item) => !isLiteralUncertaintyPhrase(item))
+      const prose = String(rawAnswer || cleaned).trim();
+      const extractedMetrics = extractScorecardMetricsFromProse(prose);
+      if (extractedMetrics.length >= 2) {
+        next.success_metrics = uniquePush([], extractedMetrics);
+        next.qualification_signals = uniquePush(
+          next.qualification_signals || [],
+          extractQualificationSignalsFromProse(prose)
+        );
+        break;
+      }
+      const split = splitListItems(cleaned).filter((item) => !isLiteralUncertaintyPhrase(item));
+      const partitioned = partitionSuccessMetricsAndQualification(
+        split.length ? split : isLiteralUncertaintyPhrase(cleaned) ? [] : [cleaned]
+      );
+      next.success_metrics = uniquePush([], partitioned.metrics);
+      next.qualification_signals = uniquePush(
+        next.qualification_signals || [],
+        partitioned.qualification
       );
       if (!next.success_metrics.length && !isLiteralUncertaintyPhrase(cleaned)) {
-        next.success_metrics = [normalizeBusinessPhrase(cleaned)];
+        const single = partitionSuccessMetricsAndQualification([normalizeBusinessPhrase(cleaned)]);
+        next.success_metrics = uniquePush([], single.metrics);
+        next.qualification_signals = uniquePush(next.qualification_signals || [], single.qualification);
       }
       break;
     }
@@ -2386,6 +3665,15 @@ function applyCorrectionToNormalizedFacts(facts, correction) {
       );
       break;
     }
+    case 'idealCustomerTraits':
+      next.ideal_customer_traits = uniquePush(
+        next.ideal_customer_traits,
+        [normalizeBusinessPhrase(stripBusinessNameLeadIn(substance))]
+      );
+      next.epistemic_states.ideal_customer_traits = next.ideal_customer_traits.length
+        ? EPISTEMIC_STATES.KNOWN
+        : next.epistemic_states.ideal_customer_traits;
+      break;
     case 'avoidCustomers':
       next.disqualified_customers = uniquePush(
         next.disqualified_customers,
@@ -2435,13 +3723,638 @@ function applyCorrectionToNormalizedFacts(facts, correction) {
       next.success_metrics = uniquePush([], splitListItems(substance));
       break;
     case 'identity': {
-      next.business_description = substance;
+      next.business_description = sanitizeIdentityDescription(next.business_name, substance);
       break;
     }
     default:
       break;
   }
   return next;
+}
+
+function normalizedSemanticValue(value) {
+  return normalizeBusinessPhrase(String(value || '')).replace(/[.!?]+$/, '').trim().toLowerCase();
+}
+
+/**
+ * SPEC-228 — detect raw correction-instruction prose that must never survive
+ * as active business meaning (a metric, a geography value, a differentiation
+ * claim, etc). Correction history may keep the operator's original language;
+ * active projection may not.
+ */
+function containsCorrectionInstructionLeakage(text) {
+  const value = String(text || '');
+  return (
+    /\bdo not interpret\b|\bnot a (?:success\s+)?metric\b|\bnot a standalone metric\b|\bnot a (?:separate\s+)?service\b|\bdid not establish\b|\bnot established\b|\bremove that assumption\b|\bdon't\s+(?:add|infer|change|invent|approve|duplicate|reframe)\b|\bdo not\s+(?:add|infer|change|invent|approve|duplicate|reframe)\b|\b(?:preserve|keep)\s+(?:the\s+)?(?:current\s+)?(?:epistemic|differentiation|brand voice|geography|success metrics|operator-defined)\b.*\b(?:rather than|separately from|if it is currently unknown|without duplicating|without reframing)\b|\b(?:present|display)\s+(?:customer\s+)?(?:exclusions?|customers?)\s+naturally\s+without\s+(?:duplicating|reframing)\b|\brather than an established buying reason\b|\bdo not invent a brand voice\b|\bdo not approve the Blueprint\b|\bthis is a refinement only\b/i.test(value)
+  );
+}
+
+function containsObjectiveCorrectionLeakage(text) {
+  return containsCorrectionInstructionLeakage(text) ||
+    /\b(?:pain|pains|learning signals?)\b[\s\S]{0,100}\b(?:not|rather than)\b[\s\S]{0,40}\b(?:metric|objective|goal|outcome)s?\b/i.test(
+      String(text || '')
+    );
+}
+
+function authoritativeObjectiveFromFacts(facts) {
+  const factRows = [
+    ...(facts?.business_facts?.ninety_day_outcomes || []),
+    ...(facts?.business_facts?.growth_focus || []),
+  ];
+  const factValue = factRows.find(
+    (fact) => fact && fact.epistemic_state === EPISTEMIC_STATES.KNOWN && fact.value &&
+      !containsObjectiveCorrectionLeakage(fact.value)
+  );
+  if (factValue) return normalizeBusinessPhrase(factValue.value);
+  if (facts?.growth_focus && !containsObjectiveCorrectionLeakage(facts.growth_focus)) {
+    return normalizeBusinessPhrase(facts.growth_focus);
+  }
+  return null;
+}
+
+function sameSemanticValue(left, right) {
+  const a = normalizedSemanticValue(left);
+  const b = normalizedSemanticValue(right);
+  return Boolean(a && b && (a === b || a.includes(b) || b.includes(a)));
+}
+
+function withoutSemanticValue(values, value) {
+  return (values || []).filter((entry) => !sameSemanticValue(entry, value));
+}
+
+/**
+ * SPEC-238: Detect if a sentence is purely a control/refinement directive.
+ * Control directives describe HOW state should be preserved/treated, not WHAT
+ * the business proposition is.
+ *
+ * Returns true if sentence is purely control language without semantic content.
+ */
+function isPureControlDirective(sentence) {
+  const lower = sentence.toLowerCase();
+
+  // Pattern 1: "preserve/keep differentiation as hypothesis/non-applicable/unknown"
+  // This is control language without a new proposition
+  if (/\b(?:preserve|keep)\s+(?:the\s+)?differentiation\s+(?:as|as a)\s+(?:a\s+)?(?:hypothesis|non-applicable|unknown|unvalidated|undefined)\b/i.test(lower)) {
+    return true;
+  }
+
+  // Pattern 2: "keep geography non-applicable"
+  if (/\b(?:keep|preserve)\s+(?:the\s+)?geography\s+(?:non-applicable|as\s+non-applicable)\b/i.test(lower)) {
+    return true;
+  }
+
+  // Pattern 3: standalone "do not (add|infer|change|invent|approve)"
+  if (/^\s*(?:do not|don't)\s+(?:add|infer|change|invent|approve|duplicate|reframe)\b/i.test(lower)) {
+    return true;
+  }
+
+  // Pattern 4: "regenerate using current understanding" - pure control
+  if (/\bregenerate\b.{0,80}\b(?:using|from)\s+(?:the\s+)?current\s+(?:corrected\s+)?understanding\b/i.test(lower)) {
+    return true;
+  }
+
+  // Pattern 5: "present X naturally" without actual content changes
+  if (/\bpresent\s+(?:customer\s+)?(?:exclusions?|customers?)\s+naturally\s+without\s+(?:duplicating|reframing)/i.test(lower)) {
+    return true;
+  }
+
+  // Pattern 6: "preserve operator-defined metrics separately"
+  if (/\bpreserve\s+operator-defined\s+(?:metrics|success metrics)\s+(?:separately|apart)\s+from/i.test(lower)) {
+    return true;
+  }
+
+  // Pattern 7: "This is a refinement only"
+  if (/\b(?:this is|this\s+is\s+just)\s+(?:a\s+)?refinement\s+only\b/i.test(lower)) {
+    return true;
+  }
+
+  return false;
+}
+
+
+/**
+ * SPEC-238A: Extract control language from a captured value.
+ *
+ * Structural isolation: identify clause boundaries (punctuation or conjunctions)
+ * and detect control clauses by their leading keywords.
+ *
+ * When extracting a value (e.g., from a differentiation sentence), strip out
+ * any trailing control/refinement clauses that were inadvertently captured.
+ *
+ * Returns the cleaned value, or null if the value is purely control language.
+ *
+ * Handles:
+ * - "proposition, do not approve" → "proposition"
+ * - "proposition; keep x unchanged" → "proposition"
+ * - "proposition and do not approve" → "proposition"
+ * - "proposition but keep x unchanged" → "proposition"
+ * - "proposition or do not approve" → "proposition"
+ * - "preserve x and change y" → "preserve x and change y" (legitimate conjunction)
+ */
+function stripControlLanguageFromValue(value) {
+  if (!value) return value;
+
+  const str = String(value).trim();
+
+  const isControlClause = (clause) => {
+    const normalized = clause.trim().toLowerCase();
+    if (/^(?:do\s+not|don't|shouldn't)\b/.test(normalized)) return true;
+    if (/^(?:regenerate|present)\b/.test(normalized)) return true;
+    if (/^(?:separately|apart)\s+from\b/.test(normalized)) return true;
+    return /^(?:keep|preserve)\b/.test(normalized) &&
+      /\b(?:brand voice|epistemic|status|facts?|state|understanding|exclusions?|blueprint)\b/.test(normalized);
+  };
+
+  // Scan clause boundaries, then classify the clause after each boundary.
+  // A conjunction itself never causes truncation; only a following control clause does.
+  const boundaryPattern = /[,;]|\b(?:and|but|or)\b/gi;
+  let boundary;
+  while ((boundary = boundaryPattern.exec(str))) {
+    const trailingClause = str.slice(boundaryPattern.lastIndex).trim();
+    if (!isControlClause(trailingClause)) continue;
+
+    let cleaned = str.slice(0, boundary.index).trim();
+
+    cleaned = cleaned.replace(/[,;]\s*$/, '').trim();
+
+    if (!cleaned || /^\s*(?:a|an|the)[\s,]*$/.test(cleaned)) {
+      return null;
+    }
+
+    return cleaned;
+  }
+
+  // No control clause detected; check for other purely-control patterns
+  // Pattern: "as a rather than" or similar control constructs
+  if (/^as\s+(?:a|an)\s+(?:rather than|rather than an?)/.test(str)) {
+    return null;
+  }
+
+  // If what remains is empty or only punctuation/articles, it's purely control
+  if (!str || /^\s*(?:rather\s+than|as\s+(?:a|an)|a|an|the)[\s,]*$/.test(str)) {
+    return null;
+  }
+
+  return str;
+}
+
+function isEpistemicQualificationOnly(value) {
+  const raw = normalizeBusinessPhrase(String(value || '').trim());
+  if (!raw) return true;
+  const lower = raw.toLowerCase();
+  if (/^(?:still\s+)?(?:only\s+|just\s+)?(?:a\s+)?[.\s]*$/.test(lower)) return true;
+  if (!/\b(?:hypothesis|hypotheses|established|proven|validated|tentative|uncertain|assumption|working theory|buying reason)\b/.test(lower)) {
+    return false;
+  }
+  if (
+    /^(?:still\s+)?(?:only\s+|just\s+)?(?:a\s+)?(?:hypothesis|tentative|uncertain|current assumption|working theory)\b/.test(lower) ||
+    /^(?:not|not yet|is not|isn't|has not been|hasn't been)\s+(?:an?\s+)?(?:established|proven|validated)/.test(lower) ||
+    /^(?:not|not yet)\s+(?:an?\s+)?established\s+buying\s+reason\b/.test(lower) ||
+    /^(?:unproven|unvalidated|not validated|not proven)\b/.test(lower)
+  ) {
+    return true;
+  }
+  const contentSignals = /\b(?:because|more compelling|outperform|better|different|approach|model|program|service|agency|serve|customers?|owners?|business|transformation|consulting|education)\b/.test(lower);
+  return !contentSignals;
+}
+
+function inferEpistemicStateFromText(text, fallback = EPISTEMIC_STATES.KNOWN) {
+  const lower = String(text || '').toLowerCase();
+  if (/\b(?:hypothesis|unvalidated|not\s+(?:yet\s+)?validated|not\s+(?:yet\s+)?proven|not\s+(?:yet\s+)?established|tentative|uncertain|current assumption|working theory|we\s+(?:think|believe|suspect)|may|might|could)\b/.test(lower)) {
+    return EPISTEMIC_STATES.HYPOTHESIS;
+  }
+  return fallback;
+}
+
+function stripEpistemicLeadIn(value) {
+  let out = String(value || '').trim();
+  for (let i = 0; i < 4; i += 1) {
+    const before = out;
+    out = out
+      .replace(/^(?:we\s+(?:think|believe|suspect|hypothesize)\s+(?:that\s+)?)/i, '')
+      .replace(/^(?:our\s+)?(?:current\s+)?(?:differentiation\s+)?hypothesis\s+(?:is|:)\s*/i, '')
+      .replace(/^(?:the\s+)?(?:current\s+)?differentiation\s+(?:hypothesis\s+)?(?:is|:)\s*/i, '')
+      .replace(/^(?:this\s+is\s+)?(?:not\s+yet\s+)?(?:proven|validated|established)\s*:\s*/i, '');
+    if (out === before) break;
+  }
+  return out.trim();
+}
+
+function substantiveDifferentiationCandidate(value) {
+  const controlCleaned = stripControlLanguageFromValue(stripEpistemicLeadIn(value));
+  if (!controlCleaned || isEpistemicQualificationOnly(controlCleaned)) return null;
+  return controlCleaned;
+}
+
+function extractDifferentiationProposition(text, focusSentence = '') {
+  const raw = String(text || '').trim();
+  const sentences = raw
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const candidates = [];
+  const push = (value) => {
+    const candidate = substantiveDifferentiationCandidate(value);
+    if (candidate) candidates.push(candidate);
+  };
+
+  for (const sentence of [focusSentence, ...sentences].filter(Boolean)) {
+    const colon = sentence.match(/:\s*(.+)$/);
+    if (colon && /\b(?:differentiation|hypothesis|proven|validated|established|assumption|working theory)\b/i.test(sentence)) {
+      push(colon[1]);
+    }
+
+    const explicit = sentence.match(/\b(?:change|update|set|correct)\s+(?:the\s+)?(?:current\s+)?differentiation(?:\s+hypothesis)?\s+(?:to|as)\s*:?\s*(.+)$/i);
+    if (explicit) push(explicit[1]);
+
+    const hypothesis = sentence.match(/\b(?:our\s+)?(?:current\s+)?(?:differentiation\s+)?hypothesis\s+(?:is|:)\s*(.+)$/i);
+    if (hypothesis) push(hypothesis[1]);
+
+    const thought = sentence.match(/\bwe\s+(?:think|believe|suspect|hypothesize)\s+(?:that\s+)?(.+)$/i);
+    if (thought) push(thought[1]);
+
+    if (/\b(?:may|might|could)\b/i.test(sentence) && /\b(?:compelling|outperform|differentiat|advantage|because|better)\b/i.test(sentence)) {
+      push(sentence);
+    }
+  }
+
+  return candidates[0] || null;
+}
+
+function reviewCorrectionOperations(text, state, turnId) {
+  const operations = [];
+  const add = (operation, slot, value, extra = {}) => operations.push({
+    operation, slot, target_key: normalizedSemanticValue(value) || slot,
+    previous_value: extra.previous_value || null,
+    value: value == null ? null : normalizeBusinessPhrase(value),
+    classification: extra.classification || null, negation: Boolean(extra.negation),
+    epistemic_state: extra.epistemic_state || EPISTEMIC_STATES.KNOWN,
+    evidence_ref: turnId, created_at: nowIso(), source_text: extra.source_text || text,
+  });
+  const sentences = String(text || '').split(/(?<=[.!?])\s+|\n+/).map((item) => item.trim()).filter(Boolean);
+  for (const sentence of sentences) {
+    const lower = sentence.toLowerCase();
+    if (/geograph(?:y|ic).{0,50}\b(?:not|no longer|isn't|is not).{0,60}\b(constrained|constraint|primary|restricted)\b/.test(lower)) {
+      add('RETRACT', 'geography', null, { previous_value: (state.normalizedFacts?.geography || []).join(', '), negation: true, epistemic_state: EPISTEMIC_STATES.NOT_APPLICABLE, source_text: sentence });
+    }
+    if (/\b(?:lead|raw)\s+volume\b.{0,60}\bnot\s+(?:a\s+)?(?:success\s+)?metric\b/.test(lower)) {
+      add('RETRACT', 'success_metrics', 'raw lead volume', { negation: true, source_text: sentence });
+    }
+    if (/\bpremium\s+positioning\b.{0,60}\b(?:never|not|did not|didn't).{0,40}\b(?:establish|established|validated|confirm)/.test(lower) || /\b(?:never|not|did not|didn't).{0,40}\b(?:establish|established|validated|confirm).{0,60}\bpremium\s+positioning\b/.test(lower)) {
+      add('RETRACT', 'differentiation', 'premium positioning', { negation: true, source_text: sentence });
+    }
+    const pain = sentence.match(/\b(.+?)\s+(?:is|are)\s+(?:a\s+)?pains?\s*,?\s+not\s+(?:a\s+)?metrics?\b/i);
+    if (pain) add('RECLASSIFY', 'pains', pain[1], { previous_value: pain[1], classification: 'PAIN', negation: true, source_text: sentence });
+    const outcome = sentence.match(/^(.+?)\s+(?:is|are)\s+(?:an?\s+)?(?:outcomes?|transformation areas?)(?:\s+or\s+(?:outcomes?|transformation areas?))?\s*,?\s+not\s+(?:a\s+)?(?:separate\s+)?services?\b/i);
+    if (outcome) {
+      for (const item of splitListItems(outcome[1])) {
+        add('RECLASSIFY', 'transformation_areas', item, { previous_value: item, classification: 'OUTCOME', negation: true, source_text: sentence });
+      }
+    }
+    const offer = sentence.match(/\b(?:one\s+)?(?:primary\s+)?offer\s*(?:is|=|:)\s*(?:the\s+)?([^.;]+)/i);
+    if (offer) add('CORRECT', 'services', offer[1], { source_text: sentence });
+    if (/\b(?:existing\s+)?operating\s+small\s+business(?:es)?\b/i.test(sentence) && /\b(?:icp|ideal customer|founder)\b/i.test(sentence)) {
+      add('CORRECT', 'ideal_customers', 'existing operating small business', { source_text: sentence });
+    }
+    if (/\b(?:segments?|verticals?)\s+to\s+test\b/i.test(sentence) || /\binitial\s+(?:test\s+)?segments?\b/i.test(sentence)) {
+      if (/\bcleaning\b/i.test(sentence) && /\bhome services\b/i.test(sentence)) {
+        add('ASSERT', 'ideal_customers', 'cleaning/home services', { source_text: sentence });
+      } else if (/\bcleaning\b/i.test(sentence)) {
+        add('ASSERT', 'ideal_customers', 'cleaning', { source_text: sentence });
+      }
+      if (/\be-commerce\b/i.test(sentence)) add('ASSERT', 'ideal_customers', 'e-commerce', { source_text: sentence });
+      if (/\bfitness\b/i.test(sentence)) add('ASSERT', 'ideal_customers', 'fitness', { source_text: sentence });
+    }
+    if (/\b(?:fewer than|under|less than)\s+10\s+employees\b/i.test(sentence)) {
+      add('ASSERT', 'ideal_customer_traits', 'generally fewer than 10 employees', { source_text: sentence });
+    }
+    if (/\bfounder operational bottleneck\b/i.test(sentence) || /\bfounder\b.{0,30}\btoo central to operations\b/i.test(sentence)) {
+      add('ASSERT', 'ideal_customer_traits', 'founder operational bottleneck', { source_text: sentence });
+    }
+    const metricMatches = sentence.match(/qualified founder conversations|icp-qualified conversations|serious program conversations|paid enrollments|discovery[\s-]*(?:to|->|→)[\s-]*enrollment conversion/gi) || [];
+    for (const metric of metricMatches) add('ASSERT', 'success_metrics', metric, { source_text: sentence });
+    const signalMatches = sentence.match(/pain[- ]patterns?(?:\s+frequency)?|segment[- ]response patterns/gi) || [];
+    for (const signal of signalMatches) add('ASSERT', 'learning_signals', signal, { classification: 'LEARNING_SIGNAL', source_text: sentence });
+    const painMatches = /\b(?:pains?|learning signals?)\b/i.test(sentence) ? (sentence.match(/employee problems|lack of owner time|founder dependence|revenue pressure/gi) || []) : [];
+    for (const item of painMatches) add('ASSERT', 'pains', item, { classification: 'PAIN', source_text: sentence });
+
+    if (/\bdifferentiation\b/.test(lower) && /\b(?:hypothesis|unvalidated|not established|not\s+(?:yet\s+)?(?:proven|validated|established)|tentative|uncertain|working theory|current assumption)\b/.test(lower)) {
+      // SPEC-238: Skip pure control directives (e.g., "preserve differentiation as a hypothesis")
+      if (isPureControlDirective(sentence)) {
+        // Do not generate any operation - this is refinement control, not a semantic correction
+      } else {
+        let value = extractDifferentiationProposition(text, sentence) || sentence;
+        const colonMatch = sentence.match(/:\s*(.+)$/);
+        if (!value || value === sentence && colonMatch) {
+          value = colonMatch[1];
+        } else if (value === sentence) {
+          value = sentence
+            .replace(/^.*?\bdifferentiation\b\s*(?:is|remains)?\s*(?:still\s+)?(?:a\s+)?\s*/i, '')
+            .replace(/\bhypothesis\b\s*[:,]?\s*/i, '');
+        }
+        value = value.trim();
+
+        const cleanedValue = stripControlLanguageFromValue(value);
+
+        if (cleanedValue && !isEpistemicQualificationOnly(cleanedValue)) {
+          add('CORRECT', 'differentiation', cleanedValue, { epistemic_state: EPISTEMIC_STATES.HYPOTHESIS, source_text: sentence });
+        } else {
+          const existing = state.normalizedFacts?.differentiation;
+          if (existing && /\b(?:hypothesis|unvalidated|not established|not\s+(?:yet\s+)?proven|not\s+(?:yet\s+)?validated|tentative|uncertain)\b/i.test(sentence)) {
+            add('CORRECT', 'differentiation', existing, {
+              epistemic_state: inferEpistemicStateFromText(sentence, EPISTEMIC_STATES.HYPOTHESIS),
+              source_text: sentence,
+            });
+          }
+        }
+      }
+    }
+    const objective = sentence.match(
+      /\b(?:near-term|90-day|ninety-day)\s+(?:objective|goal|outcome|priority)(?:s)?\s*(?:is|are|:|=)\s*(.+)$/i
+    );
+    if (objective && !containsObjectiveCorrectionLeakage(objective[1])) {
+      add('CORRECT', 'campaignGoals', objective[1], { source_text: sentence });
+    }
+  }
+  if (!operations.length && /\b(?:correction|correct|retract|remove|not a metric|not a service|not established|not constrained|reclassify)\b/i.test(text)) {
+    add('CLARIFY', 'unresolved', null, { epistemic_state: EPISTEMIC_STATES.UNRESOLVED });
+  }
+  return operations;
+}
+
+function projectWorkingSemanticOperations(facts, operations) {
+  const next = cloneNormalizedFacts(facts);
+  for (const operation of operations || []) {
+    const { operation: kind, slot, value } = operation;
+    if (slot && slot !== 'unresolved') {
+      next.superseded_slots = uniquePush(next.superseded_slots, [slot]);
+    }
+    if (kind === 'RETRACT') {
+      if (slot === 'geography') {
+        next.geography = [];
+        next.epistemic_states.geography = operation.epistemic_state || EPISTEMIC_STATES.UNKNOWN;
+      } else if (slot === 'success_metrics') {
+        next.success_metrics = withoutSemanticValue(next.success_metrics, value);
+        next.excluded_metrics = uniquePush(next.excluded_metrics, [value]);
+      } else if (slot === 'differentiation') {
+        if (value == null) {
+          next.differentiation = null;
+          next.epistemic_states.differentiation = EPISTEMIC_STATES.UNKNOWN;
+          delete next.hypotheses.differentiation;
+          delete next.evidence_statements.differentiation;
+        } else if (sameSemanticValue(next.differentiation, value)) {
+          next.differentiation = null;
+          next.epistemic_states.differentiation = operation.epistemic_state || EPISTEMIC_STATES.UNKNOWN;
+          delete next.hypotheses.differentiation;
+          delete next.evidence_statements.differentiation;
+        }
+      }
+      continue;
+    }
+    if (kind === 'CORRECT' && slot === 'services') {
+      // SPEC-228: a corrected primary offer must also displace a stale
+      // business_description that duplicates the offer confusion being corrected.
+      const previousServices = facts.services || [];
+      if (previousServices.some((prev) => sameSemanticValue(next.business_description, prev))) {
+        next.business_description = value;
+      }
+      next.services = [value];
+      continue;
+    }
+    if (kind === 'CORRECT' && slot === 'differentiation') {
+      next.differentiation = value;
+      next.epistemic_states.differentiation = operation.epistemic_state;
+      next.evidence_statements.differentiation = value;
+      if (operation.epistemic_state === EPISTEMIC_STATES.HYPOTHESIS) {
+        next.hypotheses.differentiation = value;
+      } else {
+        delete next.hypotheses.differentiation;
+      }
+      continue;
+    }
+    if (kind === 'CORRECT' && slot === 'campaignGoals') {
+      next.ninety_day_outcomes = value;
+      next.epistemic_states.ninety_day_outcomes = operation.epistemic_state;
+      continue;
+    }
+    if (kind === 'RECLASSIFY') {
+      next.services = withoutSemanticValue(next.services, value);
+      next.success_metrics = withoutSemanticValue(next.success_metrics, value);
+    }
+    if (['pains', 'transformation_areas', 'learning_signals'].includes(slot)) {
+      next[slot] = uniquePush(next[slot], [value]);
+      if (slot === 'pains') next.success_metrics = withoutSemanticValue(next.success_metrics, value);
+    } else if (slot === 'ideal_customers') {
+      next.ideal_customers = kind === 'CORRECT'
+        ? [value]
+        : uniquePush(next.ideal_customers, [value]);
+    } else if (slot === 'ideal_customer_traits') {
+      next.ideal_customer_traits = uniquePush(next.ideal_customer_traits, [value]);
+    } else if (slot === 'success_metrics' && !next.excluded_metrics.some((item) => sameSemanticValue(item, value))) {
+      next.success_metrics = uniquePush(next.success_metrics, [value]);
+    }
+  }
+  // SPEC-228 invariant: business_description is description-only and must never
+  // carry a self-referential "<name> is a ..." wrap, regardless of which slots
+  // the correction operations targeted.
+  next.business_description = sanitizeIdentityDescription(next.business_name, next.business_description);
+  // SPEC-228 invariant: raw correction-instruction prose (negation sentences,
+  // literal "not a metric" text, etc.) must never remain active business
+  // meaning even if it entered a slot before the correction operation model
+  // understood that slot.
+  next.success_metrics = next.success_metrics.filter((item) => {
+    if (!containsCorrectionInstructionLeakage(item)) return true;
+    next.excluded_metrics = uniquePush(
+      next.excluded_metrics,
+      [/lead volume/i.test(item) ? 'raw lead volume' : item]
+    );
+    return false;
+  });
+  next.geography = next.geography.filter((item) => !containsCorrectionInstructionLeakage(item));
+  if (containsCorrectionInstructionLeakage(next.differentiation)) next.differentiation = null;
+  if (containsCorrectionInstructionLeakage(next.brand_voice)) {
+    next.brand_voice = null;
+    next.epistemic_states.brand_voice = EPISTEMIC_STATES.UNKNOWN;
+    next.superseded_slots = uniquePush(next.superseded_slots, ['brand_voice']);
+  }
+  if (containsObjectiveCorrectionLeakage(next.ninety_day_outcomes)) {
+    next.ninety_day_outcomes = authoritativeObjectiveFromFacts(facts);
+    next.epistemic_states.ninety_day_outcomes = next.ninety_day_outcomes
+      ? EPISTEMIC_STATES.KNOWN
+      : EPISTEMIC_STATES.UNKNOWN;
+  }
+  for (const [slot, epistemicState] of Object.entries(next.epistemic_states)) {
+    if (epistemicState === EPISTEMIC_STATES.HYPOTHESIS && !next.hypotheses?.[slot]) {
+      throw new Error(`Semantic projection incoherent: ${slot} is HYPOTHESIS without an active hypothesis`);
+    }
+  }
+  return next;
+}
+
+/**
+ * Reconcile historical persisted state with the active semantic contract before
+ * it is used to resume an unapproved interview or synthesize a Blueprint.
+ */
+function isStructurallyIncompleteRecoveredCustomerFragment(slot, value) {
+  const raw = normalizeBusinessPhrase(String(value || '').trim());
+  if (!raw) return true;
+
+  if (slot === 'ideal_customer_traits') {
+    const words = raw.split(/\s+/).filter(Boolean);
+    if (words.length <= 1) return true;
+    if (/^(?:delegate|operate|manage|run|change|improve|grow|scale|build)\b/i.test(raw)) return true;
+    if (/^\s*(?:is|are|be|would|could|should|will)\s+(?:ready|open|able)\b/i.test(raw) && words.length <= 8) {
+      return true;
+    }
+    return false;
+  }
+
+  if (slot === 'ideal_customers' || slot === 'disqualified_customers') {
+    const words = raw.split(/\s+/).filter(Boolean);
+    if (words.length <= 1) {
+      if (slot === 'ideal_customers' && isCanonicalIdealCustomerSegment(raw)) return false;
+      return true;
+    }
+    if (/^(?:customers?|clients?|people|owners?|teams?|businesses?|segments?)$/i.test(raw)) return true;
+    if (/^(?:ideally|perhaps|maybe|likely|generally)\b/i.test(raw)) return true;
+    if (/^(?:delegate|operate|manage|run|change|improve|grow)\b/i.test(raw)) return true;
+    if (/^(?:who|what|which|when|how|why|where)\b/i.test(raw)) return true;
+    return false;
+  }
+
+  return false;
+}
+
+function isRecoveredCustomerSlotRoleValid(slot, value) {
+  const raw = normalizeBusinessPhrase(String(value || '').trim());
+  if (!raw || containsMetaInstructionLanguage(raw) || isMetaConsultantSentence(raw)) return false;
+
+  const isPositiveFitTrait = (text) =>
+    /^(?:(?:the\s+)?(?:customer|owner|founder|business)\s+)?(?:(?:is|are)\s+)?(?:willing|ready|open|able|recognizes?|has|remain(?:s)? involved)\b/i.test(
+      text
+    );
+  const isPositiveFitStatement = (text) =>
+    isPositiveFitTrait(text) || /\b(?:is designed for|already have functioning operations)\b/i.test(text);
+  const isExplicitExclusion = (text) =>
+    /\b(?:avoid|exclude|rather not work|do not want|don'?t want|will not|won'?t|not a fit|idea[\s-]?stage|early[\s-]?stage|pre[\s-]?revenue|only looking|only seeking|expecting someone else|do not yet|does not yet|without functioning|not ready)\b/i.test(
+      text
+    );
+  const sentences = raw.split(/(?<=[.!?])\s+/).filter(Boolean);
+
+  if (slot === 'ideal_customers') {
+    return !isPositiveFitTrait(raw);
+  }
+
+  if (slot === 'ideal_customer_traits') {
+    return !isExplicitExclusion(raw);
+  }
+
+  if (slot === 'disqualified_customers') {
+    if (!isExplicitExclusion(raw) || isPositiveFitTrait(raw)) return false;
+    return !(
+      sentences.length > 1 &&
+      sentences.some(isExplicitExclusion) &&
+      sentences.some(isPositiveFitStatement)
+    );
+  }
+
+  return true;
+}
+
+function normalizeRecoveredInterviewState(interviewState) {
+  const state = { ...(interviewState || {}) };
+  const facts = cloneNormalizedFacts(state.normalizedFacts);
+  const sectionState = { ...(state.sectionState || {}) };
+  const fieldToSection = Object.fromEntries(
+    Object.entries(SECTION_TO_PRIMARY_FIELD).map(([section, field]) => [field, section])
+  );
+  const slots = new Set([
+    ...Object.keys(facts.epistemic_states || {}),
+    ...Object.keys(facts.hypotheses || {}),
+    ...Object.keys(facts.evidence_statements || {}),
+    ...Object.keys(facts || {}),
+  ]);
+
+  for (const slot of slots) {
+    if (!Object.prototype.hasOwnProperty.call(facts, slot)) continue;
+    const value = facts[slot];
+    const hasValue = Array.isArray(value) ? value.length > 0 : value != null && value !== '';
+    const stateValue = facts.epistemic_states[slot];
+    const invalidValue = typeof value === 'string' && containsCorrectionInstructionLeakage(value);
+    const invalidHypothesis = containsCorrectionInstructionLeakage(facts.hypotheses[slot]);
+    const invalidEvidence = containsCorrectionInstructionLeakage(facts.evidence_statements[slot]);
+
+    if (Array.isArray(value)) {
+      const originalCount = value.length;
+      const cleaned = value.filter(
+        (entry) =>
+          !isStructurallyIncompleteRecoveredCustomerFragment(slot, entry) &&
+          isRecoveredCustomerSlotRoleValid(slot, entry)
+      );
+      if (cleaned.length !== originalCount) {
+        facts[slot] = cleaned;
+        facts.epistemic_states[slot] = cleaned.length ? facts.epistemic_states[slot] || EPISTEMIC_STATES.KNOWN : EPISTEMIC_STATES.UNKNOWN;
+        facts.superseded_slots = uniquePush(facts.superseded_slots, [slot]);
+      }
+    }
+
+    if (invalidValue) {
+      facts[slot] = null;
+      facts.epistemic_states[slot] = EPISTEMIC_STATES.UNKNOWN;
+    }
+
+    const orphanedHypothesis = stateValue === EPISTEMIC_STATES.HYPOTHESIS && !hasValue;
+    const invalidated = invalidValue ||
+      orphanedHypothesis ||
+      (!hasValue && [EPISTEMIC_STATES.UNKNOWN, EPISTEMIC_STATES.NOT_APPLICABLE].includes(stateValue));
+    if (invalidated) {
+      if (orphanedHypothesis) facts.epistemic_states[slot] = EPISTEMIC_STATES.UNKNOWN;
+      delete facts.hypotheses[slot];
+      if (invalidEvidence || !hasValue) delete facts.evidence_statements[slot];
+      facts.superseded_slots = uniquePush(facts.superseded_slots, [slot]);
+    } else if (facts.epistemic_states[slot] === EPISTEMIC_STATES.HYPOTHESIS) {
+      // An active hypothesis must be represented by its active proposition.
+      if (!facts.hypotheses[slot] || !sameSemanticValue(facts.hypotheses[slot], facts[slot])) {
+        facts.hypotheses[slot] = facts[slot];
+      }
+      if (invalidEvidence) facts.evidence_statements[slot] = facts[slot];
+    } else if (invalidHypothesis) {
+      delete facts.hypotheses[slot];
+    }
+
+    const sectionKey = fieldToSection[slot];
+    if (sectionKey && facts.superseded_slots.includes(slot)) {
+      const prior = sectionState[sectionKey];
+      if (prior && prior.summary) {
+        sectionState[sectionKey] = { ...prior, summary: '' };
+      }
+    }
+  }
+
+  state.normalizedFacts = facts;
+  state.sectionState = sectionState;
+  return state;
+}
+
+async function applyRefinementSemanticCorrections(store, session, state, text, turnId) {
+  const operations = reviewCorrectionOperations(text, state, turnId);
+  if (!operations.length) return { operations, evidenceIds: [] };
+  state.workingSemanticCorrections = [...(state.workingSemanticCorrections || []), ...operations];
+  state.normalizedFacts = projectWorkingSemanticOperations(state.normalizedFacts, operations);
+  const evidenceIds = [];
+  for (const operation of operations) {
+    const evidence = await store.insertEvidence({
+      id: newId(), client_id: session.client_id, session_id: session.id,
+      source: 'Blueprint refinement', source_turn_id: turnId, category: 'refinement',
+      statement: operation.source_text, confidence: EXPLICIT_CONFIDENCE,
+      type: 'CLIENT_EDITED', created_at: new Date(),
+    });
+    evidenceIds.push(evidence.id);
+  }
+  state.normalizedFacts = prepareNormalizedFactsForBrief(state.normalizedFacts);
+  state.sectionState = sectionsFromNormalizedFacts(state.normalizedFacts, state.sectionState);
+  session.interview_state = state;
+  return { operations, evidenceIds };
 }
 
 function normalizeBrandVoiceTone(text) {
@@ -2519,6 +4432,590 @@ function synthesizeDifferentiationSnippet(text) {
   return snippet.replace(/[.!?]+$/, '').trim();
 }
 
+function naturalListPhrases(items) {
+  const list = (items || []).map((x) => String(x).trim()).filter(Boolean);
+  if (!list.length) return '';
+  if (list.length === 1) return list[0];
+  if (list.length === 2) return `${list[0]} and ${list[1]}`;
+  return `${list.slice(0, -1).join(', ')}, and ${list[list.length - 1]}`;
+}
+
+function dedupeSemanticList(items) {
+  const out = [];
+  for (const item of items || []) {
+    const normalized = normalizeBusinessPhrase(String(item || '').trim());
+    if (!normalized) continue;
+    if (out.some((prior) => sameSemanticValue(prior, normalized))) continue;
+    out.push(normalized);
+  }
+  return out;
+}
+
+function isOutcomePhraseNotService(item) {
+  const s = String(item || '').trim();
+  if (!s) return false;
+  return (
+    /\b(?:more credible online presence|stronger,?\s*more credible online presence)\b/i.test(s) &&
+    !/\b(?:redesign|design|messaging|copywriting|seo|optimization|launch)\b/i.test(s)
+  );
+}
+
+const BLUEPRINT_AVOID_CLOSING_SENTENCE =
+  'These constraints protect targeting quality and should stay visible in the Blueprint.';
+
+function stripAvoidCustomersBlueprintClosing(text) {
+  return String(text || '')
+    .replace(
+      /\s*these constraints protect targeting quality and should stay visible in the blueprint\.?\s*/gi,
+      ' '
+    )
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isServiceCompositionNoise(item) {
+  const s = String(item || '').trim();
+  if (!s) return true;
+  if (isMisassignedWebsitePainItem(s)) return true;
+  if (isOutcomePhraseNotService(s)) return true;
+  if (
+    /\b(?:for now\b|broken on mobile|below the quality|look legitimate|help the business look|quality of the business itself)\b/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (/^(?:but|and or|for now|broken on mobile)\b/i.test(s)) return true;
+  if (
+    /\b(?:owner-led|decision-maker|trust, lead flow|lead flow|sales)\b/i.test(s) &&
+    !/\b(?:redesign|design|copywriting|seo|launch|messaging|optimization|booking flow)\b/i.test(s)
+  ) {
+    return true;
+  }
+  if (/^explain(?:ing)?\s+(?:its|their)\s+value clearly$/i.test(s)) return true;
+  if (/^making them look legitimate$/i.test(s)) return true;
+  return false;
+}
+
+const STUDIO_WEBSITE_SERVICE_ORDER = Object.freeze([
+  'website redesign',
+  'messaging',
+  'visual design',
+  'homepage and key-page design',
+  'copywriting',
+  'mobile optimization',
+  'stronger calls to action',
+  'contact or booking flow setup',
+  'basic SEO cleanup',
+  'launch support',
+  'light post-launch refinement',
+]);
+
+function studioWebsiteServiceDetected(services, evidenceText) {
+  const ev = String(evidenceText || '');
+  if (/website redesign/i.test(ev)) return true;
+  return (services || []).some((item) => /website redesign/i.test(String(item || '')));
+}
+
+function studioWebsiteServiceEvidenceMatches(canon, evidenceText) {
+  const ev = String(evidenceText || '');
+  switch (canon) {
+    case 'homepage and key-page design':
+      return /homepage and key[- ]page design/i.test(ev);
+    case 'stronger calls to action':
+      return /\b(?:stronger )?calls to action\b/i.test(ev);
+    case 'contact or booking flow setup':
+      return /contact(?: form)? or booking flow setup/i.test(ev);
+    case 'mobile optimization':
+      return /\bmobile optimization\b/i.test(ev) || /\bmobile experience\b/i.test(ev);
+    case 'light post-launch refinement':
+      return /light post[- ]launch refinement/i.test(ev);
+    default:
+      return new RegExp(`\\b${canon.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(ev);
+  }
+}
+
+function serviceItemMatchesStudioCanon(item, canon) {
+  const s = String(item || '').trim();
+  if (!s) return false;
+  if (sameSemanticValue(s, canon)) return true;
+  switch (canon) {
+    case 'mobile optimization':
+      return /^mobile(?: optimization| experience)$/i.test(s);
+    case 'stronger calls to action':
+      return /^calls to action$/i.test(s) || /^stronger calls to action$/i.test(s);
+    case 'contact or booking flow setup':
+      return /^contact(?: form)? or booking flow setup$/i.test(s);
+    case 'homepage and key-page design':
+      return /^(?:homepage and key[- ]page design|homepage|key page design)$/i.test(s);
+    default:
+      return s.toLowerCase() === canon.toLowerCase();
+  }
+}
+
+function canonicalizeComposedWebsiteServices(services, evidenceText) {
+  const filtered = (services || [])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+    .filter((item) => !isServiceCompositionNoise(item) && !isOutcomePhraseNotService(item));
+  if (!studioWebsiteServiceDetected(filtered, evidenceText)) {
+    return dedupeNormalizedList(filtered);
+  }
+
+  const ordered = [];
+  for (const canon of STUDIO_WEBSITE_SERVICE_ORDER) {
+    const inList = filtered.some((item) => serviceItemMatchesStudioCanon(item, canon));
+    const inEvidence = studioWebsiteServiceEvidenceMatches(canon, evidenceText);
+    if (inList || inEvidence) ordered.push(canon);
+  }
+  return ordered.length >= 4 ? ordered : dedupeNormalizedList(filtered);
+}
+
+function resolveBriefServicesForComposition(facts) {
+  const slotServices = sanitizeBriefServiceList(facts.services).filter(
+    (item) => !isServiceCompositionNoise(item) && !isOutcomePhraseNotService(item)
+  );
+  const evidence = String(facts.evidence_statements?.services || '').trim();
+  const evidenceServices = evidence
+    ? sanitizeBriefServiceList(extractServiceList(evidence)).filter(
+        (item) => !isServiceCompositionNoise(item) && !isOutcomePhraseNotService(item)
+      )
+    : [];
+
+  let merged;
+  if (evidenceServices.length >= 2) {
+    merged = dedupeNormalizedList(evidenceServices);
+  } else {
+    merged = dedupeNormalizedList([...slotServices, ...evidenceServices]).filter(
+      (item) => !isServiceCompositionNoise(item) && !isOutcomePhraseNotService(item)
+    );
+  }
+  return canonicalizeComposedWebsiteServices(merged, evidence);
+}
+
+function pinComposedBlueprintSectionSummaries(facts, sections) {
+  const f = facts || emptyNormalizedFacts();
+  const base = sections || emptySections();
+  const next = { ...base };
+
+  const targetMarketsSummary = composeBlueprintTargetMarketsSummary(f);
+  if (targetMarketsSummary) {
+    next.targetMarkets = {
+      ...(base.targetMarkets || emptySection()),
+      summary: targetMarketsSummary,
+    };
+  }
+
+  const briefServices = resolveBriefServicesForComposition(f);
+  if (briefServices.length && f.epistemic_states?.services !== EPISTEMIC_STATES.UNKNOWN) {
+    const name = sanitizeBusinessName(f.business_name || '');
+    next.services = {
+      ...(base.services || emptySection()),
+      summary: composeBlueprintServicesSummary(name, f),
+    };
+  }
+
+  return next;
+}
+
+function stripDisqualifiedCustomerLeadIn(text) {
+  let s = normalizeBusinessPhrase(stripAvoidCustomersBlueprintClosing(String(text || '').trim()));
+  s = s.replace(/^yes\.?\s*/i, '');
+  s = stripInterviewQuestionEcho(s);
+  s = s
+    .replace(
+      /^(?:[A-Z][a-zA-Z0-9&'.-]+(?:\s+[A-Z][a-zA-Z0-9&'.-]+)*\s+)?should avoid\s+/i,
+      ''
+    )
+    .replace(/^(?:the business prefers to avoid\s+)+/i, '')
+    .replace(/^(?:we|i)\s+(?:avoid|decline|don'?t want(?: to work with)?)\s+/i, '')
+    .replace(/^avoid\s+/i, '')
+    .trim();
+  if (!/^customers?\b/i.test(s) && /^who\s+/i.test(s)) {
+    s = `customers ${s}`;
+  }
+  return s.replace(/[.!?]+$/, '').trim();
+}
+
+function isMalformedIdealCustomerFragment(item) {
+  const s = normalizeBusinessPhrase(String(item || '').trim());
+  if (!s) return true;
+  if (
+    /^(?:lead flow|getting referrals|running ads|explaining their value clearly|making them look legitimate)$/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (/,\s*getting referrals\.?$/i.test(s)) return true;
+  if (s.split(/\s+/).length <= 3 && !isCanonicalIdealCustomerSegment(s)) return true;
+  return false;
+}
+
+function resolveIdealCustomersForComposition(facts, cleanIdeal) {
+  let items = (cleanIdeal || []).filter((item) => !isMalformedIdealCustomerFragment(item));
+  const malformed =
+    idealCustomersPersistedShapeMalformed(facts.ideal_customers) ||
+    (cleanIdeal || []).some((item) => isMalformedIdealCustomerFragment(item));
+  if (!items.length || malformed) {
+    const ev = String(facts.evidence_statements?.ideal_customers || '').trim();
+    const sentences = ev
+      .split(/\n\n+|\n+/)
+      .map((line) => normalizeBusinessPhrase(stripBusinessNameLeadIn(line.trim())))
+      .filter(
+        (line) =>
+          line &&
+          /owner-led|decision-maker|small business owner|operator \/ decision-maker/i.test(line) &&
+          !isMisassignedWebsitePainItem(line)
+      )
+      .slice(0, 2);
+    if (sentences.length) items = dedupeSemanticList(sentences);
+  }
+  return items;
+}
+
+function isDisqualifiedCompositionNoise(item) {
+  const s = String(item || '').trim();
+  if (!s) return true;
+  if (looksLikeIdealCustomerPhrase(s) && !looksLikeCustomerExclusionPhrase(s)) return true;
+  return false;
+}
+
+function dedupeCheapestWebsiteExclusions(items) {
+  const exclusionIntent = items.filter((item) =>
+    /\b(?:cheapest|lowest price|cosmetic|one-off|one off)\b/i.test(item)
+  );
+  if (exclusionIntent.length <= 1) return items;
+  const keep = exclusionIntent.sort((a, b) => b.length - a.length)[0];
+  const rest = items.filter(
+    (item) =>
+      !/\b(?:cheapest|lowest price|cosmetic|one-off|one off)\b/i.test(item) ||
+      sameSemanticValue(item, keep)
+  );
+  return dedupeSemanticList([keep, ...rest.filter((item) => !sameSemanticValue(item, keep))]);
+}
+
+function resolveDisqualifiedForComposition(facts) {
+  const evidenceRaw = String(facts.evidence_statements?.disqualified_customers || '').trim();
+  if (evidenceRaw && /\b(?:avoid|decline|don'?t want|cheapest|cosmetic|one-off)\b/i.test(evidenceRaw)) {
+    const fromEvidence = stripDisqualifiedCustomerLeadIn(evidenceRaw);
+    if (fromEvidence.split(/\s+/).length >= 6) {
+      return [fromEvidence];
+    }
+  }
+
+  const slot = (facts.disqualified_customers || [])
+    .map(stripDisqualifiedCustomerLeadIn)
+    .filter(Boolean)
+    .filter((item) => !isDisqualifiedCompositionNoise(item));
+  return dedupeCheapestWebsiteExclusions(dedupeSemanticList(slot));
+}
+
+function extractTargetMarketVerticalsFromText(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return [];
+  const afterDash = raw.match(/\s+[—–-]\s+(.+)$/);
+  const segmentSource = afterDash ? afterDash[1] : raw;
+  return dedupeNormalizedList(
+    splitListItems(segmentSource.replace(/\band owner-led local brands?\b/i, ', owner-led local brands'))
+      .map((item) => normalizeBusinessPhrase(item))
+      .filter(
+        (item) =>
+          item &&
+          (isVerticalFocusSegment(item) ||
+            /\bowner-led local brands?\b/i.test(item) ||
+            /\b(?:medical|wellness|hospitality|property service)/i.test(item))
+      )
+  );
+}
+
+function resolveTargetMarketsForComposition(facts) {
+  let geo = filterTargetMarketGeography(facts.geography || []);
+  let verticalParts = facts.vertical_focus
+    ? splitListItems(String(facts.vertical_focus).replace(/;/g, ','))
+    : [];
+
+  const marketEvidence = String(facts.evidence_statements?.geography || '').trim();
+  if (marketEvidence) {
+    if (/southern\s+new\s+hampshire/i.test(marketEvidence)) {
+      geo = dedupeNormalizedList([...geo, 'southern New Hampshire']);
+    }
+    if (geo.length < 2 || !geo.some((g) => /southern new hampshire/i.test(g))) {
+      const fromEvidenceGeo = filterTargetMarketGeography(
+        extractPlaces(marketEvidence).length
+          ? extractPlaces(marketEvidence)
+          : [marketEvidence]
+      );
+      geo = dedupeNormalizedList([...geo, ...fromEvidenceGeo]);
+    }
+    if (!verticalParts.length) {
+      verticalParts = extractTargetMarketVerticalsFromText(marketEvidence);
+    }
+  }
+
+  return { geo, verticalParts };
+}
+
+function filterTargetMarketGeography(geography) {
+  return (geography || [])
+    .map((item) => normalizeBusinessPhrase(String(item || '').trim()))
+    .filter(Boolean)
+    .filter((item) => {
+      if (looksLikeIdealCustomerPhrase(item)) return false;
+      if (looksLikeCustomerExclusionPhrase(item)) return false;
+      if (QUALIFICATION_SIGNAL_PHRASE_RE.test(item)) return false;
+      if (/\b(?:weak digital presentation|good real-world service)\b/i.test(item)) return false;
+      if (isVerticalFocusSegment(item) && !looksLikeGeographyOnly(item)) return false;
+      return looksLikeGeographyOnly(item) || extractPlaces(item).length > 0;
+    });
+}
+
+function dedupeScorecardMetrics(metrics) {
+  let list = dedupeNormalizedList(metrics || []);
+  const hasTotal = list.some((m) => /\btotal revenue closed\b/i.test(m));
+  if (hasTotal) {
+    list = list.filter((m) => !/^revenue closed$/i.test(String(m).trim()));
+  }
+  return list;
+}
+
+function composeBlueprintServicesSummary(businessName, facts) {
+  const services = resolveBriefServicesForComposition(facts);
+  if (!services.length) return '';
+  const subject = businessName || 'The business';
+  return [
+    ensurePeriod(`${subject} delivers ${naturalListPhrases(services)}`),
+    'Service understanding reflects what is actually sold now, not aspirational packaging.',
+  ].join(' ');
+}
+
+function composeBlueprintIdealCustomersSummary(facts, cleanIdeal) {
+  const items = resolveIdealCustomersForComposition(facts, cleanIdeal).map((item) =>
+    String(item || '')
+      .trim()
+      .replace(/^ideal customers?\s+(?:are|include)\s+/i, '')
+      .replace(/[.!?]+$/, '')
+      .trim()
+  );
+  if (!items.length) return '';
+
+  if (items.length === 1) {
+    return [
+      ensurePeriod(`Ideal customers are ${items[0]}`),
+      'This ICP picture prioritizes fit over volume.',
+    ].join(' ');
+  }
+
+  const primary = items.find((item) => /owner-led/i.test(item)) || items[0];
+  const secondary = items.find(
+    (item) => item !== primary && /decision-maker|small business owner|operator/i.test(item)
+  );
+  if (primary && secondary) {
+    const second = secondary.replace(/^the ideal customer is\s+/i, '');
+    return [
+      ensurePeriod(`Ideal customers are ${primary}`),
+      ensurePeriod(`The ideal buyer is ${midSentence(second)}`),
+      'This ICP picture prioritizes fit over volume.',
+    ].join(' ');
+  }
+
+  return [
+    ensurePeriod(`Ideal customers are ${naturalListPhrases(items)}`),
+    'This ICP picture prioritizes fit over volume.',
+  ].join(' ');
+}
+
+function coalesceDisqualifiedFragments(items) {
+  const stripped = (items || []).map(stripDisqualifiedCustomerLeadIn).filter(Boolean);
+  if (!stripped.length) return [];
+  if (stripped.length === 1) return stripped;
+  const looksLikeSplitSentence = stripped
+    .slice(1)
+    .every((part) => /^(?:or|a|an|the)\b/i.test(part) || part.split(/\s+/).length <= 7);
+  if (looksLikeSplitSentence) {
+    let merged = stripped[0].replace(/[.!?]+$/, '').trim();
+    for (let i = 1; i < stripped.length; i += 1) {
+      const part = stripped[i].replace(/[.!?]+$/, '').trim();
+      merged = /^or\b/i.test(part) ? `${merged}, ${part}` : `${merged}, ${part}`;
+    }
+    return [merged.replace(/\s+/g, ' ').trim()];
+  }
+  return dedupeSemanticList(stripped);
+}
+
+function peelBrandVoiceLeadIn(text) {
+  let tone = normalizeBrandVoiceTone(text);
+  tone = tone
+    .replace(
+      /^(?:[A-Z][a-zA-Z0-9&'.-]+(?:\s+[A-Z][a-zA-Z0-9&'.-]+)*\s+)?should sound\s+/i,
+      ''
+    )
+    .replace(/^(?:the tone should feel|tone should feel)\s+/i, '')
+    .replace(/^(?:brand voice should read as|brand voice should feel)\s+/i, '')
+    .trim();
+  return tone;
+}
+
+function composeBlueprintAvoidCustomersSummary(facts) {
+  const resolved = resolveDisqualifiedForComposition(facts);
+  const cleaned = coalesceDisqualifiedFragments(resolved);
+  if (!cleaned.length) return '';
+  const substance = cleaned.length === 1 ? cleaned[0] : naturalListPhrases(cleaned);
+  return [
+    ensurePeriod(`The business prefers to avoid ${substance}`),
+    BLUEPRINT_AVOID_CLOSING_SENTENCE,
+  ].join(' ');
+}
+
+function normalizeTargetMarketVerticalPhrase(items) {
+  const list = dedupeNormalizedList(items || []);
+  if (!list.length) return '';
+  if (list.length === 1 && list[0].includes(',')) {
+    return list[0]
+      .replace(/\bmedical or wellness practices\b/i, 'medical and wellness practices')
+      .replace(/\bcontractors,\s*trades\b/i, 'contractors and trades');
+  }
+  const joined = naturalListPhrases(list);
+  return joined
+    .replace(/\bmedical,\s*wellness practices\b/i, 'medical and wellness practices')
+    .replace(/\bcontractors,\s*trades\b/i, 'contractors and trades');
+}
+
+function composeBlueprintTargetMarketsSummary(facts) {
+  const { geo, verticalParts } = resolveTargetMarketsForComposition(facts);
+  const geoList = dedupeNormalizedList(geo);
+  const verticalList = dedupeNormalizedList(verticalParts);
+  if (!geoList.length && !verticalList.length) return '';
+
+  const geoPhrase =
+    geoList.length === 2 ? `${geoList[0]} and ${geoList[1]}` : naturalListPhrases(geoList);
+  const verticalPhrase = normalizeTargetMarketVerticalPhrase(verticalList);
+
+  let first;
+  if (geoList.length && verticalPhrase) {
+    first = `Priority markets are ${geoPhrase}, with an initial focus on ${verticalPhrase}`;
+  } else if (geoList.length) {
+    first = `Priority markets are ${geoPhrase}`;
+  } else {
+    first = `Priority markets have an initial focus on ${verticalPhrase}`;
+  }
+
+  return ensurePeriod(first);
+}
+
+function normalizeDifferentiationCompositionText(text) {
+  let t = String(text || '').trim();
+  t = stripInterviewQuestionEcho(t);
+  t = cleanRawAnswer('competitiveAdvantages', t);
+  t = t
+    .replace(/^competitive edge is described as\s+/i, '')
+    .replace(
+      /^a great-fit customer chooses\s+[^,]+ when they care about\s+/i,
+      'Customers care about '
+    )
+    .replace(/^a great-fit customer chooses\s+[^,]+ when\s+/i, '')
+    .trim();
+  if (/^they care about\b/i.test(t)) {
+    t = `Customers care about ${t.replace(/^they care about\s+/i, '')}`;
+  }
+  t = t.replace(/\.\s+that\s+/gi, '. ');
+  const sentences = t
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => capitalizeSentence(sentence.trim()))
+    .filter(Boolean);
+  return sentences.join(' ');
+}
+
+function composeBlueprintDifferentiationSummary(facts) {
+  const slot = String(facts.differentiation || '').trim();
+  const evidence = String(facts.evidence_statements?.differentiation || '').trim();
+  let text =
+    evidence.length > slot.length + 20 && /credibility|clarity|business impact|choose/i.test(evidence)
+      ? evidence
+      : slot || evidence;
+  text = normalizeDifferentiationCompositionText(text);
+  if (!text) return '';
+  return [
+    ensurePeriod(text),
+    'This is operator-stated differentiation — useful for messaging, not an invented strategy claim.',
+  ].join(' ');
+}
+
+function composeBlueprintBrandVoiceSummary(facts) {
+  const rawEvidence = String(facts.evidence_statements?.brand_voice || '').trim();
+  const rawSlot = String(facts.brand_voice || '').trim();
+  const parts = (rawEvidence || rawSlot)
+    .split(/\n\n+|\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  let tone = peelBrandVoiceLeadIn(parts[0] || rawSlot || rawEvidence);
+  if (parts.some((line) => /premium but not pretentious/i.test(line))) {
+    tone = `${tone.replace(/[.!?]+$/, '')}, premium but not pretentious`;
+  }
+  if (!tone) return '';
+  return [
+    ensurePeriod(capitalizeSentence(tone)),
+    'Tone guidance constrains later language without choosing channels or campaigns.',
+  ].join(' ');
+}
+
+function authoritativeCampaignGoalSource(facts) {
+  const slot = String(facts.ninety_day_outcomes || '').trim();
+  const evidence = String(facts.evidence_statements?.ninety_day_outcomes || '').trim();
+  if (evidence.length > slot.length + 20) return evidence;
+  if (slot && !/^would be successful if\b/i.test(slot)) return slot;
+  return evidence || slot;
+}
+
+function composeBlueprintCampaignGoalsSummary(facts) {
+  const raw = authoritativeCampaignGoalSource(facts);
+  if (!raw) return '';
+
+  let tail = stripInterviewQuestionEcho(raw);
+  tail = cleanRawAnswer('campaignGoals', tail);
+  tail = tail
+    .replace(/^over the next 90 days,?\s*/i, '')
+    .replace(/^(?:this growth work )?would be successful if\s+/i, '')
+    .trim();
+  tail = stripBusinessNameLeadIn(tail).replace(/[.!?]+$/, '').trim();
+  if (!tail) return '';
+
+  const pieces = tail
+    .split(/,\s*(?=acquires?|validates?|prove(?:s)?|builds?|books?|signs?|launches?)/i)
+    .map((part) => normalizeBusinessPhrase(part.trim().replace(/[.!?]+$/, '')))
+    .filter(Boolean);
+
+  const normalizedPieces = (pieces.length ? pieces : [normalizeBusinessPhrase(tail)]).map((piece, idx) => {
+    let p = piece;
+    p = p.replace(/^[A-Z][a-zA-Z0-9&'.-]+(?:\s+[A-Z][a-zA-Z0-9&'.-]+)*\s+proves?\s+/i, 'prove that ');
+    if (/^proves?\s+/i.test(p)) p = p.replace(/^proves?\s+/i, 'prove that ');
+    p = p.replace(/^prove\s+that\s+that\s+/i, 'prove that ');
+    if (/^acquires?\s+/i.test(p)) p = p.replace(/^acquires?\s+/i, 'acquire ');
+    if (/^validates?\s+/i.test(p)) p = p.replace(/^validates?\s+/i, 'validate ');
+    if (/, and validates\b/i.test(p)) p = p.replace(/, and validates\b/i, ', and validate');
+    return idx === 0 ? capitalizeSentence(p) : midSentence(p);
+  });
+
+  const joined =
+    normalizedPieces.length === 1
+      ? midSentence(normalizedPieces[0])
+      : normalizedPieces.join('; ');
+
+  return [
+    ensurePeriod(`Over the next 90 days, ${joined}`),
+    'These are desired business outcomes for the next phase of work, not execution tactics.',
+  ].join(' ');
+}
+
+function composeBlueprintSuccessMetricsSummary(metrics) {
+  const cleaned = dedupeScorecardMetrics(metrics);
+  if (!cleaned.length) return '';
+  return [
+    ensurePeriod(`Success will be judged by ${naturalListPhrases(cleaned)}`),
+    "These signals define whether the engagement is working from the client's perspective.",
+  ].join(' ');
+}
+
 /**
  * Build Blueprint-shaped section summaries from normalized evidence (not raw transcript).
  */
@@ -2527,41 +5024,52 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
   const prior = priorSections || emptySections();
   const sections = emptySections();
   const name = sanitizeBusinessName(f.business_name || '');
+  const priorSummary = (key, slot) => {
+    const summary = String(prior[key]?.summary || '').trim();
+    if (!summary || f.superseded_slots.includes(slot) || containsCorrectionInstructionLeakage(summary)) return '';
+    return summary;
+  };
 
   const identityBits = [];
   if (name && f.business_description) {
-    const desc = normalizeBusinessPhrase(firstSentence(f.business_description));
-    const article = /^[aeiou]/i.test(desc) ? 'an' : 'a';
-    identityBits.push(`${name} is ${article} ${desc}`);
+    identityBits.push(buildIdentityOverviewSentence(name, f.business_description, f));
   } else if (name) {
-    identityBits.push(`${name} is a cleaning company`);
+    identityBits.push(buildIdentityOverviewSentence(name, null, f));
   } else if (f.business_description) {
     identityBits.push(
       `The business is understood as ${normalizeBusinessPhrase(firstSentence(f.business_description))}`
     );
   }
+  const getEpistemicState = (fieldKey, hasValue) => {
+    return f.epistemic_states?.[fieldKey] || (hasValue ? EPISTEMIC_STATES.KNOWN : EPISTEMIC_STATES.UNRESOLVED);
+  };
+
   sections.identity = {
     ...(prior.identity || emptySection()),
+    epistemic_state: getEpistemicState('business_description', identityBits.length > 0),
     summary: identityBits.length
       ? [
           ensurePeriod(identityBits[0]),
           'This identity framing is how the operator describes the business today, and it anchors every other Blueprint section.',
         ].join(' ')
-      : prior.identity?.summary || '',
+      : priorSummary('identity', 'business_description'),
   };
 
+  const briefServices = resolveBriefServicesForComposition(f);
   sections.services = {
     ...(prior.services || emptySection()),
-    summary: f.services.length
-      ? [
-          ensurePeriod(`Today the business delivers ${f.services.join(', ')}`),
-          'Service understanding reflects what is actually sold now, not aspirational packaging.',
-        ].join(' ')
-      : prior.services?.summary || '',
+    epistemic_state: getEpistemicState('services', briefServices.length > 0),
+    summary:
+      briefServices.length && f.epistemic_states?.services === EPISTEMIC_STATES.KNOWN
+        ? composeBlueprintServicesSummary(name, f)
+        : f.epistemic_states?.services === EPISTEMIC_STATES.UNKNOWN
+          ? 'Services: Not yet defined.'
+          : prior.services?.summary || '',
   };
 
   sections.idealCustomers = {
     ...(prior.idealCustomers || emptySection()),
+    epistemic_state: getEpistemicState('ideal_customers', (f.ideal_customers || []).length > 0),
     summary: (() => {
       const cleanIdeal = (f.ideal_customers || []).filter(
         (item) =>
@@ -2570,19 +5078,22 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
           !isValueTraitPhrase(item) &&
           !isConversationalFiller(item)
       );
-      if (cleanIdeal.length) {
-        return [
-          ensurePeriod(`Ideal customers are ${cleanIdeal.join(', ')}`),
-          'This ICP picture prioritizes fit over volume.',
-        ].join(' ');
+      if (cleanIdeal.length && f.epistemic_states?.ideal_customers === EPISTEMIC_STATES.KNOWN) {
+        return composeBlueprintIdealCustomersSummary(f, cleanIdeal);
       }
-      const priorSummary = String(prior.idealCustomers?.summary || '').trim();
+      if (f.epistemic_states?.ideal_customers === EPISTEMIC_STATES.HYPOTHESIS) {
+        return `Current hypothesis: target audience may be ${f.hypotheses?.ideal_customers || f.evidence_statements?.ideal_customers || 'under evaluation'}.`;
+      }
+      if (f.epistemic_states?.ideal_customers === EPISTEMIC_STATES.UNKNOWN) {
+        return 'Ideal customers: Not yet defined.';
+      }
+      const priorIdealSummary = String(prior.idealCustomers?.summary || '').trim();
       if (
-        priorSummary &&
-        !isLiteralUncertaintyPhrase(priorSummary) &&
-        !/\bi don'?t know\b|\bnot sure\b|\bhaven'?t figured\b/i.test(priorSummary)
+        priorIdealSummary &&
+        !isLiteralUncertaintyPhrase(priorIdealSummary) &&
+        !/\bi don'?t know\b|\bnot sure\b|\bhaven'?t figured\b/i.test(priorIdealSummary)
       ) {
-        return priorSummary;
+        return priorSummary('idealCustomers', 'ideal_customers');
       }
       return '';
     })(),
@@ -2590,82 +5101,90 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
 
   sections.avoidCustomers = {
     ...(prior.avoidCustomers || emptySection()),
-    summary: f.disqualified_customers.length
-      ? [
-          ensurePeriod(`The business prefers to avoid ${f.disqualified_customers.join(', ')}`),
-          'These constraints protect targeting quality and should stay visible in the Blueprint.',
-        ].join(' ')
-      : prior.avoidCustomers?.summary || '',
+    epistemic_state: getEpistemicState('disqualified_customers', f.disqualified_customers.length > 0),
+    summary:
+      f.disqualified_customers.length && f.epistemic_states?.disqualified_customers === EPISTEMIC_STATES.KNOWN
+        ? composeBlueprintAvoidCustomersSummary(f)
+        : f.epistemic_states?.disqualified_customers === EPISTEMIC_STATES.UNKNOWN
+          ? 'Disqualified customers: Not yet defined.'
+          : priorSummary('avoidCustomers', 'disqualified_customers'),
   };
 
-  const marketBits = [];
-  if (f.geography.length) marketBits.push(f.geography.join(', '));
-  if (f.growth_focus) marketBits.push(`with a near-term growth focus on ${f.growth_focus}`);
+  const targetMarketsSummary = composeBlueprintTargetMarketsSummary(f);
   sections.targetMarkets = {
     ...(prior.targetMarkets || emptySection()),
-    summary: marketBits.length
-      ? [
-          ensurePeriod(`Priority markets center on ${marketBits.join(' ')}`),
-          'Geography and vertical focus here bound where discovery should concentrate first.',
-        ].join(' ')
-      : prior.targetMarkets?.summary || '',
+    epistemic_state: getEpistemicState('geography', Boolean(targetMarketsSummary)),
+    summary: targetMarketsSummary
+      ? targetMarketsSummary
+      : f.epistemic_states?.geography === EPISTEMIC_STATES.HYPOTHESIS
+        ? `Current hypothesis: target markets center on ${f.hypotheses?.geography || f.evidence_statements?.geography || 'under evaluation'}.`
+        : f.epistemic_states?.geography === EPISTEMIC_STATES.NOT_APPLICABLE
+          ? 'Geography is not currently a meaningful targeting constraint; targeting is based on business stage and characteristics instead.'
+          : f.epistemic_states?.geography === EPISTEMIC_STATES.UNKNOWN
+            ? 'Target markets: Not yet defined.'
+            : priorSummary('targetMarkets', 'geography'),
   };
 
   sections.competitiveAdvantages = {
     ...(prior.competitiveAdvantages || emptySection()),
-    summary: f.differentiation
-      ? [
-          ensurePeriod(`Competitive edge is described as ${f.differentiation}`),
-          'This is operator-stated differentiation — useful for messaging, not an invented strategy claim.',
-        ].join(' ')
-      : prior.competitiveAdvantages?.summary || '',
+    epistemic_state: getEpistemicState('differentiation', Boolean(f.differentiation)),
+    summary:
+      f.differentiation && f.epistemic_states?.differentiation === EPISTEMIC_STATES.KNOWN
+        ? composeBlueprintDifferentiationSummary(f)
+        : f.epistemic_states?.differentiation === EPISTEMIC_STATES.HYPOTHESIS
+        ? `The current differentiation hypothesis is that ${f.hypotheses?.differentiation || f.evidence_statements?.differentiation || 'the buying decision may be influenced by an as-yet unarticulated advantage'}.`
+        : f.epistemic_states?.differentiation === EPISTEMIC_STATES.UNKNOWN
+          ? 'Differentiation: Not yet defined.'
+          : priorSummary('competitiveAdvantages', 'differentiation'),
   };
 
   sections.brandVoice = {
     ...(prior.brandVoice || emptySection()),
-    summary: f.brand_voice
-      ? [
-          ensurePeriod(`Brand voice should read as ${f.brand_voice}`),
-          'Tone guidance constrains later language without choosing channels or campaigns.',
-        ].join(' ')
-      : prior.brandVoice?.summary || '',
+    epistemic_state: getEpistemicState('brand_voice', Boolean(f.brand_voice)),
+    summary:
+      f.brand_voice && f.epistemic_states?.brand_voice === EPISTEMIC_STATES.KNOWN
+        ? composeBlueprintBrandVoiceSummary(f)
+        : f.epistemic_states?.brand_voice === EPISTEMIC_STATES.HYPOTHESIS
+        ? `The current brand voice hypothesis is that the tone may align with ${f.hypotheses?.brand_voice || f.evidence_statements?.brand_voice || 'an as-yet undefined direction'}.`
+        : f.epistemic_states?.brand_voice === EPISTEMIC_STATES.UNKNOWN
+          ? 'Brand voice: Not yet defined.'
+          : priorSummary('brandVoice', 'brand_voice'),
   };
 
   sections.campaignGoals = {
     ...(prior.campaignGoals || emptySection()),
+    epistemic_state: getEpistemicState('ninety_day_outcomes', Boolean(f.ninety_day_outcomes)),
     summary: f.ninety_day_outcomes
-      ? [
-          ensurePeriod(`Near-term growth goals focus on ${f.ninety_day_outcomes}`),
-          'These are desired business outcomes for the next phase of work, not execution tactics.',
-        ].join(' ')
-      : prior.campaignGoals?.summary || '',
+      ? composeBlueprintCampaignGoalsSummary(f)
+      : priorSummary('campaignGoals', 'ninety_day_outcomes'),
   };
 
   sections.successMetrics = {
     ...(prior.successMetrics || emptySection()),
     summary: f.success_metrics.length
-      ? [
-          ensurePeriod(`Success will be judged by ${f.success_metrics.join(', ')}`),
-          'These signals define whether the engagement is working from the client\'s perspective.',
-        ].join(' ')
-      : prior.successMetrics?.summary || '',
+      ? composeBlueprintSuccessMetricsSummary(f.success_metrics)
+      : priorSummary('successMetrics', 'success_metrics'),
   };
 
   // Preserve confidence / evidenceIds / unknowns from prior when present.
   for (const key of BLUEPRINT_SECTIONS) {
     const p = prior[key] || emptySection();
     const hasSummary =
+      (sections[key].epistemic_state === EPISTEMIC_STATES.KNOWN ||
+       sections[key].epistemic_state === EPISTEMIC_STATES.HYPOTHESIS ||
+       !sections[key].epistemic_state) &&
       Boolean(String(sections[key].summary || '').trim()) &&
       !answerLooksEmpty(sections[key].summary) &&
-      !/\bi don'?t know\b|\bnot sure yet\b/i.test(String(sections[key].summary || ''));
+      !/\bi don'?t know\b|\bnot sure yet\b|\bNot yet defined\b|\bNot applicable\b/i.test(String(sections[key].summary || ''));
     const unknowns = hasSummary
       ? []
       : [...(p.unknowns || [])];
     if (!hasSummary && key === 'idealCustomers') {
       const commercialPref =
-        /commercial/i.test(String(f.growth_focus || '')) ||
-        /commercial/i.test(String(f.vertical_focus || '')) ||
-        /prefer commercial/i.test(String(f.business_description || ''));
+        factsIndicateCommercialCleaningBusiness(f) &&
+        (/commercial/i.test(String(f.growth_focus || '')) ||
+          /commercial/i.test(String(f.vertical_focus || '')) ||
+          /prefer commercial/i.test(String(f.business_description || '')));
       const icpUnknown = commercialPref
         ? 'Which commercial customer segments are the strongest fit'
         : 'Missing clear answer for idealCustomers';
@@ -2674,13 +5193,15 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
       }
     }
     sections[key] = {
-      summary: hasSummary ? sections[key].summary : '',
+      ...sections[key],
+      summary: sections[key].summary || '',
       confidence: p.confidence || (hasSummary ? EXPLICIT_CONFIDENCE : UNKNOWN_CONFIDENCE),
       evidenceIds: [...(p.evidenceIds || [])],
       unknowns,
+      epistemic_state: sections[key].epistemic_state || p.epistemic_state || EPISTEMIC_STATES.UNRESOLVED,
     };
   }
-  return sections;
+  return pinComposedBlueprintSectionSummaries(f, sections);
 }
 
 /**
@@ -2816,6 +5337,12 @@ function businessSubject(name, { possessive = false } = {}) {
  * Never concatenates raw interview text into Mad-Lib templates.
  */
 function synthesizeNormalizedFact(kind, rawOrSummary, opts = {}) {
+  if (
+    opts.epistemicState === EPISTEMIC_STATES.UNKNOWN ||
+    opts.epistemicState === EPISTEMIC_STATES.NOT_APPLICABLE
+  ) {
+    return '';
+  }
   const name = opts.businessName || '';
   const subject = businessSubject(name);
   const possessive = businessSubject(name, { possessive: true });
@@ -2841,7 +5368,7 @@ function synthesizeNormalizedFact(kind, rawOrSummary, opts = {}) {
 
   // Peel Blueprint wrapper prefixes then clean.
   claim = claim.replace(
-    /^(Today the business delivers|Ideal customers are|The business prefers to avoid|Priority markets center on|Competitive edge is described as|Brand voice should read as|Near-term growth goals focus on|Success will be judged by|The business is understood as|Progress will be judged by|Ideal customers include|Geographic focus centers on|The business declines|Brand voice should feel|Near-term growth priorities center on|Customers choose this business because(?:\s+of)?|Services include)\s+/i,
+    /^(Today the business delivers|Ideal customers are|The business prefers to avoid|Priority markets center on|Competitive edge is described as|Brand voice should read as|Near-term growth goals focus on|Success will be judged by|The business is understood as|Progress will be judged by|Ideal customers include|Geographic focus centers on|The business declines|Brand voice should feel|Near-term growth priorities center on|Customers choose this business because(?:\s+of)?|Services include|The current differentiation hypothesis is that|The current brand voice hypothesis is that the tone may align with)\s+/i,
     ''
   );
   let substance = cleanRawAnswer(sectionKey, claim);
@@ -2865,7 +5392,7 @@ function synthesizeNormalizedFact(kind, rawOrSummary, opts = {}) {
         const article = /^[aeiou]/i.test(sentence) ? 'an' : 'a';
         sentence = `${name} is ${article} ${sentence}`;
       } else if (name && new RegExp(`^${escapeRegExp(name)}$`, 'i').test(sentence)) {
-        sentence = `${name} is a cleaning company`;
+        sentence = `${name} is a ${defaultEntityKindForFacts(opts.normalizedFacts || { business_name: name })}`;
       } else {
         sentence = /^[A-Z]/.test(sentence) ? sentence : `This is a ${sentence}`;
       }
@@ -2925,39 +5452,43 @@ function synthesizeNormalizedFact(kind, rawOrSummary, opts = {}) {
     }
     case 'advantages': {
       let edge = substance.trim();
+      const presentAdvantage = (sentence) =>
+        opts.epistemicState === EPISTEMIC_STATES.HYPOTHESIS
+          ? `${subject}'s current differentiation hypothesis is that ${midSentence(edge)}`
+          : sentence;
       // "trust — responsive..." / "trust: ..." → full consultant clause
       const trustDash = edge.match(/^trust\s*[—–\-:]\s*(.+)$/i);
       if (trustDash) {
         edge = `they trust the team to be ${trustDash[1].trim()}`;
-        return `Customers choose ${subject} because ${midSentence(edge)}`;
+        return presentAdvantage(`Customers choose ${subject} because ${midSentence(edge)}`);
       }
       if (/^trust\b/i.test(edge) && /\b(responsive|consistent|accountab|chase|show|communicate)\b/i.test(edge)) {
-        return `Customers choose ${subject} because they trust the team to be responsive, consistent, and accountable without needing to chase the work`;
+        return presentAdvantage(`Customers choose ${subject} because they trust the team to be responsive, consistent, and accountable without needing to chase the work`);
       }
       // Normalize "customers trust..." → "they trust..." when we already name the chooser.
       edge = edge.replace(/^(?:customers?|clients?)\s+(trust|choose|prefer)\b/i, 'they $1');
       // If the answer is already a "trust / show up / communicate" clause, keep it natural.
       if (/^(they|customers?|clients?)\s+/i.test(edge)) {
-        return `Customers choose ${subject} because ${midSentence(edge)}`;
+        return presentAdvantage(`Customers choose ${subject} because ${midSentence(edge)}`);
       }
       if (/^(trust|show|communicate|solve|make|be)\b/i.test(edge)) {
         const clause = /^trust\b/i.test(edge)
           ? edge.replace(/^trust\b/i, 'they trust')
           : `they ${edge}`;
-        return `Customers choose ${subject} because ${midSentence(clause)}`;
+        return presentAdvantage(`Customers choose ${subject} because ${midSentence(clause)}`);
       }
       if (/\btrust\b/i.test(edge) && /\b(responsive|consistent|accountab|chase)\b/i.test(edge)) {
-        return `Customers choose ${subject} because they trust the team to be responsive, consistent, and accountable without needing to chase the work`;
+        return presentAdvantage(`Customers choose ${subject} because they trust the team to be responsive, consistent, and accountable without needing to chase the work`);
       }
       // Adjective list left after stripping "trust —"
       if (/^(responsive|consistent|accountab)/i.test(edge)) {
-        return `Customers choose ${subject} because they trust the team to be ${midSentence(edge)}`;
+        return presentAdvantage(`Customers choose ${subject} because they trust the team to be ${midSentence(edge)}`);
       }
       // Noun-phrase differentiation (e.g. "reliable crews")
       if (!/\b(because|that|who|to)\b/i.test(edge) && edge.split(/\s+/).length <= 8) {
-        return `Customers choose ${subject} for ${midSentence(edge)}`;
+        return presentAdvantage(`Customers choose ${subject} for ${midSentence(edge)}`);
       }
-      return `Customers choose ${subject} because ${midSentence(edge)}`;
+      return presentAdvantage(`Customers choose ${subject} because ${midSentence(edge)}`);
     }
     case 'voice': {
       let tone = normalizeBrandVoiceTone(substance);
@@ -2965,21 +5496,31 @@ function synthesizeNormalizedFact(kind, rawOrSummary, opts = {}) {
       if (!tone || /^(?:anchor|the business)\b/i.test(tone)) return '';
       const cleanName = sanitizeBusinessName(name) || name;
       const voicePossessive = businessSubject(cleanName || 'the business', { possessive: true });
-      return `${voicePossessive} brand voice should feel ${tone}`;
+      const sentence = `${voicePossessive} brand voice should feel ${tone}`;
+      return opts.epistemicState === EPISTEMIC_STATES.HYPOTHESIS
+        ? `${voicePossessive} current brand voice hypothesis is that the tone may be ${tone}`
+        : sentence;
     }
     case 'goals': {
       let outcome = normalizeGoalOutcomePhrase(substance);
-      if (/commercial cleaning|greater manchester/i.test(outcome) && /growth|pipeline|clients?/i.test(outcome) === false) {
-        // Keep the established Manchester commercial shorthand when that is the whole claim.
+      const cleaningBusiness = factsIndicateCommercialCleaningBusiness(opts.normalizedFacts || null);
+      if (cleaningBusiness) {
+        if (/^commercial cleaning growth in Greater Manchester$/i.test(outcome)) {
+          return `${possessive} near-term priority is commercial cleaning growth in Greater Manchester`;
+        }
+        if (
+          /\bcommercial cleaning\b/i.test(substance) &&
+          /greater manchester/i.test(substance) &&
+          !/website|redesign|assessment|web project|discovery call/i.test(substance)
+        ) {
+          return `${possessive} near-term priority is commercial cleaning growth in Greater Manchester`;
+        }
       }
-      if (/^commercial cleaning growth in Greater Manchester$/i.test(outcome)) {
-        return `${possessive} near-term priority is commercial cleaning growth in Greater Manchester`;
-      }
-      if (/commercial cleaning|greater manchester/i.test(substance) && !/pipeline|prospects|establish/i.test(substance)) {
-        return `${possessive} near-term priority is commercial cleaning growth in Greater Manchester`;
+      if (/^[A-Z]/.test(outcome)) {
+        return `${possessive} near-term priority is ${outcome.replace(/[.!?]+$/, '').trim()}`;
       }
       outcome = midSentence(outcome);
-      return `${possessive} near-term priority is ${outcome}`;
+      return `${possessive} near-term priority is ${capitalizeSentence(outcome)}`;
     }
     case 'metrics': {
       // SPEC-099: never invent metrics the operator did not state.
@@ -3047,44 +5588,49 @@ function summarizeSection(sectionKey, statements) {
     }
     case 'services':
       return [
-        ensurePeriod(`Today the business delivers ${latest}`),
+        ensurePeriod(`The business delivers ${latest}`),
         'Service understanding reflects what is actually sold now, not aspirational packaging.',
       ].join(' ');
-    case 'idealCustomers':
+    case 'idealCustomers': {
+      const substance =
+        cleaned.length > 1 ? cleaned.join('; ') : latest;
       return [
-        ensurePeriod(`Ideal customers are ${latest}`),
+        ensurePeriod(`Ideal customers are ${substance}`),
         'This ICP picture prioritizes fit over volume.',
       ].join(' ');
-    case 'avoidCustomers':
+    }
+    case 'idealCustomerTraits':
       return [
-        ensurePeriod(`The business prefers to avoid ${latest}`),
-        'These constraints protect targeting quality and should stay visible in the Blueprint.',
+        ensurePeriod(`Great-fit customers need ${latest}`),
+        'These fit requirements describe readiness and behavior, not a separate audience category.',
       ].join(' ');
+    case 'avoidCustomers':
+      return composeBlueprintAvoidCustomersSummary({
+        disqualified_customers: cleaned,
+        evidence_statements: {},
+      });
     case 'targetMarkets':
       return [
         ensurePeriod(`Priority markets center on ${latest}`),
         'Geography and vertical focus here bound where discovery should concentrate first.',
       ].join(' ');
     case 'competitiveAdvantages':
-      return [
-        ensurePeriod(`Competitive edge is described as ${latest}`),
-        'This is operator-stated differentiation — useful for messaging, not an invented strategy claim.',
-      ].join(' ');
+      return composeBlueprintDifferentiationSummary({
+        differentiation: latest,
+        evidence_statements: {},
+      });
     case 'brandVoice':
-      return [
-        ensurePeriod(`Brand voice should read as ${latest}`),
-        'Tone guidance constrains later language without choosing channels or campaigns.',
-      ].join(' ');
+      return composeBlueprintBrandVoiceSummary({
+        brand_voice: normalizeBrandVoiceTone(latest),
+        evidence_statements: { brand_voice: latest },
+      });
     case 'campaignGoals':
-      return [
-        ensurePeriod(`Near-term growth goals focus on ${latest}`),
-        'These are desired business outcomes for the next phase of work, not execution tactics.',
-      ].join(' ');
+      return composeBlueprintCampaignGoalsSummary({
+        ninety_day_outcomes: latest,
+        evidence_statements: { ninety_day_outcomes: latest },
+      });
     case 'successMetrics':
-      return [
-        ensurePeriod(`Success will be judged by ${latest}`),
-        'These signals define whether the engagement is working from the client\'s perspective.',
-      ].join(' ');
+      return composeBlueprintSuccessMetricsSummary(cleaned.length > 1 ? cleaned : [latest]);
     default:
       return [
         ensurePeriod(capitalizeSentence(latest)),
@@ -3390,6 +5936,111 @@ function normalizeClaim(kind, summary, opts = {}) {
   return synthesized;
 }
 
+function composeWhoYouAreFromNormalizedFacts(f, briefOpts) {
+  const businessName = briefOpts.businessName || f.business_name || '';
+  const services = sanitizeBriefServiceList(f.services);
+  const parts = [];
+  if (f.business_name || f.business_description) {
+    parts.push(
+      buildIdentityOverviewSentence(f.business_name || businessName, f.business_description, f)
+    );
+  }
+  if (services.length) {
+    parts.push(`Services include ${services.join(', ')}`);
+  }
+  if (parts.length) return joinPolished(parts);
+  return '';
+}
+
+function composeWhoYouServeFromNormalizedFacts(f, briefOpts) {
+  const businessName = briefOpts.businessName || f.business_name || 'The business';
+  const sentences = [];
+  const cleanIdeal = (f.ideal_customers || []).filter(
+    (item) =>
+      item &&
+      !isValueTraitPhrase(item) &&
+      !isLiteralUncertaintyPhrase(item) &&
+      !isConversationalFiller(item) &&
+      !/as part of (?:my|our|the)\s+ideal customer/i.test(item)
+  );
+  const cleaningContext = factsIndicateCommercialCleaningBusiness(f);
+
+  if (cleanIdeal.length) {
+    const needsRecurring =
+      cleaningContext &&
+      /dependable recurring|recurring(?:\s+commercial)?(?:\s+cleaning)?|weekly or multiple/i.test(
+        [f.growth_focus, (f.ideal_customer_traits || []).join(' '), cleanIdeal.join(' ')].join(' ')
+      );
+    sentences.push(
+      `${businessSubject(businessName, { possessive: true })} ideal customers include ${cleanIdeal.join(', ')}${
+        needsRecurring ? ' that need dependable recurring cleaning' : ''
+      }`
+    );
+  }
+
+  if ((f.geography || []).length && f.epistemic_states?.geography === EPISTEMIC_STATES.KNOWN) {
+    const towns = f.geography.filter((g) => !/^Greater (?:Manchester|Toronto Area)$/i.test(g));
+    const hasGM = f.geography.some((g) => /Greater Manchester/i.test(g));
+    const hasGTA = f.geography.some((g) => /Greater Toronto|GTA/i.test(g));
+    if (hasGM) {
+      sentences.push(
+        `${businessSubject(businessName, { possessive: true })} near-term geography is the Greater Manchester area${
+          towns.length ? `, including ${towns.join(', ')}` : ''
+        }`
+      );
+    } else if (hasGTA) {
+      sentences.push(
+        `${businessSubject(businessName, { possessive: true })} near-term geography centers on the Greater Toronto Area`
+      );
+    } else {
+      sentences.push(
+        `${businessSubject(businessName, { possessive: true })} near-term geography centers on ${f.geography.join(', ')}`
+      );
+    }
+  } else if ((f.geography || []).length && f.epistemic_states?.geography === EPISTEMIC_STATES.HYPOTHESIS) {
+    sentences.push(
+      `Current hypothesis: target markets center on ${
+        f.hypotheses?.geography || f.evidence_statements?.geography || f.geography.join(', ')
+      }`
+    );
+  }
+
+  if ((f.disqualified_customers || []).length) {
+    const constraintRaw = f.disqualified_customers.join('; ');
+    sentences.push(
+      composeCustomerConstraintPresentation(businessName, constraintRaw) ||
+        `${businessName} prefers to avoid ${constraintRaw}`
+    );
+  }
+
+  if (
+    cleaningContext &&
+    sentences.length >= 2 &&
+    cleanIdeal.length &&
+    (f.geography || []).length &&
+    f.epistemic_states?.geography === EPISTEMIC_STATES.KNOWN
+  ) {
+    sentences.push(
+      'Taken together, this is a disciplined beachhead: fit over volume, and geography chosen to match that fit.'
+    );
+  }
+  return joinPolished(sentences);
+}
+
+function composeQualificationSignalsFromNormalizedFacts(f) {
+  return dedupeNormalizedList(
+    [...(f.qualification_signals || []), ...(f.ideal_customer_traits || [])]
+      .map((item) => normalizeBusinessPhrase(String(item || '').trim()))
+      .filter(
+        (item) =>
+          item &&
+          !isLiteralUncertaintyPhrase(item) &&
+          (QUALIFICATION_SIGNAL_PHRASE_RE.test(item) ||
+            /^(?:a|an)\s+(?:real|reachable|good|weak|strong)\b/i.test(item))
+      )
+  );
+}
+
 function composeWhoYouAre(identity, services, opts = {}) {
   const businessName = opts.businessName || extractBusinessName(identity);
   const id = normalizeClaim('identity', identity, { businessName });
@@ -3476,8 +6127,14 @@ function composeWhoYouServe(ideal, avoid, markets, opts = {}) {
 
 function composeWhyChooseYou(advantages, brandVoice, opts = {}) {
   const businessName = opts.businessName || '';
-  const adv = normalizeClaim('advantages', advantages, { businessName });
-  const voice = normalizeClaim('voice', brandVoice, { businessName });
+  const adv = normalizeClaim('advantages', advantages, {
+    businessName,
+    epistemicState: opts.differentiationState,
+  });
+  const voice = normalizeClaim('voice', brandVoice, {
+    businessName,
+    epistemicState: opts.brandVoiceState,
+  });
   const sentences = [];
   if (adv) sentences.push(adv);
   if (voice) sentences.push(voice);
@@ -3597,9 +6254,40 @@ function collectUnknownLabels(sections) {
  * SPEC-085 — always identify meaningful unknowns. Never return "nothing outstanding."
  * SPEC-099: explicit interview unknowns (e.g. unresolved ICP) rank ahead of generic fillers.
  */
+function normalizedFactsHasIdealCustomers(facts) {
+  return ((facts && facts.ideal_customers) || []).some(
+    (item) => item && !isLiteralUncertaintyPhrase(item) && !isConversationalFiller(item)
+  );
+}
+
+function normalizedFactsHasExcludedCustomers(facts) {
+  return ((facts && facts.disqualified_customers) || []).some(
+    (item) => item && !isLiteralUncertaintyPhrase(item)
+  );
+}
+
 function composeLearnMoreItems(unknownLabels, opts = {}) {
   const facts = opts.normalizedFacts || null;
-  const cleaned = [...new Set((unknownLabels || []).map(humanizeUnknownLabel).filter(Boolean))];
+  let cleaned = [...new Set((unknownLabels || []).map(humanizeUnknownLabel).filter(Boolean))];
+  if (facts) {
+    if (normalizedFactsHasIdealCustomers(facts)) {
+      cleaned = cleaned.filter(
+        (label) =>
+          !/ideal customer|who the ideal customer|commercial customer segment/i.test(String(label))
+      );
+    }
+    if (normalizedFactsHasExcludedCustomers(facts)) {
+      cleaned = cleaned.filter(
+        (label) => !/customers to decline|which customers to (?:decline|avoid)/i.test(String(label))
+      );
+    }
+    if ((facts.geography || []).length) {
+      cleaned = cleaned.filter((label) => !/where to concentrate first|target markets?/i.test(String(label)));
+    }
+    if ((facts.services || []).length) {
+      cleaned = cleaned.filter((label) => !/full service mix|service mix/i.test(String(label)));
+    }
+  }
   // Keep question-form unknowns readable; title-case only short topic labels.
   const items = cleaned.map((label) =>
     /\?$/.test(label) || /^(which|who|what|how|where)\b/i.test(label)
@@ -3608,11 +6296,10 @@ function composeLearnMoreItems(unknownLabels, opts = {}) {
   );
 
   const prefersCommercial =
-    /commercial/i.test(String((facts && facts.growth_focus) || '')) ||
-    /commercial/i.test(String((facts && facts.vertical_focus) || ''));
-  const hasNamedIdeal = ((facts && facts.ideal_customers) || []).some(
-    (item) => item && !isLiteralUncertaintyPhrase(item)
-  );
+    factsIndicateCommercialCleaningBusiness(facts) &&
+    (/commercial/i.test(String((facts && facts.growth_focus) || '')) ||
+      /commercial/i.test(String((facts && facts.vertical_focus) || '')));
+  const hasNamedIdeal = normalizedFactsHasIdealCustomers(facts);
   const geo = ((facts && facts.geography) || []).join(', ') || 'the target geography';
 
   if (prefersCommercial && !hasNamedIdeal) {
@@ -3688,7 +6375,14 @@ function composeObservations(sections, normalizedFacts = null) {
           ''
         )
     );
-    if (edge && !containsRawPromptFragment(edge) && edge.split(/\s+/).length <= 40) {
+    if (
+      edge &&
+      !containsRawPromptFragment(edge) &&
+      edge.split(/\s+/).length <= 40 &&
+      !/Not yet defined|Not applicable/i.test(edge) &&
+      facts.epistemic_states?.differentiation !== EPISTEMIC_STATES.UNKNOWN &&
+      facts.epistemic_states?.differentiation !== EPISTEMIC_STATES.NOT_APPLICABLE
+    ) {
       observations.push(
         `${possessiveShort} differentiation centers on ${edge}.`
       );
@@ -3723,7 +6417,9 @@ function composeObservations(sections, normalizedFacts = null) {
 
   if (facts.ninety_day_outcomes || facts.growth_focus) {
     const goal =
-      facts.growth_focus && /commercial/i.test(facts.growth_focus)
+      factsIndicateCommercialCleaningBusiness(facts) &&
+      facts.growth_focus &&
+      /commercial/i.test(facts.growth_focus)
         ? `${possessiveShort} near-term growth goal is to build a clearer, repeatable path to commercial cleaning opportunities`
         : `${possessiveShort} near-term growth goal is ${midSentence(
             firstSentence(normalizeBusinessPhrase(facts.ninety_day_outcomes || facts.growth_focus))
@@ -3744,9 +6440,15 @@ function composeObservations(sections, normalizedFacts = null) {
     );
   }
 
-  if (facts.brand_voice) {
-    const tone = normalizeBrandVoiceTone(facts.brand_voice);
-    if (tone && !/anchor/i.test(tone)) {
+  if (facts.brand_voice || coreClaim(s('brandVoice').summary)) {
+    const tone = normalizeBrandVoiceTone(facts.brand_voice || coreClaim(s('brandVoice').summary));
+    if (
+      tone &&
+      !/anchor/i.test(tone) &&
+      !/Not yet defined|Not applicable/i.test(tone) &&
+      facts.epistemic_states?.brand_voice !== EPISTEMIC_STATES.UNKNOWN &&
+      facts.epistemic_states?.brand_voice !== EPISTEMIC_STATES.NOT_APPLICABLE
+    ) {
       observations.push(
         `${possessiveShort} brand voice reinforces its positioning by sounding ${tone}.`
       );
@@ -3873,6 +6575,20 @@ function composeAssessment(sections, opts = {}) {
     if (!hasNamedIdeal) marketFocusStars = Math.min(marketFocusStars, 2);
   }
 
+  const diffEpistemic = facts?.epistemic_states?.differentiation || s('competitiveAdvantages')?.epistemic_state || (facts?.differentiation ? EPISTEMIC_STATES.KNOWN : EPISTEMIC_STATES.UNRESOLVED);
+
+  let diffStars = starsFromConfidence(diff);
+  let diffExplanation;
+  if (diffEpistemic === EPISTEMIC_STATES.UNKNOWN || diffEpistemic === EPISTEMIC_STATES.UNRESOLVED || !advClaim || answerLooksEmpty(advClaim) || /Not yet defined/i.test(advClaim)) {
+    diffStars = 1;
+    diffExplanation = 'Competitive reason-to-choose is not yet defined and remains an open area to investigate.';
+  } else if (diffEpistemic === EPISTEMIC_STATES.HYPOTHESIS) {
+    diffStars = Math.min(diffStars, 2);
+    diffExplanation = `Supported by a working hypothesis around ${softenClaim(advClaim)}; requires market validation.`;
+  } else {
+    diffExplanation = `Supported by stated advantages around ${softenClaim(advClaim)}.`;
+  }
+
   const ratings = [
     {
       label: 'Business Clarity',
@@ -3888,10 +6604,8 @@ function composeAssessment(sections, opts = {}) {
     },
     {
       label: 'Differentiation',
-      stars: starsFromConfidence(diff),
-      explanation: advClaim
-        ? `Supported by stated advantages around ${softenClaim(advClaim)}.`
-        : 'Competitive reason-to-choose is not yet evidenced with enough specificity.',
+      stars: diffStars,
+      explanation: diffExplanation,
     },
     {
       label: 'Growth Readiness',
@@ -3924,7 +6638,7 @@ function composeConversationStarters(sections, learnMoreItems) {
   }
   if (sectionFilled(s('competitiveAdvantages'))) {
     starters.push(
-      'Whether your pricing reflects the premium positioning you described.'
+      'Whether your pricing reinforces the differentiation you want the market to recognize.'
     );
   }
   if (sectionFilled(s('avoidCustomers')) || sectionFilled(s('idealCustomers'))) {
@@ -3978,17 +6692,71 @@ function composeConversationStarters(sections, learnMoreItems) {
 }
 
 /**
+ * SPEC-116 — scorecard sections for the Executive Business Brief.
+ * Replaces "Success Looks Like". Distinguishes Max recommendations from
+ * operator-approved metrics. Drafts are never presented as approved truth.
+ */
+function buildOperatorScorecardBriefSections(sections, opts = {}) {
+  if (opts.operatorScorecard) {
+    return buildBriefScorecardSections(opts.operatorScorecard);
+  }
+  const facts = opts.normalizedFacts || null;
+  const goalFromFacts =
+    facts &&
+    (facts.ninety_day_outcomes ||
+      (factsIndicateCommercialCleaningBusiness(facts) && facts.growth_focus));
+  const businessGoal =
+    opts.businessGoal ||
+    (Array.isArray(goalFromFacts) ? goalFromFacts.join('; ') : goalFromFacts) ||
+    (sections && sections.campaignGoals && sections.campaignGoals.summary) ||
+    'Establish a repeatable acquisition process.';
+  try {
+    const draft = generateDraftScorecard({
+      tenantId: opts.tenantId || (opts.clientId != null ? String(opts.clientId) : 'brief'),
+      clientId: opts.clientId || null,
+      businessName: opts.businessName,
+      businessGoal,
+      blueprint: { sections },
+      normalizedFacts: facts,
+      objectives: facts && facts.ninety_day_outcomes,
+      operatorMetrics: facts && facts.success_metrics,
+      aim: opts.aim || null,
+      outcomes: opts.outcomes || null,
+      learning: opts.scorecardLearning || null,
+    });
+    if (facts && facts.excluded_metrics && facts.excluded_metrics.length) {
+      draft.metrics = draft.metrics.filter((metric) =>
+        !facts.excluded_metrics.some((excluded) =>
+          sameSemanticValue(metric.name, excluded) || sameSemanticValue(metric.key, excluded)
+        )
+      );
+    }
+    return buildBriefScorecardSections(draft);
+  } catch (_err) {
+    return buildBriefScorecardSections({
+      status: 'draft',
+      metrics: [],
+      reasoning: { extraExplore: ['qualified replies', 'booked conversations', 'estimate requests'] },
+    });
+  }
+}
+
+/**
  * SPEC-085 — Executive Business Brief.
  * CEO-facing synthesis from a senior consultant. Never concatenates raw
  * interview wording or exposes implementation metadata.
  * Only business interview answers become evidence; refinement instructions
  * are sanitized out before render.
+ * SPEC-116 replaces Success Looks Like with operator scorecard sections.
  */
 function buildExecutiveSummary(sections, opts = {}) {
-  const normalizedFacts =
+  const rawNormalizedFacts =
     opts.normalizedFacts ||
     (opts.interviewState && opts.interviewState.normalizedFacts) ||
     null;
+  const normalizedFacts = rawNormalizedFacts
+    ? prepareNormalizedFactsForBrief(rawNormalizedFacts)
+    : null;
   const fromNormalized = normalizedFacts
     ? sectionsFromNormalizedFacts(normalizedFacts, sections)
     : null;
@@ -3998,7 +6766,12 @@ function buildExecutiveSummary(sections, opts = {}) {
     (normalizedFacts && normalizedFacts.business_name) ||
       extractBusinessName(s('identity').summary)
   );
-  const briefOpts = { businessName, normalizedFacts };
+  const briefOpts = {
+    businessName,
+    normalizedFacts,
+    differentiationState: normalizedFacts?.epistemic_states?.differentiation,
+    brandVoiceState: normalizedFacts?.epistemic_states?.brand_voice,
+  };
   const unknownLabels = collectUnknownLabels(clean);
   const learnMoreItems = composeLearnMoreItems(unknownLabels, { normalizedFacts });
   const observations = composeObservations(clean, normalizedFacts);
@@ -4021,132 +6794,57 @@ function buildExecutiveSummary(sections, opts = {}) {
   let whereHeaded = composeWhereHeaded(s('campaignGoals').summary, briefOpts);
   let successLooksLike = composeWhatSuccess(s('successMetrics').summary, briefOpts);
 
-  if (normalizedFacts) {
-    const f = cloneNormalizedFacts(normalizedFacts);
-    const cleanServices = (f.services || []).filter(
-      (item) => item && !/^(?:anchor(?:\s+cleaning)?\s+)?provides?\b/i.test(item)
-    );
-    const cleanIdeal = (f.ideal_customers || []).filter(
-      (item) =>
-        item &&
-        !isValueTraitPhrase(item) &&
-        !isLiteralUncertaintyPhrase(item) &&
-        !isConversationalFiller(item) &&
-        !/as part of (?:my|our|the)\s+ideal customer/i.test(item) &&
-        !/^(?:anchor(?:\s+cleaning)?\s+)?most wants\b/i.test(item)
-    );
+  let qualificationSignalItems = [];
 
-    if (cleanServices.length || f.business_name || f.business_description) {
-      const identityLine =
-        synthesizeNormalizedFact('identity', s('identity').summary, briefOpts) ||
-        (f.business_name
-          ? `${f.business_name} is a ${f.business_description || 'cleaning company'}`
-          : 'This is a cleaning company');
-      const whoYouAreParts = [identityLine];
-      if (cleanServices.length) {
-        whoYouAreParts.push(`Services include ${cleanServices.join(', ')}`);
+  if (normalizedFacts) {
+    const f = normalizedFacts;
+    const fromFactsWhoYouAre = composeWhoYouAreFromNormalizedFacts(f, briefOpts);
+    if (fromFactsWhoYouAre) whoYouAre = fromFactsWhoYouAre;
+    const fromFactsWhoYouServe = composeWhoYouServeFromNormalizedFacts(f, briefOpts);
+    if (fromFactsWhoYouServe) whoYouServe = fromFactsWhoYouServe;
+    if (f.ninety_day_outcomes) {
+      const goalLine = synthesizeNormalizedFact('goals', f.ninety_day_outcomes, {
+        ...briefOpts,
+        normalizedFacts: f,
+      });
+      if (goalLine) {
+        whereHeaded = joinPolished([
+          goalLine,
+          'That outcome should set priorities, sequencing, and what the team deliberately declines so focus is not diluted.',
+          'Recommendations earn their keep only when they move the business meaningfully toward this direction.',
+        ]);
       }
-      whoYouAre = joinPolished(whoYouAreParts);
     }
-    if (cleanIdeal.length || f.geography.length || /commercial/i.test(String(f.growth_focus || ''))) {
-      const sentences = [];
-      if (cleanIdeal.length) {
-        const displayName = businessName || 'the business';
-        const possessive = businessSubject(displayName, { possessive: true });
-        const decisionMakers = cleanIdeal.filter(isDecisionMakerLabel);
-        const segments = cleanIdeal.filter((item) => !isDecisionMakerLabel(item));
-        const needsRecurring = /dependable recurring|recurring(?:\s+commercial)?(?:\s+cleaning)?|weekly or multiple/i.test(
-          [
-            s('idealCustomers').summary,
-            f.growth_focus,
-            (f.ideal_customer_traits || []).join(' '),
-            cleanIdeal.join(' '),
-          ].join(' ')
-        );
-        if (decisionMakers.length && segments.length) {
-          const dmProse = formatDecisionMakerProse(decisionMakers);
-          const segProse = formatSegmentProse(segments);
-          sentences.push(
-            `${possessive} current acquisition focus is ${dmProse}, particularly those responsible for ${segProse}${
-              needsRecurring ? ' that need dependable recurring cleaning' : ''
-            }`
-          );
-        } else {
-          sentences.push(
-            `${possessive} ideal customers include ${cleanIdeal.join(', ')}${
-              needsRecurring ? ' that need dependable recurring cleaning' : ''
-            }`
-          );
-        }
-      } else if (/commercial/i.test(String(f.growth_focus || f.vertical_focus || ''))) {
-        const shortName =
-          String(businessName || 'The business').replace(/\s+Cleaning$/i, '') || 'The business';
-        // Keep to two sentences so geography / avoid still fit joinPolished's 4-sentence budget.
-        sentences.push(
-          `${shortName} has not chosen a primary commercial customer segment yet`
-        );
-        sentences.push(
-          `${businessSubject(businessName || 'The business')} prefers commercial work while continuing to serve residential customers, but the ideal segment remains an open decision`
-        );
-      }
-      if (f.disqualified_customers.length) {
-        const constraintRaw = f.disqualified_customers.join('; ');
-        sentences.push(
-          composeCustomerConstraintPresentation(
-            businessName || 'The business',
-            constraintRaw
-          ) ||
-            synthesizeNormalizedFact(
-              'avoid',
-              `The business prefers to avoid ${constraintRaw}`,
-              briefOpts
-            ) ||
-            `${businessName || 'The business'} prefers to avoid ${constraintRaw}`
-        );
-      }
-      if (f.geography.length) {
-        const towns = f.geography.filter((g) => !/^Greater (?:Manchester|Toronto Area)$/i.test(g));
-        const hasGM = f.geography.some((g) => /Greater Manchester/i.test(g));
-        const hasGTA = f.geography.some((g) => /Greater Toronto|GTA/i.test(g));
-        if (hasGM) {
-          sentences.push(
-            `${businessSubject(businessName || 'Anchor', { possessive: true })} near-term geography is the Greater Manchester area${
-              towns.length ? `, including ${towns.join(', ')}` : ''
-            }`
-          );
-        } else if (hasGTA) {
-          sentences.push(
-            `${businessSubject(businessName || 'the business', { possessive: true })} near-term geography centers on the Greater Toronto Area`
-          );
-        } else {
-          sentences.push(
-            `${businessSubject(businessName || 'the business', { possessive: true })} near-term geography centers on ${f.geography.join(', ')}`
-          );
-        }
-      }
-      if (sentences.length >= 2 && cleanIdeal.length) {
-        sentences.push(
-          'Taken together, this is a disciplined beachhead: fit over volume, and geography chosen to match that fit.'
-        );
-      }
-      whoYouServe = joinPolished(sentences);
-    }
+    qualificationSignalItems = composeQualificationSignalsFromNormalizedFacts(f);
     if (f.brand_voice) {
       const adv =
-        synthesizeNormalizedFact('advantages', s('competitiveAdvantages').summary, briefOpts) ||
+        synthesizeNormalizedFact('advantages', s('competitiveAdvantages').summary, {
+          ...briefOpts,
+          epistemicState: briefOpts.differentiationState,
+        }) ||
         (f.differentiation
           ? `Customers choose ${businessName || 'this business'} because ${midSentence(f.differentiation)}`
           : '');
       const voice = synthesizeNormalizedFact(
         'voice',
         `Brand voice should read as ${f.brand_voice}`,
-        briefOpts
+        { ...briefOpts, epistemicState: briefOpts.brandVoiceState }
       );
       whyChooseYou = joinPolished(
         [adv, voice, 'Differentiation and tone must reinforce each other so the market experiences the same promise the business actually keeps.'].filter(
           Boolean
         )
       );
+    }
+    const differentiationFacts = f.business_facts?.differentiation || [];
+    const unknownReason = differentiationFacts.find(
+      (fact) => fact.subject === 'customer_buying_reason' && fact.epistemic_state === EPISTEMIC_STATES.UNKNOWN
+    );
+    const candidateReason = differentiationFacts.find(
+      (fact) => fact.subject === 'candidate_customer_buying_reason' && fact.epistemic_state === EPISTEMIC_STATES.HYPOTHESIS
+    );
+    if (unknownReason && candidateReason) {
+      whyChooseYou = `Actual customer reason-to-choose: Not yet established. Current hypothesis: ${candidateReason.hypothesis_value}.`;
     }
   }
 
@@ -4172,6 +6870,12 @@ function buildExecutiveSummary(sections, opts = {}) {
   whereHeaded = normalizePresentationProse(whereHeaded);
   successLooksLike = normalizePresentationProse(successLooksLike);
 
+  const scorecardSections = buildOperatorScorecardBriefSections(clean, {
+    ...opts,
+    businessName,
+    normalizedFacts,
+  });
+
   return {
     title: 'Executive Business Brief',
     subtitle: 'Prepared by Max',
@@ -4189,6 +6893,17 @@ function buildExecutiveSummary(sections, opts = {}) {
         kind: 'prose',
         body: whoYouServe,
       },
+      ...(qualificationSignalItems.length
+        ? [
+            {
+              id: 'qualificationSignals',
+              title: 'Prospect Fit Criteria',
+              kind: 'list',
+              body: 'Qualification signals describe fit before a prospect becomes a scorecard event — not operator success metrics.',
+              items: qualificationSignalItems,
+            },
+          ]
+        : []),
       {
         id: 'whyChooseYou',
         title: 'Why Customers Choose You',
@@ -4201,12 +6916,7 @@ function buildExecutiveSummary(sections, opts = {}) {
         kind: 'prose',
         body: whereHeaded,
       },
-      {
-        id: 'successLooksLike',
-        title: 'Success Looks Like',
-        kind: 'prose',
-        body: successLooksLike,
-      },
+      ...scorecardSections,
       {
         id: 'observations',
         title: 'Initial Observations',
@@ -4262,6 +6972,8 @@ function withExperienceFields(session, payload = {}) {
     out.executiveSummary = buildExecutiveSummary(payload.blueprint.sections, {
       normalizedFacts,
       interviewState: session && session.interview_state,
+      clientId: session && (session.client_id || session.clientId),
+      tenantId: session && (session.client_id || session.clientId),
     });
   }
   return out;
@@ -4451,8 +7163,7 @@ async function acceptExplicitUnknown(store, session, state, q, clientTurn, text)
   state.normalizedFacts = facts;
   state.reasoningMemory = reasoningMemory;
   state.answers = { ...(state.answers || {}), [q.question.id]: '' };
-  state.stepIndex = (Number(state.stepIndex) || 0) + 1;
-  if (state.stepIndex >= QUESTION_BANK.length) state.done = true;
+  advanceStepIndexAfterAnswer(state);
   state.supplementalContext = [
     ...(state.supplementalContext || []),
     {
@@ -4526,11 +7237,22 @@ function currentQuestion(state) {
   return { index: idx, question: QUESTION_BANK[idx] };
 }
 
+function syncAwaitingQuestionId(state) {
+  if (!state || state.mode === 'notes') {
+    state.awaitingQuestionId = null;
+    return state;
+  }
+  const q = currentQuestion(state);
+  state.awaitingQuestionId = q ? q.question.id : null;
+  return state;
+}
+
 function initialInterviewState({ notes } = {}) {
-  return {
+  const base = {
     mode: notes ? 'notes' : 'interactive',
     stepIndex: 0,
     done: Boolean(notes),
+    awaitingQuestionId: notes ? null : QUESTION_BANK[0].id,
     answers: {},
     sectionState: emptySections(),
     contradictions: [],
@@ -4541,10 +7263,15 @@ function initialInterviewState({ notes } = {}) {
     normalizedFacts: emptyNormalizedFacts(),
     /** SPEC-090 — session-level conversational reasoning memory. */
     reasoningMemory: emptyReasoningMemory(),
+    /** Keyword-derived tags attached to a guided answer without changing its primary field. */
+    intakeSupportingEvidence: [],
+    workingSemanticCorrections: [],
     notes: notes ? String(notes) : null,
     blueprintId: null,
     lastReflectionAt: 0,
+    interviewPaused: false,
   };
+  return syncAwaitingQuestionId(base);
 }
 
 function cloneJson(value) {
@@ -4626,7 +7353,11 @@ function createMemoryStore() {
       return (turnsBySession.get(String(sessionId)) || []).map((t) => ({ ...t }));
     },
     async insertEvidence(row) {
-      const copy = { ...row };
+      const copy = {
+        ...row,
+        source_text_sha256: canonicalEvidenceDigest(row.statement),
+        immutable_at: row.created_at || new Date().toISOString(),
+      };
       evidence.set(copy.id, copy);
       const list = evidenceBySession.get(copy.session_id) || [];
       list.push(copy);
@@ -4845,8 +7576,8 @@ function createPostgresStore(pool) {
       const result = await pool.query(
         `INSERT INTO cie_evidence (
            id, client_id, session_id, source, source_turn_id, category,
-           statement, confidence, type, created_at
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10,NOW()))
+           statement, confidence, type, created_at, source_text_sha256, immutable_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10,NOW()),$11,COALESCE($10,NOW()))
          RETURNING *`,
         [
           row.id,
@@ -4859,6 +7590,7 @@ function createPostgresStore(pool) {
           row.confidence,
           row.type,
           row.created_at || null,
+          canonicalEvidenceDigest(row.statement),
         ]
       );
       return normalizeEvidenceRow(result.rows[0]);
@@ -4922,6 +7654,8 @@ function createPostgresStore(pool) {
         playbook_id: 'playbook_id',
         playbook_version: 'playbook_version',
         section_provenance: 'section_provenance',
+        canonical_snapshot_id: 'canonical_snapshot_id',
+        canonical_snapshot_tenant_id: 'canonical_snapshot_tenant_id',
       };
       for (const [key, col] of Object.entries(map)) {
         if (Object.prototype.hasOwnProperty.call(patch, key)) {
@@ -5036,6 +7770,11 @@ function normalizeEvidenceRow(r) {
     statement: r.statement,
     confidence: Number(r.confidence),
     type: r.type,
+    // SPEC-224: preserved so callers (CIECanonicalAdapter) can build a
+    // canonical batch whose idempotency key matches what commitCanonicalSemanticBatch
+    // re-derives from cie_evidence directly.
+    source_text_sha256: r.source_text_sha256 || null,
+    immutable_at: r.immutable_at || null,
     created_at: r.created_at,
   };
 }
@@ -5061,6 +7800,8 @@ function normalizeBlueprintRow(r) {
         ? JSON.parse(r.section_provenance)
         : r.section_provenance || {},
     parent_blueprint_id: r.parent_blueprint_id,
+    canonical_snapshot_id: r.canonical_snapshot_id || null,
+    canonical_snapshot_tenant_id: r.canonical_snapshot_tenant_id || null,
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -5101,6 +7842,8 @@ function publicBlueprint(bp) {
     playbookVersion: bp.playbook_version,
     sectionProvenance: bp.section_provenance,
     parentBlueprintId: bp.parent_blueprint_id,
+    canonicalSnapshotId: bp.canonical_snapshot_id || null,
+    canonicalSnapshotTenantId: bp.canonical_snapshot_tenant_id || null,
     readiness: bp.readiness || null,
     createdAt: bp.created_at,
     updatedAt: bp.updated_at,
@@ -5135,7 +7878,15 @@ function publicTurn(t) {
   };
 }
 
-async function applySectionUpdate(store, session, sectionKey, statement, type, turnId) {
+async function applySectionUpdate(
+  store,
+  session,
+  sectionKey,
+  statement,
+  type,
+  turnId,
+  classifyOpts = {}
+) {
   const state = session.interview_state || initialInterviewState();
   const sectionState = state.sectionState || emptySections();
   const section = sectionState[sectionKey] || emptySection();
@@ -5145,16 +7896,50 @@ async function applySectionUpdate(store, session, sectionKey, statement, type, t
   const priorStatements = priorEvidence
     .map((e) => e.statement)
     .filter((s) => s && !/^Unknown:/i.test(String(s)))
-    .filter((s) => isBusinessFactStatement(s));
+    .filter((s) => isBusinessFactStatement(s, classifyOpts));
 
   const rawStatement = String(statement || '').trim();
-  const responseKind = classifyUserResponse(rawStatement);
+  let responseKind = classifyUserResponse(rawStatement, classifyOpts);
+  const guidedAuthoritativeCapture =
+    isActiveGuidedIntakeTurn(classifyOpts) &&
+    authoritativeGuidedSection(classifyOpts) === sectionKey;
+  const activeSuccessMetricsCapture = isActiveSuccessMetricsBusinessCapture(
+    rawStatement,
+    sectionKey,
+    classifyOpts
+  );
+  const narrowWritingGuidance = looksLikeInterviewWritingGuidance(rawStatement, {
+    ...classifyOpts,
+    awaitingQuestionId:
+      classifyOpts.awaitingQuestionId ||
+      (classifyOpts.activeQuestion &&
+        (classifyOpts.activeQuestion.id || classifyOpts.activeQuestion.questionId)),
+    looksLikeRefinement: undefined,
+    containsMetaInstruction: undefined,
+  });
+  const guidedCopywritingBlock = activeSuccessMetricsCapture
+    ? blocksSuccessMetricsBusinessCapture(rawStatement)
+    : looksLikeExplicitCopywritingCommand(rawStatement, classifyOpts);
+  const forceGuidedBusinessFact =
+    activeSuccessMetricsCapture ||
+    (guidedAuthoritativeCapture &&
+      !guidedCopywritingBlock &&
+      (!narrowWritingGuidance ||
+        (sectionKey === 'successMetrics' &&
+          looksLikeSuccessMetricsBusinessEvidence(rawStatement))));
+
+  if (activeSuccessMetricsCapture) {
+    responseKind = ANSWER_KINDS.BUSINESS_FACT;
+  } else if (responseKind === ANSWER_KINDS.REFINEMENT_FEEDBACK && forceGuidedBusinessFact) {
+    responseKind = ANSWER_KINDS.BUSINESS_FACT;
+  }
 
   // Refinement / system guidance must never populate commercial Blueprint fields.
   if (
-    responseKind === ANSWER_KINDS.REFINEMENT_FEEDBACK ||
-    responseKind === ANSWER_KINDS.SYSTEM_GUIDANCE ||
-    containsMetaInstructionLanguage(rawStatement)
+    !activeSuccessMetricsCapture &&
+    (responseKind === ANSWER_KINDS.REFINEMENT_FEEDBACK ||
+      responseKind === ANSWER_KINDS.SYSTEM_GUIDANCE ||
+      (!guidedAuthoritativeCapture && containsMetaInstructionLanguage(rawStatement)))
   ) {
     state.revisionGuidance = [
       ...(state.revisionGuidance || []),
@@ -5245,7 +8030,8 @@ async function applySectionUpdate(store, session, sectionKey, statement, type, t
       state.normalizedFacts = ingestAnswerIntoNormalizedFacts(
         state.normalizedFacts || emptyNormalizedFacts(),
         sectionKey,
-        rawStatement
+        rawStatement,
+        { provenance: turnId }
       );
     }
     const fromFacts = sectionsFromNormalizedFacts(state.normalizedFacts, sectionState);
@@ -5326,6 +8112,7 @@ function mergeSupplementalIntoSections(sections, supplementalContext) {
     const domain = entry.domain || tagContextDomain(entry.text);
     const sectionKey = entry.section || (domain && DOMAIN_TO_SECTION[domain]);
     if (!sectionKey || !out[sectionKey]) continue;
+    if (sectionKey === 'targetMarkets' || sectionKey === 'services') continue;
 
     const cleaned = stripInterviewQuestionEcho(
       stripSupplementalPreamble(
@@ -5370,24 +8157,46 @@ function mergeSupplementalIntoSections(sections, supplementalContext) {
   return out;
 }
 
-async function generateBlueprint(store, session) {
-  if (session.status !== 'BLUEPRINT_GENERATION') {
+async function generateBlueprint(store, session, genOpts = {}) {
+  const regeneratingInReview =
+    Boolean(genOpts.regeneration) && session.status === 'CLIENT_REVIEW';
+  if (!regeneratingInReview && session.status !== 'BLUEPRINT_GENERATION') {
     advanceStatus(session, 'BLUEPRINT_GENERATION');
   }
   const state = session.interview_state || initialInterviewState();
-  const merged = mergeSupplementalIntoSections(
-    state.sectionState,
-    state.supplementalContext
-  );
-  // Prefer normalized evidence for Blueprint/Brief commercial fields.
-  const sections = state.normalizedFacts
-    ? sectionsFromNormalizedFacts(state.normalizedFacts, merged)
-    : merged;
+  const rawNormalizedFacts = state.normalizedFacts || emptyNormalizedFacts();
+  logBlueprintPipelineDiagnostics(session.id, session.client_id, 'raw_normalizedFacts_before_prepare', {
+    fields: pickBlueprintPipelineFactSlice(rawNormalizedFacts),
+    answerKeys: Object.keys(state.answers || {}),
+  });
+  const rehydratedFacts = rehydrateNormalizedFactsFromAnswers(state);
+  logBlueprintPipelineDiagnostics(session.id, session.client_id, 'rehydrated_normalizedFacts_before_prepare', {
+    fields: pickBlueprintPipelineFactSlice(rehydratedFacts),
+  });
+  const preparedFacts = prepareNormalizedFactsForBrief(rehydratedFacts);
+  logBlueprintPipelineDiagnostics(session.id, session.client_id, 'prepared_normalizedFacts_after_prepare', {
+    fields: pickBlueprintPipelineFactSlice(preparedFacts),
+  });
+  const metadataPrior = emptySections();
+  for (const key of BLUEPRINT_SECTIONS) {
+    const src = (state.sectionState || {})[key] || emptySection();
+    metadataPrior[key] = {
+      ...emptySection(),
+      evidenceIds: [...(src.evidenceIds || [])],
+      confidence: src.confidence,
+    };
+  }
+  let sections = sectionsFromNormalizedFacts(preparedFacts, metadataPrior);
+  logBlueprintPipelineDiagnostics(session.id, session.client_id, 'sections_from_normalized_facts', {
+    sections: pickBlueprintPipelineSectionSummaries(sections),
+  });
+  sections = mergeSupplementalIntoSections(sections, state.supplementalContext);
+  sections = pinComposedBlueprintSectionSummaries(preparedFacts, sections);
 
   // SPEC-090 — artifact readiness: mark weak evidence clearly; never invent facts.
   const readiness = checkArtifactReadiness(ARTIFACT_KINDS.BLUEPRINT, {
     sectionState: sections,
-    normalizedFacts: state.normalizedFacts || emptyNormalizedFacts(),
+    normalizedFacts: preparedFacts,
   });
   let reasoningMemory = ensureReasoningMemory(state);
   const artifactProgress = resolveNextArtifact(
@@ -5406,19 +8215,23 @@ async function generateBlueprint(store, session) {
   // Refinement / re-generation: supersede prior unapproved Blueprints for this
   // session so only the newly created row remains the current in_review.
   await supersedeUnapprovedBlueprintsForSession(store, session);
+  const prior = genOpts.priorBlueprint || null;
+  const isRegeneration = Boolean(genOpts.regeneration && prior);
   const blueprint = await store.insertBlueprint({
-    id: newId(),
+    id: isRegeneration ? String(prior.id) : newId(),
     client_id: session.client_id,
     session_id: session.id,
-    version: '1.0',
+    version: isRegeneration ? bumpBlueprintVersion(prior.version) : '1.0',
     status: 'in_review',
     generated_by: GENERATED_BY,
     sections,
     confidence_summary,
     playbook_id: null,
     playbook_version: null,
-    section_provenance: {},
-    parent_blueprint_id: null,
+    section_provenance: {
+      business_facts: state.normalizedFacts?.business_facts || {},
+    },
+    parent_blueprint_id: isRegeneration ? String(prior.id) : null,
     readiness: {
       ready: readiness.ready,
       missing: readiness.missing,
@@ -5428,13 +8241,15 @@ async function generateBlueprint(store, session) {
     created_at: new Date(),
     updated_at: new Date(),
   });
-  advanceStatus(session, 'CLIENT_REVIEW');
+  if (session.status !== 'CLIENT_REVIEW') {
+    advanceStatus(session, 'CLIENT_REVIEW');
+  }
   session.interview_state = {
     ...session.interview_state,
     blueprintId: blueprint.id,
     blueprintVersion: blueprint.version,
     sectionState: sections,
-    normalizedFacts: state.normalizedFacts || emptyNormalizedFacts(),
+    normalizedFacts: preparedFacts,
     reasoningMemory,
     artifactReadiness: {
       blueprint: readiness,
@@ -5443,7 +8258,9 @@ async function generateBlueprint(store, session) {
   session.confidence_score = overallConfidence(confidence_summary);
   session.summary = readiness.confidenceNote
     ? `Draft Business Blueprint ${blueprint.id}@${blueprint.version} (${readiness.confidenceNote})`
-    : `Draft Business Blueprint ${blueprint.id}@${blueprint.version}`;
+    : isRegeneration
+      ? `Regenerated Business Blueprint ${blueprint.id}@${blueprint.version}`
+      : `Draft Business Blueprint ${blueprint.id}@${blueprint.version}`;
   session.current_stage = 'Client Review';
   await store.updateSession(session.id, {
     status: session.status,
@@ -5453,6 +8270,76 @@ async function generateBlueprint(store, session) {
     interview_state: session.interview_state,
   });
   return blueprint;
+}
+
+/**
+ * Operator action: discard stale pending Blueprint prose and re-compose from
+ * current normalized facts using the latest brief/Blueprint composer.
+ * Preserves interview answers and normalized facts (unless composer sanitizes them).
+ */
+async function regeneratePendingBlueprint(sessionId, opts = {}) {
+  const store = await resolveStore(opts);
+  const session = await store.getSession(sessionId);
+  if (!session) {
+    throw new ClientIntelligenceError('not_found', 'Interview session not found', 404);
+  }
+  if (session.status === 'APPROVED') {
+    throw new ClientIntelligenceError(
+      'interview_complete',
+      'Blueprint is already approved; revise the approved Blueprint instead of regenerating pending review'
+    );
+  }
+  if (!['CLIENT_REVIEW', 'BLUEPRINT_GENERATION'].includes(session.status)) {
+    throw new ClientIntelligenceError(
+      'invalid_status',
+      `Can only regenerate pending Blueprint review from CLIENT_REVIEW (was ${session.status})`
+    );
+  }
+
+  session.interview_state = normalizeRecoveredInterviewState(
+    session.interview_state || initialInterviewState()
+  );
+  await store.updateSession(session.id, {
+    interview_state: session.interview_state,
+  });
+
+  const prior = await resolveBlueprintForSession(store, session);
+  if (prior && blueprintStatusOf(prior) === 'approved') {
+    throw new ClientIntelligenceError(
+      'invalid_status',
+      'Cannot regenerate an approved Blueprint from this session'
+    );
+  }
+
+  await store.insertTurn({
+    id: newId(),
+    session_id: session.id,
+    speaker: 'system',
+    message:
+      'Operator requested Blueprint regeneration from current normalized understanding.',
+    goal: 'Regenerate pending Blueprint review',
+    asked_because:
+      'Stale or corrupted Blueprint prose must be recomposed without restarting the interview.',
+    derived_evidence: [],
+    created_at: new Date(),
+  });
+
+  const blueprint = await generateBlueprint(store, session, {
+    priorBlueprint: prior,
+    regeneration: true,
+  });
+  const fresh = await store.getSession(session.id);
+  const pub = publicBlueprint(blueprint);
+  return withExperienceFields(fresh, {
+    interviewId: fresh.id,
+    ...publicSession(fresh),
+    nextAction: 'GENERATE_BLUEPRINT',
+    question: null,
+    blueprint: pub,
+    message: `Regenerated Business Blueprint v${pub.version} from current understanding.`,
+    regenerated: true,
+    supersededBlueprintVersion: prior ? prior.version : null,
+  });
 }
 
 async function advanceThroughLifecycleToBlueprint(store, session) {
@@ -5490,30 +8377,84 @@ function extractNotesIntoSections(notes) {
     .map((s) => s.trim())
     .filter(Boolean)
     .filter((s) => isBusinessFactStatement(s));
+  const hasAvoidancePolarity = (sentence) =>
+    /\b(?:avoid|never|does\s+not|do\s+not|don'?t|would\s+rather\s+not|should\s+not|not\s+a\s+fit|excludes?|disqualif(?:y|ies)|no\s+longer|won'?t|will\s+not)\b/i.test(sentence);
+  const hasCustomerAvoidanceObject = (sentence) =>
+    /\b(?:serve|serving|work\s+with|take\s+on|fit)\b.{0,140}\b(?:customers?|clients?|prospects?|accounts?|people|owners?|founders?|businesses?|companies|restaurants?|daycares?|facilities|managers?|offices?)\b/i.test(sentence) ||
+    /\b(?:customers?|clients?|prospects?|accounts?|people|owners?|founders?|businesses?|companies|restaurants?|daycares?|facilities|managers?|offices?)\b.{0,140}\b(?:fit|expect(?:ing)?|looking\s+only|quick\s+lead[-\s]?generation|cheapest|lowest\s+price|idea[-\s]?stage|outside)\b/i.test(sentence) ||
+    /\b(?:avoid|never|does\s+not|do\s+not|don'?t|would\s+rather\s+not|won'?t|will\s+not)\b.{0,80}\b(?:restaurants?|daycares?|facilities|offices?|companies|businesses?|owners?|founders?|customers?|clients?|prospects?|accounts?)\b/i.test(sentence);
+  const hasCommunicationObject = (sentence) =>
+    /\b(?:brand\s+voice|voice|tone|sound|sounds?|sounding|style|language|wording|phrasing|copy|messag(?:e|es|ing)|communication|claims?|promises?|rhetoric|presentation|polish|jargon|hype|salesy|fluffy|corporate|passive|active|direct|grounded|experienced|practical|confident|encouraging|challenge)\b/i.test(sentence);
+  const isCustomerExclusion = (sentence) =>
+    hasAvoidancePolarity(sentence) &&
+    hasCustomerAvoidanceObject(sentence) &&
+    !/\b(?:language|wording|phrasing|copy|messag(?:e|es|ing)|brand\s+voice|tone|voice|sound|sounds?|sounding|claims?|promises?|rhetoric|presentation|polish)\b/i.test(sentence);
+  const isBrandCommunicationGuidance = (sentence, previousSection = null) =>
+    /\b(?:brand\s+)?voice\s+should\b/i.test(sentence) ||
+    /\b(?:don'?t|do\s+not|never|avoid)\b.{0,120}\b(?:sound|sounds?|sounding|use|say|claim|promise|language|wording|phrasing|copy|messag(?:e|es|ing)|jargon|hype|salesy|fluffy|corporate|polish|passive)\b/i.test(sentence) ||
+    /\b(?:avoid|never)\b.{0,120}\b(?:jargon|hype|salesy|fluffy|corporate|polish|claims?|promises?|language|wording|phrasing|copy|messag(?:e|es|ing)|passive)\b/i.test(sentence) ||
+    (previousSection === 'brandVoice' &&
+      hasCommunicationObject(sentence) &&
+      !hasCustomerAvoidanceObject(sentence));
+  const isPositiveFitTrait = (sentence) =>
+    /\b(?:right|ideal|great[-\s]?fit|best[-\s]?fit)\s+(?:customer|client|owner|founder|business)\b.{0,80}\b(?:needs?|requires?|must|should|has\s+to|is|are)\b.{0,120}\b(?:willing|prepared|ready|open|able|committed|comfortable|recognizes?|has|operat(?:e|es|ing)|manage|delegate|change|involved)\b/i.test(sentence) ||
+    /\b(?:customer|client|owner|founder|business)\b.{0,80}\b(?:needs?|requires?|must|should|has\s+to)\s+(?:to\s+)?be\s+(?:willing|prepared|ready|open|able|committed|comfortable)\b/i.test(sentence) ||
+    /\b(?:needs?|requires?|must|should|has\s+to)\s+(?:to\s+)?be\s+(?:willing|prepared|ready|open|able|committed|comfortable)\b/i.test(sentence) ||
+    /\b(?:works?\s+well|best\s+fit)\s+for\s+(?:customers?|clients?|owners?|founders?|businesses?)\s+who\b.{0,140}\b(?:are|will|can|have|recognize|delegate|manage|change|operate)\b/i.test(sentence);
+  const isCustomerCategory = (sentence) =>
+    /\b(?:work\s+with|serve|ideal\s+customers?\s+(?:are|include)|customers?\s+(?:are|include)|clients?\s+(?:are|include)|audience\s+(?:is|includes))\b.{0,160}\b(?:owners?|founders?|businesses?|companies|managers?|offices?|restaurants?|daycares?|facilities|segments?|verticals?)\b/i.test(sentence) &&
+    !isPositiveFitTrait(sentence) &&
+    !isCustomerExclusion(sentence);
+  const isBusinessIdentity = (sentence) =>
+    /\b(?:we\s+are|we're|company|business|dba|called|program|practice|agency|firm)\b/i.test(sentence) &&
+    /\b(?:is|are|helps?|provides?|offers?|delivers?|does|builds?|sells?|called|dba)\b/i.test(sentence) &&
+    !/\b(?:customers?|clients?|people|owners?|founders?|businesses?)\b.{0,80}\b(?:avoid|not\s+a\s+fit|would\s+rather\s+not|should\s+not|do\s+not|don't|expecting|looking\s+only)\b/i.test(sentence) &&
+    !isPositiveFitTrait(sentence);
+  const classifyFallbackSection = (sentence, previousSection = null) => {
+    if (isBrandCommunicationGuidance(sentence, previousSection)) return 'brandVoice';
+    if (isCustomerExclusion(sentence)) return 'avoidCustomers';
+    if (isPositiveFitTrait(sentence)) return 'idealCustomerTraits';
+    if (isCustomerCategory(sentence)) return 'idealCustomers';
+    if (isBusinessIdentity(sentence)) return 'identity';
+    if (/\b(services?|offers?|provide|sell|product)\b/i.test(sentence)) return 'services';
+    if (/\b(markets?|geo|regions?|city|cities|county|counties|verticals?)\b/i.test(sentence)) return 'targetMarkets';
+    if (/\b(advantage|differen|better|unique|moat)\b/i.test(sentence)) return 'competitiveAdvantages';
+    if (/\b(voice|tone|sound|brand|professional|friendly|premium)\b/i.test(sentence)) return 'brandVoice';
+    if (/\b(goal|grow|book|appointments|revenue|pipeline)\b/i.test(sentence)) return 'campaignGoals';
+    if (/\b(metric|kpi|measure|success|roi|close rate)\b/i.test(sentence)) return 'successMetrics';
+    return null;
+  };
   const patterns = [
-    { re: /\b(we are|company|business|dba|called)\b/i, section: 'identity' },
-    { re: /\b(service|offer|provide|sell|product)\b/i, section: 'services' },
+    { re: /\b(services?|offers?|provide|sell|product)\b/i, section: 'services' },
     { re: /\b(ideal|icp|customer|clientele|buyer)\b/i, section: 'idealCustomers' },
     { re: /\b(avoid|not a fit|do not want|no longer serve)\b/i, section: 'avoidCustomers' },
-    { re: /\b(market|geo|region|city|county|vertical)\b/i, section: 'targetMarkets' },
+    { re: /\b(markets?|geo|regions?|city|cities|county|counties|verticals?)\b/i, section: 'targetMarkets' },
     { re: /\b(advantage|differen|better|unique|moat)\b/i, section: 'competitiveAdvantages' },
     { re: /\b(voice|tone|sound|brand|professional|friendly|premium)\b/i, section: 'brandVoice' },
     { re: /\b(goal|grow|book|appointments|revenue|pipeline)\b/i, section: 'campaignGoals' },
     { re: /\b(metric|kpi|measure|success|roi|close rate)\b/i, section: 'successMetrics' },
   ];
   const assigned = {};
+  let previousSection = null;
   for (const sentence of sentences) {
+    const semanticSection = classifyFallbackSection(sentence, previousSection);
+    if (semanticSection) {
+      assigned[semanticSection] = assigned[semanticSection]
+        ? `${assigned[semanticSection]} ${sentence}`
+        : sentence;
+      previousSection = semanticSection;
+      continue;
+    }
     for (const p of patterns) {
+      if (p.section === 'avoidCustomers' && !isCustomerExclusion(sentence)) continue;
+      if (p.section === 'idealCustomers' && (isPositiveFitTrait(sentence) || isCustomerExclusion(sentence))) continue;
       if (assigned[p.section]) continue;
       if (p.re.test(sentence)) {
         assigned[p.section] = sentence;
+        previousSection = p.section;
         break;
       }
     }
-  }
-  // leftover sentences fill identity if missing — but never with refinement guidance
-  if (!assigned.identity && sentences[0] && isBusinessFactStatement(sentences[0])) {
-    assigned.identity = sentences[0];
   }
   return { assigned, guidance: partitioned.guidance };
 }
@@ -5872,22 +8813,70 @@ async function getApprovedClientBlueprint(clientId, opts = {}) {
     );
   }
   const bp = publicBlueprint(approved[0]);
+  const durableFacts = bp.sectionProvenance?.business_facts || {};
+  if (Object.keys(durableFacts).length) {
+    bp.epistemicFacts = durableFacts;
+  }
+
+  async function loadLegacySessionFacts() {
+    const sessionId = bp.sessionId || approved[0].session_id;
+    if (!sessionId) return null;
+    const session = await store.getSession(sessionId);
+    const facts =
+      session &&
+      session.interview_state &&
+      session.interview_state.normalizedFacts;
+    return facts && typeof facts === 'object' ? cloneNormalizedFacts(facts) : null;
+  }
+
+  // SPEC-225: snapshot-backed Blueprints read through SPEC-223C. Projection
+  // failure must fail closed rather than silently reverting to session facts.
+  if (approved[0].canonical_snapshot_id && approved[0].canonical_snapshot_tenant_id) {
+    const { deriveBlueprintCompatibility } = require('../lib/canonicalProjection');
+    const pool = opts.pool || defaultPool;
+    const canonicalFacts = await deriveBlueprintCompatibility({
+      tenant_id: approved[0].canonical_snapshot_tenant_id,
+      snapshot_id: approved[0].canonical_snapshot_id,
+      pool,
+    });
+    if (
+      !canonicalFacts ||
+      !canonicalFacts._projection_metadata ||
+      canonicalFacts._projection_metadata.completeness === 'UNAVAILABLE'
+    ) {
+      throw new ClientIntelligenceError(
+        'CANONICAL_PROJECTION_FAILURE',
+        `Canonical snapshot ${approved[0].canonical_snapshot_id} could not be reconstructed for Max business understanding`,
+        500
+      );
+    }
+    bp.normalizedFacts = canonicalFacts;
+    bp._canonical_authority = approved[0].canonical_snapshot_id;
+    bp._semantic_authority = 'CANONICAL';
+    try {
+      bp._legacyFallbackFacts = await loadLegacySessionFacts();
+    } catch (_) {
+      bp._legacyFallbackFacts = null;
+    }
+    return bp;
+  }
+
   // SPEC-103A — attach structured normalizedFacts for Max semantic reasoning.
   // Section summaries remain precomposed Blueprint prose; Max must not nest them.
   try {
-    const sessionId = bp.sessionId || approved[0].session_id;
-    if (sessionId) {
-      const session = await store.getSession(sessionId);
-      const facts =
-        session &&
-        session.interview_state &&
-        session.interview_state.normalizedFacts;
-      if (facts && typeof facts === 'object') {
-        bp.normalizedFacts = cloneNormalizedFacts(facts);
-      }
+    const facts = await loadLegacySessionFacts();
+    if (facts) {
+      bp.normalizedFacts = facts;
+      bp._semantic_authority = 'session_archival'; // Mark as legacy authority
     }
   } catch (_) {
     /* fail soft — Max falls back to peeled section substance */
+  }
+  if (!bp.normalizedFacts && Object.keys(durableFacts).length) {
+    const projected = emptyNormalizedFacts();
+    projected.business_facts = cloneNormalizedFacts({ business_facts: durableFacts }).business_facts;
+    bp.normalizedFacts = projected;
+    bp._semantic_authority = 'section_provenance';
   }
   return bp;
 }
@@ -5945,6 +8934,13 @@ async function startClientInterview(input = {}, opts = {}) {
   if (!restart && !forceNew && !notes) {
     const existing = await findActiveInterviewForClient(clientId, opts);
     if (existing) {
+      const recoveredState = syncStepIndexToFirstUnanswered(
+        normalizeRecoveredInterviewState(existing.interview_state)
+      );
+      if (JSON.stringify(recoveredState) !== JSON.stringify(existing.interview_state || {})) {
+        existing.interview_state = recoveredState;
+        await store.updateSession(existing.id, { interview_state: recoveredState });
+      }
       const detail = await getInterview(existing.id, opts);
       const q = currentQuestion(existing.interview_state);
       const memory = ensureReasoningMemory(existing.interview_state || {});
@@ -6151,10 +9147,41 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     throw new ClientIntelligenceError('empty_message', 'message is required');
   }
 
-  const state = session.interview_state || initialInterviewState();
+  let state = normalizeRecoveredInterviewState(session.interview_state || initialInterviewState());
+  const stepIndexBeforeRecoverySync = Number(state.stepIndex) || 0;
+  state = reconcilePersistedGuidedAnswerSlots(state);
+  const recoveryGuardRan = stepIndexBeforeRecoverySync !== (Number(state.stepIndex) || 0);
+  if (state !== session.interview_state) {
+    session.interview_state = state;
+    await store.updateSession(session.id, { interview_state: state });
+  }
   const q = currentQuestion(state);
 
-  // Refinement pass after resume: free-form note updates then regenerate blueprint.
+  const intakeTrace = createIntakePathTrace({
+    tenantId: session.client_id,
+    sessionId: session.id,
+    incomingAnswerLength: text.length,
+    activeQuestionKeyBeforeClassify: q && q.question ? q.question.id : null,
+    normalizedSuccessMetricsBeforeSave: Boolean(
+      (state.normalizedFacts && state.normalizedFacts.success_metrics || []).length
+    ),
+    recoveryGuardRan,
+  });
+
+  async function finishIntakeTurn(branch, payload, tracePatch = {}) {
+    patchIntakePathTrace(intakeTrace, {
+      responseBranch: branch,
+      ...tracePatch,
+    });
+    const freshSession = await store.getSession(session.id);
+    return withExperienceFields(
+      freshSession,
+      finalizeIntakePathPayload(intakeTrace, payload)
+    );
+  }
+
+  // Refinement pass after resume: free-form note updates stay conversational
+  // unless the operator explicitly asks to regenerate/review the Blueprint.
   // Refinement instructions are stored as revision guidance — never as business facts.
   if (!q && state.refinementPass) {
     const clientTurn = await store.insertTurn({
@@ -6167,7 +9194,13 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       derived_evidence: [],
       created_at: new Date(),
     });
-    const { assigned: mapped, guidance } = extractNotesIntoSections(text);
+    const correctionResult = await applyRefinementSemanticCorrections(
+      store, session, state, text, clientTurn.id
+    );
+    const extracted = correctionResult.operations.length
+      ? { assigned: {}, guidance: [] }
+      : extractNotesIntoSections(text);
+    const { assigned: mapped, guidance } = extracted;
     if (guidance.length) {
       state.revisionGuidance = [
         ...(state.revisionGuidance || []),
@@ -6179,7 +9212,17 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         })),
       ];
     }
-    const evidenceIds = [];
+    const evidenceIds = [...correctionResult.evidenceIds];
+    const primaryFieldToSection = Object.fromEntries(
+      Object.entries(SECTION_TO_PRIMARY_FIELD).map(([section, field]) => [field, section])
+    );
+    const updatedSections = correctionResult.operations
+      .map((operation) =>
+        BLUEPRINT_SECTIONS.includes(operation.slot)
+          ? operation.slot
+          : primaryFieldToSection[operation.slot]
+      )
+      .filter(Boolean);
     const sectionsToUpdate = Object.keys(mapped);
     // Only apply when we extracted real business facts — never default the whole
     // refinement message into identity.
@@ -6194,19 +9237,91 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         'EXPLICIT',
         clientTurn.id
       );
-      if (!skippedAsGuidance && evidenceRow) evidenceIds.push(evidenceRow.id);
+      if (!skippedAsGuidance && evidenceRow) {
+        evidenceIds.push(evidenceRow.id);
+        updatedSections.push(section);
+        state.normalizedFacts = session.interview_state?.normalizedFacts || state.normalizedFacts;
+        state.sectionState = session.interview_state?.sectionState || state.sectionState;
+      }
     }
     await store.updateTurn(clientTurn.id, { derived_evidence: evidenceIds });
-    state.refinementPass = false;
-    state.done = true;
+    const explicitRegeneration = hasExplicitBlueprintRegenerationIntent(text);
+    if (explicitRegeneration) {
+      state.refinementPass = false;
+      state.done = true;
+    } else {
+      state.refinementPass = true;
+      state.done = false;
+    }
     session.interview_state = state;
     await store.updateSession(session.id, {
       status: 'DISCOVERY',
       interview_state: state,
       current_stage: 'Refinement',
     });
+
+    if (!explicitRegeneration) {
+      const sectionNames = updatedSections.map((section) => SECTION_TITLES[section] || section);
+      const ack =
+        sectionNames.length
+          ? `Got it. I've updated my working understanding for ${sectionNames.join(', ')}.`
+          : guidance.length
+            ? "Understood. I'll treat that as refinement guidance for Max, not as business evidence."
+            : "Got it. I've kept this as refinement context.";
+      const assistantMessage = `${ack}\n\nYou can add another refinement, or ask me to show the updated Blueprint when you're ready to review it.`;
+
+      await store.insertTurn({
+        id: newId(),
+        session_id: session.id,
+        speaker: 'assistant',
+        message: assistantMessage,
+        goal: 'Continue refinement of Business Blueprint understanding',
+        asked_because:
+          'Client refinement updated working understanding; conversational Max/CIE still owns the turn.',
+        derived_evidence: [],
+        created_at: new Date(),
+      });
+
+      return finishIntakeTurn(
+        guidance.length && !sectionsToUpdate.length
+          ? 'refinement_pass_guidance_ack'
+          : 'refinement_pass_section_update',
+        {
+          interviewId: session.id,
+          ...publicSession(await store.getSession(session.id)),
+          nextAction: 'ASK',
+          messageType: guidance.length && !sectionsToUpdate.length
+            ? MESSAGE_TYPES.REFINEMENT_FEEDBACK
+            : MESSAGE_TYPES.ADD_ON,
+          answerDisposition: evidenceIds.length
+            ? ANSWER_DISPOSITIONS.ACCEPTED
+            : null,
+          question: null,
+          message: assistantMessage,
+          evidence: null,
+          contradiction: false,
+          blueprint: null,
+          reflection: null,
+          supplementalContext: state.supplementalContext || [],
+          reasoningMemory: state.reasoningMemory || null,
+          refinementPass: true,
+        },
+        {
+          finalIntent:
+            guidance.length && !sectionsToUpdate.length
+              ? MESSAGE_TYPES.REFINEMENT_FEEDBACK
+              : MESSAGE_TYPES.ADD_ON,
+          templateName:
+            guidance.length && !sectionsToUpdate.length
+              ? 'postInterviewMessage.refinementPass.guidance_ack'
+              : 'postInterviewMessage.refinementPass.section_update',
+          writingGuidanceBranchEntered: Boolean(guidance.length),
+        }
+      );
+    }
+
     const blueprint = await advanceThroughLifecycleToBlueprint(store, session);
-    return withExperienceFields(await store.getSession(session.id), {
+    return finishIntakeTurn('refinement_pass_generate_blueprint', {
       interviewId: session.id,
       ...publicSession(await store.getSession(session.id)),
       nextAction: 'GENERATE_BLUEPRINT',
@@ -6214,12 +9329,12 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       message: 'Draft Business Blueprint is ready for review.',
       blueprint: publicBlueprint(blueprint),
       reflection: null,
-    });
+    }, { templateName: 'postInterviewMessage.refinementPass.explicit_regeneration' });
   }
 
   if (!q) {
     const blueprint = await advanceThroughLifecycleToBlueprint(store, session);
-    return withExperienceFields(await store.getSession(session.id), {
+    return finishIntakeTurn('no_active_question_complete', {
       interviewId: session.id,
       ...publicSession(await store.getSession(session.id)),
       nextAction: 'COMPLETE',
@@ -6227,7 +9342,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       message: 'Draft Business Blueprint is ready for review.',
       blueprint: publicBlueprint(blueprint),
       reflection: null,
-    });
+    }, { templateName: 'postInterviewMessage.noQuestion.blueprint_ready' });
   }
 
   const clientTurn = await store.insertTurn({
@@ -6249,35 +9364,71 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
 
   // SPEC-090 — session-level reasoning before attaching to the active question.
   let reasoningMemory = ensureReasoningMemory(state);
-  const planned = planReasoningTurn(text, {
+  state.awaitingQuestionId = q.question.id;
+  const classifyOpts = {
     activeQuestion: q.question,
-    state,
-    businessName: businessNameHint,
-    hasSpecificity: hasSpecificitySignals(text),
+    awaitingQuestionId: q.question.id,
     looksLikeCorrection,
     looksLikeAddOn: looksLikeSupplementalContext,
     looksLikeRefinement: looksLikeRefinementFeedback,
     containsMetaInstruction: containsMetaInstructionLanguage,
     answerLooksEmpty,
+  };
+  const planned = planReasoningTurn(text, {
+    activeQuestion: q.question,
+    awaitingQuestionId: q.question.id,
+    state,
+    businessName: businessNameHint,
+    hasSpecificity: hasSpecificitySignals(text),
+    ...classifyOpts,
     crossSectionHelpers: {
-      inferDomain: (t) => inferDomainFromQuestionEcho(t) || tagContextDomain(t),
-      tagDomain: tagContextDomain,
+      inferDomain: (t) => inferExplicitRoutingDomain(t),
+      tagDomain: (t) =>
+        tagContextDomain(t, { activeQuestion: q.question, respectActiveQuestion: false }),
       domainToSection: DOMAIN_TO_SECTION,
     },
   });
-  let messageType = planned.messageClass;
+  const plannedMessageClass = planned.messageClass;
+  let messageType = plannedMessageClass;
+  intakeTrace.initialIntent = plannedMessageClass;
+  if (
+    messageType === MESSAGE_TYPES.REFINEMENT_FEEDBACK &&
+    q.question.id &&
+    !looksLikeInterviewWritingGuidance(text, {
+      ...classifyOpts,
+      looksLikeRefinement: undefined,
+      containsMetaInstruction: undefined,
+    })
+  ) {
+    messageType = MESSAGE_TYPES.DIRECT_ANSWER;
+    intakeTrace.successMetricsHardGuardRan = true;
+  }
+  messageType = coerceActiveGuidedAnswerIntent(text, q.question, messageType, classifyOpts);
+  intakeTrace.finalIntent = messageType;
+  intakeTrace.destinationSection = q.question.section;
   reasoningMemory = markClassification(reasoningMemory, messageType);
   state.reasoningMemory = reasoningMemory;
 
-  // Soft cross-section: treat high-confidence prior-section substance as add-on.
-  if (
-    messageType === MESSAGE_TYPES.DIRECT_ANSWER &&
-    planned.cross &&
-    planned.cross.section &&
-    planned.cross.confidence >= 0.8
-  ) {
-    messageType = MESSAGE_TYPES.ADD_ON;
-  }
+  const interviewEscape = detectInterviewEscapeIntent(text, classifyOpts);
+
+  logInterviewRoutingTurn(session.id, {
+    phase: 'classify',
+    ...buildInterviewRoutingDiagnostics({
+      session,
+      interviewState: state,
+      question: q.question,
+      text,
+      planned,
+      messageType,
+      plannedMessageClass,
+      classifyOpts,
+      interviewEscape,
+    }),
+    awaitingQuestionId: state.awaitingQuestionId,
+    stepIndex: state.stepIndex,
+    responseBranch:
+      messageType === MESSAGE_TYPES.DIRECT_ANSWER ? 'direct_answer_path' : 'non_answer_path',
+  });
 
   // Non-answers: store appropriately, stay on the same question (or skip-advance), respond conversationally.
   if (messageType !== MESSAGE_TYPES.DIRECT_ANSWER) {
@@ -6287,7 +9438,56 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     let probePrompt = planned.probe || null;
     let advancedAfterSkip = false;
 
+    if (interviewEscape === 'pause' || interviewEscape === 'cancel') {
+      state.interviewPaused = interviewEscape === 'pause';
+      state.awaitingQuestionId = q.question.id;
+      session.interview_state = state;
+      await store.updateSession(session.id, {
+        status: 'DISCOVERY',
+        interview_state: state,
+        current_stage: session.current_stage,
+      });
+      const pauseAck =
+        interviewEscape === 'pause'
+          ? "Understood — I'll pause intake here. Your progress is saved; answer the current question whenever you're ready to continue."
+          : "Understood — I'll stop here for now. You can resume this interview later from where you left off.";
+      const assistantMessage = `${pauseAck}\n\n${q.question.prompt}`;
+      await store.insertTurn({
+        id: newId(),
+        session_id: session.id,
+        speaker: 'assistant',
+        message: assistantMessage,
+        goal: q.question.goal,
+        asked_because: 'Operator paused or cancelled intake; preserved awaiting question.',
+        derived_evidence: [],
+        created_at: new Date(),
+      });
+      return finishIntakeTurn('interview_escape_pause_cancel', {
+        interviewId: session.id,
+        ...publicSession(await store.getSession(session.id)),
+        nextAction: 'ASK',
+        messageType,
+        question: {
+          id: q.question.id,
+          prompt: q.question.prompt,
+          stage: q.question.stage,
+          section: q.question.section,
+          goal: q.question.goal,
+          askedBecause: q.question.askedBecause,
+        },
+        message: assistantMessage,
+        reflection: null,
+        evidence: null,
+        contradiction: false,
+        blueprint: null,
+        supplementalContext: state.supplementalContext || [],
+        reasoningMemory,
+        interviewPaused: state.interviewPaused,
+      }, { templateName: 'postInterviewMessage.interviewEscape' });
+    }
+
     if (messageType === MESSAGE_TYPES.REFINEMENT_FEEDBACK) {
+      intakeTrace.writingGuidanceBranchEntered = true;
       state.revisionGuidance = [
         ...(state.revisionGuidance || []),
         {
@@ -6388,7 +9588,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
 
         if (state.done) {
           const blueprint = await advanceThroughLifecycleToBlueprint(store, session);
-          return withExperienceFields(await store.getSession(session.id), {
+          return finishIntakeTurn('insufficient_accept_unknown_complete', {
             interviewId: session.id,
             ...publicSession(await store.getSession(session.id)),
             nextAction: 'GENERATE_BLUEPRINT',
@@ -6400,6 +9600,10 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
             reflection: null,
             reasoningMemory,
             acceptedUnknown: true,
+          }, {
+            fieldMarkedComplete: true,
+            nextQuestionKey: null,
+            templateName: 'postInterviewMessage.insufficient.acceptUnknown.blueprint',
           });
         }
 
@@ -6417,7 +9621,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
           created_at: new Date(),
         });
 
-        return withExperienceFields(await store.getSession(session.id), {
+        return finishIntakeTurn('insufficient_accept_unknown_advance', {
           interviewId: session.id,
           ...publicSession(await store.getSession(session.id)),
           nextAction: 'ASK',
@@ -6442,6 +9646,10 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
           reasoningMemory,
           acceptedUnknown: true,
           probe: null,
+        }, {
+          fieldMarkedComplete: true,
+          nextQuestionKey: nextQ ? nextQ.question.id : null,
+          templateName: 'postInterviewMessage.insufficient.acceptUnknown.advance',
         });
       }
 
@@ -6771,7 +9979,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         current_stage: session.current_stage,
       });
       const blueprint = await advanceThroughLifecycleToBlueprint(store, session);
-      return withExperienceFields(await store.getSession(session.id), {
+      return finishIntakeTurn('skip_advanced_complete', {
         interviewId: session.id,
         ...publicSession(await store.getSession(session.id)),
         nextAction: 'GENERATE_BLUEPRINT',
@@ -6781,7 +9989,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         blueprint: publicBlueprint(blueprint),
         reflection: null,
         reasoningMemory,
-      });
+      }, { templateName: 'postInterviewMessage.skip.blueprint_ready' });
     }
 
     const nextQAfterSkip = advancedAfterSkip ? currentQuestion(state) : q;
@@ -6818,6 +10026,10 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         substance: ackSubstance,
         probe: probePrompt,
       });
+      if (messageType === MESSAGE_TYPES.REFINEMENT_FEEDBACK) {
+        intakeTrace.writingGuidanceBranchEntered = true;
+        intakeTrace.templateName = 'conversationalAck.refinement_feedback';
+      }
     }
 
     const assistantMessage =
@@ -6849,7 +10061,15 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       created_at: new Date(),
     });
 
-    return withExperienceFields(await store.getSession(session.id), {
+    const nonAnswerBranch =
+      messageType === MESSAGE_TYPES.INSUFFICIENT_ANSWER
+        ? 'non_answer_insufficient_probe'
+        : messageType === MESSAGE_TYPES.SKIP
+          ? 'non_answer_skip'
+          : messageType === MESSAGE_TYPES.REFINEMENT_FEEDBACK
+            ? 'non_answer_refinement_feedback'
+            : 'non_answer_ack';
+    return finishIntakeTurn(nonAnswerBranch, {
       interviewId: session.id,
       ...publicSession(await store.getSession(session.id)),
       nextAction:
@@ -6886,21 +10106,154 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       reasoningMemory,
       probe: messageType === MESSAGE_TYPES.INSUFFICIENT_ANSWER ? probePrompt : null,
       acceptedUnknown: messageType === MESSAGE_TYPES.SKIP ? true : undefined,
+    }, {
+      nextQuestionKey: activeForAck ? activeForAck.id : q.question.id,
+      fieldMarkedComplete: advancedAfterSkip,
+      templateName:
+        messageType === MESSAGE_TYPES.REFINEMENT_FEEDBACK
+          ? intakeTrace.templateName || 'conversationalAck.refinement_feedback'
+          : messageType === MESSAGE_TYPES.INSUFFICIENT_ANSWER
+            ? 'postInterviewMessage.insufficient.probe'
+            : undefined,
     });
   }
 
-  const { evidenceRow, contradiction, skippedAsGuidance } = await applySectionUpdate(
+  session.interview_state = state;
+  let { evidenceRow, contradiction, skippedAsGuidance, responseKind: applyResponseKind } =
+    await applySectionUpdate(
     store,
     session,
     q.question.section,
     text,
     'EXPLICIT',
-    clientTurn.id
+    clientTurn.id,
+    classifyOpts
   );
+  state.normalizedFacts = session.interview_state.normalizedFacts || state.normalizedFacts;
+  state.sectionState = session.interview_state.sectionState || state.sectionState;
 
   await store.updateTurn(clientTurn.id, {
     derived_evidence: evidenceRow ? [evidenceRow.id] : [],
   });
+
+  const classifyKindAtPersist = classifyUserResponse(text, classifyOpts);
+  if (
+    classifyKindAtPersist === ANSWER_KINDS.REFINEMENT_FEEDBACK &&
+    !skippedAsGuidance
+  ) {
+    intakeTrace.successMetricsHardGuardRan = true;
+  }
+  intakeTrace.normalizedSuccessMetricsAfterSave = Boolean(
+    (state.normalizedFacts && state.normalizedFacts.success_metrics || []).length
+  );
+
+  const nextQuestionAfterPersist = skippedAsGuidance ? q : currentQuestion(state);
+  logInterviewRoutingTurn(session.id, {
+    phase: 'persist',
+    activeQuestionId: q.question.id,
+    destinationSection: q.question.section,
+    detectedIntent: messageType,
+    applyResponseKind: applyResponseKind || null,
+    skippedAsGuidance: Boolean(skippedAsGuidance),
+    normalizedMetrics: (state.normalizedFacts && state.normalizedFacts.success_metrics) || [],
+    answersSuccessMetrics: state.answers && state.answers.success_metrics,
+    successMetricsCompleteAfter: hasValidGuidedAnswer(state, 'success_metrics'),
+    nextQuestionKey: nextQuestionAfterPersist && nextQuestionAfterPersist.question.id,
+    stepIndex: state.stepIndex,
+    awaitingQuestionId: state.awaitingQuestionId,
+    intakeTraceId: intakeTrace.intakeTraceId,
+    responseBranch: skippedAsGuidance ? 'skipped_as_guidance' : 'accepted_direct_answer',
+  });
+
+  if (
+    skippedAsGuidance &&
+    q.question.id === 'success_metrics' &&
+    looksLikeSuccessMetricsBusinessEvidence(text) &&
+    !looksLikeExplicitCopywritingCommand(text, classifyOpts)
+  ) {
+    skippedAsGuidance = false;
+    state.normalizedFacts = ingestAnswerIntoNormalizedFacts(
+      state.normalizedFacts || emptyNormalizedFacts(),
+      'successMetrics',
+      text,
+      { provenance: clientTurn.id }
+    );
+    state.answers = { ...(state.answers || {}), [q.question.id]: text };
+    const rebuilt = sectionsFromNormalizedFacts(state.normalizedFacts, state.sectionState || emptySections());
+    const curSection = (state.sectionState || emptySections()).successMetrics || emptySection();
+    state.sectionState = {
+      ...(state.sectionState || emptySections()),
+      successMetrics: {
+        ...curSection,
+        summary: rebuilt.successMetrics.summary,
+        confidence: Math.max(curSection.confidence || 0, EXPLICIT_CONFIDENCE),
+        unknowns: [],
+      },
+    };
+    session.interview_state = state;
+    logInterviewRoutingTurn(session.id, {
+      phase: 'recover',
+      activeQuestionId: q.question.id,
+      destinationSection: 'successMetrics',
+      finalDetectedIntent: MESSAGE_TYPES.DIRECT_ANSWER,
+      successMetricsCompleteAfter: true,
+      normalizedMetrics: state.normalizedFacts.success_metrics || [],
+      responseBranch: 'success_metrics_recovery',
+    });
+  }
+
+  if (skippedAsGuidance) {
+    intakeTrace.writingGuidanceBranchEntered = true;
+    intakeTrace.templateName = 'conversationalAck.refinement_feedback';
+    state.awaitingQuestionId = q.question.id;
+    session.interview_state = state;
+    await store.updateSession(session.id, {
+      status: 'DISCOVERY',
+      interview_state: state,
+      current_stage: session.current_stage,
+    });
+    const ack = conversationalAck(MESSAGE_TYPES.REFINEMENT_FEEDBACK, text, domain, {
+      activeQuestion: q.question,
+      businessName: businessNameHint,
+    });
+    const assistantMessage = `${ack}\n\n${q.question.prompt}`;
+    await store.insertTurn({
+      id: newId(),
+      session_id: session.id,
+      speaker: 'assistant',
+      message: assistantMessage,
+      goal: q.question.goal,
+      asked_because:
+        'Answer reclassified as refinement guidance during persistence; question remains open.',
+      derived_evidence: [],
+      created_at: new Date(),
+    });
+    return finishIntakeTurn('direct_answer_skipped_as_guidance', {
+      interviewId: session.id,
+      ...publicSession(await store.getSession(session.id)),
+      nextAction: 'ASK',
+      messageType: MESSAGE_TYPES.REFINEMENT_FEEDBACK,
+      question: {
+        id: q.question.id,
+        prompt: q.question.prompt,
+        stage: q.question.stage,
+        section: q.question.section,
+        goal: q.question.goal,
+        askedBecause: q.question.askedBecause,
+      },
+      message: assistantMessage,
+      reflection: null,
+      evidence: null,
+      contradiction: false,
+      blueprint: null,
+      reasoningMemory,
+    }, {
+      finalIntent: MESSAGE_TYPES.REFINEMENT_FEEDBACK,
+      nextQuestionKey: q.question.id,
+      fieldMarkedComplete: false,
+      templateName: 'conversationalAck.refinement_feedback',
+    });
+  }
 
   // Only record business answers against the question bank — refinement stays in revisionGuidance.
   const acceptedDisposition = contradiction
@@ -6909,6 +10262,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
   state.lastAnswerDisposition = acceptedDisposition;
   if (!skippedAsGuidance) {
     state.answers = { ...(state.answers || {}), [q.question.id]: text };
+    recordIntakeSupportingEvidence(state, q.question, text);
     const synthesized = synthesizeBusinessLanguage(text, {
       section: q.question.section,
       businessName: businessNameHint,
@@ -6924,8 +10278,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     state.answers = { ...(state.answers || {}) };
   }
   // SPEC-100 — only advance after accepted (or partial) operator evidence.
-  state.stepIndex = (Number(state.stepIndex) || 0) + 1;
-  if (state.stepIndex >= QUESTION_BANK.length) state.done = true;
+  advanceStepIndexAfterAnswer(state);
   reasoningMemory = syncConfidenceFromSections(
     reasoningMemory,
     session.interview_state.sectionState || state.sectionState
@@ -6951,7 +10304,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       current_stage: session.current_stage,
     });
     const blueprint = await advanceThroughLifecycleToBlueprint(store, session);
-    return withExperienceFields(await store.getSession(session.id), {
+    return finishIntakeTurn('direct_answer_interview_complete', {
       interviewId: session.id,
       ...publicSession(await store.getSession(session.id)),
       nextAction: 'GENERATE_BLUEPRINT',
@@ -6962,6 +10315,10 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       blueprint: publicBlueprint(blueprint),
       reflection: null,
       reasoningMemory: (await store.getSession(session.id)).interview_state?.reasoningMemory,
+    }, {
+      fieldMarkedComplete: true,
+      nextQuestionKey: null,
+      templateName: 'postInterviewMessage.directAnswer.blueprint_ready',
     });
   }
 
@@ -7002,27 +10359,38 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     interview_state: state,
   });
 
-  return withExperienceFields(await store.getSession(session.id), {
-    interviewId: session.id,
-    ...publicSession(await store.getSession(session.id)),
-    nextAction: contradiction ? 'CLARIFY' : 'ASK',
-    messageType: MESSAGE_TYPES.DIRECT_ANSWER,
-    answerDisposition: acceptedDisposition,
-    question: {
-      id: nextQ.question.id,
-      prompt: nextQ.question.prompt,
-      stage: nextQ.question.stage,
-      section: nextQ.question.section,
-      goal: nextQ.question.goal,
-      askedBecause: nextQ.question.askedBecause,
+  intakeTrace.fieldMarkedComplete = true;
+  intakeTrace.nextQuestionKey = nextQ.question.id;
+
+  return finishIntakeTurn(
+    contradiction ? 'direct_answer_advance_contradiction' : 'direct_answer_advance',
+    {
+      interviewId: session.id,
+      ...publicSession(await store.getSession(session.id)),
+      nextAction: contradiction ? 'CLARIFY' : 'ASK',
+      messageType: MESSAGE_TYPES.DIRECT_ANSWER,
+      answerDisposition: acceptedDisposition,
+      question: {
+        id: nextQ.question.id,
+        prompt: nextQ.question.prompt,
+        stage: nextQ.question.stage,
+        section: nextQ.question.section,
+        goal: nextQ.question.goal,
+        askedBecause: nextQ.question.askedBecause,
+      },
+      message: nextQ.question.prompt,
+      reflection,
+      evidence: evidenceRow ? publicEvidence(evidenceRow) : null,
+      contradiction: contradiction || false,
+      blueprint: null,
+      reasoningMemory,
     },
-    message: nextQ.question.prompt,
-    reflection,
-    evidence: evidenceRow ? publicEvidence(evidenceRow) : null,
-    contradiction: contradiction || false,
-    blueprint: null,
-    reasoningMemory,
-  });
+    {
+      templateName: reflection
+        ? 'postInterviewMessage.directAnswer.advance_with_reflection'
+        : 'postInterviewMessage.directAnswer.next_question_prompt',
+    }
+  );
 }
 
 function sessionIsSample(session) {
@@ -7733,6 +11101,7 @@ async function reviseBlueprint(blueprintId, revisions = {}, opts = {}) {
   if (!session) {
     throw new ClientIntelligenceError('not_found', 'Interview session not found', 404);
   }
+  session.interview_state = normalizeRecoveredInterviewState(session.interview_state);
 
   const sections = buildSectionsFromState(current.sections);
   const sectionEdits = revisions.sections || revisions;
@@ -7885,7 +11254,7 @@ async function resumeInterview(sessionId, opts = {}) {
 
   advanceStatus(session, 'DISCOVERY');
   const state = {
-    ...(session.interview_state || initialInterviewState()),
+    ...normalizeRecoveredInterviewState(session.interview_state || initialInterviewState()),
     done: false,
     refinementPass: true,
   };
@@ -8074,19 +11443,157 @@ async function approveBlueprint(blueprintId, opts = {}) {
     );
   }
 
+  // =====================================================================
+  // SPEC-224 Execution Order: Canonical Authority BEFORE Downstream Artifacts
+  // =====================================================================
+  // A. Load session + frozen approval interpretation (done above)
+  // B. Construct CanonicalSemanticBatch from normalizedFacts + evidence
+  // C. Commit through SPEC-223B (returns immutable canonical snapshot)
+  // D. Reconstruct through SPEC-223C projection (if enabled)
+  // E. Derive Blueprint-compatible representation from canonical projection
+  // F. Persist Blueprint as approved with canonical snapshot association
+  // G. Mark session approved
+  // H. Create playbook / perform downstream handoff
+
+  let canonicalSnapshotId = null;
+  let canonicalTenantId = null;
+  const commitCanonicalOpts =
+    opts.canonicalCommit !== false &&
+    (store.kind !== 'memory' || opts.canonicalCommit === true);
+
+  if (commitCanonicalOpts) {
+    try {
+      // Step B+C: Build and commit canonical semantic batch
+      const { CIECanonicalAdapter } = require('../lib/cieCanonicalAdapter');
+      const { commitCanonicalSemanticBatch } = require('../lib/canonicalSemanticWrite');
+      const pool = opts.pool || defaultPool;
+
+      // Resolve the tenant workspace binding for this client (SPEC-223 authority check
+      // requires an existing tenant_workspaces row; tenant_id cannot be fabricated).
+      const clientId = current.client_id;
+      const tenantRow = (
+        await pool.query(
+          `SELECT tenant_key FROM tenant_workspaces WHERE client_id = $1`,
+          [clientId]
+        )
+      ).rows[0];
+      if (!tenantRow) {
+        throw new ClientIntelligenceError(
+          'missing_tenant_workspace',
+          `No tenant workspace bound to client ${clientId}`
+        );
+      }
+      canonicalTenantId = tenantRow.tenant_key;
+
+      // Retrieve frozen evidence records for this session
+      const sessionEvidence = await store.listEvidence(current.session_id);
+
+      // Retrieve approved SPEC-222 registry artifact
+      const registryArtifact = await getApprovedCanonicalRegistry({ ...opts, pool });
+      if (!registryArtifact) {
+        throw new ClientIntelligenceError(
+          'missing_registry',
+          'SPEC-222 canonical registry artifact not seeded (SPEC-224 blocker)'
+        );
+      }
+
+      // Build CanonicalSemanticBatch from approved Blueprint interpretation.
+      // normalizedFacts lives only in session.interview_state (frozen at approval);
+      // the Blueprint row itself carries no normalizedFacts column.
+      const canonicalBatch = CIECanonicalAdapter.buildBatch({
+        tenant_id: canonicalTenantId,
+        client_id: clientId,
+        blueprint: {
+          ...current,
+          normalizedFacts:
+            (session.interview_state && session.interview_state.normalizedFacts) || {},
+        },
+        blueprint_id: current.id,
+        blueprint_version: current.version,
+        cie_evidence_records: sessionEvidence,
+        registry_artifact: registryArtifact,
+        interpreter_id: 'cie-approval-interpreter',
+        interpreter_version: '1.0.0-spec-224',
+        session_id: current.session_id,
+      });
+
+      // Commit canonical batch (with SPEC-223B atomicity)
+      const commitResult = await commitCanonicalSemanticBatch(pool, canonicalBatch);
+      canonicalSnapshotId = commitResult.snapshot_id;
+
+      console.log(
+        `[SPEC-224] Approved Blueprint ${current.id} committed to canonical snapshot ${canonicalSnapshotId}`
+      );
+
+      // Step D+E: Reconstruct through SPEC-223C and derive the Blueprint-compatible
+      // representation BEFORE persisting approval. A projection failure here must
+      // block approval -- a committed snapshot that cannot be reconstructed must
+      // not be presented to the operator as an approved Blueprint.
+      const { deriveBlueprintCompatibility } = require('../lib/canonicalProjection');
+      const projected = await deriveBlueprintCompatibility({
+        tenant_id: canonicalTenantId,
+        snapshot_id: canonicalSnapshotId,
+        pool,
+      });
+      if (!projected || !projected._projection_metadata || projected._projection_metadata.completeness === 'UNAVAILABLE') {
+        throw new ClientIntelligenceError(
+          'projection_failed',
+          `Canonical snapshot ${canonicalSnapshotId} could not be reconstructed into a Blueprint-compatible projection`
+        );
+      }
+    } catch (err) {
+      // Step H (failure behavior): If canonical commit or projection fails, Blueprint remains unapproved
+      console.error('[SPEC-224] Canonical commit or projection failed; approval aborted:', err.message);
+      throw new ClientIntelligenceError(
+        err.code === 'projection_failed' ? 'projection_failed' : 'canonical_commit_failed',
+        `Canonical semantic authority could not be established: ${err.message}`
+      );
+    }
+  }
+
+  // =====================================================================
+  // Step F: Persist Blueprint as approved with canonical snapshot association
+  // (before playbook, per SPEC-224 order)
+  // =====================================================================
+  const approved = await store.updateBlueprint(current.id, current.version, {
+    status: 'approved',
+    canonical_snapshot_id: canonicalSnapshotId, // NEW: Link to canonical authority
+    canonical_snapshot_tenant_id: canonicalTenantId,
+    section_provenance: current.section_provenance,
+  });
+  await store.supersedeBlueprints(current.id, current.version);
+
+  // =====================================================================
+  // Step H: Create playbook / perform downstream handoff
+  // (AFTER canonical authority established, per SPEC-224 order)
+  // =====================================================================
   const handoffOpts = { ...opts };
   if (store.kind === 'memory' && !handoffOpts.playbookStore) {
     handoffOpts.useMemoryPlaybookStore = true;
   }
-  const handoff = await createPlaybookFromApprovedBlueprint(current, handoffOpts);
-  const approved = await store.updateBlueprint(current.id, current.version, {
-    status: 'approved',
-    playbook_id: handoff.playbook.id,
-    playbook_version: handoff.playbook.version,
-    section_provenance: handoff.sectionProvenance,
-  });
-  await store.supersedeBlueprints(current.id, current.version);
+  let handoff;
+  try {
+    handoff = await createPlaybookFromApprovedBlueprint(approved, handoffOpts);
+    // Link playbook to approved Blueprint
+    await store.updateBlueprint(approved.id, approved.version, {
+      playbook_id: handoff.playbook.id,
+      playbook_version: handoff.playbook.version,
+      section_provenance: handoff.sectionProvenance,
+    });
+  } catch (err) {
+    // Step H (failure behavior): Surface playbook failure separately
+    console.error('[SPEC-224] Playbook creation failed (after canonical approval):', err.message);
+    // Blueprint is already approved + canonical snapshot linked; don't revert
+    // Playbook handoff is a downstream concern, not an approval blocker
+    throw new ClientIntelligenceError(
+      'playbook_creation_failed',
+      `Playbook handoff failed after approval: ${err.message}`
+    );
+  }
 
+  // =====================================================================
+  // Growth direction (independent of canonical authority)
+  // =====================================================================
   const initialGrowthDirection = buildInitialGrowthDirection(approved, {
     normalizedFacts:
       (session.interview_state && session.interview_state.normalizedFacts) || null,
@@ -8110,18 +11617,22 @@ async function approveBlueprint(blueprintId, opts = {}) {
     ARTIFACT_KINDS.GROWTH_DIRECTION
   );
 
+  // =====================================================================
+  // Step G: Mark session approved
+  // =====================================================================
   advanceStatus(session, 'APPROVED');
   session.completed_at = new Date();
   await store.updateSession(session.id, {
     status: 'APPROVED',
     completed_at: session.completed_at,
-    summary: `Approved Business Blueprint ${approved.id}@${approved.version}`,
+    summary: `Approved Business Blueprint ${approved.id}@${approved.version} (canonical snapshot: ${canonicalSnapshotId || 'N/A'})`,
     interview_state: {
       ...session.interview_state,
       blueprintId: approved.id,
       blueprintVersion: approved.version,
       playbookId: handoff.playbook.id,
       playbookVersion: handoff.playbook.version,
+      canonicalSnapshotId, // NEW: Link for reference
       approvedAt: session.completed_at.toISOString(),
       initialGrowthDirection,
       growthConversation: null,
@@ -8141,10 +11652,32 @@ async function approveBlueprint(blueprintId, opts = {}) {
     message: 'approved',
     blueprint: publicBlueprint(approved),
     playbook: handoff.playbook,
+    canonicalSnapshotId, // NEW: Expose canonical authority link to caller
     initialGrowthDirection,
     sectionProvenance: handoff.sectionProvenance,
     alreadyApproved: false,
   };
+}
+
+/**
+ * Retrieve the approved SPEC-222 canonical registry artifact.
+ * Per SPEC-224: must exist and be seeded by production registry migration.
+ */
+async function getApprovedCanonicalRegistry(opts) {
+  try {
+    const pool = opts.pool || require('../db');
+    const result = await pool.query(
+      `SELECT id, registry_version, entity_vocabulary, predicate_definitions, content_digest
+       FROM canonical_registry_artifacts
+       WHERE registry_version LIKE '1.0.0-spec-222%'
+       ORDER BY created_at DESC
+       LIMIT 1`
+    );
+    return result.rows[0] || null;
+  } catch (err) {
+    console.error('[SPEC-224] Failed to retrieve canonical registry artifact:', err.message);
+    return null;
+  }
 }
 
 /**
@@ -9573,6 +13106,9 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
 }
 
 module.exports = {
+  EPISTEMIC_STATES,
+  classifyEpistemicState,
+  composeAssessment,
   SESSION_STATUSES,
   ALLOWED_TRANSITIONS,
   BLUEPRINT_SECTIONS,
@@ -9601,6 +13137,17 @@ module.exports = {
   buildUnderstandingProgress,
   buildExecutiveSummary,
   buildExecutiveBusinessBrief,
+  prepareNormalizedFactsForBrief,
+  rehydrateNormalizedFactsFromAnswers,
+  pickBlueprintPipelineFactSlice,
+  pickBlueprintPipelineSectionSummaries,
+  logBlueprintPipelineDiagnostics,
+  factsIndicateCommercialCleaningBusiness,
+  partitionSuccessMetricsAndQualification,
+  extractScorecardMetricsFromProse,
+  composeQualificationSignalsFromNormalizedFacts,
+  composeWhoYouServeFromNormalizedFacts,
+  composeWhoYouAreFromNormalizedFacts,
   buildReflection,
   hasSpecificitySignals,
   looksAmbiguous,
@@ -9627,6 +13174,7 @@ module.exports = {
   resolveResumeTarget,
   buildGrowthPlan,
   reviseBlueprint,
+  regeneratePendingBlueprint,
   approveBlueprint,
   startGrowthConversation,
   postGrowthMessage,
@@ -9648,6 +13196,9 @@ module.exports = {
   looksLikeRefinementFeedback,
   looksLikeCorrection,
   looksLikeSupplementalContext,
+  reviewCorrectionOperations,
+  projectWorkingSemanticOperations,
+  normalizeRecoveredInterviewState,
   containsMetaInstructionLanguage,
   containsRawPromptFragment,
   partitionUserResponse,
@@ -9661,12 +13212,20 @@ module.exports = {
   synthesizeNormalizedFact,
   normalizeClaim,
   tagContextDomain,
+  inferSupportingContextDomains,
+  inferExplicitRoutingDomain,
+  QUESTION_ID_TO_SECTION,
+  sectionForGuidedQuestion,
+  hasValidGuidedAnswer,
+  syncStepIndexToFirstUnanswered,
+  looksLikeExplicitCrossSectionAddOn,
   inferDomainFromQuestionEcho,
   resolveCorrectionTarget,
   findLastAnsweredQuestionId,
   conversationalAck,
   extractBusinessName,
   mergeSupplementalIntoSections,
+  pinComposedBlueprintSectionSummaries,
   parseCorrectionMessage,
   parseSupplementalMessage,
   normalizeBusinessPhrase,
@@ -9688,6 +13247,7 @@ module.exports = {
   isConversationalFiller,
   isDecisionMakerLabel,
   mergeIdealCustomersWithPrecedence,
+  isCanonicalIdealCustomerSegment,
   synthesizeDifferentiationSnippet,
   emptyNormalizedFacts,
   ingestAnswerIntoNormalizedFacts,

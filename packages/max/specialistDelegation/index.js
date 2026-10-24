@@ -75,6 +75,12 @@ const {
   classifyCognitiveMode,
   forbidsSpecialistDelegation,
   looksLikeInvestigation,
+  looksLikeSummary,
+  looksLikeCompletedRetrieval,
+  looksLikeDiagnosis,
+  looksLikeUnknownAnalysis,
+  looksLikeRisk,
+  looksLikeProgress,
 } = require('./CognitiveMode');
 const {
   UNKNOWN_ANSWER,
@@ -85,6 +91,8 @@ const {
 } = require('./RetrievalGate');
 
 const ADAPTERS = Object.freeze({
+  paige_social_publication: require('./PaigeSocialAdapter').runPaigeSocialPublication,
+  paige_social_content: require('./PaigeSocialAdapter').runPaigeSocialContent,
   test_intelligence: runTestIntelligence,
   scout: runScoutAcquisitionIntelligence,
 });
@@ -732,6 +740,12 @@ function createSpecialistDelegationService(options = {}) {
     classifyCognitiveMode,
     forbidsSpecialistDelegation,
     looksLikeInvestigation,
+    looksLikeSummary,
+    looksLikeCompletedRetrieval,
+    looksLikeDiagnosis,
+    looksLikeUnknownAnalysis,
+    looksLikeRisk,
+    looksLikeProgress,
     UNKNOWN_ANSWER,
     mayCreateDelegation,
     mayEnterSpecialistPath,
@@ -789,6 +803,12 @@ module.exports = {
   classifyCognitiveMode,
   forbidsSpecialistDelegation,
   looksLikeInvestigation,
+  looksLikeSummary,
+  looksLikeCompletedRetrieval,
+  looksLikeDiagnosis,
+  looksLikeUnknownAnalysis,
+  looksLikeRisk,
+  looksLikeProgress,
   UNKNOWN_ANSWER,
   mayCreateDelegation,
   mayEnterSpecialistPath,

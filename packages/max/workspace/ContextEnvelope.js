@@ -108,6 +108,10 @@ function normalizeContext(raw) {
     // SPEC-098 — approved Client Intelligence (carrier only; loaded elsewhere)
     'clientIntelligence',
     'businessBlueprint',
+    // SPEC-114 — provisioned tenant workspace + onboarding greeting
+    'tenantWorkspace',
+    'tenant',
+    'tenantName',
     // SPEC-103 — short-lived session cue for advisory follow-ups (Why?)
     'lastClientIntelligenceTurn',
     // SPEC-103C — active conversational reasoning thread (session only)

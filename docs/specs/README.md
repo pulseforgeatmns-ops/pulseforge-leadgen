@@ -6,6 +6,8 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 
 | Spec | Title | Status | Release |
 |---|---|---|---|
+| [SPEC-JEV-003](SPEC-JEV-003_Operator_Visible_Routing_Mismatch_Warnings.md) | Operator-Visible Routing Mismatch Warnings | Implemented | Unreleased |
+| [SPEC-JEV-002](SPEC-JEV-002_Decision_Shadow_Review.md) | Decision Shadow Review + Mismatch Audit | Implemented; migration pending deployment | Unreleased |
 | [SPEC-000](SPEC-000_Repository_Foundation.md) | Repository Foundation & Source of Truth | Done | v0.7.0 |
 | [SPEC-001A](SPEC-001A_Knowledge_Layer_Foundation.md) | Knowledge Layer Foundation | Done | v0.7.1 |
 | [SPEC-001B](SPEC-001B_Graph_Synchronization_Engine.md) | Graph Synchronization Engine | Done | v0.7.2 |
@@ -97,6 +99,16 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 | [SPEC-103](SPEC-103_Durable_Business_Understanding_Retrieval.md) | Durable Business Understanding Retrieval | Implemented (v1 thin slice) | v0.1 |
 | [SPEC-104](SPEC-104_Persistent_Operator_Context.md) | Persistent Operator Context | Implemented (v1) | v0.1 |
 | [SPEC-105](SPEC-105_Max_Operating_Evidence_Retrieval.md) | Max Operating Evidence Retrieval | Implemented (v1 thin slice) | v0.1 |
+| [SPEC-106](SPEC-106_Operator_Reported_Operating_Evidence.md) | Operator-Reported Operating Evidence | Implemented (v1 thin slice) | v0.1 |
+| [SPEC-109](SPEC-109_Intent_Bound_Response_Selection.md) | Intent-Bound Response Selection | Implemented (v1) | v0.1 |
+| [SPEC-110](SPEC-110_Business_Intelligence_Synthesis.md) | Business Intelligence Synthesis | Implemented (v1) | v0.1 |
+| [SPEC-111](SPEC-111_Operator_Intent_Taxonomy.md) | Operator Intent Taxonomy | Implemented (v1) | v0.1 |
+| [SPEC-112](SPEC-112_Acquisition_Intelligence_Model.md) | Acquisition Intelligence Model (AIM) | Implemented (v1 thin slice) | v0.1 |
+| [SPEC-113](SPEC-113_Acquisition_Intelligence_Compiler.md) | Acquisition Intelligence Compiler (AIC) | Implemented (v1 thin slice) | v0.1 |
+| [SPEC-114](SPEC-114_Client_Tenant_Creation.md) | Client Tenant Creation & Activation | Implemented (v1 thin slice) | v0.1 |
+| [SPEC-115](SPEC-115_Client_Registration_and_Workspace_Provisioning.md) | Pilot 0 Self-Service Client Onboarding | Implemented (v1 thin slice) | v0.1 |
+| [SPEC-116](SPEC-116_Operator_Scorecard_Intelligence.md) | Operator Scorecard Intelligence (OSI) | Implemented (v1 thin slice) | v0.1 |
+| [SPEC-117](SPEC-117_Emmett_Outbound_Infrastructure_Intelligence.md) | Emmett Outbound Infrastructure Intelligence | Implemented (v1 thin slice) | v0.1 |
 | [SPEC-102F](SPEC-102F_Max_Development_Framework.md) | Max Development Framework | Foundation (v1 thin slice) | v0.1 |
 | [SPEC-006](SPEC-006_Command_Deck.md) | Pulseforge Command Deck | Approved | v1.0.0 |
 | [SPEC-001_Business_Knowledge_Graph.md](SPEC-001_Business_Knowledge_Graph.md) | Business Knowledge Graph (remaining production ingest) | Draft | — |

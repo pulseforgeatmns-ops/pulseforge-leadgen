@@ -66,6 +66,88 @@ describe('SPEC-102F Max Development Framework', () => {
     }
   });
 
+  test('intent_bound_response_selection is a graduated Pilot 0 competency', () => {
+    const competency = training.getCompetency('intent_bound_response_selection');
+    assert.equal(competency.stage, training.STAGES.GRADUATED);
+    assert.ok(competency.specRefs.includes('SPEC-109'));
+    assert.match(competency.exercises[0].generalLesson, /response structure/i);
+    assert.match(competency.exercises[0].transferTest, /How is Anchor Cleaning doing/i);
+  });
+
+  test('claim_grounding is a graduated Pilot 0 competency', () => {
+    const competency = training.getCompetency('claim_grounding');
+    assert.equal(competency.stage, training.STAGES.GRADUATED);
+    assert.ok(competency.specRefs.includes('SPEC-108'));
+    assert.match(competency.exercises[0].generalLesson, /supported operating-state claims/i);
+    assert.match(competency.exercises[0].transferTest, /has outreach begun/i);
+  });
+
+  test('business_intelligence_synthesis is a graduated Pilot 0 competency', () => {
+    const competency = training.getCompetency('business_intelligence_synthesis');
+    assert.equal(competency.stage, training.STAGES.GRADUATED);
+    assert.ok(competency.specRefs.includes('SPEC-110'));
+    assert.match(competency.exercises[0].generalLesson, /conclusions, not merely inventories/i);
+    assert.match(competency.exercises[0].transferTest, /Are Yelp Ads working/i);
+  });
+
+  test('operator_intent_taxonomy is a graduated Pilot 0 competency', () => {
+    const competency = training.getCompetency('operator_intent_taxonomy');
+    assert.equal(competency.stage, training.STAGES.GRADUATED);
+    assert.ok(competency.specRefs.includes('SPEC-111'));
+    assert.match(competency.exercises[0].generalLesson, /Intent determines analysis/i);
+    assert.match(competency.exercises[0].transferTest, /What don't we know yet that matters/i);
+  });
+
+  test('acquisition_intelligence_model is a graduated competency', () => {
+    const competency = training.getCompetency('acquisition_intelligence_model');
+    assert.equal(competency.stage, training.STAGES.GRADUATED);
+    assert.ok(competency.specRefs.includes('SPEC-112'));
+    assert.match(competency.exercises[0].generalLesson, /understand a market before/i);
+  });
+
+  test('client_tenant_creation is a graduated competency', () => {
+    const competency = training.getCompetency('client_tenant_creation');
+    assert.equal(competency.stage, training.STAGES.GRADUATED);
+    assert.ok(competency.specRefs.includes('SPEC-114'));
+    assert.match(competency.exercises[0].generalLesson, /provisioned before intelligence/i);
+  });
+
+  test('pilot_0_client_onboarding is a graduated competency', () => {
+    const competency = training.getCompetency('pilot_0_client_onboarding');
+    assert.equal(competency.stage, training.STAGES.GRADUATED);
+    assert.ok(competency.specRefs.includes('SPEC-115'));
+    assert.match(competency.exercises[0].generalLesson, /developer intervention is a product bug/i);
+  });
+
+  test('client_registration_workspace is a graduated competency', () => {
+    const competency = training.getCompetency('client_registration_workspace');
+    assert.equal(competency.stage, training.STAGES.GRADUATED);
+    assert.ok(competency.specRefs.includes('SPEC-115'));
+    assert.match(competency.exercises[0].generalLesson, /workspace is created first/i);
+  });
+
+  test('acquisition_intelligence_compiler is a graduated competency', () => {
+    const competency = training.getCompetency('acquisition_intelligence_compiler');
+    assert.equal(competency.stage, training.STAGES.GRADUATED);
+    assert.ok(competency.specRefs.includes('SPEC-113'));
+    assert.match(competency.exercises[0].generalLesson, /compiled, then approved, then published/i);
+  });
+
+  test('emmett_outbound_infrastructure is a graduated Pilot 0 competency', () => {
+    const competency = training.getCompetency('emmett_outbound_infrastructure');
+    assert.equal(competency.stage, training.STAGES.GRADUATED);
+    assert.ok(competency.specRefs.includes('SPEC-117'));
+    assert.match(competency.exercises[0].generalLesson, /Reputation is capital/i);
+    assert.match(competency.exercises[0].transferTest, /blacklist/i);
+  });
+
+  test('acquisition_mission_orchestration is a graduated competency', () => {
+    const competency = training.getCompetency('acquisition_mission_orchestration');
+    assert.equal(competency.stage, training.STAGES.GRADUATED);
+    assert.ok(competency.specRefs.includes('SPEC-118'));
+    assert.match(competency.exercises[0].generalLesson, /Max doesn't manage agents/i);
+  });
+
   test('retrieve_before_delegation exercise includes transfer test', () => {
     const competency = training.getCompetency('retrieve_before_delegation');
     const exercise = competency.exercises[0];

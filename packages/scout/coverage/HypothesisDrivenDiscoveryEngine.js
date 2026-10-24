@@ -1,0 +1,557 @@
+'use strict';
+
+const { rethrowResearchProviderControl } = require('../../../utils/anchorResearchProviderPause');
+
+/**
+ * SPEC-177 — Hypothesis-Driven Discovery Engine.
+ *
+ * Replaces provider-first discovery with hypothesis-driven investigation.
+ * Business hypotheses → Investigation Plan → Evidence Requirements → Provider Assignment
+ * → Evidence Collection → Identity Resolution → Evidence Synthesis.
+ *
+ * Invariants:
+ * - Business hypotheses own investigations.
+ * - Providers collect evidence — they do not define search strategy.
+ * - Investigations are planned from uncertainty, not keywords.
+ */
+
+const { asText, SOURCE_TYPES } = require('../../max/scoutAcquisition/Types');
+const { scopeSearchDefinitionForTask } = require('./EvidenceRequest');
+const {
+  withPlacesContext,
+  buildPlacesContextFromDiscovery,
+} = require('../../../utils/placesCostAttribution');
+const { generateCanonicalHypotheses, businessHypothesesForPlanner } = require('../hypothesis/CanonicalHypothesisEngine');
+const {
+  createInvestigationState,
+  addEvidenceToGraph,
+  updateHypothesisBuckets,
+} = require('../investigation/InvestigationState');
+const {
+  buildIdentityKey,
+  establishBusinessIdentity,
+  leadHasEstablishedIdentity,
+} = require('../identity/BusinessIdentity');
+const { INVESTIGATIVE_EVIDENCE } = require('./EvidenceRequirements');
+const {
+  createHypothesisInvestigationPlan,
+  updatePlanAfterEvidence,
+  getNextInvestigationTasks,
+  markInvestigationComplete,
+  buildOperatorExplanations,
+  revisePlanForUnavailableProviders,
+} = require('./HypothesisInvestigationPlanner');
+const {
+  normalizeProviderReport,
+  mergeEvidenceReports,
+  buildProviderEvidenceReport,
+} = require('./ProviderEvidenceContract');
+const { explainProviderForOperator } = require('./EvidenceProviderAssignment');
+const { getDefaultUnifiedRegistry } = require('./ProviderCapabilityRegistry');
+
+/** @deprecated Use getDefaultUnifiedRegistry().getSourceType() — SPEC-182 */
+function buildProviderToSourceTypeMap(registry = getDefaultUnifiedRegistry()) {
+  const map = {};
+  for (const provider of registry.list()) {
+    if (provider.sourceType) map[provider.id] = provider.sourceType;
+  }
+  return Object.freeze(map);
+}
+
+const PROVIDER_TO_SOURCE_TYPE = buildProviderToSourceTypeMap();
+
+function adapterForProvider(adapters = [], providerId, registry = getDefaultUnifiedRegistry()) {
+  const meta = registry.get(providerId);
+  const sourceType = meta?.sourceType;
+
+  if (providerId === 'google_maps' || meta?.adapterIds?.includes('public_business_places')) {
+    return (
+      adapters.find((a) => a && a.sourceType === SOURCE_TYPES.PUBLIC_BUSINESS_DATA) || null
+    );
+  }
+
+  if (providerId === 'website' || meta?.adapterIds?.includes('company_websites')) {
+    return (
+      adapters.find((a) => a && a.id === 'company_websites') ||
+      adapters.find((a) => a && a.sourceType === SOURCE_TYPES.COMPANY_WEBSITES) ||
+      null
+    );
+  }
+
+  if (meta?.adapterIds?.length) {
+    for (const adapterId of meta.adapterIds) {
+      const match = adapters.find((a) => a && a.id === adapterId);
+      if (match) return match;
+    }
+  }
+
+  if (!sourceType) {
+    return adapters.find((a) => a && a.id === providerId) || null;
+  }
+
+  return (
+    adapters.find((a) => a && a.sourceType === sourceType && a.id !== 'existing_pf') ||
+    adapters.find((a) => a && a.sourceType === sourceType) ||
+    null
+  );
+}
+
+function scopedSearchForTask(searchDefinition, task, marketDefinition) {
+  return scopeSearchDefinitionForTask(searchDefinition, task, marketDefinition);
+}
+
+function normalizeCandidateRow(row) {
+  const location = row.location || row.geography || row.discoveryCity || null;
+  return {
+    ...row,
+    place_id: row.place_id || row.placeId,
+    placeId: row.placeId || row.place_id,
+    company: row.company || row.name,
+    name: row.name || row.company,
+    location,
+    address: row.address || row.formatted_address || location,
+    formatted_address: row.formatted_address || row.address || location,
+    formatted_phone_number: row.formatted_phone_number || row.phone,
+    url: row.url || row.website,
+    website: row.website || row.url,
+    government_registry: row.government_registry || row.registry_id,
+  };
+}
+
+function lowerText(value) {
+  return (asText(value) || '').toLowerCase();
+}
+
+function candidateAddressText(row = {}) {
+  return asText(row.address || row.formatted_address || row.location || row.geography || row.discoveryCity);
+}
+
+function candidateMatchKey(row) {
+  const normalized = normalizeCandidateRow(row);
+  const identity = establishBusinessIdentity(normalized);
+  if (identity.identityKey) return identity.identityKey;
+
+  const name = lowerText(normalized.name || normalized.company);
+  const address = lowerText(candidateAddressText(normalized));
+  if (name && address) return `nameaddr:${name}|${address}`;
+  return lowerText(normalized.id || name);
+}
+
+/**
+ * Merge overlapping business identities from multiple providers (Scenario 5).
+ * @param {object[]} candidates
+ * @returns {object[]}
+ */
+function mergeIdentities(candidates = []) {
+  const byKey = new Map();
+  const merged = [];
+
+  for (const raw of candidates) {
+    const row = normalizeCandidateRow(raw);
+    const identity = establishBusinessIdentity(row);
+    if (!identity.established && !row.name && !row.company) continue;
+
+    const key = candidateMatchKey(row);
+
+    const existing = byKey.get(key);
+    if (existing) {
+      const fused = fuseCandidateRecords(existing, row, identity);
+      byKey.set(key, fused);
+      const index = merged.indexOf(existing);
+      if (index >= 0) merged[index] = fused;
+    } else {
+      // Secondary match: try name+address against existing entries
+      const nameAddrKey = `nameaddr:${lowerText(row.name || row.company)}|${lowerText(candidateAddressText(row))}`;
+      const byNameAddr = [...byKey.entries()].find(([k, v]) => {
+        const vKey = `nameaddr:${lowerText(v.name || v.company)}|${lowerText(candidateAddressText(v))}`;
+        return vKey === nameAddrKey && nameAddrKey !== 'nameaddr:|';
+      });
+
+      if (byNameAddr) {
+        const [existingKey, existingRow] = byNameAddr;
+        const fused = fuseCandidateRecords(existingRow, row, identity);
+        byKey.delete(existingKey);
+        byKey.set(key, fused);
+        const idx = merged.indexOf(existingRow);
+        if (idx >= 0) merged[idx] = fused;
+        else merged.push(fused);
+      } else {
+        const canonical = {
+          ...row,
+          _identityKey: key,
+          _identityConfidence: identity.confidence,
+          _identitySignals: identity.signals,
+          _mergedFrom: [row.discoverySource || row.source].filter(Boolean),
+        };
+        byKey.set(key, canonical);
+        merged.push(canonical);
+      }
+    }
+  }
+
+  return merged;
+}
+
+function fuseCandidateRecords(existing, incoming, identity) {
+  const sources = new Set([
+    ...(existing._mergedFrom || []),
+    incoming.discoverySource || incoming.source,
+  ].filter(Boolean));
+
+  return {
+    ...existing,
+    ...incoming,
+    ...require('../../../utils/scoutTicketMembership').ticketFields(existing, incoming),
+    name: existing.name || incoming.name || incoming.company,
+    phone: existing.phone || incoming.phone,
+    address: existing.address || incoming.address,
+    website: existing.website || incoming.website || incoming.url,
+    placeId: existing.placeId || incoming.placeId || incoming.place_id,
+    people: [...(existing.people || []), ...(incoming.people || [])],
+    signals: [...(existing.signals || []), ...(incoming.signals || [])],
+    _identityKey: existing._identityKey || identity.identityKey,
+    _identityConfidence: Math.max(existing._identityConfidence || 0, identity.confidence),
+    _mergedFrom: [...sources],
+  };
+}
+
+async function executeProviderAssignment(assignment, searchDefinition, adapters, marketDefinition) {
+  const adapter = adapterForProvider(adapters, assignment.providerId);
+  const task = {
+    id: `task:${assignment.evidenceType}`,
+    evidenceType: assignment.evidenceType,
+    providers: [assignment],
+  };
+  const scoped = scopedSearchForTask(searchDefinition, task, marketDefinition);
+
+  const adapterAvailable =
+    adapter && (typeof adapter.available !== 'function' || adapter.available());
+
+  if (!adapterAvailable) {
+    return normalizeProviderReport(
+      { candidates: [], errors: [{ message: `${assignment.providerId} unavailable` }], available: false },
+      assignment
+    );
+  }
+
+  try {
+    const placesCtx = buildPlacesContextFromDiscovery({
+      searchDefinition: scoped,
+      assignment,
+      task,
+      mission: marketDefinition.mission || searchDefinition.mission || {},
+      caller: 'HypothesisDrivenDiscoveryEngine',
+    });
+    const report = await withPlacesContext(placesCtx, () => adapter.discover(scoped));
+    return normalizeProviderReport(report, assignment);
+  } catch (err) {
+    rethrowResearchProviderControl(err);
+    return normalizeProviderReport(
+      { candidates: [], errors: [{ message: err.message || String(err) }] },
+      assignment
+    );
+  }
+}
+
+async function executeInvestigationTask(task, searchDefinition, adapters, marketDefinition, opts = {}) {
+  const reports = [];
+  const errors = [];
+
+  for (const assignment of task.providers || []) {
+    if (assignment.status === 'skipped') continue;
+
+    const adapter = adapterForProvider(adapters, assignment.providerId);
+    const adapterAvailable =
+      adapter && (typeof adapter.available !== 'function' || adapter.available());
+    if (!adapterAvailable && assignment.status === 'unavailable') continue;
+    const report = await executeProviderAssignment(
+      assignment,
+      searchDefinition,
+      adapters,
+      marketDefinition
+    );
+    reports.push(report);
+    if (report.status === 'failed') {
+      errors.push({
+        providerId: assignment.providerId,
+        error: report.error,
+        code: report.execution && report.execution.errors && report.execution.errors[0]
+          ? report.execution.errors[0].code
+          : 'provider_failed',
+        googleStatus:
+          report.execution && report.execution.errors && report.execution.errors[0]
+            ? report.execution.errors[0].googleStatus
+            : null,
+        execution: report.execution || null,
+      });
+    }
+  }
+
+  const merged = mergeEvidenceReports(reports);
+  const candidates = mergeIdentities(merged.candidates || []);
+
+  return {
+    taskId: task.id,
+    evidenceType: task.evidenceType,
+    reports,
+    mergedReport: merged,
+    candidates,
+    errors,
+    status: candidates.length ? 'completed' : reports.some((r) => r.status === 'completed') ? 'partial' : 'failed',
+  };
+}
+
+/**
+ * Run hypothesis-driven discovery (SPEC-177).
+ * @param {object} input
+ * @returns {Promise<object>}
+ */
+async function runHypothesisDrivenDiscovery(input = {}) {
+  const mission = input.mission || {};
+  const marketDefinition = input.marketDefinition || {};
+  let searchDefinition = input.searchDefinition || marketDefinition.searchDefinition || {};
+  searchDefinition = {
+    ...searchDefinition,
+    missionId: searchDefinition.missionId || searchDefinition.mission_id || mission.id || null,
+    missionStage:
+      searchDefinition.missionStage ||
+      searchDefinition.mission_stage ||
+      mission.stage ||
+      mission.currentStage ||
+      null,
+    operatorId:
+      searchDefinition.operatorId ||
+      searchDefinition.operator_id ||
+      mission.operatorId ||
+      mission.createdBy ||
+      null,
+    executionId:
+      searchDefinition.executionId ||
+      searchDefinition.execution_id ||
+      mission.executionId ||
+      null,
+    hypotheses: searchDefinition.hypotheses || mission.hypotheses || [],
+    mission,
+  };
+  marketDefinition.mission = mission;
+  const adapters = input.adapters || [];
+  const opts = input.opts || {};
+
+  const canonical =
+    input.canonicalHypotheses ||
+    generateCanonicalHypotheses(marketDefinition, mission, opts);
+  const hypotheses =
+    input.hypotheses || businessHypothesesForPlanner(canonical.hypotheses || canonical.business);
+  let plan = input.investigationPlan || createHypothesisInvestigationPlan({
+    mission,
+    marketDefinition,
+    hypotheses,
+    canonicalHypotheses: canonical,
+    opts,
+  });
+
+  let investigationState =
+    input.investigationState ||
+    createInvestigationState({
+      mission,
+      marketDefinition,
+      hypotheses,
+      coverage: null,
+    });
+
+  investigationState = {
+    ...investigationState,
+    investigationPlan: plan,
+    questions: plan.questions,
+    evidenceRequirements: plan.evidenceRequirements,
+    assignedProviders: plan.assignedProviders,
+    satisfiedEvidence: plan.satisfiedEvidence,
+    outstandingEvidence: plan.outstandingEvidence,
+  };
+
+  const allCandidates = [];
+  const allReports = [];
+  const allErrors = [];
+  const executedTasks = [];
+  const collectedEvidence = [];
+  let iteration = 0;
+  const maxIterations = opts.maxIterations != null ? opts.maxIterations : 10;
+
+  // ADR-102 — preserve identities from prior discovery during entity continuation.
+  if (Array.isArray(opts.preservedCandidates) && opts.preservedCandidates.length) {
+    for (const row of opts.preservedCandidates) {
+      const normalized = normalizeCandidateRow(row);
+      const key = normalized._identityKey || candidateMatchKey(normalized);
+      normalized._identityKey = key;
+      normalized._preservedFromContinuation = true;
+      allCandidates.push(normalized);
+    }
+  }
+
+  while (iteration < maxIterations) {
+    iteration += 1;
+    const nextTasks = getNextInvestigationTasks(plan, opts);
+    if (!nextTasks.length) break;
+
+    for (const task of nextTasks) {
+      if (plan.sufficientlyInvestigated) break;
+
+      const result = await executeInvestigationTask(
+        task,
+        searchDefinition,
+        adapters,
+        marketDefinition,
+        opts
+      );
+
+      executedTasks.push(result);
+      allReports.push(...result.reports);
+      allErrors.push(...result.errors);
+
+      for (const report of result.reports) {
+        collectedEvidence.push({
+          evidenceType: report.evidenceType,
+          type: report.evidenceType,
+          providerId: report.providerId,
+          evidenceProduced: report.evidenceProduced,
+          confidence: report.confidence,
+          coverage: report.coverage,
+          limitations: report.limitations,
+          entityId: task.entityId || task.candidateId || null,
+          candidateId: task.candidateId || task.entityId || null,
+          hypothesisId: task.hypothesisId || null,
+        });
+      }
+
+      const newCandidates = result.candidates || [];
+      for (const row of newCandidates) {
+        const normalized = normalizeCandidateRow(row);
+        const key = normalized._identityKey || candidateMatchKey(normalized);
+        normalized._identityKey = key;
+        const existingIndex = allCandidates.findIndex(
+          (c) => (c._identityKey || candidateMatchKey(c)) === key
+        );
+        if (existingIndex >= 0) {
+          allCandidates[existingIndex] = fuseCandidateRecords(allCandidates[existingIndex], normalized, establishBusinessIdentity(normalized));
+        } else {
+          allCandidates.push(normalized);
+        }
+      }
+
+      task.status = result.status === 'failed' ? 'failed' : 'completed';
+      plan = updatePlanAfterEvidence(plan, collectedEvidence);
+
+      investigationState = addEvidenceToGraph(investigationState, collectedEvidence.slice(-result.reports.length));
+      investigationState = {
+        ...investigationState,
+        investigationPlan: plan,
+        satisfiedEvidence: plan.satisfiedEvidence,
+        outstandingEvidence: plan.outstandingEvidence,
+        questions: plan.questions,
+      };
+
+      if (plan.sufficientlyInvestigated) {
+        plan = markInvestigationComplete(plan);
+        investigationState = {
+          ...investigationState,
+          investigationPlan: plan,
+          phase: 'complete',
+        };
+        break;
+      }
+    }
+
+    if (plan.sufficientlyInvestigated) break;
+
+    // No progress — try revising for unavailable providers (Scenario 4).
+    const failedProviders = allReports
+      .filter((r) => r.status === 'failed')
+      .map((r) => r.providerId);
+    if (failedProviders.length && iteration < maxIterations) {
+      plan = revisePlanForUnavailableProviders(plan, failedProviders);
+      investigationState = { ...investigationState, investigationPlan: plan };
+    } else {
+      break;
+    }
+  }
+
+  const identityComplete = (plan.satisfiedEvidence || []).some(
+    (s) => s.evidenceType === INVESTIGATIVE_EVIDENCE.IDENTITY
+  );
+
+  const qualifiedCandidates = allCandidates.filter((row) => {
+    if (opts.requireEstablishedIdentity === false) return true;
+    return leadHasEstablishedIdentity(row);
+  });
+
+  investigationState = updateHypothesisBuckets(
+    investigationState,
+    plan.hypotheses.map((h) => ({
+      ...h,
+      lifecycle: plan.sufficientlyInvestigated ? 'confirmed' : 'testing',
+      confidence: plan.sufficientlyInvestigated ? 0.85 : h.confidence,
+    }))
+  );
+
+  const operatorExplanations = buildOperatorExplanations(plan);
+
+  return {
+    candidates: qualifiedCandidates,
+    allCandidates,
+    investigationPlan: plan,
+    investigationState,
+    executedTasks,
+    providerReports: allReports,
+    collectedEvidence,
+    errors: allErrors,
+    identityComplete,
+    sufficientlyInvestigated: plan.sufficientlyInvestigated,
+    operatorExplanations,
+    investigationMode: plan.investigationMode || opts.investigationMode || 'market',
+    preservedCandidateCount: opts.preservedCandidates ? opts.preservedCandidates.length : 0,
+    discoveryPlan: {
+      hypothesisDriven: true,
+      spec: 'SPEC-177',
+      tasksExecuted: executedTasks.length,
+      providersUsed: [...new Set(allReports.map((r) => r.providerId))],
+      identityComplete,
+      sufficientlyInvestigated: plan.sufficientlyInvestigated,
+      investigationMode: plan.investigationMode || opts.investigationMode || 'market',
+    },
+    coverage: buildCoverageMetrics(plan, executedTasks),
+  };
+}
+
+function buildCoverageMetrics(plan, executedTasks = []) {
+  const totalReqs = (plan.evidenceRequirements || []).length;
+  const satisfied = (plan.satisfiedEvidence || []).length;
+  return {
+    evidenceRequirements: { satisfied, planned: totalReqs, ratio: totalReqs ? satisfied / totalReqs : 1 },
+    tasks: { executed: executedTasks.length, planned: (plan.tasks || []).length },
+    complete: plan.sufficientlyInvestigated === true,
+    warnings: [],
+  };
+}
+
+/**
+ * Explain why a provider was selected (operator explainability for Max).
+ * @param {object} plan
+ * @param {string} providerId
+ * @returns {string|null}
+ */
+function explainProviderUsage(plan, providerId) {
+  const assignment = (plan.assignedProviders || []).find((a) => a.providerId === providerId);
+  if (!assignment) return null;
+  return explainProviderForOperator(assignment, plan);
+}
+
+module.exports = {
+  runHypothesisDrivenDiscovery,
+  mergeIdentities,
+  executeInvestigationTask,
+  executeProviderAssignment,
+  scopedSearchForTask,
+  explainProviderUsage,
+  PROVIDER_TO_SOURCE_TYPE,
+  buildProviderEvidenceReport,
+};

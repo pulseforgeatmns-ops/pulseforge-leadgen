@@ -24,7 +24,7 @@ const EXPLAIN_RE =
   /\bwhy did (?:the )?acquisition (?:move|elevate|change|go up)|why is acquisition elevated|why did acquisition move\b/i;
 
 const FOLLOWUP_RE =
-  /\b(which (?:four|\d+)|why is (?:this|that)(?: one)? strongest|what don'?t we know|find more like|pursue these before|number (?:two|2)|more like)\b/i;
+  /\b(which (?:four|\d+)|why is (?:this|that)(?: one)? strongest|what don'?t we know about (?:these|those|them|this|that|the (?:four|\d+|candidates?|companies|opportunit))|find more like|pursue these before|number (?:two|2)|more like)\b/i;
 
 const INSPECTION_RE =
   /\b(what did scout(?: actually)? investigate|how thorough|why did (?:he|scout) find nothing|how many compan(?:y|ies)|what eliminated|where was (?:scout'?s? )?coverage weak|do you trust|what would you investigate next|how (?:complete|deep) was (?:the|this) (?:search|investigation)|why couldn'?t (?:scout|he)|what geographic information|what did you give (?:him|scout)|why (?:didn'?t|did) you elevate|why weren'?t (?:those|these) evaluated)\b/i;
@@ -108,6 +108,13 @@ function objectivesSimilar(a, b) {
   return overlap / denom >= 0.5;
 }
 
+function isOutboundInventoryReplenishment(input = {}) {
+  return (
+    input.workflow === 'outbound_inventory_replenishment' &&
+    Number(input.inventoryDeficit) > 0
+  );
+}
+
 /**
  * @param {object} input
  * @returns {{ needed: boolean, reason: string, reuse: object|null }}
@@ -115,8 +122,12 @@ function objectivesSimilar(a, b) {
 function assessScoutNeed(input = {}) {
   const question = String(input.question || '');
   const existing = input.existingIntelligence || null;
+  const replenishmentRequired = isOutboundInventoryReplenishment(input);
   const mode = classifyCognitiveMode(question, { context: input.context });
-  if (!mayCreateDelegation(mode, { question, context: input.context, force: input.force })) {
+  if (
+    !mayCreateDelegation(mode, { question, context: input.context, force: input.force }) &&
+    !replenishmentRequired
+  ) {
     if (looksLikeExplainPriority(question)) {
       return {
         needed: false,
@@ -184,6 +195,19 @@ function assessScoutNeed(input = {}) {
     };
   }
 
+  // Max measures verified, contactable inventory before requesting this work.
+  // Matching company intelligence or a recent search cannot satisfy that deficit.
+  if (replenishmentRequired) {
+    return {
+      needed: true,
+      reason:
+        asText(input.reason) ||
+        'Verified outbound inventory is below the buffer target — fresh discovery is required.',
+      reuse: null,
+      kind: 'investigate',
+    };
+  }
+
   const matching = recent.filter((row) => {
     if (!row) return false;
     if (row.specialist && row.specialist !== SCOUT_SPECIALIST) return false;
@@ -223,7 +247,7 @@ function assessScoutNeed(input = {}) {
     };
   }
 
-  if (!looksLikeAcquisitionQuestion(question, input.context) && !input.force) {
+  if (!looksLikeAcquisitionQuestion(question, input.context) && !input.force && !replenishmentRequired) {
     return {
       needed: false,
       reason: 'Question is not an acquisition intelligence need.',
@@ -253,5 +277,6 @@ module.exports = {
   looksLikeInvestigationInspection,
   looksLikeFindMoreLike,
   objectivesSimilar,
+  isOutboundInventoryReplenishment,
   assessScoutNeed,
 };

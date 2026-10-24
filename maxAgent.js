@@ -1,8 +1,9 @@
 require('dotenv').config();
 const pool = require('./db');
 const axios = require('axios');
-const Anthropic = require('@anthropic-ai/sdk');
+const Anthropic = require('./utils/meteredAnthropic').forAgent('max');
 const { randomUUID } = require('crypto');
+const { getApiUsageReport, formatApiUsageBrief } = require('./services/apiUsageService');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { getAvailableActionAgents, getEnabledAgents, isAgentEnabled } = require('./utils/agentAvailability');
 const { getExpansionReport } = require('./scoutExpansion');
@@ -11,8 +12,12 @@ const { ensureHealthSchema, upsertDailyHealth } = require('./utils/healthSchema'
 const { sendMiraTelegramMessage } = require('./utils/miraCorrections');
 const { reportAgentRun } = require('./utils/agentObservability');
 const { formatShadowDigest, getShadowDigestData } = require('./utils/maxOrchestrationAnalytics');
+const { getRuntime, digestCopy } = require('./services/operatorScorecard');
+const { DIGEST_IDENTITY } = require('./packages/max/identity/MaxIdentity');
+const { listAssessmentsForClient } = require('./services/websiteOpportunityPersistence');
+const { buildMaxWebOpportunityDigest } = require('./utils/webOpportunityMaxPrioritization');
 
-const client = new Anthropic();
+const client = new Anthropic(undefined, { tenantId: () => CLIENT_ID });
 const AGENT_NAME = 'max';
 const CLIENT_ID = getRuntimeClientId();
 let CLIENT_CONFIG = null;
@@ -49,6 +54,15 @@ function makeRunId() {
 function captureSendError(err) {
   if (!err) return null;
   return err.response?.data || err.message;
+}
+
+async function approvedScorecardDigest() {
+  try {
+    const runtime = await getRuntime(String(CLIENT_ID || ''));
+    return digestCopy(runtime);
+  } catch (_err) {
+    return 'No operator-approved scorecard. Do not treat Max draft recommendations as the definition of success.';
+  }
 }
 
 async function reportMaxRun({ runId, attempts, successes, skipped = 0, errorSample = null }) {
@@ -894,7 +908,7 @@ function extractTextFromMessage(message) {
 // LLM fallback and as the MSHI deterministic path. Same shape as the LLM
 // output (ACTIONS EXECUTED / EXCEPTIONS / PIPELINE SNAPSHOT / RECOMMENDATION)
 // so the dashboard format never regresses to the old verbose template.
-function buildDeterministicDigest(snapshot, autoExec) {
+function buildDeterministicDigest(snapshot, autoExec, scorecardText) {
   const autoExecLine = formatAutoExecSummary(autoExec);
   const closer = snapshot.closerMetrics || {};
   const callStats = snapshot.callDispositionStats || {};
@@ -981,12 +995,16 @@ MRR closed this month: $${Number(closer.mrr_this_month || 0).toLocaleString()}
 Pending approvals: ${pending}
 Total prospects: ${totalProspects}${recommendation ? `\n\n${recommendation}` : ''}
 
+SUCCESS SCORECARD
+${scorecardText || 'No operator-approved scorecard. Do not treat Max draft recommendations as the definition of success.'}
+
 — Pulseforge`;
 }
 
-async function generateInsightsViaLLM(snapshot, autoExec) {
+async function generateInsightsViaLLM(snapshot, autoExec, scorecardText) {
   const autoExecLine = formatAutoExecSummary(autoExec);
   const dataString = JSON.stringify(digestSnapshotWithMarketLabels(snapshot), null, 2);
+  const scorecardBlock = scorecardText || 'No operator-approved scorecard. Do not treat Max draft recommendations as the definition of success.';
 
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
@@ -994,7 +1012,7 @@ async function generateInsightsViaLLM(snapshot, autoExec) {
     system: buildDigestAgentNamingRules(snapshot),
     messages: [{
       role: 'user',
-      content: `Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}. You are Max, the manager agent for Pulseforge.
+      content: `Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}. ${DIGEST_IDENTITY}
 
 Max already auto-executed these actions before this digest was generated. Do NOT repeat, re-flag, or recommend them:
 ${autoExecLine}
@@ -1002,6 +1020,8 @@ ${autoExecLine}
 Second brain snapshot (the ONLY source for prospect references):
 
 ${dataString}
+
+${scorecardBlock}
 
 Generate a tight, streamlined digest with EXACTLY these four sections, in order:
 
@@ -1014,6 +1034,7 @@ Style rules:
 - Plain text. No markdown. No headers beyond the four labels above.
 - DO NOT include: click rate commentary, generic content quality observations, routine bounce mentions, untouched prospect lists, copy performance.
 - When naming a prospect, copy company_name_with_market verbatim from the snapshot, e.g. "TT Hair Salon (Manchester NH)". Never invent a business name.
+- Use the operator-approved scorecard above as the definition of business success. Do not treat draft or unapproved Max recommendations as success metrics.
 - Keep total length under 200 words.`
     }]
   });
@@ -1026,10 +1047,12 @@ Style rules:
 async function generateInsights(snapshot, autoExec) {
   console.log(`[Max] generateInsights called for client_id=${CLIENT_ID} (autoExec keys: ${autoExec ? Object.keys(autoExec).join(',') : 'none'})`);
 
+  const scorecardText = await approvedScorecardDigest();
+
   // MSHI is always deterministic (no LLM cost or latency for a 2-line update).
   if (CLIENT_ID === 2) {
     console.log('[Max] MSHI client — using deterministic digest path.');
-    return buildDeterministicDigest(snapshot, autoExec);
+    return buildDeterministicDigest(snapshot, autoExec, scorecardText);
   }
 
   // For Pulseforge clients we prefer the LLM-shaped digest, but fall back to
@@ -1037,7 +1060,7 @@ async function generateInsights(snapshot, autoExec) {
   // every dashboard trigger writes a fresh daily_digest row instead of
   // silently leaving the previous day's brief in place.
   try {
-    return await generateInsightsViaLLM(snapshot, autoExec);
+    return await generateInsightsViaLLM(snapshot, autoExec, scorecardText);
   } catch (err) {
     console.error(`[Max] LLM digest failed (${err.message}) — falling back to deterministic template.`);
     // 'failed' — this row only fires when the LLM threw, so it should surface
@@ -1046,7 +1069,7 @@ async function generateInsights(snapshot, autoExec) {
       reason: err.message,
       stack: (err.stack || '').slice(0, 1500),
     }, 'failed').catch(() => {});
-    return buildDeterministicDigest(snapshot, autoExec);
+    return buildDeterministicDigest(snapshot, autoExec, scorecardText);
   }
 }
 
@@ -1240,7 +1263,19 @@ function formatLinkedInStatsDueSection(posts = []) {
   return lines.join('\n');
 }
 
-async function sendDigest(digestText, snapshot, expansionReport, dailyHealth = null) {
+function formatWebOpportunitySection(webDigest) {
+  if (!webDigest?.top_five?.length) return '';
+  const lines = ['WEBSITE OPPORTUNITY PRIORITIES (SPEC-WEB-001 — internal, no outreach authorized)'];
+  lines.push(`Distribution: ${JSON.stringify(webDigest.distribution)}`);
+  for (const row of webDigest.top_five) {
+    lines.push(
+      `- ${row.business_name || row.domain}: priority ${row.max_priority_score} | ${row.recommended_action || row.payload?.recommended_action} | score ${row.opportunity_score ?? row.payload?.opportunity_score}`
+    );
+  }
+  return lines.join('\n');
+}
+
+async function sendDigest(digestText, snapshot, expansionReport, dailyHealth = null, webDigest = null) {
   lastDigestSendError = null;
   // Refuse to ship an empty or non-string digest — better to skip the email
   // and surface the failure than to send "null" / "undefined" to the client.
@@ -1275,6 +1310,11 @@ async function sendDigest(digestText, snapshot, expansionReport, dailyHealth = n
     ? `\n${'─'.repeat(50)}\n${linkedInStatsDueBlock}\n`
     : '';
 
+  const webOpportunityBlock = formatWebOpportunitySection(webDigest);
+  const webOpportunitySection = webOpportunityBlock
+    ? `\n${'─'.repeat(50)}\n${webOpportunityBlock}\n`
+    : '';
+
   const healthBlock = dailyHealth ? formatDailyHealthMessage(dailyHealth) : '';
   const healthSection = healthBlock
     ? `${healthBlock}\n${'─'.repeat(50)}\n\n`
@@ -1285,13 +1325,13 @@ async function sendDigest(digestText, snapshot, expansionReport, dailyHealth = n
   const subject = `${CLIENT_ID === 2 ? 'MSHI' : 'Pulseforge'} Daily Digest — ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`;
 
   const body = CLIENT_ID === 2 ? `${healthSection}${digestText}
-${linkedInStatsDueSection}${scoutExpansionSection}${emailPerfSection}${emailVerificationSection}${unreachableSection}
+${linkedInStatsDueSection}${scoutExpansionSection}${webOpportunitySection}${emailPerfSection}${emailVerificationSection}${unreachableSection}
 Pulseforge · gopulseforge.com` : `PULSEFORGE DAILY DIGEST
 ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
 ${'─'.repeat(50)}
 
 ${healthSection}${digestText}
-${linkedInStatsDueSection}${scoutExpansionSection}${emailPerfSection}${emailVerificationSection}${unreachableSection}
+${linkedInStatsDueSection}${scoutExpansionSection}${webOpportunitySection}${emailPerfSection}${emailVerificationSection}${unreachableSection}
 ${'─'.repeat(50)}
 Pulseforge · gopulseforge.com
 To adjust digest frequency reply to this email.`;
@@ -2479,6 +2519,8 @@ async function runQueueWarmForCal() {
     FROM prospects p
     WHERE p.client_id = $1
       AND COALESCE(p.do_not_contact, false) = false
+      AND COALESCE(p.ao_call_suppressed, false) = false
+      AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
       AND (p.is_hot = true OR p.status = 'warm')
       AND NOT EXISTS (
         SELECT 1 FROM touchpoints t
@@ -2502,11 +2544,17 @@ async function runQueueWarmForCal() {
 
     const row = res.rows[i];
     const reason = row.is_hot ? 'is_hot' : 'warm_status';
-    await pool.query(
+    const queued = await pool.query(
       `INSERT INTO cal_queue (prospect_id, client_id, priority, reason, status)
-       VALUES ($1, $2, 1, $3, 'pending')`,
+       SELECT id, client_id, 1, $3, 'pending' FROM prospects
+       WHERE id = $1 AND client_id = $2
+         AND COALESCE(ao_call_suppressed, false) = false
+         AND COALESCE((to_jsonb(prospects)->>'ao_outreach_review_required')::boolean,false) = false
+         AND COALESCE(do_not_contact, false) = false
+       RETURNING id`,
       [row.id, CLIENT_ID, reason]
     );
+    if (!queued.rows.length) continue;
     await insertAgentLog('auto_queued_cal', {
       prospect_id: row.id,
       priority: 1,
@@ -2533,6 +2581,8 @@ async function runHandoff5TouchNoReply() {
     WHERE p.client_id = $1
       AND p.status IN ('cold', 'contacted')
       AND COALESCE(p.do_not_contact, false) = false
+      AND COALESCE(p.ao_call_suppressed, false) = false
+      AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
       AND (
         SELECT COUNT(*) FROM touchpoints t
         WHERE t.prospect_id = p.id AND t.client_id = p.client_id
@@ -2557,11 +2607,17 @@ async function runHandoff5TouchNoReply() {
     }
 
     const row = res.rows[i];
-    await pool.query(
+    const queued = await pool.query(
       `INSERT INTO cal_queue (prospect_id, client_id, priority, reason, status)
-       VALUES ($1, $2, 2, '5_touch_no_reply', 'pending')`,
+       SELECT id, client_id, 2, '5_touch_no_reply', 'pending' FROM prospects
+       WHERE id = $1 AND client_id = $2
+         AND COALESCE(ao_call_suppressed, false) = false
+         AND COALESCE((to_jsonb(prospects)->>'ao_outreach_review_required')::boolean,false) = false
+         AND COALESCE(do_not_contact, false) = false
+       RETURNING id`,
       [row.id, CLIENT_ID]
     );
+    if (!queued.rows.length) continue;
     await insertAgentLog('auto_queued_cal_nurture', {
       prospect_id: row.id,
       priority: 2,
@@ -2805,6 +2861,16 @@ async function run(args = {}) {
       console.log(`[Max] generateInsights returned (type=${typeof rawInsights}, length=${typeof rawInsights === 'string' ? rawInsights.length : 'n/a'})`);
       const verifiedInsights = await verifyDigestProspects(rawInsights, snapshot);
       let insights = injectPatternsSection(verifiedInsights, patternAnalysis.dailyInsights);
+      if (CLIENT_ID === 1) {
+        try {
+          const usage = await getApiUsageReport({ db: pool });
+          insights += `\n\n${formatApiUsageBrief(usage)}`;
+          result.api_usage = { alerts: usage.alerts, billing: usage.billing.status };
+        } catch (_err) {
+          insights += '\n\nAPI spending visibility is unavailable; current costs and caps could not be verified.';
+          result.api_usage = { status: 'unavailable' };
+        }
+      }
       try {
         const shadowData = await getShadowDigestData({ db: pool, clientId: CLIENT_ID, hours: 24 });
         const shadowBlock = formatShadowDigest(shadowData);
@@ -2829,8 +2895,35 @@ async function run(args = {}) {
       console.log(insights);
       console.log('--- END PREVIEW ---\n');
 
+      let webDigest = null;
+      if (CLIENT_CONFIG?.scoring_profile === 'web_design' || CLIENT_CONFIG?.scoring_profile === 'studio_substral') {
+        try {
+          const assessments = await listAssessmentsForClient(pool, CLIENT_ID, { limit: 50 });
+          if (CLIENT_CONFIG?.scoring_profile === 'studio_substral') {
+            const { listAssessmentOpportunities } = require('./services/studioSubstralPersistence');
+            const { prioritizeStudioSubstralOpportunities } = require('./utils/studioSubstralMaxPrioritization');
+            const { listStudioSubstralScoutProspects } = require('./services/studioSubstralScoutPersistence');
+            const { STUDIO_MIN_FIT_SCORE } = require('./services/studioSubstralScoutIntelligence');
+            const assessmentRequests = await listAssessmentOpportunities(pool, CLIENT_ID, { limit: 25 });
+            const scoutProspects = await listStudioSubstralScoutProspects(pool, CLIENT_ID, {
+              limit: 25,
+              minScore: STUDIO_MIN_FIT_SCORE,
+            });
+            webDigest = prioritizeStudioSubstralOpportunities({
+              assessments,
+              assessmentRequests,
+              scoutProspects,
+            });
+          } else {
+            webDigest = buildMaxWebOpportunityDigest(assessments);
+          }
+        } catch (webErr) {
+          console.warn('[Max] Website opportunity digest unavailable:', webErr.message);
+        }
+      }
+
       console.log('Sending digest...');
-      result.digest.sent = await sendDigest(insights, snapshot, expansionReport, dailyHealth);
+      result.digest.sent = await sendDigest(insights, snapshot, expansionReport, dailyHealth, webDigest);
 
       await logAgentRun(insights);
     } catch (err) {
@@ -2886,3 +2979,4 @@ if (require.main === module) {
     process.exit(1);
   });
 }
+

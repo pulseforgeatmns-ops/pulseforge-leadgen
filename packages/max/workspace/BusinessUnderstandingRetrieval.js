@@ -79,6 +79,34 @@ function sessionHasApprovedUnderstanding(sessionCtx = {}) {
   );
 }
 
+function sourceFor(summary, ...keys) {
+  const sources = (summary && summary.fieldSources) || {};
+  for (const key of keys) {
+    if (sources[key]) return sources[key];
+  }
+  return null;
+}
+
+function buildContractFieldSources(summary, objectives = []) {
+  const sources = {
+    companyName: sourceFor(summary, 'businessName', 'identity'),
+    serviceArea: sourceFor(summary, 'geography', 'targetMarkets'),
+    services: sourceFor(summary, 'services'),
+    targetCustomers: sourceFor(summary, 'idealCustomers'),
+    targetGeography: sourceFor(summary, 'geography', 'targetMarkets'),
+    valueProposition: sourceFor(summary, 'competitiveAdvantages'),
+    businessGoals: sourceFor(summary, 'campaignGoals'),
+    constraints: sourceFor(summary, 'avoidCustomers'),
+    unknowns: { source: 'CONTRACT_DERIVED', field: 'unknowns' },
+    playbookStatus: { source: 'PLAYBOOK', field: 'status' },
+    playbookName: { source: 'PLAYBOOK', field: 'name' },
+  };
+  sources.currentPriorities = Array.isArray(objectives) && objectives.length
+    ? { source: 'OPERATOR_OBJECTIVES', field: 'currentPriorities' }
+    : sources.businessGoals;
+  return Object.fromEntries(Object.entries(sources).filter(([, value]) => value));
+}
+
 /**
  * Stable retrieval interface — minimum operating context for Max.
  *
@@ -116,6 +144,14 @@ function buildBusinessUnderstandingContract(summary, playbook = null, objectives
     unknowns: Array.isArray(summary.unknowns) ? summary.unknowns.filter(Boolean) : [],
     playbookStatus: playbook ? playbook.status || null : null,
     playbookName: playbook ? present(playbook.name) : null,
+    semantic_authority: summary.semanticAuthority || null,
+    canonical_snapshot_id: summary.canonicalSnapshotId || null,
+    projection_version: summary.projectionVersion || null,
+    semantic_adapter_version: summary.semanticAdapterVersion || null,
+    field_sources: buildContractFieldSources(summary, activeObjectives),
+    legacy_fallback_fields: summary.legacyFallbackFields || [],
+    unavailable_fields: summary.unavailableFields || [],
+    canonical_trace: summary.canonicalTrace || null,
   };
 }
 
@@ -150,8 +186,13 @@ async function loadDurableBusinessUnderstanding(input = {}) {
   let summary = null;
   let playbook = null;
   let blueprintSource = null;
+  const sessionUnderstandingIsCanonical = Boolean(
+    sessionCtx.clientIntelligence &&
+      sessionCtx.clientIntelligence.semanticAuthority === 'CANONICAL' &&
+      sessionCtx.clientIntelligence.canonicalSnapshotId
+  );
 
-  if (sessionHasApprovedUnderstanding(sessionCtx)) {
+  if (sessionHasApprovedUnderstanding(sessionCtx) && sessionUnderstandingIsCanonical) {
     summary = sessionCtx.clientIntelligence;
     playbook = sessionCtx.playbook || null;
     blueprintSource = 'session';

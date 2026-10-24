@@ -801,6 +801,19 @@ async function delegateCampaignContentRecommendation(input = {}, opts = {}) {
   );
   const prose = formatMaxPaigeCampaignRecommendation(recommendation);
 
+  if (request.missionId || request.campaignContext?.missionId || opts.missionId) {
+    try {
+      const { attachPaigeVariants } = require('./acquisitionMission');
+      await attachPaigeVariants(
+        { tenantId: request.tenantId, clientId: request.clientId, missionId: request.missionId || request.campaignContext?.missionId || opts.missionId },
+        recommendation,
+        opts
+      );
+    } catch (_err) {
+      // Mission attach must not block advisory presentation
+    }
+  }
+
   return {
     ok: true,
     skipped: false,

@@ -1,5 +1,7 @@
 'use strict';
 
+const { rethrowResearchProviderControl } = require('../../../utils/anchorResearchProviderPause');
+
 /**
  * SPEC-100 — Scout acquisition_intelligence adapter.
  * Intelligence only. Reuses existing company/prospect/evidence records.
@@ -18,6 +20,10 @@ const {
   FORBIDDEN_OUTBOUND,
   SOURCE_TYPES,
   REJECTION_REASONS,
+  OPPORTUNITY_CLASSES,
+  READINESS_STATES,
+  QUALIFICATION_STATUSES,
+  PROSPECT_BUCKETS,
 } = require('./Types');
 const { loadRepository } = require('./ExistingIntelligence');
 const {
@@ -25,11 +31,28 @@ const {
   buildInvestigation,
   uniqueLocations,
 } = require('./InvestigationProvenance');
+const { buildProspectEvaluation, businessFitQualifiedCount, countByBucket } = require('./ProspectEvaluation');
 const { buildAcquisitionSearchDefinition, expansionSuggestion } = require('./SearchDefinition');
 const { constructCandidateUniverse } = require('./CandidateUniverse');
 const { attachFitToClassified, enrichPeopleSafe } = require('./FitEvaluation');
 const { defaultDiscoveryAdapters } = require('./DiscoveryAdapters');
-const { OPPORTUNITY_CLASSES } = require('./Types');
+const { runCandidateInvestigationLoop } = require('../../scout/investigation/CandidateInvestigation');
+const {
+  applyBeliefToCompany,
+  seedClassifiedFromBelief,
+  rebuildProspectProjections,
+  buildCandidateUniverseWithBelief,
+  checkBeliefRegressionIntegrity,
+  collectCandidateBeliefsFromPayload,
+  reconcilePreservedEvaluation,
+} = require('../../scout/investigation/CandidateBeliefState');
+const { isRuntimeAim } = require('../../aim');
+const {
+  buildDiscoveryReport,
+  computeDiscoveryConfidence,
+  discoveryStatusFromCoverage,
+  canConcludeEmptyUniverse,
+} = require('../../scout/coverage/DiscoveryCoverageEngine');
 
 const OUTBOUND_RE = new RegExp(
   `\\b(${FORBIDDEN_OUTBOUND.join('|')}|send|enroll|publish|twilio|brevo|bland)\\b`,
@@ -225,6 +248,8 @@ function classifySignals(company) {
 
   return {
     companyId: company.id,
+    website: company.website || null,
+    location: company.location || null,
     personIds: people.map((p) => p.id).filter(Boolean),
     fit: Number(fit.toFixed(2)),
     timing: Number(timing.toFixed(2)),
@@ -269,27 +294,33 @@ function summarizeOpportunities(opportunities, criteria, investigation, extras =
       ? investigation.coverage.signalBearingCount
       : extras.signalBearingCount || 0;
   const fitCandidates = extras.fitCandidates || [];
+  const nurtureCandidates = extras.nurtureCandidates || [];
+  const qualifiedFitOnly = fitCandidates.length + nurtureCandidates.length;
 
   if (!opportunities.length) {
-    const fitLine =
-      basicFit > 0
-        ? ` ${basicFit} compan${basicFit === 1 ? 'y meets' : 'ies meet'} the target profile. Current vendor timing is unknown.`
-        : '';
+    const qualifiedLine =
+      qualifiedFitOnly > 0
+        ? ` ${qualifiedFitOnly} qualified prospect${qualifiedFitOnly === 1 ? '' : 's'} found; buying readiness is unknown for ${fitCandidates.length === qualifiedFitOnly ? 'all' : 'some'}.`
+        : basicFit > 0
+          ? ` ${basicFit} compan${basicFit === 1 ? 'y meets' : 'ies meet'} the target profile. Current vendor timing is unknown.`
+          : '';
     const funnelLine =
       discovered != null && evaluated != null
         ? ` I discovered ${discovered} companies within the requested market. ${evaluated} had enough information for evaluation.`
         : '';
     return {
-      summary: `No sufficiently supported opportunities found under the current criteria${
+      summary: `No buying-ready prospects under the current criteria${
         criteria.geography ? ` (${criteria.geography}` : ''
-      }${criteria.segments && criteria.segments.length ? `; ${criteria.segments.join(', ')})` : criteria.geography ? ')' : ''}.${fitLine}`,
+      }${criteria.segments && criteria.segments.length ? `; ${criteria.segments.join(', ')})` : criteria.geography ? ')' : ''}.${qualifiedLine}`,
       observations: [
         {
           kind: 'observation',
           text:
-            basicFit > 0
-              ? `No strongly timed opportunities found, but ${basicFit} companies meet the target profile. Current vendor timing is unknown.`
-              : 'Current criteria produced no sufficiently supported opportunities. Expanding geography or segment may produce additional results.',
+            qualifiedFitOnly > 0
+              ? `${qualifiedFitOnly} qualified prospect${qualifiedFitOnly === 1 ? '' : 's'} found; buying readiness is unknown for ${fitCandidates.length === qualifiedFitOnly ? 'all' : 'some'}.`
+              : basicFit > 0
+                ? `No buying-ready prospects found, but ${basicFit} companies meet the target profile. Current vendor timing is unknown.`
+                : 'Current criteria produced no qualified prospects. Expanding geography or segment may produce additional results.',
         },
         funnelLine
           ? {
@@ -299,18 +330,22 @@ function summarizeOpportunities(opportunities, criteria, investigation, extras =
           : null,
       ].filter(Boolean),
       uncertainties: [
-        evaluated != null
-          ? `Zero supported opportunities after evaluating ${evaluated} candidate${evaluated === 1 ? '' : 's'} — criteria were not weakened to manufacture prospects.`
-          : 'Zero results are intelligence — criteria were not weakened to manufacture prospects.',
+        qualifiedFitOnly > 0
+          ? `${qualifiedFitOnly} qualified prospect${qualifiedFitOnly === 1 ? '' : 's'} lack timing signals — readiness is unknown, not negative.`
+          : evaluated != null
+            ? `Zero qualified prospects after evaluating ${evaluated} candidate${evaluated === 1 ? '' : 's'} — criteria were not weakened to manufacture prospects.`
+            : 'Zero results are intelligence — criteria were not weakened to manufacture prospects.',
       ],
       recommendedNextAction: {
-        type: 'review',
+        type: qualifiedFitOnly > 0 ? 'investigate' : 'review',
         text:
-          basicFit > 0 && basicFit < 8 && extras.expansionText
-            ? extras.expansionText
-            : 'Decide whether to broaden geography or segment. Scout will not do that automatically.',
+          qualifiedFitOnly > 0
+            ? 'Continue readiness investigation on qualified prospects before prioritizing outreach order.'
+            : basicFit > 0 && basicFit < 8 && extras.expansionText
+              ? extras.expansionText
+              : 'Decide whether to broaden geography or segment. Scout will not do that automatically.',
       },
-      confidence: evaluated != null && evaluated >= 12 ? 0.88 : 0.7,
+      confidence: evaluated != null && evaluated >= 12 ? 0.88 : qualifiedFitOnly > 0 ? 0.76 : 0.7,
     };
   }
 
@@ -508,6 +543,33 @@ function emptyInvestigationResult(input) {
   };
 }
 
+function resolveProviderExecution(universe) {
+  if (!universe) return [];
+  return universe.providerReports || [];
+}
+
+// Logging-only receipts must not enter providerExecution's evidence consumers.
+function resolveProviderReceipts(universe) {
+  return Array.isArray(universe?.providerReceipts) ? universe.providerReceipts : null;
+}
+
+function resolveAim(opts = {}, delegation = {}) {
+  if (opts.aim) return isRuntimeAim(opts.aim) ? opts.aim : null;
+  const ctx = (delegation && delegation.businessContext) || {};
+  if (ctx.aim) return isRuntimeAim(ctx.aim) ? ctx.aim : null;
+  const key = asText(opts.aimClientKey || ctx.aimClientKey || ctx.clientKey);
+  if (!key) return null;
+  const store = opts.aimStore;
+  if (store && typeof store.getPublishedAim === 'function') {
+    return store.getPublishedAim(key);
+  }
+  if (store && typeof store.getAim === 'function') {
+    const loaded = store.getAim(key);
+    return isRuntimeAim(loaded) ? loaded : null;
+  }
+  return null;
+}
+
 async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
   assertIntelligenceOnly(delegation);
   const startedAt = nowIso();
@@ -550,6 +612,8 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
         consumedContext: buildConsumedContext(null, {
           invalidReason: 'Discovery provider failed before opportunities could be confirmed.',
         }),
+        providerExecution: [],
+        providerReceipts: null,
       },
     };
   }
@@ -562,6 +626,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
     businessContext: delegation.businessContext,
     operatorDirection:
       delegation.businessContext && delegation.businessContext.operatorDirection,
+    aim: resolveAim(opts, delegation),
   });
   if (!searchDefinition.valid) {
     const packed = emptyInvestigationResult({
@@ -594,6 +659,8 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
         investigation: packed.investigation,
         coverageConfidence: packed.investigation.coverageConfidence,
         consumedContext: buildConsumedContext(searchDefinition),
+        providerExecution: [],
+        providerReceipts: null,
       },
     };
   }
@@ -641,6 +708,8 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
         investigation: packed.investigation,
         coverageConfidence: packed.investigation.coverageConfidence,
         consumedContext: buildConsumedContext(searchDefinition),
+        providerExecution: [],
+        providerReceipts: null,
       },
     };
   }
@@ -671,10 +740,21 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       },
       discoveryStore: opts.discoveryStore,
       persistCompanies: opts.persistCompanies,
+      acknowledgeDiscovery: opts.acknowledgeDiscovery,
       now: opts.now,
       freshnessMs: opts.freshnessMs,
+      useCoverageEngine: opts.useCoverageEngine !== false,
+      marketDefinition: opts.marketDefinition,
+      mission: opts.mission || delegation.mission,
+      hypothesisOpts: opts.hypothesisOpts,
+      terminologyLearningStore: opts.terminologyLearningStore,
+      investigationPlan: opts.investigationPlan || null,
+      investigationMode: opts.investigationMode || null,
+      entityInvestigationContinuation: opts.entityInvestigationContinuation === true,
+      preservedCandidates: opts.preservedCandidates || [],
     });
   } catch (err) {
+    rethrowResearchProviderControl(err);
     const packed = emptyInvestigationResult({
       delegation,
       startedAt,
@@ -706,12 +786,72 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
         investigation: packed.investigation,
         coverageConfidence: packed.investigation.coverageConfidence,
         consumedContext: buildConsumedContext(searchDefinition),
+        providerExecution: [],
+        providerReceipts: null,
       },
     };
   }
 
   const criteria = existing.criteria;
-  const companies = universe.companies.slice();
+  if (universe.capabilityBlocked === true) {
+    const blockReason =
+      universe.blockReason || 'External Discovery Capability Unavailable';
+    const packed = emptyInvestigationResult({
+      delegation,
+      criteria,
+      startedAt,
+      candidatesDiscovered: universe.candidatesDiscovered,
+      sourceTypesChecked: universe.sourceTypesChecked,
+      sourceTypesUnavailable: universe.sourceTypesUnavailable,
+      providerFailed: false,
+      extraLimitations: [blockReason],
+    });
+    return {
+      status: 'blocked',
+      summary: blockReason,
+      observations: [],
+      actionsTaken: universe.actionsTaken.slice(),
+      evidenceRefs: [],
+      artifactRefs: [],
+      confidence: null,
+      uncertainties: [
+        universe.capabilityEvaluation && universe.capabilityEvaluation.explanation
+          ? universe.capabilityEvaluation.explanation
+          : 'No external discovery provider is available for this market.',
+      ],
+      recommendedNextAction: {
+        type: 'configure',
+        text: 'Configure an external discovery provider (e.g. Google Places) before retrying.',
+      },
+      policyEvents: [],
+      errors: [
+        {
+          code: universe.blockerCode || 'external_discovery_capability_unavailable',
+          message: blockReason,
+        },
+      ],
+      startedAt,
+      completedAt: packed.completedAt,
+      payload: {
+        opportunities: [],
+        searchDefinition,
+        broadened: false,
+        outboundInvoked: [],
+        criteria,
+        investigation: packed.investigation,
+        coverageConfidence: packed.investigation.coverageConfidence,
+        consumedContext: buildConsumedContext(searchDefinition),
+        discoveryPlan: universe.discoveryPlan || null,
+        capabilityEvaluation: universe.capabilityEvaluation || null,
+        capabilityBlocked: true,
+        outcome: 'blocked',
+        providerExecution: resolveProviderExecution(universe),
+        providerReceipts: resolveProviderReceipts(universe),
+      },
+    };
+  }
+
+  const companies = universe.companies.slice().map((company) => applyBeliefToCompany(company, company._preservedBelief));
   const discoveredCount = universe.candidatesDiscovered;
   for (const src of universe.sourceTypesChecked || []) {
     if (!sourceTypesChecked.includes(src)) sourceTypesChecked.push(src);
@@ -761,6 +901,8 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
         investigation: packed.investigation,
         coverageConfidence: packed.investigation.coverageConfidence,
         consumedContext: buildConsumedContext(searchDefinition),
+        providerExecution: resolveProviderExecution(universe),
+        providerReceipts: resolveProviderReceipts(universe),
       },
     };
   }
@@ -773,7 +915,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
     } else if (peopleResult.people.length) {
       company.people = peopleResult.people;
     }
-    const row = classifySignals(company);
+    const row = seedClassifiedFromBelief(classifySignals(company), company);
     if (peopleResult.failed) {
       row.unknowns.push(
         normalizeClaim(
@@ -818,6 +960,8 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
   const supported = [];
   const fitCandidates = [];
   const watchCandidates = [];
+  const uncertainCandidates = [];
+  const prospectEvaluations = [];
   const nearThreshold = [];
   let basicFitCount = 0;
   let signalBearingCount = 0;
@@ -825,27 +969,56 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
 
   classified.forEach((row, index) => {
     const company = companies[index];
-    const attached = attachFitToClassified(row, company, searchDefinition, now);
+    let attached = attachFitToClassified(row, company, searchDefinition, now);
+    if (opts.investigationContinuation === true && company._preservedBelief) {
+      attached = reconcilePreservedEvaluation(attached, company);
+    }
     const next = attached.classified;
     classified[index] = next;
     company.lastEvaluatedAt = attached.lastEvaluatedAt;
     company.evidenceObservedAt = attached.evidenceObservedAt;
     company.fitEvaluation = attached.fit;
+    company.prospectEvaluation = attached.evaluation || null;
     const qualification = attached.qualification;
+    const evaluation = attached.evaluation || buildProspectEvaluation({
+      candidate: company,
+      classified: next,
+      fit: attached.fit,
+      qualification,
+      searchDefinition,
+    });
+    next.evaluation = evaluation;
+    prospectEvaluations.push(evaluation);
+
     if (qualification.basicFit || attached.fit.basicFit) basicFitCount += 1;
     if (qualification.signalBearing) signalBearingCount += 1;
     if ((next.signals || []).some((s) => isTimely(s.observedAt, now))) timelyEvidenceCount += 1;
-    if (next.classification === OPPORTUNITY_CLASSES.SUPPORTED || qualification.supported) {
+
+    if (evaluation.bucket === PROSPECT_BUCKETS.HIGH_PRIORITY || qualification.supported) {
       next.classification = OPPORTUNITY_CLASSES.SUPPORTED;
       supported.push(next);
       return;
     }
-    incrementReason(rejectionReasonCounts, qualification.reason);
-    if (next.classification === OPPORTUNITY_CLASSES.FIT) {
+
+    if (!evaluation.qualified && evaluation.qualification.status === QUALIFICATION_STATUSES.NOT_QUALIFIED) {
+      incrementReason(rejectionReasonCounts, qualification.reason || evaluation.qualification.reasonCode);
+    } else if (evaluation.readinessState === READINESS_STATES.NOT_READY) {
+      incrementReason(rejectionReasonCounts, qualification.reason);
+    }
+
+    if (evaluation.bucket === PROSPECT_BUCKETS.INVESTIGATION_REQUIRED) {
+      fitCandidates.push(next);
+    } else if (evaluation.bucket === PROSPECT_BUCKETS.NURTURE) {
+      watchCandidates.push(next);
+    } else if (evaluation.bucket === PROSPECT_BUCKETS.FIT_INVESTIGATION) {
+      uncertainCandidates.push(next);
+      watchCandidates.push(next);
+    } else if (next.classification === OPPORTUNITY_CLASSES.FIT) {
       fitCandidates.push(next);
     } else if (next.classification === OPPORTUNITY_CLASSES.WATCH) {
       watchCandidates.push(next);
     }
+
     if (qualification.nearThreshold || next.classification === OPPORTUNITY_CLASSES.FIT) {
       nearThreshold.push({
         company,
@@ -858,22 +1031,135 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
     }
   });
 
+  // SPEC-195 — post-qualification candidate investigation loop.
+  let candidateInvestigation = null;
+  if (opts.runCandidateInvestigation !== false && classified.length) {
+    candidateInvestigation = await runCandidateInvestigationLoop({
+      companies,
+      classified,
+      searchDefinition,
+      marketDefinition: opts.marketDefinition || {},
+      mission: opts.mission || delegation.mission || {},
+      adapters,
+      opts: {
+        ...opts,
+        now,
+        maxCandidateInvestigationIterations:
+          opts.maxCandidateInvestigationIterations != null
+            ? opts.maxCandidateInvestigationIterations
+            : 8,
+      },
+    });
+
+    if (candidateInvestigation.companies) {
+      candidateInvestigation.companies.forEach((company, index) => {
+        companies[index] = company;
+      });
+    }
+    if (candidateInvestigation.classified) {
+      candidateInvestigation.classified.forEach((row, index) => {
+        classified[index] = row;
+      });
+    }
+
+    if (candidateInvestigation.executedTasks && candidateInvestigation.executedTasks.length) {
+      actionsTaken.push({
+        text: `Candidate investigation (SPEC-195): ${candidateInvestigation.executedTasks.length} entity task${candidateInvestigation.executedTasks.length === 1 ? '' : 's'} executed; stop reason: ${(candidateInvestigation.stop && candidateInvestigation.stop.reason) || 'queue_complete'}.`,
+      });
+    }
+
+    // SPEC-199 — rebuild projections from post-investigation canonical state.
+    const projections = rebuildProspectProjections({
+      classified,
+      companies,
+      searchDefinition,
+      now,
+      OPPORTUNITY_CLASSES,
+      PROSPECT_BUCKETS,
+      READINESS_STATES,
+      QUALIFICATION_STATUSES,
+    });
+    classified.splice(0, classified.length, ...projections.classified);
+    companies.splice(0, companies.length, ...projections.companies);
+    supported.splice(0, supported.length, ...projections.supported);
+    fitCandidates.splice(0, fitCandidates.length, ...projections.fitCandidates);
+    watchCandidates.splice(0, watchCandidates.length, ...projections.watchCandidates);
+    uncertainCandidates.splice(0, uncertainCandidates.length, ...projections.uncertainCandidates);
+    prospectEvaluations.splice(0, prospectEvaluations.length, ...projections.prospectEvaluations);
+    basicFitCount = projections.basicFitCount;
+    signalBearingCount = projections.signalBearingCount;
+  }
+
   if (opts.discoveryStore && typeof opts.discoveryStore.upsert === 'function' && companies.length) {
     await opts.discoveryStore.upsert(tenantId, companies);
   }
 
   const requested = requestedScopeFrom(delegation, criteria);
   const completedAt = nowIso();
+  const coverageMetrics = universe.coverage || null;
+  const discoveryStatus = universe.discoveryStatus || discoveryStatusFromCoverage(coverageMetrics);
+  const coverageIncomplete = Boolean(coverageMetrics && coverageMetrics.complete === false);
   const zeroEvaluated = classified.length === 0;
-  const coverageInsufficient = zeroEvaluated && searchDefinition.valid;
+  const coverageInsufficient =
+    coverageIncomplete ||
+    (zeroEvaluated && searchDefinition.valid && !(universe.candidateUniverse || []).length);
   const extraLimitations = [];
-  if (coverageInsufficient) {
+  const failedProviderReport = (universe.providerReports || []).find(
+    (row) =>
+      row &&
+      (row.status === 'failed' ||
+        (row.execution && Array.isArray(row.execution.errors) && row.execution.errors.length))
+  );
+  const providerFailure =
+    failedProviderReport ||
+    (universe.discoveryErrors || []).find(
+      (row) =>
+        row &&
+        (row.googleStatus ||
+          /google_places_status_|REQUEST_DENIED|OVER_QUERY_LIMIT|provider_unavailable|empty_geography/i.test(
+            String(row.message || row.error || row.code || '')
+          ))
+    );
+  if (failedProviderReport) {
+    const execError =
+      (failedProviderReport.execution &&
+        failedProviderReport.execution.errors &&
+        failedProviderReport.execution.errors[0]) ||
+      {};
+    extraLimitations.push(
+      execError.message ||
+        failedProviderReport.error ||
+        `External discovery provider failed (${execError.code || failedProviderReport.status}).`
+    );
+  } else if (providerFailure) {
+    extraLimitations.push(
+      providerFailure.message ||
+        providerFailure.error ||
+        `External discovery provider failed (${providerFailure.code || providerFailure.googleStatus}).`
+    );
+  }
+  if (coverageIncomplete && coverageMetrics && coverageMetrics.warnings) {
+    extraLimitations.push(...coverageMetrics.warnings);
+  } else if (coverageInsufficient) {
     extraLimitations.push(
       universe.discoveryRan
         ? 'Current discovery sources produced no candidate universe; investigation coverage insufficient.'
         : 'Candidate discovery provider unavailable.'
     );
   }
+
+  const bucketCounts = countByBucket(prospectEvaluations);
+  const qualifiedProspectCount = businessFitQualifiedCount(prospectEvaluations);
+  const readinessUnknownCount = prospectEvaluations.filter(
+    (row) =>
+      row.qualification.status === QUALIFICATION_STATUSES.QUALIFIED &&
+      row.readiness.status === READINESS_STATES.UNKNOWN
+  ).length;
+  const readinessNotReadyCount = prospectEvaluations.filter(
+    (row) =>
+      row.qualification.status === QUALIFICATION_STATUSES.QUALIFIED &&
+      row.readiness.status === READINESS_STATES.NOT_READY
+  ).length;
 
   const investigation = buildInvestigation({
     requestedGeography: requested.geography,
@@ -891,6 +1177,9 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
     basicFitCount,
     signalBearingCount,
     supportedOpportunityCount: supported.length,
+    qualifiedProspectCount,
+    readinessReadyCount: supported.length,
+    qualifiedUnknownReadinessCount: readinessUnknownCount,
     unresolvedCount,
     sourceTypesChecked,
     sourceTypesUnavailable,
@@ -908,14 +1197,63 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
 
   const rollup = summarizeOpportunities(supported, criteria, investigation, {
     fitCandidates,
+    nurtureCandidates: watchCandidates.filter(
+      (row) => row.prospectBucket === PROSPECT_BUCKETS.NURTURE || row.readinessState === READINESS_STATES.NOT_READY
+    ),
     basicFitCount,
     signalBearingCount,
     discovered: discoveredCount,
     expansionText: expansionSuggestion(searchDefinition, basicFitCount),
   });
+
+  const candidateUniverseRecords = buildCandidateUniverseWithBelief(
+    companies,
+    classified,
+    universe.candidateUniverse || []
+  );
+
+  if (opts.investigationContinuation === true && opts.priorDiscoveryPayload) {
+    const integrity = checkBeliefRegressionIntegrity({
+      priorPayload: opts.priorDiscoveryPayload,
+      nextPayload: {
+        candidateUniverse: candidateUniverseRecords,
+        prospectEvaluations,
+        qualifiedCount: qualifiedProspectCount,
+      },
+    });
+    if (integrity.violation) {
+      const err = new Error(integrity.message || 'Candidate belief state regression detected.');
+      err.code = 'BELIEF_STATE_REGRESSION';
+      err.integrity = integrity;
+      throw err;
+    }
+  }
+
+  const discoveryConfidence = computeDiscoveryConfidence({
+    coverage: coverageMetrics,
+    candidateUniverse: candidateUniverseRecords,
+    searchSuccess:
+      coverageMetrics && coverageMetrics.searches && coverageMetrics.searches.planned
+        ? coverageMetrics.searches.executed / coverageMetrics.searches.planned
+        : discoveredCount > 0
+          ? 0.65
+          : 0.35,
+    evidenceQuality: timelyEvidenceCount > 0 ? 0.7 : basicFitCount > 0 ? 0.55 : 0.35,
+  });
+  const discoveryReport = buildDiscoveryReport({
+    coverage: coverageMetrics,
+    candidateUniverse: candidateUniverseRecords,
+    qualifiedCount: qualifiedProspectCount,
+    discoveryConfidence,
+  });
+  if (canConcludeEmptyUniverse(coverageMetrics, qualifiedProspectCount)) {
+    discoveryReport.emptyUniverse = true;
+    discoveryReport.summary =
+      'No candidate universe exists after complete investigation coverage.';
+  }
   const evidenceRefs = [];
   const seen = new Set();
-  for (const opp of [...supported, ...fitCandidates]) {
+  for (const opp of [...supported, ...fitCandidates, ...watchCandidates.filter((row) => row.qualified)]) {
     for (const ev of opp.evidenceRefs) {
       if (!ev.id || seen.has(ev.id)) continue;
       seen.add(ev.id);
@@ -923,19 +1261,24 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
     }
   }
 
-  const status = coverageInsufficient
-    ? universe.discoveryRan
-      ? 'partial'
-      : 'blocked'
-    : mode === 'partial' || enrichmentFailed
-      ? 'partial'
-      : 'completed';
+  const status = coverageIncomplete
+    ? 'partial'
+    : coverageInsufficient
+      ? universe.discoveryRan
+        ? 'partial'
+        : 'blocked'
+      : mode === 'partial' || enrichmentFailed
+        ? 'partial'
+        : 'completed';
 
   return {
     status,
-    summary: coverageInsufficient
-      ? extraLimitations[0]
-      : rollup.summary,
+    summary: coverageIncomplete
+      ? (coverageMetrics && coverageMetrics.warnings && coverageMetrics.warnings[0]) ||
+        'Discovery incomplete — coverage plan not fully executed.'
+      : coverageInsufficient
+        ? extraLimitations[0]
+        : rollup.summary,
     observations: [
       ...rollup.observations,
       ...supported.flatMap((o) => o.observations),
@@ -947,7 +1290,11 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
     actionsTaken,
     evidenceRefs,
     artifactRefs: supported.map(toArtifact),
-    confidence: coverageInsufficient ? 0.35 : rollup.confidence,
+    confidence: coverageIncomplete
+      ? discoveryConfidence.overall
+      : coverageInsufficient
+        ? discoveryConfidence.overall
+        : rollup.confidence,
     uncertainties: [
       ...rollup.uncertainties,
       ...classified.flatMap((o) => o.unknowns.map((u) => u.text)),
@@ -973,6 +1320,9 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       opportunities: supported,
       fitCandidates,
       watchCandidates,
+      uncertainCandidates,
+      prospectEvaluations,
+      prospectBuckets: bucketCounts,
       searchDefinition,
       evaluatedCandidates: classified.map((row) => ({
         companyId: row.companyId,
@@ -993,6 +1343,22 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       investigation,
       coverageConfidence: investigation.coverageConfidence,
       consumedContext: buildConsumedContext(searchDefinition),
+      coverage: coverageMetrics,
+      discoveryPlan: universe.discoveryPlan || null,
+      candidateUniverse: candidateUniverseRecords,
+      discoveryReport,
+      discoveryStatus,
+      discoveryConfidence,
+      investigationState: universe.investigationState || null,
+      investigationPlan: universe.investigationPlan || null,
+      candidateInvestigation: candidateInvestigation || null,
+      providerExecution: resolveProviderExecution(universe),
+      providerReceipts: resolveProviderReceipts(universe),
+      qualifiedCount: qualifiedProspectCount,
+      qualifiedProspectCount,
+      readinessReadyCount: supported.length,
+      readinessUnknownCount,
+      readinessNotReadyCount,
     },
   };
 }
@@ -1004,6 +1370,7 @@ function isScoutAcquisition(specialist, capability) {
 module.exports = {
   runScoutAcquisitionIntelligence,
   isScoutAcquisition,
+  resolveAim,
   buildConsumedContext,
   classifySignals,
   summarizeOpportunities,

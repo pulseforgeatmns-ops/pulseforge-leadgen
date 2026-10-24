@@ -70,6 +70,7 @@ describe('clientIntelligence routes (static)', () => {
       '/api/v1/interview/:id/resume',
       '/api/v1/interview/:id',
       '/api/v1/interview/:id/blueprint',
+      '/api/v1/interview/:id/blueprint/regenerate',
       '/api/v1/blueprint/:id/revise',
       '/api/v1/blueprint/:id/approve',
       '/api/v1/interview/:id/growth/start',
@@ -105,6 +106,8 @@ describe('clientIntelligence routes (static)', () => {
     assert.match(uiSource, /Conversation/);
     assert.match(uiSource, /Business Blueprint/);
     assert.match(uiSource, /Approve Blueprint/);
+    assert.match(uiSource, /Regenerate Blueprint/);
+    assert.match(uiSource, /\/blueprint\/regenerate/);
     assert.match(uiSource, /\/api\/v1\/clients\//);
     assert.match(uiSource, /\/resume/);
     assert.match(uiSource, /overflow:\s*hidden/);
@@ -113,6 +116,7 @@ describe('clientIntelligence routes (static)', () => {
     assert.match(uiSource, /progress-fill/);
     assert.match(uiSource, /Executive Business Brief/);
     assert.match(uiSource, /Prepared by Max/);
+    assert.match(uiSource, /kind === 'scorecard'/);
     assert.match(uiSource, /Connecting themes/);
     assert.match(uiSource, /PREMIUM_LOAD_MS\s*=\s*3000/);
     assert.match(uiSource, /Yes, this reflects my business/);
@@ -154,6 +158,14 @@ describe('clientIntelligence routes (static)', () => {
     // Approve action must not stay actionable after approval.
     assert.match(uiSource, /Blueprint approved/);
     assert.match(uiSource, /els\.blueprintActions\.hidden\s*=\s*true/);
+  });
+
+  it('shows a Blueprint Review refine action that reuses the resume route', () => {
+    assert.match(uiSource, /Refine with Max/);
+    assert.match(uiSource, /id="refineWithMaxBtn"/);
+    assert.match(uiSource, /resumeConversation\(\)/);
+    assert.match(uiSource, /\/api\/v1\/interview\/.*\/resume/);
+    assert.match(uiSource, /refineWithMaxBtn.*resumeConversation|resumeConversation.*refineWithMaxBtn/);
   });
 });
 

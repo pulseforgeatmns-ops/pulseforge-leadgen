@@ -12,6 +12,7 @@ const Types = require('./Types');
 const { buildBoundedScoutContext, criteriaFingerprint } = require('./BoundedContext');
 const {
   assessScoutNeed,
+  isOutboundInventoryReplenishment,
   looksLikeAcquisitionQuestion,
   looksLikeExplainPriority,
   looksLikeFollowUp,
@@ -21,12 +22,13 @@ const {
 const { retrieveExistingIntelligence, loadRepository } = require('./ExistingIntelligence');
 const { buildAcquisitionSearchDefinition } = require('./SearchDefinition');
 const { constructCandidateUniverse, createMemoryDiscoveryStore } = require('./CandidateUniverse');
-const { evaluateBasicFit } = require('./FitEvaluation');
+const { evaluateBasicFit, evaluateAimBasicFit, attachFitToClassified } = require('./FitEvaluation');
 const { resolveCandidate, resolveCandidateUniverse } = require('./EntityResolution');
 const { discoverCandidates, defaultDiscoveryAdapters } = require('./DiscoveryAdapters');
 const {
   runScoutAcquisitionIntelligence,
   isScoutAcquisition,
+  resolveAim,
 } = require('./ScoutAdapter');
 const {
   createMemoryAcquisitionState,
@@ -262,11 +264,15 @@ async function runAcquisitionIntelligenceLoop(input = {}, opts = {}) {
     objective: input.objective,
     reason: input.reason,
     context: input.context,
+    workflow: input.workflow,
+    inventoryDeficit: input.inventoryDeficit,
     targetContext: bounded.targetContext,
     businessContext: bounded.businessContext,
-    existingIntelligence: priorState
-      ? { ...priorState, sufficient: priorState.opportunityCount > 0 }
-      : { ...existingRepo, sufficient: false },
+    existingIntelligence: isOutboundInventoryReplenishment(input)
+      ? { ...existingRepo, sufficient: existingRepo.sufficient }
+      : priorState
+        ? { ...priorState, sufficient: priorState.opportunityCount > 0 }
+        : { ...existingRepo, sufficient: false },
     recentResults,
     freshnessMs: opts.freshnessMs,
     now: opts.now,
@@ -393,10 +399,14 @@ async function runAcquisitionIntelligenceLoop(input = {}, opts = {}) {
         discoveryAdapters: opts.discoveryAdapters,
         discoveryStore: opts.discoveryStore,
         persistCompanies: opts.persistCompanies,
+        acknowledgeDiscovery: opts.acknowledgeDiscovery,
         enrichPeople: opts.enrichPeople,
         enablePlaces: opts.enablePlaces,
         placesProvider: opts.placesProvider,
         mode: input.fixtureMode,
+        aim: opts.aim || input.aim,
+        aimStore: opts.aimStore,
+        aimClientKey: opts.aimClientKey || input.aimClientKey,
       },
     }
   );
@@ -476,6 +486,7 @@ module.exports = {
   buildBoundedScoutContext,
   criteriaFingerprint,
   assessScoutNeed,
+  isOutboundInventoryReplenishment,
   looksLikeAcquisitionQuestion,
   looksLikeExplainPriority,
   looksLikeFollowUp,
@@ -487,12 +498,15 @@ module.exports = {
   constructCandidateUniverse,
   createMemoryDiscoveryStore,
   evaluateBasicFit,
+  evaluateAimBasicFit,
+  attachFitToClassified,
   resolveCandidate,
   resolveCandidateUniverse,
   discoverCandidates,
   defaultDiscoveryAdapters,
   runScoutAcquisitionIntelligence,
   isScoutAcquisition,
+  resolveAim,
   createMemoryAcquisitionState,
   createPostgresAcquisitionState,
   buildAcquisitionSummary,

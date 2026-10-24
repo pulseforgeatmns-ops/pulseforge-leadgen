@@ -57,8 +57,11 @@ describe('SPEC-105 operating evidence classification', () => {
   it('retrieves before recommending on grounded next-step questions', () => {
     const question =
       "Given what we've already tried and what PulseForge can actually verify, what should I focus on next to build the repeatable commercial pipeline?";
+    const mode = classifyCognitiveMode(question);
     assert.equal(shouldRetrieveOperatingEvidence(question), true);
     assert.equal(isOperatingGroundedRecommendation(question), true);
+    assert.equal(mode.kind, COGNITIVE_MODES.RECOMMENDATION);
+    assert.equal(mode.requiresOperatingRetrieval, true);
     assert.equal(shouldHandleScoutAcquisition({ question, context: { tenantId: '10' } }), false);
   });
 

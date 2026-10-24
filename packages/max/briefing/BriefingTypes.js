@@ -13,6 +13,7 @@ const BRIEFING_PERIODS = Object.freeze({
 
 const BRIEFING_SECTIONS = Object.freeze([
   'summary',
+  'scorecard',
   'priorities',
   'changes',
   'watchAlerts',

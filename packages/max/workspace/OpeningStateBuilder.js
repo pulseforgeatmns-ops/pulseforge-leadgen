@@ -2,6 +2,7 @@
 
 const { PAGE_TYPES } = require('./WorkspaceTypes');
 const { contextFocusLabel } = require('./ContextEnvelope');
+const { greetingForWorkspace } = require('./TenantContextResolver');
 
 /**
  * Deterministic opening message from MaxContext.
@@ -15,6 +16,20 @@ function buildOpeningState(context, options = {}) {
   const hour =
     Number.isFinite(options.hour) ? options.hour : new Date().getHours();
   const greeting = hour < 12 ? 'Good morning.' : hour < 17 ? 'Good afternoon.' : 'Good evening.';
+
+  // SPEC-114 / SPEC-115 — empty workspace opens with the onboarding greeting.
+  if (context.tenantWorkspace && context.tenantWorkspace.needsOnboarding) {
+    const name =
+      (context.tenant && context.tenant.name) ||
+      context.tenantName ||
+      (context.tenantWorkspace.client && context.tenantWorkspace.client.name) ||
+      'there';
+    const workspace = context.workspace || context.tenantWorkspace.workspace || context.tenantWorkspace;
+    return {
+      ...greetingForWorkspace(workspace, name),
+      onboarding: true,
+    };
+  }
 
   // SPEC-104 — operator context brief takes precedence on command-deck open
   if (

@@ -15,6 +15,12 @@ const {
 } = require('./ContextEnvelope');
 const { buildOpeningState } = require('./OpeningStateBuilder');
 const {
+  resolveActiveTenantId,
+  resolveMaxPromptContext,
+  buildTenantGreeting,
+  NO_ACTIVE_CLIENT,
+} = require('./TenantContextResolver');
+const {
   buildSuggestions,
   buildActiveWorkSuggestions,
   isActiveDeskWorkflow,
@@ -29,6 +35,25 @@ const {
   composeMissionResponse,
   composeActiveMissionResponse,
 } = require('./MissionResponse');
+const {
+  maybeHandleMissionFirstTurn,
+  evaluateMissionContinuation,
+  evaluateMissionEscape,
+  logMissionRouting,
+  logMissionRoutingOverride,
+  listMissionRoutingLog,
+  clearMissionRoutingLog,
+  PIPELINES,
+  CONTINUATION_THRESHOLD,
+} = require('./MissionFirstRouting');
+const {
+  resolveMissionRuntime,
+  logMissionRuntimeSelected,
+  listMissionRuntimeAuditLog,
+  clearMissionRuntimeAuditLog,
+  MISSION_RUNTIMES,
+  MISSION_TYPES,
+} = require('./MissionRuntimeDispatch');
 const {
   PresentationEngine,
   formatDeterministicProse,
@@ -79,6 +104,41 @@ const {
   maybeHandleSpecialistInterrogationTurn,
 } = require('./SpecialistInterrogationContext');
 const {
+  maybeHandleAcquisitionMissionTurn,
+  looksLikeAcquisitionMissionQuestion,
+  referencesMissionState,
+  shouldInspectActiveMission,
+} = require('./AcquisitionMissionTurn');
+const {
+  maybeHandleWorkspaceMissionInspection,
+  PIPELINE_MISSION_INSPECTION,
+} = require('./WorkspaceMissionInspection');
+const {
+  maybeHandleAcquisitionOwnershipTurn,
+  detectAcquisitionObjective,
+  missionOwnsAcquisitionRequest,
+  buildClientIntelligenceMissionEvidence,
+} = require('./AcquisitionOwnership');
+const {
+  listAcquisitionOwnershipAuditLog,
+  clearAcquisitionOwnershipAuditLog,
+  createAcquisitionOwnershipAudit,
+} = require('./audit/AcquisitionOwnershipAudit');
+const {
+  listWorkspaceMissionInspectionAuditLog,
+  clearWorkspaceMissionInspectionAuditLog,
+  buildOwnershipTrace,
+} = require('./audit/WorkspaceMissionInspectionAudit');
+const {
+  resolveWorkspaceOwner,
+  WORKSPACE_OWNERS,
+} = require('./WorkspaceOwnershipResolver');
+const {
+  listWorkspaceOwnershipAuditLog,
+  clearWorkspaceOwnershipAuditLog,
+  createWorkspaceOwnershipAudit,
+} = require('./audit/WorkspaceOwnershipAudit');
+const {
   maybeHandleRetrievalBeforeDelegationTurn,
 } = require('./RetrievalBeforeDelegationContext');
 const {
@@ -92,6 +152,13 @@ const {
   isOperatingEvidenceQuestion,
   shouldRetrieveOperatingEvidence,
 } = require('./OperatingEvidenceRetrieval');
+const {
+  maybeHandleOperatorOperatingUpdate,
+  isOperatorOperatingUpdate,
+} = require('./OperatorOperatingUpdate');
+const ResponseContract = require('./ResponseContract');
+const BusinessIntelligence = require('./BusinessIntelligence');
+const OperatorIntentRegistry = require('./OperatorIntentRegistry');
 
 module.exports = {
   getProspectOperatingBrief,
@@ -110,6 +177,27 @@ module.exports = {
   maybeHandleScoutAcquisitionTurn,
   shouldHandleScoutAcquisition,
   maybeHandleSpecialistInterrogationTurn,
+  maybeHandleAcquisitionMissionTurn,
+  maybeHandleAcquisitionOwnershipTurn,
+  detectAcquisitionObjective,
+  missionOwnsAcquisitionRequest,
+  buildClientIntelligenceMissionEvidence,
+  listAcquisitionOwnershipAuditLog,
+  clearAcquisitionOwnershipAuditLog,
+  createAcquisitionOwnershipAudit,
+  maybeHandleWorkspaceMissionInspection,
+  PIPELINE_MISSION_INSPECTION,
+  listWorkspaceMissionInspectionAuditLog,
+  clearWorkspaceMissionInspectionAuditLog,
+  buildOwnershipTrace,
+  resolveWorkspaceOwner,
+  WORKSPACE_OWNERS,
+  listWorkspaceOwnershipAuditLog,
+  clearWorkspaceOwnershipAuditLog,
+  createWorkspaceOwnershipAudit,
+  looksLikeAcquisitionMissionQuestion,
+  referencesMissionState,
+  shouldInspectActiveMission,
   maybeHandleRetrievalBeforeDelegationTurn,
   loadDurableBusinessUnderstanding,
   buildBusinessUnderstandingContract,
@@ -118,6 +206,33 @@ module.exports = {
   loadOperatingEvidence,
   isOperatingEvidenceQuestion,
   shouldRetrieveOperatingEvidence,
+  maybeHandleOperatorOperatingUpdate,
+  isOperatorOperatingUpdate,
+  selectResponseContract: ResponseContract.selectResponseContract,
+  listResponseContracts: ResponseContract.listResponseContracts,
+  getResponseContract: ResponseContract.getResponseContract,
+  CONTRACT_IDS: ResponseContract.CONTRACT_IDS,
+  RetrievalContract: ResponseContract.RetrievalContract,
+  SummaryContract: ResponseContract.SummaryContract,
+  RecommendationContract: ResponseContract.RecommendationContract,
+  DiagnosisContract: ResponseContract.DiagnosisContract,
+  UnknownAnalysisContract: ResponseContract.UnknownAnalysisContract,
+  RiskContract: ResponseContract.RiskContract,
+  ProgressContract: ResponseContract.ProgressContract,
+  ChallengeContract: ResponseContract.ChallengeContract,
+  InvestigationContract: ResponseContract.InvestigationContract,
+  synthesizeBusinessIntelligence: BusinessIntelligence.synthesizeBusinessIntelligence,
+  serializeBusinessIntelligence: BusinessIntelligence.serializeBusinessIntelligence,
+  isChannelEffectivenessQuestion: BusinessIntelligence.isChannelEffectivenessQuestion,
+  CATEGORIES: BusinessIntelligence.CATEGORIES,
+  CONFIDENCE: BusinessIntelligence.CONFIDENCE,
+  OPERATOR_INTENTS: OperatorIntentRegistry.OPERATOR_INTENTS,
+  ANALYSIS_MODES: OperatorIntentRegistry.ANALYSIS_MODES,
+  classifyNewAnalysisMode: OperatorIntentRegistry.classifyNewAnalysisMode,
+  looksLikeDiagnosis: OperatorIntentRegistry.looksLikeDiagnosis,
+  looksLikeUnknownAnalysis: OperatorIntentRegistry.looksLikeUnknownAnalysis,
+  looksLikeRisk: OperatorIntentRegistry.looksLikeRisk,
+  looksLikeProgress: OperatorIntentRegistry.looksLikeProgress,
   PAGE_TYPES,
   PAGE_TYPE_SET,
   SOURCE_KEYS,
@@ -128,6 +243,10 @@ module.exports = {
   contextFingerprint,
   contextFocusLabel,
   buildOpeningState,
+  resolveActiveTenantId,
+  resolveMaxPromptContext,
+  buildTenantGreeting,
+  NO_ACTIVE_CLIENT,
   buildSuggestions,
   buildActiveWorkSuggestions,
   isActiveDeskWorkflow,
@@ -140,6 +259,21 @@ module.exports = {
   classifyIntent,
   composeMissionResponse,
   composeActiveMissionResponse,
+  maybeHandleMissionFirstTurn,
+  evaluateMissionContinuation,
+  evaluateMissionEscape,
+  logMissionRouting,
+  logMissionRoutingOverride,
+  listMissionRoutingLog,
+  clearMissionRoutingLog,
+  PIPELINES,
+  CONTINUATION_THRESHOLD,
+  resolveMissionRuntime,
+  logMissionRuntimeSelected,
+  listMissionRuntimeAuditLog,
+  clearMissionRuntimeAuditLog,
+  MISSION_RUNTIMES,
+  MISSION_TYPES,
   PresentationEngine,
   formatDeterministicProse,
   WorkspaceEngine,

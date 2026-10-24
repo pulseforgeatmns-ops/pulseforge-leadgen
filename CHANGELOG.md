@@ -1,3 +1,50 @@
+## Unreleased — PF-CLARITY-001
+
+- Add default-off tenant-10 Gmail readonly Clarity digest ingestion with separately consented, encrypted credentials, bounded retry/backfill and tenant-scoped historical snapshots.
+- Max daily brief surfaces at most three evidence-backed hypotheses with visual, digest-bound approve/reject review through SPEC-171. Approval records review only; website changes and deployments remain separately gated.
+- Add synthetic parser, OAuth, ingestion, PostgreSQL isolation/concurrency, router/CSRF and browser acceptance coverage. Live authorized-digest acceptance remains blocked on owner OAuth consent and separately approved deployment. See [spec](docs/specs/PF-CLARITY-001_Google_Workspace_Clarity.md) and [runbook](docs/clarity-runbook.md).
+
+## Local-only: PR960 managed-facilities enrichment boundary (2026-10-20)
+
+- Keep portal-copy experimentation off by default. Require explicit hash-bound approved tenant-10 mission opt-in; preserve legacy copy for existing high-score prospects, with no successor auto-opt-in or refill behavior expansion.
+
+- [SPEC-SCOUT-FACILITIES-001](docs/specs/SPEC-SCOUT-FACILITIES-001_Legacy_Enrichment_Boundary.md): keep facilities canonical without widening shared legacy enrichment defaults or scheduled retries. Explicit Anchor facilities missions select only their reviewed categories, including restaurant FOH when approved; unsupported mixed scopes fail closed.
+- Use canonical recognition for the legacy queue reconciler so legitimate facility rows are not mistaken for query-slug contamination. Preserve other tenant paths and the Pulseforge reviewed-trade gate.
+- Add focused regression coverage. Local/test only; no publication, provider action, migration or production activation.
+
+## Local-only: promotion schema lifecycle repair (2026-10-19)
+
+- [SPEC-SCOUT-SCHEMA-001](docs/specs/SPEC-SCOUT-SCHEMA-001_Promotion_Schema_Lifecycle.md): complete existing business-name schema ensure before promotion transactions, check visible columns before lazy DDL, and coalesce only pending work per query object. Prevent inherited schema/advisory deadlocks and rolled-back ensure-cache poisoning while preserving tenant-scoped canonical dedup.
+- Add deterministic native PostgreSQL regression coverage. No new migration, provider behavior, deployment, or production operation is included.
+
+## Unreleased — SPEC-265 local research-provider pause
+
+- Add a default-off tenant-10 research/discovery/contact-enrichment/email-verification pause at reviewed provider handoffs and trusted caller boundaries. Preserve field-route geocoding, call/SMS and unrelated presentation paths.
+- Require explicit tenant context for previously unscoped research diagnostics while armed; keep known non-Anchor utilities bound to their existing scope. Typed interruption preserves candidate state and completed accounting.
+- No new DDL, budget, research-resume permission or activation. See [SPEC-265](docs/specs/SPEC-265_Anchor_Research_Provider_Pause.md), [ADR-107](docs/adr/ADR-107_Explicit_Research_Provider_Pause.md), and [operator proposal](docs/anchor-research-provider-pause.md).
+
+
+## Local SPEC-264 operator invocation proposal
+
+
+Default-read-only fixed tenant-10 CRM preparation command; explicit exact revision/manifest/source hashes and --apply required for later separately approved writes. No new route, activation or provider authority.
+
+## Local SPEC-263 follow-on
+
+Default-closed deterministic existing-CRM canonical preparation, no Scout fallback/provider calls, review-only READY. See ADR-106. Separate implementation and native review on the frozen SPEC262 base; not part of that immutable publication artifact. Draft identities and later frozen items are separately charged; manual schema extension is opt-in.
+
+## Local SPEC-262 proposal
+
+Tenant-10-only approved identity-batch email and existing-artifact/deterministic preparation resume while quarantine persists. Non-Anchor query/lock/preparation behavior remains unchanged. Paid research is rejected; source currently lacks ready artifacts. See ADR-105 and the scoped operator proposal. No production action approved.
+
+# Local SPEC-261 milestone
+
+Default-disabled Anchor email recovery, dedicated no-resend quarantine and strict manifest preparation. See SPEC-261 and ADR-103; no production action approved.
+
+## Local proposal 2026-10-19: SPEC-260
+
+Default-disabled Anchor-only Brevo boundary diagnostics; exact 42703 and post-HTTP COMMIT regressions. No migration, admission widening, hold release, publication or deployment. See ADR-104 (combined-artifact metadata-only renumber; frozen boundary patch unchanged).
+
 # Changelog
 
 All notable changes to this project are documented here. Format inspired by [Keep a Changelog](https://keepachangelog.com/). Versions follow the release plans in `docs/releases/`.
@@ -5,6 +52,265 @@ All notable changes to this project are documented here. Format inspired by [Kee
 ## [Unreleased]
 
 ### Added
+
+- [SPEC-SCOUT-CONT-002](docs/specs/SPEC-SCOUT-CONT-002_Explicit_Legacy_Coverage_Epoch.md)
+  and [ADR-102](docs/adr/ADR-102_Explicit_Immutable_Legacy_Coverage_Epoch.md):
+  default-off explicit same-fingerprint epoch1 for exact legacy query roots,
+  immutable scope-wide allocation/window receipt, durable staged-page recovery
+  after expiry/removal, and bounded sanitized approval diagnostics. Local tests
+  preserve old candidate/attempt history and enforce cumulative page ceilings.
+  Production release, exact manifest and additional spend remain approval-gated.
+
+- Default-off tenant 10/13 durable Scout candidate tickets and exact immutable
+  query membership, independent backlog draining, fenced queue completion,
+  bounded continuation and explicit dependency holds. Successful no-evidence
+  crawls do not automatically repeat; only explicit transient failures retry.
+  Real PostgreSQL tests exercise sustained simulated queue/clean-inventory flow,
+  crashes, concurrency and preserved cost/attempt limits. Migration, activation,
+  publication and live yield remain separately gated.
+
+- [SPEC-SCOUT-CONT-001](docs/specs/SPEC-SCOUT-CONT-001_Bounded_Query_Page_Continuation.md):
+  authorized local/test, opt-in finite Places pagination with immutable scoped
+  page checkpoints, exact durable candidate handoff, one-page cycle allocation,
+  existing spend reservations and explicit exhaustion/legacy-token blockers.
+  No publication, production migration, activation or live replenishment proof.
+
+- [SPEC-PF-ACCEL-001](docs/specs/SPEC-PF-ACCEL-001_Rollout_Preflight.md):
+  default-dry-run rollout preflight for PR897 schema/index/constraint/trigger
+  prerequisites and optional local PR899 token-length diagnostics. Uses an
+  owned, bounded read-only connection and fixed metadata SELECTs; never starts
+  the app, contacts providers, prints secrets or certifies deployment readiness.
+  Includes failure/timeout/redaction tests, a non-skipping PostgreSQL CI gate,
+  and an approval-gated operator plan.
+
+### Fixed
+
+- [SPEC-SCOUT-OWNER-001](docs/specs/SPEC-SCOUT-OWNER-001_Observed_Website_Owner_Evidence.md):
+  Babrun/tenant 13 intake and promotion opt in to rank explicit, company-bound owner/founder contact records ahead of an earlier
+  website role inbox using only pages the existing crawl already fetched. Keep
+  exact bounded source evidence in the selected Babrun contact receipt; reject
+  ambiguous, hidden, third-party and contradictory records. Preserve the prior
+  fallback, default shared-caller behavior, provider budgets, verification and contact-policy gates.
+  Add a network-denying synthetic regression command and stub the legacy crawl
+  fixture's robots fetch. Local/test implementation only; no live validation.
+
+- [SPEC-184](docs/specs/SPEC-184_Provider_Execution_Continuity.md): preserve per-caller
+  Places search cache provenance through Scout provider receipts; emit only the
+  bounded sanitized receipt after the normal control event write. Distinguish
+  held denials, cached zero results and shared in-flight requests without exposing
+  query text, contact data or keys. Label the zero-yield generation cap truthfully
+  without changing retry, spend, admission or outbound behavior.
+
+- Restore AUDIT-063 Places in-flight request sharing and per-caller reuse
+  attribution after integrating failure-cache handling. Concurrent denials stay
+  sanitized, produce no business evidence, and reserve only one paid request;
+  tests cover cache expiry and synthetic spend-control dependencies.
+
+- Max merge-readiness regressions against existing contracts: restore the
+  [SPEC-JEV-006](docs/specs/SPEC-JEV-006_Guarded_Active_Routing_Promotion.md) promotion
+  assessment import; preserve durable-objective, operating-evidence, specialist,
+  advisory, market and identity ownership; restore tenant-bound mission-owner
+  audit events and explicit failure-mode answers.
+- Enforce existing fail-closed clarification and approval boundaries: uncertain
+  region answers and negated approval/execution cannot advance missions; preserve
+  gatekeeper evidence without inventing an unknown decision-maker identity.
+  SPEC-168 missing
+  objectives clarify without mission creation, and transactional rollback keeps
+  provider/blocker diagnostics.
+- Preserve supplied recurring-revenue success metrics; update legacy test
+  expectations to the [SPEC-111](docs/specs/SPEC-111_Operator_Intent_Taxonomy.md)
+  unknown-analysis and [SPEC-147](docs/specs/SPEC-147_Conversational_Intelligence_Layer.md)
+  read-only conversational contracts with explicit no-mutation assertions.
+- Max CI still runs the complete suite and preserves its exit status; bounded
+  failure summaries and a three-day test-output artifact make failures inspectable.
+
+### Changed
+
+- Anchor one-send runner (`scripts/executeAnchorOneOutbound.js`) accepts `--mission-id`
+  - Default remains the conservative historical law-firm mission id
+  - Production execution must pass the READY STR mission explicitly
+  - Requires tenant 10, stage READY, readiness-probe match, and active non-superseded CAPACITY
+  - Sends the highest-ranked sendable email-bearing queue item only (`maxSends=1`)
+  - Prints recipient / company / subject / body before execute; autosend and enabled_agents stay unchanged
+
+### Added
+
+- [SPEC-JEV-003 Shadow Routing Warning](docs/specs/SPEC-JEV-003_Shadow_Routing_Warning.md):
+  emits `[DECISION_SHADOW_ROUTING_WARNING]` for the validated high-confidence
+  mission-inspection mismatch and adds `npm run decision:review -- --warnings`.
+  Jev remains observer-only and warning failures cannot affect routing.
+
+- [SPEC-JEV-002 Decision Shadow Review](docs/specs/SPEC-JEV-002_Decision_Shadow_Review.md):
+  best-effort Postgres copies of complete shadow events, isolated bounded writes,
+  and `npm run decision:review` for the latest 50 evaluations, mismatch patterns,
+  and provider errors. Includes an idempotent migration and failure-isolation
+  tests; Jev has no production routing authority.
+
+- Anchor STR canonical outbound recovery (tenant 10)
+  - Inspects every Anchor acquisition mission and selects the short-term-rental operator objective without duplicating the law-firm mission
+  - Recovers Scout → Max → Paige → Emmett → READY on the canonical AMO path only
+  - Stops before `APPROVE_EXECUTION` / `EXECUTE_OUTBOUND`; autosend stays off
+  - Refuses Scout `CONTINUE_INVESTIGATION` when a healthy candidate set already exists
+  - Stops cleanly at the Scout → Max boundary when discovery readiness is insufficient instead of looping invalid `APPROVE_PRIORITIZATION`
+  - If discovery is already approved and Scout candidates are empty, runs canonical Scout continuation instead of looping `APPROVE_DISCOVERY`
+  - Railway cron: `GET/POST /cron/inspect-anchor-canonical-outbound` (read-only) and `/cron/recover-anchor-canonical-outbound?recover=true` (READY only)
+  - GitHub Actions production job is workflow_dispatch only and does not use Railway's `charming-trust / production` GitHub environment
+
+
+### Added
+
+- AUDIT-066 Max Post-Discovery Dispatch ([AUDIT-066](docs/architecture/AUDIT-066_Max_Post_Discovery_Dispatch.md))
+  - Operator `PRIORITIZATION_APPROVAL` now executes Max through SEC/TME and commits a validated `PRIORITIZATION` contribution atomically
+  - `MaxPrioritizationExecutor` builds mission-bound Max input from locked structured mission + Scout discovery (MIR, ranked prospects, evidence)
+  - Fail-closed: contract/execution failures leave the mission at `DISCOVER` without false `maxComplete`
+  - `advanceMaxPrioritization()` remains idempotent for back-compat and autonomous progression
+
+- SPEC-185 Blocked Discovery Telemetry Continuity ([SPEC-185](docs/specs/SPEC-185_Blocked_Discovery_Telemetry_Continuity.md), [ADR-100](docs/adr/ADR-100_Uniform_Discovery_Payloads.md))
+  - Every Discovery exit path — success, blocked, partial, provider failure — includes `providerExecution`
+  - Blocked Scout returns preserve `universe.providerReports` instead of dropping sensor telemetry
+  - Operators on blocked discovery see provider execution records, not only generic failure copy
+  - Remediates AUDIT-061 blocked-path divergence
+
+- SPEC-184 Provider Execution Continuity ([SPEC-184](docs/specs/SPEC-184_Provider_Execution_Continuity.md), [ADR-099](docs/adr/ADR-099_Sensor_Observation_Continuity.md))
+  - `providerExecution` is part of the canonical Discovery contribution contract — never discarded at normalization
+  - Provider sensor telemetry (HTTP status, Google status, latency, query, results) persists with mission contributions
+  - Validation rollback attaches provider diagnostics so operators see sensor context instead of generic evidence errors
+  - Remediates AUDIT-060 propagation gap
+
+- AUDIT-059 External Discovery Provider Failure ([AUDIT-059](docs/architecture/AUDIT-059_External_Discovery_Provider_Failure.md))
+  - Places execution records the actual Text Search query, Google status, HTTP status, latency, retries, quota, and errors
+  - `REQUEST_DENIED` / quota failures are provider failures, not empty markets
+  - Scout discovery payload includes `providerExecution` so Discovery Blocked can cite the sensor result
+  - First divergence: Provider Execution, not identity/qualification filters
+
+- Canonical Execution Router ([SPEC-171](docs/specs/SPEC-171_Canonical_Execution_Router.md), [ADR-090](docs/adr/ADR-090_Canonical_Execution_Routing.md))
+  - Every execution-capable surface produces an immutable Canonical Execution Request (CER)
+  - Only `routeExecutionRequest()` may dispatch specialists or TME
+  - Chat, Mission Workspace approval buttons, and `POST /api/v1/amo/missions/:id/execute` submit the same intent catalog
+  - Voice `START_DISCOVERY` is an alias of `APPROVE_DISCOVERY`; future surfaces add a producer, not a new router
+  - SPEC-170 runtime ownership is validated before dispatch; every CER is uniquely identified, replayable, and audited once
+
+- Canonical Mission Verification ([SPEC-169](docs/specs/SPEC-169_Canonical_Mission_Verification.md), [ADR-088](docs/adr/ADR-088_Canonical_Mission_Projection_Is_The_Verification_Contract.md))
+  - Transaction verification compares `CanonicalMissionProjection`, not a 10-field subset
+  - `buildCanonicalMissionProjection()` is the single projection builder consumed by `assertPersistedMatchesEngine`
+  - Future durable mission fields (e.g. `organizationalPlan`) participate automatically
+  - Persistence mismatches return a structured projection diff: field, memory, persisted, reason, first divergence
+
+- Pending Operator Decision Consistency ([SPEC-136](docs/specs/SPEC-136_Pending_Operator_Decision_Consistency.md), [ADR-058](docs/adr/ADR-058_Pending_Operator_Decision_Matches_Execution.md))
+  - `pendingOperatorDecision` must satisfy `hasPendingPlanApproval` / `hasPendingDiscoveryApproval` after every mission mutation
+  - Plan approval atomically advances to discovery approval; discovery approval is consumed before Scout is durable
+  - Inconsistent missions fail with `MISSION_STATE_INCONSISTENT` and are not rendered
+  - Presentation derives from executable mission state; generic `operator_approved` cannot run while a valid pending decision exists
+
+- Acquisition Mission Orchestration ([SPEC-118](docs/specs/SPEC-118_Acquisition_Mission_Orchestration.md), [ADR-055](docs/adr/ADR-055_Max_Manages_Missions.md))
+  - Max manages missions, not agents; capabilities contribute evidence and execution
+  - Durable Acquisition Mission object with Discover → Understand → Plan → Prepare → Ready → Execute → Observe → Learn → Improve
+  - Capability contracts: Scout never messages; Max never writes copy; Paige never chooses recipients; Emmett never changes campaign messaging
+  - Shared mission context follows every capability
+  - Inspectable workspace, chronological timeline, mission health, and explicit blockers
+  - Segment learning and evidence-backed "why is this mission here?" — never invented, never auto-applied
+  - Operator workspace at `/acquisition-missions`; Scout / Paige / Emmett attach when `missionId` is present
+  - Competency `acquisition_mission_orchestration` graduated 2026-08-19
+
+- Emmett Outbound Infrastructure Intelligence ([SPEC-117](docs/specs/SPEC-117_Emmett_Outbound_Infrastructure_Intelligence.md), [ADR-054](docs/adr/ADR-054_Reputation_Is_Capital.md))
+  - Emmett is not a copywriter, BDR, or sales strategist — it protects outbound reputation capital
+  - Explainable Inbox Health 0–100 (SPF, DKIM, DMARC, warmup, bounce/reply/open, age, blacklist, velocity, consistency, overrides)
+  - Capacity Intelligence reasons a daily volume (spec example: 22 at confidence 0.84) instead of `gmail = 50`
+  - Safe Send Governor: Proceed / Slow / Pause / Emergency before every send
+  - Max cannot override Pause or Emergency silently; operator acknowledgement is required
+  - Today's queue ranks Max priority, buying-signal freshness, expected response, capacity, and campaign diversity
+  - Operator dashboard at `/emmett-outbound`; human approval of today's plan is mandatory before send
+  - Outcomes (delivery, open, reply, bounce, unsubscribe, spam, meeting, opportunity, revenue) route to Paige, Scout, Max, and Emmett without auto-mutating campaigns
+  - Competency `emmett_outbound_infrastructure` graduated 2026-08-19
+  - Numbering: the product brief called this SPEC-110; repository SPEC-110 remains Business Intelligence Synthesis
+
+- Operator Scorecard Intelligence ([SPEC-116](docs/specs/SPEC-116_Operator_Scorecard_Intelligence.md), [ADR-053](docs/adr/ADR-053_Business_Success_Is_Operator_Defined.md))
+  - Max reasons from Blueprint, AIM, stage, revenue model, and operator objectives before recommending metrics
+  - Every recommendation includes reason, business outcome, confidence, leading/lagging, and category
+  - Operators accept, modify, remove, reorder, or add metrics; removal can include an optional reason
+  - Feedback becomes tenant-scoped Operator Intelligence and adjusts future drafts
+  - Only the approved scorecard is runtime truth; drafts never report
+  - Executive Business Brief replaces **Success Looks Like** with Recommended / Approved / Under Review
+  - Daily Briefings and Max digest consume the approved scorecard as the definition of success
+  - Max recommends scorecard evolution as the business stage changes — nothing auto-applies
+  - Competency `operator_scorecard_intelligence` graduated 2026-08-19
+
+  - Admin provisions tenant + client user + temporary password in `/admin/clients` and `/admin/users` — no SQL
+  - First login forces a password change (`password_change_required`); workspace is blocked until it succeeds
+  - Guided workspace: Client Intelligence → Blueprint → AIM upload/compile/review/publish → Ask Max → Run Scout
+  - Max answers acquisition questions only after Blueprint approved **and** AIM published
+  - AIM status: No Documents / Ready To Compile / Draft / Published (`/aim`)
+  - Scout writes tenant-scoped prospects (`client_id`); outreach stays gated
+  - Explicit failure copy for no tenant, no Blueprint, no AIM, and password change required
+  - Competency `pilot_0_client_onboarding` graduated 2026-08-19
+  - Public self-service signup and email verification remain out of scope for Pilot 0
+
+- Client Registration & Workspace Provisioning ([SPEC-115](docs/specs/SPEC-115_Client_Registration_and_Workspace_Provisioning.md), [ADR-052](docs/adr/ADR-052_Workspace_First_Registration.md))
+  - Public `/signup`: account + workspace, no developer SQL or admin tools
+  - Workspace is created first; the user is bound as `role=client`
+  - Email verification required before the session
+  - Empty intelligence foundation: Blueprint, AIM, Knowledge, Missions, Prospects, Campaigns, Outcomes, Memory
+  - Login lands on the dashboard; Max greets with Client Intelligence and **Begin Client Intelligence**
+  - Client-role login never defaults to Pulseforge; no workspace fails closed
+  - Explicit workspace lifecycle: Registered → Provisioned → … → Learning
+  - Competency `client_registration_workspace` graduated 2026-08-19
+
+- Client Tenant Creation & Activation ([SPEC-114](docs/specs/SPEC-114_Client_Tenant_Creation.md), [ADR-051](docs/adr/ADR-051_Provision_Tenant_Before_Intelligence.md))
+  - Operator creates a client from required/optional fields — no developer SQL
+  - Automatic provision of isolated knowledge, mission, prospect, outcome, and AIM namespaces
+  - Empty initial workspace: Client Intelligence Not Started, no published AIM
+  - Activate tenant; Max executes inside that `tenant_id`
+  - Fail closed when no tenant is selected: `No active client selected.`
+  - Max onboarding greeting on a new tenant dashboard
+  - `/admin/clients` + New client control in the shell
+  - Competency `client_tenant_creation` graduated 2026-08-18
+  - Numbering: the product brief called this SPEC-112; repository SPEC-112 remains Acquisition Intelligence Model
+
+- Acquisition Intelligence Compiler ([SPEC-113](docs/specs/SPEC-113_Acquisition_Intelligence_Compiler.md), [ADR-050](docs/adr/ADR-050_Compile_Market_Knowledge_Before_Runtime.md))
+  - Ingest market documents into a draft Acquisition Intelligence Workspace
+  - Extract sourced concepts (mission, ICP, pain, signals, language) — not summaries
+  - Construct a reasoning graph (supported_by / observed_through / excludes)
+  - Operator review: accept / edit / merge / remove; nothing publishes automatically
+  - Published AIM is the only Scout runtime knowledge; draft AIM and document bodies are not search inputs
+  - Compiler cannot execute outreach
+  - Competency `acquisition_intelligence_compiler` graduated 2026-08-18
+  - Numbering: the product brief called this SPEC-111; repository SPEC-111 remains Operator Intent Taxonomy
+
+- Acquisition Intelligence Model ([SPEC-112](docs/specs/SPEC-112_Acquisition_Intelligence_Model.md), [ADR-049](docs/adr/ADR-049_Understand_Market_Before_Selling.md))
+  - First-class AIM: mission, reasoning-based ICP, desired transformation, pain ontology, knowledge capture, messaging intelligence
+  - Fedir seed: founder-led → business-machine; People / Growth / Finance pains with observable signals
+  - Six-dimension qualification (ICP Fit, Pain Match, Evidence Quality, Buying Readiness, Confidence, Recommendation)
+  - Scout reasons over AIM when present; commercial-cleaning fit unchanged when AIM is absent
+  - Paige `aim_briefing` (likely pain, language, proof-or-unknown, CTA)
+  - Pilot status reports technical vs business milestones without inventing 50 prospects
+  - Competency `acquisition_intelligence_model` graduated 2026-08-18
+  - Numbering: the product brief called this SPEC-110; repository SPEC-110 remains Business Intelligence Synthesis
+
+- Max Operator Intent Taxonomy ([SPEC-111](docs/specs/SPEC-111_Operator_Intent_Taxonomy.md), [ADR-048](docs/adr/ADR-048_Intent_Selects_Analysis_Mode.md))
+  - Explicit intent registry: Retrieval, Summary, Recommendation, Diagnosis, Unknown Analysis, Risk, Progress, Challenge, Investigation
+  - Diagnosis, unknown analysis, risk, and progress select their own response contracts before reasoning
+  - Business Intelligence objects are reused as inputs; no duplicated reasoning
+  - Competency `operator_intent_taxonomy` graduated 2026-08-18
+
+- Max Business Intelligence Synthesis ([SPEC-110](docs/specs/SPEC-110_Business_Intelligence_Synthesis.md), [ADR-047](docs/adr/ADR-047_Intelligence_Before_Evidence.md))
+  - First-class intelligence objects (`finding`, `category`, `confidence`, `supporting_claims`, `operator_impact`)
+  - Retrieval, summary, and recommendation contracts lead with synthesized conclusions, then attributable evidence
+  - Channel-effectiveness questions fail closed as Unknown rather than speculation
+  - Competency `business_intelligence_synthesis` graduated 2026-08-18
+
+- Max Intent-Bound Response Selection ([SPEC-109](docs/specs/SPEC-109_Intent_Bound_Response_Selection.md), [ADR-046](docs/adr/ADR-046_Intent_Determines_Response_Structure.md))
+  - Response contract registry: Retrieval, Summary, Recommendation, Challenge, Investigation
+  - Contract selected after intent classification and before retrieval or specialist delegation
+  - Retrieval answers verified state; summaries separate state / goals / unknowns; recommendations stay primary only when asked
+  - Competency `intent_bound_response_selection` graduated 2026-08-18
+
+- Anchor Cleaning public terminology: **facilities assessment** replaces walkthrough on the website, form, success message, lead emails, and CRM-visible action titles (backend routes/events unchanged)
+
+- Anchor Cleaning ads-ready homepage + walkthrough intake
+  - Source page at `sites/anchor-cleaning/index.html` (copy to the GitHub Pages repo to ship)
+  - Visible `tel:+16034202430` Call/Text path, search-literal commercial-cleaning copy, and a short walkthrough form
+  - `POST /api/public/walkthrough` writes `agent_actions` for `client_id=10`
+  - Page emits `walkthrough_form_submit`, `phone_click`, and `email_click` for GA4 / Google Ads once IDs are pasted in
 
 - Max Development Framework ([SPEC-102F](docs/specs/SPEC-102F_Max_Development_Framework.md))
   - Competency lifecycle (not started → training → practicing → graduated → regression)

@@ -30,6 +30,7 @@ const REBUILD_TRIGGERS = Object.freeze({
   MANUAL: 'manual_rebuild',
   SESSION_STALE: 'session_stale',
   INITIAL: 'initial_build',
+  OPERATING_EVIDENCE_RECORDED: 'operating_evidence_recorded',
 });
 
 const ACTIVE_MISSION_STATUSES = new Set([
@@ -43,6 +44,16 @@ const ACTIVE_MISSION_STATUSES = new Set([
   'awaiting_review',
   'review',
 ]);
+
+const { STAGE_LABELS: AMO_STAGE_LABELS } = require('../packages/acquisition-mission/types');
+const AMO_ACTIVE_MISSION_STATUSES = new Set(Object.values(AMO_STAGE_LABELS));
+
+function isActiveMissionStatus(status) {
+  const raw = String(status || '').trim();
+  if (!raw || /^cancel/i.test(raw)) return false;
+  if (ACTIVE_MISSION_STATUSES.has(raw.toLowerCase())) return true;
+  return AMO_ACTIVE_MISSION_STATUSES.has(raw);
+}
 
 const COMPLETED_MISSION_STATUSES = new Set([
   'completed',
@@ -430,9 +441,7 @@ function deriveRisksAndOpportunities(summary, playbook, missions) {
     }
   }
 
-  const activeCount = (missions || []).filter((m) =>
-    ACTIVE_MISSION_STATUSES.has(String(m.status || '').toLowerCase())
-  ).length;
+  const activeCount = (missions || []).filter((m) => isActiveMissionStatus(m.status)).length;
   if (activeCount === 0 && summary && summary.approved) {
     risks.push('No active missions are running right now.');
   }
@@ -488,7 +497,7 @@ function deriveOpenQuestions(summary, recentOutcomes) {
  */
 function mapActiveMissions(missions) {
   return (missions || [])
-    .filter((m) => ACTIVE_MISSION_STATUSES.has(String(m.status || '').toLowerCase()))
+    .filter((m) => isActiveMissionStatus(m.status))
     .slice(0, 8)
     .map((m) => ({
       id: m.id,

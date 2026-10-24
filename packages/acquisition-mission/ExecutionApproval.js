@@ -1,0 +1,418 @@
+'use strict';
+
+/**
+ * Canonical READY transition & artifact-bound execution approval.
+ * Approval authorizes the exact prepared Paige + Emmett + Max state at READY.
+ */
+
+const crypto = require('crypto');
+const {
+  STAGES,
+  SPECIALISTS,
+  CONTRIBUTION_KINDS,
+  OPERATOR_DECISION_KINDS,
+  asText,
+  nowIso,
+  MESSAGE_BINDING_SCOPES,
+  BINDING_VALIDATION_RESULTS,
+} = require('./types');
+const {
+  extractCapacitySenderIdentity,
+} = require('../../utils/canonicalSenderIdentity');
+const {
+  unwrapSpecialistPayload,
+} = require('./ContributionSupersession');
+const { selectCanonicalContribution } = require('./CanonicalContributionSelection');
+const { isUpstreamArtifactChainCoherent } = require('./UpstreamArtifactCoherence');
+const {
+  extractOutreachSequenceSteps,
+  outreachSequenceForRevisionHash,
+  freezeOutreachSequenceForApproval,
+} = require('./PreparedOutreachSequence');
+
+const EXECUTION_APPROVAL_ACTION = 'execution_approved';
+
+function missionFromContributions(contributions = [], missionId = null) {
+  if (missionId) return { id: missionId };
+  const row = contributions.find((entry) => entry && entry.missionId);
+  return row ? { id: row.missionId } : null;
+}
+
+function findLatestContribution(contributions = [], specialist, kind, mission = null) {
+  return selectCanonicalContribution(contributions, {
+    missionId: mission?.id,
+    specialist,
+    kind,
+    mission,
+  });
+}
+
+function findMaxPrioritization(contributions = [], mission = null) {
+  return findLatestContribution(
+    contributions,
+    SPECIALISTS.MAX,
+    CONTRIBUTION_KINDS.PRIORITIZATION,
+    mission || missionFromContributions(contributions)
+  );
+}
+
+function findPaigeVariants(contributions = [], mission = null) {
+  return findLatestContribution(
+    contributions,
+    SPECIALISTS.PAIGE,
+    CONTRIBUTION_KINDS.VARIANTS,
+    mission || missionFromContributions(contributions)
+  );
+}
+
+function findEmmettCapacity(contributions = [], mission = null) {
+  return findLatestContribution(
+    contributions,
+    SPECIALISTS.EMMETT,
+    CONTRIBUTION_KINDS.CAPACITY,
+    mission || missionFromContributions(contributions)
+  );
+}
+
+function findLatestScoutDiscovery(contributions = [], mission = null) {
+  return findLatestContribution(
+    contributions,
+    SPECIALISTS.SCOUT,
+    CONTRIBUTION_KINDS.DISCOVERY,
+    mission || missionFromContributions(contributions)
+  );
+}
+
+/**
+ * Deterministic revision from canonical contribution IDs and prepared queue state.
+ */
+function computePreparedArtifactBinding(missionId, contributions = [], mission = null) {
+  const missionRef = mission || { id: missionId };
+  const max = findMaxPrioritization(contributions, missionRef);
+  const paige = findPaigeVariants(contributions, missionRef);
+  const emmett = findEmmettCapacity(contributions, missionRef);
+  const emmettPayload = emmett ? unwrapSpecialistPayload(emmett) : {};
+  const queue = emmettPayload.queue || {};
+  const queueItems = Array.isArray(queue.items) ? queue.items : [];
+  const governor = emmettPayload.governor || {};
+  const senderIdentity = extractCapacitySenderIdentity(emmettPayload);
+  const paigePayload = paige ? unwrapSpecialistPayload(paige) : {};
+
+  return {
+    missionId,
+    maxContributionId: max?.id || null,
+    paigeContributionId: paige?.id || null,
+    emmettContributionId: emmett?.id || null,
+    queueCount: queueItems.length,
+    queueTargetIds: queueItems
+      .slice(0, 25)
+      .map((item) => asText(item.prospectId || item.id || item.companyId || item.company))
+      .filter(Boolean)
+      .sort(),
+    governorOutcome: governor.outcome || null,
+    senderEmail: senderIdentity.senderEmail || null,
+    sendingDomain: senderIdentity.sendingDomain || null,
+    outreachSequenceSteps: outreachSequenceForRevisionHash(paigePayload.outreachSequence),
+  };
+}
+
+function computePreparedArtifactRevision(missionId, contributions = []) {
+  const binding = computePreparedArtifactBinding(missionId, contributions);
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify(binding))
+    .digest('hex')
+    .slice(0, 16);
+}
+
+/**
+ * SPEC-212 — Validate message binding integrity before execution.
+ * Every queue item must have a message bound to the same candidateId.
+ */
+function validateProspectMessageBindings(emmettPayload = {}) {
+  const queue = emmettPayload.queue || {};
+  const queueItems = Array.isArray(queue.items) ? queue.items : [];
+
+  if (!queueItems.length) {
+    return {
+      valid: true,
+      result: BINDING_VALIDATION_RESULTS.VALID,
+      violations: [],
+    };
+  }
+
+  const violations = [];
+
+  for (let i = 0; i < queueItems.length; i += 1) {
+    const item = queueItems[i];
+    const itemCandidateId = asText(item.id || item.candidateId || item.prospectId || item.companyId);
+
+    if (!itemCandidateId) {
+      violations.push({
+        index: i,
+        reason: 'missing_candidate_id',
+        message: `Queue item #${i} missing candidateId / prospectId / id`,
+        item,
+      });
+      continue;
+    }
+
+    // Check for message binding
+    if (!item.paige || !item.paige.candidateId) {
+      violations.push({
+        index: i,
+        reason: 'missing_message_binding',
+        message: `Queue item #${i} (${itemCandidateId}) has no bound message`,
+        item,
+      });
+      continue;
+    }
+
+    const messageCandidateId = asText(item.paige.candidateId);
+
+    // SPEC-212: Fail closed on mismatch
+    if (String(itemCandidateId) !== String(messageCandidateId)) {
+      violations.push({
+        index: i,
+        reason: 'candidate_id_mismatch',
+        message: `Queue item #${i}: itemCandidateId="${itemCandidateId}" ≠ messageCandidateId="${messageCandidateId}"`,
+        itemCandidateId,
+        messageCandidateId,
+        item,
+      });
+      continue;
+    }
+
+    // Check for prospect-specific binding scope
+    const bindingScope = item.paige.bindingScope || MESSAGE_BINDING_SCOPES.PROSPECT;
+    if (bindingScope === MESSAGE_BINDING_SCOPES.PROSPECT) {
+      // For prospect-bound messages, verify attributable intelligence exists
+      if (!item.paige.attributableIntelligence) {
+        violations.push({
+          index: i,
+          reason: 'missing_attributable_intelligence',
+          message: `Queue item #${i}: prospect-bound message lacking attributable intelligence`,
+          item,
+        });
+        continue;
+      }
+    }
+  }
+
+  if (violations.length) {
+    return {
+      valid: false,
+      result: BINDING_VALIDATION_RESULTS.CONTAMINATED,
+      violations,
+      blockerReason: `Message binding validation failed: ${violations.length} violation(s)`,
+    };
+  }
+
+  return {
+    valid: true,
+    result: BINDING_VALIDATION_RESULTS.VALID,
+    violations: [],
+  };
+}
+
+function isExecutionApprovalContribution(row) {
+  if (!row || row.specialist !== SPECIALISTS.OPERATOR || row.kind !== CONTRIBUTION_KINDS.APPROVAL) {
+    return false;
+  }
+  const payload = row.payload || {};
+  if (payload.invalidated === true || payload.superseded === true) return false;
+  return (
+    payload.decisionKind === OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL
+    || payload.kind === OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL
+    || payload.action === EXECUTION_APPROVAL_ACTION
+  );
+}
+
+function findExecutionApprovals(contributions = []) {
+  return contributions.filter(isExecutionApprovalContribution);
+}
+
+function findValidExecutionApproval(contributions = [], missionId) {
+  const revision = computePreparedArtifactRevision(missionId, contributions);
+  const approvals = findExecutionApprovals(contributions);
+  for (let i = approvals.length - 1; i >= 0; i -= 1) {
+    const approval = approvals[i];
+    if (approval.payload && approval.payload.preparedArtifactRevision === revision) {
+      return approval;
+    }
+  }
+  return null;
+}
+
+function isExecutionApproved(contributions = [], missionId, extras = {}) {
+  if (extras.executionApproved === true) return true;
+  if (!missionId) return false;
+  return Boolean(findValidExecutionApproval(contributions, missionId));
+}
+
+function buildExecutionApprovalPayload(mission, contributions = [], input = {}) {
+  const binding = computePreparedArtifactBinding(mission.id, contributions);
+  const revision = computePreparedArtifactRevision(mission.id, contributions);
+  const emmett = findEmmettCapacity(contributions);
+  const paige = findPaigeVariants(contributions);
+  const emmettPayload = emmett ? unwrapSpecialistPayload(emmett) : {};
+  const paigePayload = paige ? unwrapSpecialistPayload(paige) : {};
+  const queueItems = Array.isArray(emmettPayload.queue?.items) ? emmettPayload.queue.items : [];
+  const frozenOutreachSequence = freezeOutreachSequenceForApproval(paigePayload.outreachSequence);
+
+  // SPEC-212: Validate message bindings before approval
+  const bindingValidation = validateProspectMessageBindings(emmettPayload);
+
+  return {
+    approved: true,
+    consumed: true,
+    decisionKind: OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL,
+    kind: OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL,
+    action: EXECUTION_APPROVAL_ACTION,
+    stage: STAGES.READY,
+    missionId: mission.id,
+    preparedArtifactRevision: revision,
+    maxContributionId: binding.maxContributionId,
+    paigeContributionId: binding.paigeContributionId,
+    emmettContributionId: binding.emmettContributionId,
+    queueCount: binding.queueCount,
+    governorOutcome: binding.governorOutcome,
+    plannedSendCount: queueItems.length,
+    approvedAt: input.approvedAt || nowIso(),
+    approvedBy: asText(input.approvedBy || input.operatorId) || 'operator',
+    command: asText(input.command || input.question) || null,
+    executionRequestId: input.executionRequestId || null,
+    transactionId: input.transactionId || null,
+    // SPEC-212: Include binding validation in approval payload
+    bindingValidation,
+    ...(input.dailyEnvelope ? { dailyEnvelope: input.dailyEnvelope } : {}),
+    ...(frozenOutreachSequence ? { outreachSequence: frozenOutreachSequence } : {}),
+  };
+}
+
+function buildExecutionReview(mission, contributions = []) {
+  const max = findMaxPrioritization(contributions);
+  const paige = findPaigeVariants(contributions);
+  const emmett = findEmmettCapacity(contributions);
+  const scout = findLatestScoutDiscovery(contributions);
+  const maxPayload = (max && max.payload) || {};
+  const paigePayload = paige ? unwrapSpecialistPayload(paige) : {};
+  const emmettPayload = emmett ? unwrapSpecialistPayload(emmett) : {};
+  const scoutPayload = (scout && scout.payload) || {};
+  const variant = (Array.isArray(paigePayload.variants) && paigePayload.variants[0]) || {};
+  const queue = emmettPayload.queue || {};
+  const queueItems = Array.isArray(queue.items) ? queue.items : [];
+  const capacity = emmettPayload.capacity || {};
+  const deliverability = emmettPayload.deliverability || emmettPayload.warmup || {};
+  const governor = emmettPayload.governor || {};
+  const rankedTargets = Array.isArray(maxPayload.rankedTargets)
+    ? maxPayload.rankedTargets
+    : Array.isArray(maxPayload.priorities)
+      ? maxPayload.priorities
+      : [];
+
+  const targets = rankedTargets.map((row, index) => ({
+    rank: row.rank != null ? row.rank : index + 1,
+    company: row.name || row.company || row.segment || null,
+    priorityReason: row.reason || row.fit || maxPayload.objectiveReason || null,
+    buyingSignals: row.signals || scoutPayload.buyingSignals || scoutPayload.signals || [],
+    scoutEvidence: scoutPayload.evidence || [],
+  }));
+
+  const blockers = [];
+  if (governor.outcome === 'pause' || governor.outcome === 'emergency') {
+    blockers.push(governor.reason || 'Deliverability governor paused sending.');
+  }
+  if (deliverability.status === 'warming' || deliverability.warmup === true) {
+    blockers.push('Domain warmup in progress.');
+  }
+
+  return {
+    spec: 'execution_review',
+    missionId: mission.id,
+    stage: mission.stage,
+    preparedArtifactRevision: computePreparedArtifactRevision(mission.id, contributions),
+    artifactBinding: computePreparedArtifactBinding(mission.id, contributions),
+    targets,
+    communication: {
+      subject: variant.subject || paigePayload.subjects?.[0] || null,
+      body: variant.body || null,
+      cta: variant.cta || paigePayload.cta || null,
+      selectedVariant: variant.label || 'Primary',
+      variantCount: Array.isArray(paigePayload.variants) ? paigePayload.variants.length : 0,
+      outreachSequence: (() => {
+        const steps = extractOutreachSequenceSteps(paigePayload);
+        if (!steps.length) return null;
+        return {
+          stepCount: steps.length,
+          nextStepDay: steps[1]?.day ?? null,
+          steps: steps.map(({ step, day, channel }) => ({ step, day, channel })),
+        };
+      })(),
+    },
+    infrastructure: {
+      queue: queueItems,
+      safeCapacity: capacity.recommended != null ? capacity.recommended : capacity.available,
+      timingRecommendation: emmettPayload.sendRecommendations || [],
+      deliverabilityStatus: deliverability.status || deliverability.warmupStatus || null,
+      governorOutcome: governor.outcome || null,
+      governorReason: governor.reason || null,
+      reputationWarnings: emmettPayload.reputationWarnings || deliverability.warnings || [],
+    },
+    decision: {
+      summary: 'Authorize external execution of the prepared outreach queue.',
+      plannedSendCount: queueItems.length,
+      onApproval: `Up to ${queueItems.length} prepared send(s) become eligible for provider execution.`,
+      blockers,
+      unknowns: blockers.length ? [] : (queueItems.length ? [] : ['No queue items prepared.']),
+    },
+  };
+}
+
+function buildPendingExecutionDecision(mission, contributions = []) {
+  return {
+    stage: STAGES.READY,
+    kind: OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL,
+    prompt: 'Authorize external execution of prepared outreach?',
+    description: 'Review prepared variants, queue, and deliverability before authorizing send.',
+    executionReview: buildExecutionReview(mission, contributions),
+  };
+}
+
+function canAdvertiseExecutionApproval(mission, contributions = [], extras = {}) {
+  if (!mission || mission.stage !== STAGES.READY) return false;
+  if (!isUpstreamArtifactChainCoherent(mission, contributions)) return false;
+  const { latestApproachDecision } = require('./AcquisitionApproach');
+  const approach = latestApproachDecision(contributions);
+  if (approach && approach.selected !== 'outbound' && approach.selected !== 'both') return false;
+  const paige = findPaigeVariants(contributions, mission);
+  const emmett = findEmmettCapacity(contributions, mission);
+  const paigeComplete = Boolean(paige) || extras.paigeComplete;
+  const emmettComplete = Boolean(emmett) || extras.emmettComplete;
+  if (!paigeComplete || !emmettComplete) return false;
+  const governor = emmett ? unwrapSpecialistPayload(emmett).governor : null;
+  const deliverabilityPaused = extras.deliverabilityPaused === true
+    || Boolean(governor && (governor.outcome === 'pause' || governor.outcome === 'emergency'));
+  if (deliverabilityPaused) return false;
+  if (isExecutionApproved(contributions, mission.id, extras)) return false;
+  return true;
+}
+
+module.exports = {
+  EXECUTION_APPROVAL_ACTION,
+  findLatestContribution,
+  findMaxPrioritization,
+  findPaigeVariants,
+  findEmmettCapacity,
+  computePreparedArtifactBinding,
+  computePreparedArtifactRevision,
+  validateProspectMessageBindings,
+  isExecutionApprovalContribution,
+  findExecutionApprovals,
+  findValidExecutionApproval,
+  isExecutionApproved,
+  buildExecutionApprovalPayload,
+  buildExecutionReview,
+  buildPendingExecutionDecision,
+  canAdvertiseExecutionApproval,
+};

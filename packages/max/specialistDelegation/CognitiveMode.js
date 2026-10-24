@@ -1,12 +1,25 @@
 'use strict';
 
 /**
- * SPEC-102 — operator cognitive-mode classification.
+ * SPEC-102 / SPEC-111 — operator cognitive-mode classification.
  *
  * Every question belongs primarily to one mode. Classification happens
  * before any specialist routing. Investigation verbs are not inferred
  * from topic words like "cleaning" or a prior Scout turn.
+ *
+ * SPEC-111 expands analytical modes: diagnosis, unknown analysis, risk,
+ * and progress are classified before recommendation or specialist paths.
  */
+
+const {
+  OPERATOR_INTENTS,
+  classifyNewAnalysisMode,
+  intentFromCognitiveMode,
+  looksLikeDiagnosis,
+  looksLikeUnknownAnalysis,
+  looksLikeRisk,
+  looksLikeProgress,
+} = require('../workspace/OperatorIntentRegistry');
 
 const COGNITIVE_MODES = Object.freeze({
   RETRIEVAL: 'retrieval',
@@ -16,6 +29,10 @@ const COGNITIVE_MODES = Object.freeze({
   RECOMMENDATION: 'recommendation',
   PLANNING: 'planning',
   EXECUTION: 'execution',
+  DIAGNOSIS: 'diagnosis',
+  UNKNOWN_ANALYSIS: 'unknown_analysis',
+  RISK: 'risk',
+  PROGRESS: 'progress',
   UNCLASSIFIED: 'unclassified',
 });
 
@@ -23,6 +40,10 @@ const NEVER_DELEGATE_MODES = Object.freeze([
   COGNITIVE_MODES.RETRIEVAL,
   COGNITIVE_MODES.EXPLANATION,
   COGNITIVE_MODES.REFLECTION,
+  COGNITIVE_MODES.DIAGNOSIS,
+  COGNITIVE_MODES.UNKNOWN_ANALYSIS,
+  COGNITIVE_MODES.RISK,
+  COGNITIVE_MODES.PROGRESS,
 ]);
 
 const SPECIALIST_NAMES =
@@ -51,7 +72,7 @@ const PLANNING_RE =
   /\b(help me build|create a (?:rollout )?plan|build campaign|rollout plan|create a campaign)\b/i;
 
 const RECOMMENDATION_RE =
-  /\b(what should we(?: do| focus| target| pursue)?|should we (?:target|pursue|go after|look at)|what(?:'s| is) next|what do you recommend)\b/i;
+  /\b(what should (?:we|i)(?: do| focus| prioritize| target| pursue)?|should (?:we|i) (?:target|pursue|go after|look at|focus|do next)|what(?:'s| is) next|what do you recommend|where is the (?:highest[- ]leverage|highest leverage)|what is (?:our|the|my) next (?:move|focus|step|priority))\b/i;
 
 const REFLECTION_RE =
   /\b(do you trust|what worries you|where are you uncertain|what are you (?:uncertain|unsure|worried)|what don'?t you (?:currently )?know|where are you unsure)\b/i;
@@ -81,6 +102,32 @@ const RETRIEVAL_RE = new RegExp(
     String.raw`\bwhat (?:prospects|leads) do we already have\b`,
     String.raw`\bwhat has happened so far\b`,
     String.raw`\bwhat have we already tried\b`,
+    String.raw`\bwhat have we (?:completed|done|finished|accomplished)(?: recently)?\b`,
+    String.raw`\brecently completed\b`,
+    String.raw`\bwhat outreach has (?:already )?(?:been )?sent\b`,
+    String.raw`\bwhat (?:emails?|mail|outreach) (?:has|have) (?:already )?(?:been )?(?:sent|mailed)\b`,
+  ].join('|'),
+  'i'
+);
+
+const SUMMARY_RE = new RegExp(
+  [
+    String.raw`\bhow(?:'s| is)\b.{0,80}\bdoing\b`,
+    String.raw`\bhow are we doing\b`,
+    String.raw`\bhow is (?:the )?(?:business|company|client|pipeline)\b`,
+    String.raw`\bstatus (?:update|of)\b.{0,40}\b(?:anchor|campaign|pipeline|business)\b`,
+  ].join('|'),
+  'i'
+);
+
+const COMPLETED_RETRIEVAL_RE = new RegExp(
+  [
+    String.raw`\bwhat have we (?:completed|done|finished|accomplished)(?: recently)?\b`,
+    String.raw`\bwhat(?:'s| is) (?:already )?(?:been )?(?:completed|done|finished) recently\b`,
+    String.raw`\brecently completed\b`,
+    String.raw`\bwhat outreach has (?:already )?(?:been )?sent\b`,
+    String.raw`\bwhat (?:has|have) already been sent\b`,
+    String.raw`\bwhat (?:emails?|mail|outreach) (?:has|have) (?:already )?(?:been )?(?:sent|mailed)\b`,
   ].join('|'),
   'i'
 );
@@ -105,6 +152,17 @@ function hasRecentSpecialistWork(input = {}) {
       envelope.lastSpecialistEvaluation ||
       envelope.acquisitionLoop
   );
+}
+
+function looksLikeClaimChallenge(question) {
+  try {
+    const challenge = require('../workspace/RecommendationClaimChallenge');
+    return (
+      challenge.isClaimChallenge(question) || challenge.isOperatorClaimCorrection(question)
+    );
+  } catch (_) {
+    return false;
+  }
 }
 
 function looksLikeExistingEvidenceRetrieval(question) {
@@ -146,105 +204,167 @@ function looksLikeExplanation(question) {
 }
 
 function looksLikeRetrieval(question) {
-  return RETRIEVAL_RE.test(String(question || ''));
+  const q = String(question || '');
+  return RETRIEVAL_RE.test(q) || COMPLETED_RETRIEVAL_RE.test(q);
+}
+
+function looksLikeCompletedRetrieval(question) {
+  return COMPLETED_RETRIEVAL_RE.test(String(question || ''));
+}
+
+function looksLikeSummary(question) {
+  const q = String(question || '');
+  if (!q.trim()) return false;
+  if (looksLikeRecommendation(q)) return false;
+  if (looksLikeClaimChallenge(q)) return false;
+  if (looksLikeInvestigation(q)) return false;
+  return SUMMARY_RE.test(q);
+}
+
+function modeResult(kind, via, extras = {}) {
+  const result = {
+    kind,
+    via,
+    explicitInvestigation: extras.explicitInvestigation === true,
+    requiresOperatingRetrieval: extras.requiresOperatingRetrieval === true,
+  };
+  const intent =
+    extras.intent ||
+    intentFromCognitiveMode(result) ||
+    (kind === COGNITIVE_MODES.DIAGNOSIS
+      ? OPERATOR_INTENTS.DIAGNOSIS
+      : kind === COGNITIVE_MODES.UNKNOWN_ANALYSIS
+        ? OPERATOR_INTENTS.UNKNOWN_ANALYSIS
+        : kind === COGNITIVE_MODES.RISK
+          ? OPERATOR_INTENTS.RISK
+          : kind === COGNITIVE_MODES.PROGRESS
+            ? OPERATOR_INTENTS.PROGRESS
+            : null);
+  result.intent = intent || null;
+  result.analysisMode = extras.analysisMode || intent || null;
+  return result;
 }
 
 /**
  * Classify the operator's primary cognitive mode.
+ * Recommendation and operating retrieval are not mutually exclusive:
+ * a turn may have primaryIntent=recommendation with a retrieval requirement.
  * @param {string} question
  * @param {object} [input]
- * @returns {{ kind: string, via: string, explicitInvestigation: boolean }}
+ * @returns {{ kind: string, via: string, explicitInvestigation: boolean, requiresOperatingRetrieval: boolean }}
  */
+function isExecutionInspectionTurn(question) {
+  try {
+    const { isExecutionInspectionQuestion } = require('../workspace/ExecutionInspectionRegistry');
+    return isExecutionInspectionQuestion(question);
+  } catch (_) {
+    return false;
+  }
+}
+
 function classifyCognitiveMode(question, input = {}) {
   const q = String(question || '').trim();
   if (!q) {
-    return {
-      kind: COGNITIVE_MODES.RETRIEVAL,
-      via: 'empty',
-      explicitInvestigation: false,
-    };
+    return modeResult(COGNITIVE_MODES.RETRIEVAL, 'empty');
+  }
+
+  if (isExecutionInspectionTurn(q)) {
+    return modeResult(COGNITIVE_MODES.UNCLASSIFIED, 'execution_inspection');
   }
 
   if (looksLikeExecution(q)) {
-    return {
-      kind: COGNITIVE_MODES.EXECUTION,
-      via: 'execution_verb',
-      explicitInvestigation: false,
-    };
+    return modeResult(COGNITIVE_MODES.EXECUTION, 'execution_verb');
   }
 
-  if (looksLikeExistingEvidenceRetrieval(q)) {
-    return {
-      kind: COGNITIVE_MODES.RETRIEVAL,
-      via: 'operating_evidence',
-      explicitInvestigation: false,
-    };
+  if (looksLikeClaimChallenge(q)) {
+    return modeResult(COGNITIVE_MODES.EXPLANATION, 'claim_challenge', {
+      requiresOperatingRetrieval: true,
+      intent: OPERATOR_INTENTS.CHALLENGE,
+      analysisMode: OPERATOR_INTENTS.CHALLENGE,
+    });
+  }
+
+  const analysis = classifyNewAnalysisMode(q);
+  if (analysis) {
+    const kind =
+      analysis.intent === OPERATOR_INTENTS.DIAGNOSIS
+        ? COGNITIVE_MODES.DIAGNOSIS
+        : analysis.intent === OPERATOR_INTENTS.UNKNOWN_ANALYSIS
+          ? COGNITIVE_MODES.UNKNOWN_ANALYSIS
+          : analysis.intent === OPERATOR_INTENTS.RISK
+            ? COGNITIVE_MODES.RISK
+            : COGNITIVE_MODES.PROGRESS;
+    return modeResult(kind, analysis.via, {
+      requiresOperatingRetrieval: true,
+      intent: analysis.intent,
+      analysisMode: analysis.analysisMode,
+    });
+  }
+
+  const operatingRetrieval = looksLikeExistingEvidenceRetrieval(q);
+  const recommendation = looksLikeRecommendation(q);
+
+  if (operatingRetrieval && recommendation) {
+    return modeResult(COGNITIVE_MODES.RECOMMENDATION, 'recommendation', {
+      requiresOperatingRetrieval: true,
+    });
+  }
+
+  if (operatingRetrieval) {
+    return modeResult(COGNITIVE_MODES.RETRIEVAL, 'operating_evidence', {
+      requiresOperatingRetrieval: true,
+    });
   }
 
   if (looksLikeInvestigation(q)) {
-    return {
-      kind: COGNITIVE_MODES.INVESTIGATION,
-      via: 'investigation_verb',
+    return modeResult(COGNITIVE_MODES.INVESTIGATION, 'investigation_verb', {
       explicitInvestigation: true,
-    };
+      intent: OPERATOR_INTENTS.INVESTIGATION,
+      analysisMode: OPERATOR_INTENTS.INVESTIGATION,
+    });
   }
 
   if (looksLikePlanning(q)) {
-    return {
-      kind: COGNITIVE_MODES.PLANNING,
-      via: 'planning',
-      explicitInvestigation: false,
-    };
+    return modeResult(COGNITIVE_MODES.PLANNING, 'planning');
   }
 
-  if (looksLikeRecommendation(q)) {
-    return {
-      kind: COGNITIVE_MODES.RECOMMENDATION,
-      via: 'recommendation',
-      explicitInvestigation: false,
-    };
+  if (recommendation) {
+    return modeResult(COGNITIVE_MODES.RECOMMENDATION, 'recommendation', {
+      intent: OPERATOR_INTENTS.RECOMMENDATION,
+      analysisMode: OPERATOR_INTENTS.RECOMMENDATION,
+    });
   }
 
   if (looksLikeReflection(q)) {
-    return {
-      kind: COGNITIVE_MODES.REFLECTION,
-      via: 'reflection',
-      explicitInvestigation: false,
-    };
+    return modeResult(COGNITIVE_MODES.REFLECTION, 'reflection');
   }
 
   if (looksLikeExplanation(q)) {
-    return {
-      kind: COGNITIVE_MODES.EXPLANATION,
-      via: 'explanation',
-      explicitInvestigation: false,
-    };
+    return modeResult(COGNITIVE_MODES.EXPLANATION, 'explanation');
   }
 
   if (looksLikeRetrieval(q)) {
-    return {
-      kind: COGNITIVE_MODES.RETRIEVAL,
-      via: 'retrieval',
-      explicitInvestigation: false,
-    };
+    return modeResult(COGNITIVE_MODES.RETRIEVAL, 'retrieval', {
+      requiresOperatingRetrieval: looksLikeCompletedRetrieval(q) || looksLikeExistingEvidenceRetrieval(q),
+    });
+  }
+
+  if (looksLikeSummary(q)) {
+    return modeResult(COGNITIVE_MODES.RETRIEVAL, 'summary', {
+      requiresOperatingRetrieval: true,
+      intent: OPERATOR_INTENTS.SUMMARY,
+      analysisMode: OPERATOR_INTENTS.SUMMARY,
+    });
   }
 
   if (hasRecentSpecialistWork(input)) {
     const tokenCount = q.split(/\s+/).filter(Boolean).length;
     if (WH_RETRIEVAL_PREFIX_RE.test(q) || tokenCount <= 4) {
-      return {
-        kind: COGNITIVE_MODES.RETRIEVAL,
-        via: 'conversation_continuity',
-        explicitInvestigation: false,
-      };
+      return modeResult(COGNITIVE_MODES.RETRIEVAL, 'conversation_continuity');
     }
   }
 
-  return {
-    kind: COGNITIVE_MODES.UNCLASSIFIED,
-    via: 'unclassified',
-    explicitInvestigation: false,
-  };
+  return modeResult(COGNITIVE_MODES.UNCLASSIFIED, 'unclassified');
 }
 
 function forbidsSpecialistDelegation(mode) {
@@ -262,6 +382,8 @@ module.exports = {
   REFLECTION_RE,
   EXPLANATION_RE,
   RETRIEVAL_RE,
+  SUMMARY_RE,
+  COMPLETED_RETRIEVAL_RE,
   classifyCognitiveMode,
   looksLikeInvestigation,
   looksLikeExecution,
@@ -270,7 +392,14 @@ module.exports = {
   looksLikeReflection,
   looksLikeExplanation,
   looksLikeRetrieval,
+  looksLikeSummary,
+  looksLikeCompletedRetrieval,
   looksLikeExistingEvidenceRetrieval,
+  looksLikeClaimChallenge,
+  looksLikeDiagnosis,
+  looksLikeUnknownAnalysis,
+  looksLikeRisk,
+  looksLikeProgress,
   hasRecentSpecialistWork,
   forbidsSpecialistDelegation,
 };

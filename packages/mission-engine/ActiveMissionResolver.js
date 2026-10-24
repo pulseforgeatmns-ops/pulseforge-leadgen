@@ -21,6 +21,7 @@ const {
   activeMissionResolverEnabled,
   newId,
 } = require('./types');
+const { executeCurrentStage } = require('./StageExecutionOrchestrator');
 
 class ActiveMissionResolver {
   /**
@@ -388,6 +389,57 @@ class ActiveMissionResolver {
         route: { kind: 'mission', missionType: active.type, reason: 'active_modify' },
         mission: modified.mission,
         modification: modified,
+        reason,
+      };
+    }
+
+    if (classification === MESSAGE_CLASS.EXECUTE_STAGE) {
+      const execution = await executeCurrentStage({
+        mission: active,
+        missionEngine: this._engine,
+        operatorId: input.operatorId,
+        message,
+      });
+
+      const mission = execution.result.mission || active;
+
+      await this._engine.store.appendAudit({
+        missionId: mission.id,
+        kind: execution.fallback
+          ? AUDIT_KINDS.STAGE_EXECUTOR_FALLBACK
+          : AUDIT_KINDS.STAGE_EXECUTED,
+        payload: {
+          stage: execution.stage,
+          executorId: execution.executorId,
+          selectionReason: execution.selectionReason,
+          fallback: execution.fallback,
+          outcome: execution.result.outcome,
+          scoutPayload: execution.result.scoutPayload || null,
+          summary: execution.result.summary || null,
+          message,
+        },
+      });
+
+      this._recordResolution({
+        sessionId: input.sessionId,
+        missionId: mission.id,
+        message,
+        classification,
+        resolutionPath: RESOLUTION_PATHS.EXECUTE_STAGE,
+        reason,
+      });
+
+      return {
+        action: execution.fallback ? 'stage_fallback' : 'executed',
+        classification,
+        resolutionPath: RESOLUTION_PATHS.EXECUTE_STAGE,
+        route: {
+          kind: 'mission',
+          missionType: mission.type,
+          reason: execution.fallback ? 'stage_executor_fallback' : 'stage_executed',
+        },
+        mission,
+        stageExecution: execution,
         reason,
       };
     }

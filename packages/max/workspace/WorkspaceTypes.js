@@ -21,11 +21,12 @@ const SOURCE_KEYS = Object.freeze([
   'memory',
   'policy',
   'knowledge',
+  'missionState',
 ]);
 
 /**
  * Empty sourcesUsed map (all false).
- * @returns {{ briefing: boolean, reasoning: boolean, memory: boolean, policy: boolean, knowledge: boolean }}
+ * @returns {{ briefing: boolean, reasoning: boolean, memory: boolean, policy: boolean, knowledge: boolean, missionState: boolean }}
  */
 function emptySourcesUsed() {
   return {
@@ -34,6 +35,7 @@ function emptySourcesUsed() {
     memory: false,
     policy: false,
     knowledge: false,
+    missionState: false,
   };
 }
 
@@ -269,6 +271,80 @@ function buildResponseMetadata(partial = {}) {
   if (partial.cognitiveMode != null) meta.cognitiveMode = String(partial.cognitiveMode);
   if (partial.specialistDelegated === false) meta.specialistDelegated = false;
   if (partial.operatingEvidenceRetrieval === true) meta.operatingEvidenceRetrieval = true;
+  if (partial.evidenceGroundedRecommendation === true) {
+    meta.evidenceGroundedRecommendation = true;
+  }
+  if (partial.claimChallenge === true) meta.claimChallenge = true;
+  if (partial.claimVerdict != null) meta.claimVerdict = String(partial.claimVerdict);
+  if (partial.executed === false) meta.executed = false;
+  if (partial.acquisitionMission === true) meta.acquisitionMission = true;
+  if (partial.acquisitionOwnership === true) meta.acquisitionOwnership = true;
+  if (partial.missionRuntime != null) meta.missionRuntime = String(partial.missionRuntime);
+  if (partial.presentationContract != null) {
+    meta.presentationContract = String(partial.presentationContract);
+  }
+  if (partial.missionCreated === true) meta.missionCreated = true;
+  if (partial.missionResumed === true) meta.missionResumed = true;
+  if (partial.missionInspection === true) meta.missionInspection = true;
+  if (partial.inspectionProperty != null) {
+    meta.inspectionProperty = String(partial.inspectionProperty);
+  }
+  if (partial.inspectionPipeline != null) {
+    meta.inspectionPipeline = String(partial.inspectionPipeline);
+  }
+  if (partial.invented === true) meta.invented = true;
+  if (partial.invented === false) meta.invented = false;
+  if (partial.missionCommunication === true) meta.missionCommunication = true;
+  if (partial.missionCommunicationPayload != null) {
+    meta.missionCommunicationPayload = partial.missionCommunicationPayload;
+  }
+  if (partial.reasoningEvidence != null) {
+    meta.reasoningEvidence = partial.reasoningEvidence;
+  }
+  if (partial.showReasoningDisclosure === true) {
+    meta.showReasoningDisclosure = true;
+  }
+  if (partial.businessIntelligenceUsed === true) {
+    meta.businessIntelligenceUsed = true;
+  }
+  if (partial.businessIntelligenceUsed === false) {
+    meta.businessIntelligenceUsed = false;
+  }
+  if (partial.identityConversation === true) meta.identityConversation = true;
+  if (partial.operatingModelReflection === true) meta.operatingModelReflection = true;
+  if (partial.operatingModelReflection === false) meta.operatingModelReflection = false;
+  if (partial.conceptGraphReasoning === true) meta.conceptGraphReasoning = true;
+  if (partial.conceptGraphReasoning === false) meta.conceptGraphReasoning = false;
+  if (Array.isArray(partial.activeConcepts) && partial.activeConcepts.length) {
+    meta.activeConcepts = partial.activeConcepts.map(String);
+  }
+  if (partial.operatingModelReasoning != null) {
+    meta.operatingModelReasoning = partial.operatingModelReasoning;
+  }
+  if (partial.underlyingIntent != null) {
+    meta.underlyingIntent = String(partial.underlyingIntent);
+  }
+  if (partial.reflectiveCognition === true) meta.reflectiveCognition = true;
+  if (partial.conversationLayer === true) meta.conversationLayer = true;
+  if (partial.conversationSubject != null) {
+    meta.conversationSubject = String(partial.conversationSubject);
+  }
+  if (partial.conversationIntent != null) {
+    meta.conversationIntent = String(partial.conversationIntent);
+  }
+  if (partial.readOnlyCognition === true) meta.readOnlyCognition = true;
+  if (partial.sessionInspection === true) meta.sessionInspection = true;
+  if (partial.sessionConfiguration === true) meta.sessionConfiguration = true;
+  if (partial.sessionStateRead === true) meta.sessionStateRead = true;
+  if (partial.sessionStateEvidence === true) meta.sessionStateEvidence = true;
+  // SPEC-152: execution state introspection metadata
+  if (partial.executionInspection === true) meta.executionInspection = true;
+  if (partial.executionStateRead === true) meta.executionStateRead = true;
+  if (partial.executionState != null) meta.executionState = partial.executionState;
+  // SPEC-167: objective resolution inspection
+  if (partial.objectiveResolutionRead === true) meta.objectiveResolutionRead = true;
+  if (partial.objectiveResolution != null) meta.objectiveResolution = partial.objectiveResolution;
+  if (partial.inspectionMode != null) meta.inspectionMode = String(partial.inspectionMode);
   return meta;
 }
 

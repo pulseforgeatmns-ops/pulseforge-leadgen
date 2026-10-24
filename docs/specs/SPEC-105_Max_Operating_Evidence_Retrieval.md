@@ -65,7 +65,7 @@ Campaign layers stay distinct: intent, execution, observation, outcome, learning
 
 ## Out of Scope
 
-- New persistence for physical mail, Yelp, walkthrough events, campaign learning, or operator-reported events
+- New persistence for physical mail, Yelp, walkthrough events, or campaign learning (operator-reported events are SPEC-106)
 - CIE semantic contamination fixes
 - A parallel Operating Intelligence Engine
 

@@ -384,7 +384,7 @@ function resolveStore(opts = {}) {
   return createMemoryStore();
 }
 
-function scheduleOperatorContextRebuildForObjective(objective) {
+function scheduleOperatorContextRebuildForObjective(objective, opts = {}) {
   if (!objective) return;
   const clientId =
     objective.clientId != null
@@ -395,7 +395,18 @@ function scheduleOperatorContextRebuildForObjective(objective) {
   if (clientId == null) return;
   try {
     const { onOperatorObjectiveChanged } = require('./operatorContextEvents');
-    onOperatorObjectiveChanged(clientId, { objectiveId: objective.id });
+    // Only dependencies may cross this seam. Event identity and metadata belong
+    // to the saved objective, never to caller-supplied rebuild options.
+    const dependencies = {};
+    const supplied = opts.operatorContextOpts || {};
+    for (const key of ['store', 'objectiveService', 'objectiveOpts', 'cieService', 'cieOpts', 'listMissions', 'loadOutcomes']) {
+      if (Object.prototype.hasOwnProperty.call(supplied, key)) dependencies[key] = supplied[key];
+    }
+    onOperatorObjectiveChanged(
+      clientId,
+      { objectiveId: objective.id },
+      dependencies
+    );
   } catch (_) {
     /* fail soft */
   }
@@ -463,7 +474,7 @@ async function createOperatorObjective(input = {}, opts = {}) {
 
   const store = resolveStore(opts);
   const saved = await store.insert(row);
-  scheduleOperatorContextRebuildForObjective(saved);
+  scheduleOperatorContextRebuildForObjective(saved, opts);
   return toPublicObjective(saved);
 }
 
@@ -513,7 +524,7 @@ async function updateOperatorObjective(id, patch = {}, opts = {}) {
   next.updatedAt = nowIso();
 
   const saved = await store.update(next);
-  scheduleOperatorContextRebuildForObjective(saved);
+  scheduleOperatorContextRebuildForObjective(saved, opts);
   return toPublicObjective(saved);
 }
 
@@ -656,6 +667,31 @@ function resolveObjectiveReference(input = {}) {
 /* Intent detection (deterministic, fail-closed)                               */
 /* -------------------------------------------------------------------------- */
 
+/** SPEC-126 — execution verbs block objective persistence. */
+const OBJECTIVE_EXECUTION_VERB_RE =
+  /\b(create|resume|begin|operate|execute|manage|run|continue|complete)\b/i;
+
+function objectiveHasExecutionLanguage(text) {
+  return OBJECTIVE_EXECUTION_VERB_RE.test(asText(text).toLowerCase());
+}
+
+/**
+ * SPEC-126 — explicit persistence phrasing only.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function isExplicitObjectivePersistenceRequest(text) {
+  const lower = asText(text).toLowerCase();
+  if (!lower) return false;
+  return (
+    /\bremember\s+my\s+goal\b/.test(lower) ||
+    /\bsave\s+(?:this\s+)?(?:as\s+)?(?:an\s+)?(?:active\s+)?objective\b/.test(lower) ||
+    /\btrack\s+(?:this\s+)?objective\b/.test(lower) ||
+    /\bmake\s+this\s+my\s+current\s+priority\b/.test(lower) ||
+    /\bpersist\s+(?:this\s+)?(?:as\s+)?(?:an\s+)?(?:active\s+)?objective\b/.test(lower)
+  );
+}
+
 /**
  * Strong cues that the operator is establishing a durable objective.
  * Weak / speculative language returns null (do not persist).
@@ -667,6 +703,9 @@ function detectObjectiveEstablishment(text) {
   const raw = asText(text);
   if (!raw) return null;
   const lower = raw.toLowerCase();
+
+  // SPEC-126 — execution requests never persist objectives.
+  if (objectiveHasExecutionLanguage(raw)) return null;
 
   // Explicitly reject weak speculation
   if (
@@ -680,6 +719,9 @@ function detectObjectiveEstablishment(text) {
   }
 
   const establishCue =
+    /\bremember\s+my\s+goal\b/.test(lower) ||
+    /\btrack\s+(?:this\s+)?objective\b/.test(lower) ||
+    /\bmake\s+this\s+my\s+current\s+priority\b/.test(lower) ||
     /\bour\s+objective\s+is\b/.test(lower) ||
     /\bi\s+want\s+you\s+to\s+own\b/.test(lower) ||
     /\bmake\s+this\s+(an\s+)?active\s+priority\b/.test(lower) ||
@@ -1152,7 +1194,7 @@ async function ensurePublicMaxLaunchObjective(opts = {}) {
       },
       createdBy: 'spec_095_seed',
     },
-    { store }
+    { ...opts, store }
   );
 }
 
@@ -1169,6 +1211,7 @@ module.exports = {
   getObjectiveById,
   resolveObjectiveReference,
   detectObjectiveEstablishment,
+  isExplicitObjectivePersistenceRequest,
   detectObjectiveLifecycleChange,
   detectObjectiveUpdate,
   looksLikeObjectiveStatusRequest,

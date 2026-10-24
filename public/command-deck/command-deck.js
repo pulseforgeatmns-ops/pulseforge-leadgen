@@ -33,6 +33,8 @@
 
   /** @type {object|null} */
   let currentModel = null;
+  // Invalidate pending deck/live responses when a newer load or tenant wins.
+  let deckLoadGeneration = 0;
   /** @type {string|null} */
   let askContext = 'command_deck';
   /** @type {string|null} */
@@ -54,6 +56,94 @@
   /** SPEC-102 — prevent duplicate Max Workspace asks during reveal. */
   /** @type {boolean} */
   let workspaceAskInFlight = false;
+  let mxPendingComposerFiles = [];
+  let mxComposerMemory = null;
+  let mxComposerConversationId = null;
+  const spreadsheetReview = window.PulseforgeSpreadsheetReview.create({
+    fetch: (...args) => fetch(...args),
+    host: () => document.getElementById('mxSpreadsheetProposal'),
+    scopeHost: () => document.getElementById('mxSpreadsheetScope'),
+    onMessage: text => appendSystemMessage(text),
+    onReviewAccounts: owner => { closeWorkspace(); window.PulseforgeAccountReview?.open(owner); },
+    getTenantId: () => window.PulseforgeTenantCoordinator?.getActiveClientId(),
+  });
+
+  // Do not restore cross-tenant composer context from unscoped browser storage.
+  function loadMxComposerMemory() {}
+  function saveMxComposerMemory(mem) { mxComposerMemory = mem || null; }
+
+  function renderMxComposerChips() {
+    const host = document.getElementById('mxComposerChips');
+    if (!host) return;
+    if (!mxPendingComposerFiles.length) {
+      host.hidden = true;
+      host.innerHTML = '';
+      return;
+    }
+    host.hidden = false;
+    host.innerHTML = mxPendingComposerFiles
+      .map(
+        (entry, idx) =>
+          `<span class="mx-composer-chip">${escapeHtml(entry.file.name)} <button type="button" data-mx-remove="${idx}" style="border:none;background:none;color:inherit;cursor:pointer">×</button></span>`
+      )
+      .join('');
+    host.querySelectorAll('[data-mx-remove]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        mxPendingComposerFiles.splice(Number(btn.getAttribute('data-mx-remove')), 1);
+        renderMxComposerChips();
+      });
+    });
+  }
+
+  function inferMxAttachmentType(file) {
+    const name = (file.name || '').toLowerCase();
+    if (/\.(xlsx|xls|csv)$/.test(name)) return 'spreadsheet';
+    if (/\.(png|jpe?g|webp)$/.test(name) || (file.type || '').startsWith('image/')) return 'image';
+    if ((file.type || '').startsWith('audio/')) return 'voice';
+    return 'document';
+  }
+
+  async function submitMxComposer(question, { confirm = false } = {}) {
+    loadMxComposerMemory();
+    if (!mxComposerConversationId) {
+      mxComposerConversationId = `mx-${Date.now()}`;
+    }
+    const form = new FormData();
+    const isSpreadsheet = mxPendingComposerFiles.some(entry => inferMxAttachmentType(entry.file) === 'spreadsheet');
+    if (isSpreadsheet) await spreadsheetReview.appendScope(form);
+    const reviewEpoch = spreadsheetReview.token();
+    form.append('text', question || '');
+    form.append('conversation_id', mxComposerConversationId);
+    if (confirm) form.append('confirm', 'true');
+    if (mxComposerMemory) form.append('conversation_memory', JSON.stringify(mxComposerMemory));
+    mxPendingComposerFiles.forEach((entry) => form.append('files', entry.file, entry.file.name));
+    const res = await fetch('/api/v1/max/composer', {
+      method: 'POST',
+      credentials: 'same-origin',
+      body: form,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.message || data.error || 'Composer failed');
+    }
+    if (isSpreadsheet && reviewEpoch !== spreadsheetReview.token()) throw new Error('Review scope changed; upload again in this workspace.');
+    if (data.conversation_memory && !data.spreadsheet_proposal) saveMxComposerMemory(data.conversation_memory);
+    spreadsheetReview.accept(data, reviewEpoch);
+    return data;
+  }
+
+  function mxComposerReplyText(data) {
+    if (data.operational_response) return data.operational_response;
+    if (data.batch_preview?.summary) return data.batch_preview.summary;
+    if (data.understanding_preview && !/stay curious/i.test(data.understanding_preview)) {
+      return data.understanding_preview;
+    }
+    if (data.understanding_preview) return data.understanding_preview;
+    if (data.clarification_required) return data.clarification_required;
+    if (typeof data.receipt === 'string') return data.receipt;
+    if (data.receipt?.title) return data.receipt.title;
+    return 'Update processed.';
+  }
   /** SPEC-102 — stick-to-bottom follower for progressive reveal. */
   /** @type {ReturnType<typeof window.MaxInteractionCadence.createScrollFollow>|null} */
   let mxScrollFollow = null;
@@ -71,6 +161,7 @@
     operatorLayout: document.getElementById('cdOperatorLayout'),
     commandRail: document.getElementById('cdCommandRail'),
     todayChanges: document.getElementById('cdTodayChanges'),
+    googleAdsBrief: document.getElementById('cdGoogleAdsBrief'),
     needsJake: document.getElementById('cdNeedsJake'),
     mikeNext: document.getElementById('cdMikeNext'),
     aoDrillDown: document.getElementById('cdAoDrillDown'),
@@ -306,6 +397,26 @@
    * Fillable verification table field mutations must not show as Prospect List Detected.
    * @param {string} text
    */
+  function looksLikeProspectingCriteriaDisplay(text) {
+    const raw = String(text || '').trim();
+    if (!raw) return false;
+    if (
+      /\bcompany\s+name\b[\s\S]{0,80}\b(?:website|address|phone)\b/i.test(raw)
+    ) {
+      return false;
+    }
+    const hasDecision =
+      /\b(?:\bicp\b|prospecting criteria|scoring rule|controlled batch|refining anchor)\b/i.test(
+        raw
+      ) || /^\s*scout\s*:\s*update\b/im.test(raw);
+    if (!hasDecision) return false;
+    return (
+      /\b(?:daycares?|schools?|industrial|property managers?|warehouses?|manufacturers?)\b/i.test(
+        raw
+      ) || /\b(?:first\s+)?controlled\s+batch\b/i.test(raw)
+    );
+  }
+
   function detectProspectListDisplay(text) {
     const raw = String(text || '').replace(/^\uFEFF/, '');
     if (!raw.trim()) return null;
@@ -314,6 +425,7 @@
     // field mutations, and readiness reassessment.
     if (looksLikeFillableTableMutationDisplay(raw)) return null;
     if (looksLikeFillableVerificationTablePasteDisplay(raw)) return null;
+    if (looksLikeProspectingCriteriaDisplay(raw)) return null;
 
     const lines = raw.split(/\r?\n/);
     let start = -1;
@@ -1548,11 +1660,34 @@
     return CARD_TYPE_LABELS[type] || String(type || 'Intelligence');
   }
 
+  function activeDeckTenantId() {
+    const value = window.PulseforgeTenantCoordinator?.getActiveClientId?.()
+      ?? window.PulseforgeShell?.activeClientId ?? window.PulseforgeShell?.context?.active_client_id;
+    return /^[1-9]\d*$/.test(String(value)) ? String(value) : null;
+  }
+
+  function deckMatchesActiveTenant(model) {
+    const active = activeDeckTenantId();
+    return active == null || String(tenantIdFromModel(model)) === active;
+  }
+
+  function withoutCachedClarity(model) {
+    if (!model?.livingBrief) return model;
+    const livingBrief = { ...model.livingBrief };
+    delete livingBrief.clarity;
+    return { ...model, livingBrief };
+  }
+
   function readCache() {
     try {
       const raw = sessionStorage.getItem(CACHE_KEY);
       if (!raw) return null;
-      return JSON.parse(raw);
+      const cached = JSON.parse(raw);
+      // Scrub older cache entries too. Source evidence is never offline fallback.
+      cached.model = withoutCachedClarity(cached.model);
+      sessionStorage.setItem(CACHE_KEY, JSON.stringify(cached));
+      if (!activeDeckTenantId() || !deckMatchesActiveTenant(cached.model)) return null;
+      return cached;
     } catch (_err) {
       return null;
     }
@@ -1564,7 +1699,7 @@
         CACHE_KEY,
         JSON.stringify({
           savedAt: new Date().toISOString(),
-          model,
+          model: withoutCachedClarity(model),
         })
       );
     } catch (_err) {
@@ -1595,6 +1730,7 @@
   }
 
   function clearSections() {
+    window.LivingCommand?.clear();
     document.body.classList.remove('cd-operator-mode', 'cd-living-deck');
     if (window.SpatialDeck) window.SpatialDeck.clear();
     for (const key of [
@@ -1603,6 +1739,7 @@
       'operatorLayout',
       'commandRail',
       'todayChanges',
+      'googleAdsBrief',
       'needsJake',
       'mikeNext',
       'aoDrillDown',
@@ -1640,6 +1777,7 @@
   }
 
   function showError(options = {}) {
+    window.LivingCommand?.unavailable();
     const hasCache = Boolean(readCache() && readCache().model);
     els.error.hidden = false;
     els.error.innerHTML = `
@@ -1907,6 +2045,36 @@
     `;
     els.todayChanges.hidden = false;
 
+    const gads = ob.googleAds;
+    if (els.googleAdsBrief && gads) {
+      const warnBlock = (() => {
+        const items = [...(gads.blockers || []), ...(gads.warnings || [])].filter(Boolean);
+        return items.length ? items.map((w) => escapeHtml(w)).join('; ') : 'none';
+      })();
+      const costPerConv = gads.costPerConversion == null
+        ? '—'
+        : `$${Number(gads.costPerConversion).toFixed(2)}`;
+      els.googleAdsBrief.innerHTML = `
+        <p class="cd-kicker" id="cdGoogleAdsHeading">${escapeHtml(gads.title || 'Paid Acquisition — Google Ads')}</p>
+        <dl class="cd-gads-metrics">
+          <div><dt>Status</dt><dd>${escapeHtml(gads.accountStatus || 'UNKNOWN')}</dd></div>
+          <div><dt>Spend</dt><dd>$${Number(gads.spend || 0).toFixed(2)}</dd></div>
+          <div><dt>Impressions</dt><dd>${escapeHtml(String(gads.impressions ?? 0))}</dd></div>
+          <div><dt>Clicks</dt><dd>${escapeHtml(String(gads.clicks ?? 0))}</dd></div>
+          <div><dt>CTR</dt><dd>${Number(gads.ctr || 0).toFixed(2)}%</dd></div>
+          <div><dt>Conversions</dt><dd>${escapeHtml(String(gads.conversions ?? 0))}</dd></div>
+          <div><dt>Cost / conversion</dt><dd>${costPerConv}</dd></div>
+          <div><dt>Active campaigns</dt><dd>${escapeHtml(String(gads.activeCampaignCount ?? 0))}</dd></div>
+          <div class="cd-gads-warn"><dt>Warnings/blockers</dt><dd>${warnBlock}</dd></div>
+        </dl>
+        <p class="cd-gads-action-label">Recommended next action:</p>
+        <p class="cd-gads-action">${escapeHtml(gads.recommendedNextAction || '')}</p>
+      `;
+      els.googleAdsBrief.hidden = false;
+    } else if (els.googleAdsBrief) {
+      els.googleAdsBrief.hidden = true;
+    }
+
     els.needsJake.innerHTML = `
       <p class="cd-kicker" id="cdNeedsJakeHeading">What Needs Jake</p>
       ${renderBriefList(ob.jakeActions || [], 'No Jake actions pending — monitor the route and warm opportunities.')}
@@ -2085,7 +2253,10 @@
               <button type="button" class="cd-btn cd-btn-ghost" data-cd-action-type="${
                 ACTION_TYPES.OPEN_MISSION
               }" data-cd-action-payload="${escapeHtml(
-                JSON.stringify({ missionId: m.id })
+                JSON.stringify({
+                  missionId: m.id,
+                  runtime: m.runtime === 'AMO' ? 'AMO' : 'SPEC-022',
+                })
               )}">Expand</button>
             </div>
           </article>`;
@@ -2425,7 +2596,8 @@
     }
     if (type === ACTION_TYPES.OPEN_MISSION || type === 'review_mission') {
       const missionId = payload && payload.missionId;
-      if (missionId) openMissionWorkspace(missionId);
+      const runtime = payload && payload.runtime;
+      if (missionId) openMissionWorkspace(missionId, runtime);
       return;
     }
     // dismiss / snooze — presentation acknowledgement + operator learning
@@ -2715,7 +2887,8 @@
       : page.replace(/-/g, ' ');
   }
 
-  function closeWorkspace() {
+  function closeWorkspace(preserveNavigation = false) {
+    if (!preserveNavigation) window.PulseforgeReviewNavigation?.invalidate();
     if (!els.workspace || els.workspace.hidden) return;
     els.workspace.hidden = true;
     document.body.style.overflow = '';
@@ -3354,8 +3527,13 @@
     bindReviewQueueControls();
   }
 
-  async function openMissionWorkspace(missionId) {
+  async function openMissionWorkspace(missionId, runtime) {
     if (!els.missionWorkspace || !missionId) return;
+    if (runtime === 'AMO') {
+      window.location.href =
+        '/acquisition-missions?mission=' + encodeURIComponent(missionId);
+      return;
+    }
     try {
       const data = await apiRequest(`/api/v1/missions/${encodeURIComponent(missionId)}`);
       const mission = data.mission || {};
@@ -4126,6 +4304,67 @@
     scrollMxThread();
   }
 
+  const REASONING_MARKER = '▼ Show reasoning';
+  const REASONING_EXPANDED_MARKER = '▲ Hide reasoning';
+
+  function stripReasoningMarker(prose) {
+    const text = String(prose || '');
+    return text
+      .replace(new RegExp(`\\n?${REASONING_EXPANDED_MARKER}[\\s\\S]*$`), '')
+      .replace(new RegExp(`\\n?${REASONING_MARKER}\\s*$`), '')
+      .trim();
+  }
+
+  function renderReasoningDisclosure(reasoningEvidence) {
+    if (!reasoningEvidence || typeof reasoningEvidence !== 'object') return '';
+    const sections = [];
+    if (Array.isArray(reasoningEvidence.known) && reasoningEvidence.known.length) {
+      sections.push(
+        `<div class="mx-reasoning-group"><h4>Known</h4><ul>${reasoningEvidence.known
+          .map((item) => `<li>${escapeHtml(item)}</li>`)
+          .join('')}</ul></div>`
+      );
+    }
+    if (Array.isArray(reasoningEvidence.inference) && reasoningEvidence.inference.length) {
+      sections.push(
+        `<div class="mx-reasoning-group"><h4>Inference</h4><ul>${reasoningEvidence.inference
+          .map((item) => `<li>${escapeHtml(item)}</li>`)
+          .join('')}</ul></div>`
+      );
+    }
+    if (Array.isArray(reasoningEvidence.unknown) && reasoningEvidence.unknown.length) {
+      sections.push(
+        `<div class="mx-reasoning-group"><h4>Unknown</h4><ul>${reasoningEvidence.unknown
+          .map((item) => `<li>${escapeHtml(item)}</li>`)
+          .join('')}</ul></div>`
+      );
+    }
+    if (
+      Array.isArray(reasoningEvidence.evidenceNeeded) &&
+      reasoningEvidence.evidenceNeeded.length
+    ) {
+      sections.push(
+        `<div class="mx-reasoning-group"><h4>Evidence Needed</h4><ul>${reasoningEvidence.evidenceNeeded
+          .map((item) => `<li>${escapeHtml(item)}</li>`)
+          .join('')}</ul></div>`
+      );
+    }
+    if (reasoningEvidence.confidence != null) {
+      sections.push(
+        `<div class="mx-reasoning-confidence">Confidence: ${escapeHtml(
+          Number(reasoningEvidence.confidence).toFixed(2)
+        )}</div>`
+      );
+    }
+    if (!sections.length) return '';
+    return `
+      <details class="mx-reasoning-disclosure">
+        <summary>${escapeHtml(REASONING_MARKER)}</summary>
+        <div class="mx-reasoning-body">${sections.join('')}</div>
+      </details>
+    `;
+  }
+
   /**
    * SPEC-102 — progressive Max Workspace response.
    * Prose reveals first; evidence/meta/actions appear after completion.
@@ -4135,7 +4374,8 @@
     const Cadence = window.MaxInteractionCadence;
     const structured = result.structured || {};
     const metadata = result.metadata || structured.metadata || {};
-    const prose = String(result.prose || '');
+    const rawProse = String(result.prose || '');
+    const prose = stripReasoningMarker(rawProse);
     const meta = presentation || {};
     const div = document.createElement('div');
     div.className = 'mx-msg';
@@ -4168,12 +4408,16 @@
     scrollMxThread();
 
     const finishSupporting = () => {
+      const reasoningHtml =
+        metadata.showReasoningDisclosure === true
+          ? renderReasoningDisclosure(metadata.reasoningEvidence)
+          : '';
       const evidenceHtml = renderEvidencePanel(structured);
       const metaHtml = renderMetadataStrip(metadata);
       const actionsHtml = renderRecommendedActions(
         result.recommendedActions || structured.recommendedActions || []
       );
-      supporting.innerHTML = `${evidenceHtml}${metaHtml}${actionsHtml}`;
+      supporting.innerHTML = `${reasoningHtml}${evidenceHtml}${metaHtml}${actionsHtml}`;
       supporting.hidden = false;
       supporting.classList.add('is-visible');
       bindWorkspaceActions(div);
@@ -4538,17 +4782,45 @@
 
   async function askWorkspace(question) {
     const q = String(question || '').trim();
-    if (!q) return;
+    const hasAttachments = mxPendingComposerFiles.length > 0;
+    if (!q && !hasAttachments) return;
     if (workspaceAskInFlight) return;
     workspaceAskInFlight = true;
+    const reviewToken = window.PulseforgeReviewNavigation?.begin();
+    document.body.classList.add('lc-thinking');
     console.info('[mission-objective-len]', {
       stage: 'frontend',
       chars: q.length,
       newlines: (q.match(/\n/g) || []).length,
     });
     if (els.mxAskSend) els.mxAskSend.disabled = true;
-    appendOperatorMessage(q);
+    if (q) appendOperatorMessage(q);
+    else appendOperatorMessage(`[${mxPendingComposerFiles.length} attachment(s)]`);
     resetAskInput();
+
+    if (!hasAttachments && spreadsheetReview.hasPending()) {
+      try { await spreadsheetReview.handleText(q); }
+      catch (err) { appendSystemMessage(err.message); }
+      finally { workspaceAskInFlight = false; document.body.classList.remove('lc-thinking'); if (els.mxAskSend) els.mxAskSend.disabled = false; }
+      return;
+    }
+
+    if (hasAttachments) {
+      try {
+        const data = await submitMxComposer(q, { confirm: /^confirm$/i.test(q) });
+        appendSystemMessage(mxComposerReplyText(data));
+        mxPendingComposerFiles = [];
+        renderMxComposerChips();
+      } catch (err) {
+        appendSystemMessage(err.message || 'Composer failed');
+      } finally {
+        workspaceAskInFlight = false;
+        document.body.classList.remove('lc-thinking');
+        if (els.mxAskSend) els.mxAskSend.disabled = false;
+        els.mxAskInput?.focus();
+      }
+      return;
+    }
 
     const Cadence = window.MaxInteractionCadence;
     const startedAtMs = Date.now();
@@ -4597,6 +4869,7 @@
         chars: q.length,
         payloadQuestionChars: String(q).length,
       });
+      if (reviewToken && !window.PulseforgeReviewNavigation?.current(reviewToken)) return;
       workspaceSessionId = result.sessionId || workspaceSessionId;
       if (result.context) {
         workspaceContext = result.context;
@@ -4605,6 +4878,11 @@
       if (result.contextSwitch && els.mxSwitch) {
         els.mxSwitch.hidden = false;
         els.mxSwitch.textContent = result.contextSwitch;
+      }
+      if (result.uiAction && ['open_content_review', 'open_account_review'].includes(result.uiAction.type)) {
+        thinking.clear();
+        window.PulseforgeReviewNavigation?.consume(result.uiAction, reviewToken);
+        return;
       }
       await appendMaxResponse(result, {
         startedAtMs,
@@ -4648,6 +4926,7 @@
       );
     } finally {
       workspaceAskInFlight = false;
+      document.body.classList.remove('lc-thinking');
       if (els.mxAskSend) els.mxAskSend.disabled = false;
       els.mxAskInput?.focus();
     }
@@ -4716,6 +4995,7 @@
   }
 
   function renderModel(model, options = {}) {
+    if (!deckMatchesActiveTenant(model)) return;
     currentModel = model;
     if (model && model.live && model.live.cursor) {
       liveCursor = model.live.cursor;
@@ -4728,6 +5008,7 @@
       renderOperatorBrief(model);
     }
     const spatialMode = renderSpatialOverview(model);
+    window.LivingCommand?.render(model, options);
 
     if (!operatorMode && !spatialMode) {
       applyPresentationLayout(model);
@@ -4887,6 +5168,8 @@
     if (livePollInFlight) return;
     if (document.hidden) return;
     livePollInFlight = true;
+    const generation = deckLoadGeneration;
+    const requestTenant = activeDeckTenantId();
     try {
       const qs = new URLSearchParams();
       if (liveCursor) qs.set('since', liveCursor);
@@ -4894,6 +5177,8 @@
       const payload = await apiRequest(
         `/api/v1/intelligence/live?${qs.toString()}`
       );
+      if (generation !== deckLoadGeneration || requestTenant !== activeDeckTenantId()
+        || (payload.deck && !deckMatchesActiveTenant(payload.deck))) return;
       if (payload.cursor) liveCursor = payload.cursor;
 
       if (payload.notifications && payload.notifications.length) {
@@ -4910,6 +5195,11 @@
 
       if (payload.deck) {
         const next = payload.deck;
+        // The live intelligence model has a separate composer. Keep the opening
+        // snapshot, with its original timestamp, only within the same tenant.
+        if (!next.livingBrief && currentModel?.livingBrief && String(tenantIdFromModel(next)) === String(currentModel.livingBrief.clientId)) {
+          next.livingBrief = currentModel.livingBrief;
+        }
         if (next.live && next.live.cursor) liveCursor = next.live.cursor;
         writeCache(next);
         const shouldEvolve =
@@ -4948,10 +5238,12 @@
   }
 
   function evolveRender(model) {
+    if (!deckMatchesActiveTenant(model)) return;
     currentModel = model;
     const wasHla = els.hla ? els.hla.innerHTML : '';
     clearSections();
     hideError();
+    window.LivingCommand?.render(model);
     const operatorMode = Boolean(model.operatorBrief);
     const spatialMode = model.spatialOverview && window.SpatialDeck
       ? window.SpatialDeck.render(model.spatialOverview)
@@ -4987,14 +5279,18 @@
   }
 
   async function loadDeck(options = {}) {
+    const generation = ++deckLoadGeneration;
+    currentModel = null;
     setStatus(options.force ? 'Retrying…' : 'Assembling today’s briefing…');
     hideError();
     clearSections();
     try {
       const model = await fetchCommandDeck();
+      if (generation !== deckLoadGeneration || !deckMatchesActiveTenant(model)) return;
       writeCache(model);
       renderModel(model);
     } catch (err) {
+      if (generation !== deckLoadGeneration) return;
       console.error('[command-deck]', err);
       setStatus('');
       showError();
@@ -5022,6 +5318,47 @@
     event.preventDefault();
     askWorkspace(els.mxAskInput?.value || '');
   });
+
+  spreadsheetReview.loadScope().catch(err => appendSystemMessage(err.message));
+  const mxComposerPlus = document.getElementById('mxComposerPlus');
+  const mxComposerMenu = document.getElementById('mxComposerMenu');
+  mxComposerPlus?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (!mxComposerMenu) return;
+    mxComposerMenu.hidden = !mxComposerMenu.hidden;
+  });
+  document.addEventListener('click', () => {
+    if (mxComposerMenu) mxComposerMenu.hidden = true;
+  });
+  mxComposerMenu?.addEventListener('click', (event) => event.stopPropagation());
+  mxComposerMenu?.querySelectorAll('[data-mx-attach]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const kind = btn.getAttribute('data-mx-attach');
+      if (mxComposerMenu) mxComposerMenu.hidden = true;
+      const map = {
+        spreadsheet: document.getElementById('mxFileSpreadsheet'),
+        file: document.getElementById('mxFileDocument'),
+        image: document.getElementById('mxFileImage'),
+        voice: document.getElementById('mxFileVoice'),
+      };
+      map[kind]?.click();
+    });
+  });
+  [
+    document.getElementById('mxFileSpreadsheet'),
+    document.getElementById('mxFileDocument'),
+    document.getElementById('mxFileImage'),
+    document.getElementById('mxFileVoice'),
+  ].forEach((input) => {
+    input?.addEventListener('change', () => {
+      if (input.files?.[0]) {
+        mxPendingComposerFiles.push({ file: input.files[0], type: inferMxAttachmentType(input.files[0]) });
+        renderMxComposerChips();
+      }
+      input.value = '';
+    });
+  });
+  loadMxComposerMemory();
 
   // Enter sends; Shift+Enter keeps a newline so multi-row ProspectList pastes survive.
   els.mxAskInput?.addEventListener('keydown', (event) => {
@@ -5121,6 +5458,10 @@
   }
 
   function invalidateWorkspaceForTenantChange() {
+    deckLoadGeneration += 1;
+    liveCursor = '';
+    clearSections();
+    currentModel = null;
     workspaceSessionId = null;
     workspaceContext = null;
     if (els.workspace && !els.workspace.hidden) {
@@ -5130,6 +5471,9 @@
 
   async function onTenantChanged() {
     invalidateWorkspaceForTenantChange();
+    spreadsheetReview.clear(); mxComposerMemory = null; mxComposerConversationId = null;
+    mxPendingComposerFiles = []; renderMxComposerChips();
+    spreadsheetReview.loadScope().catch(err => appendSystemMessage(err.message));
     try {
       await loadDeck();
     } catch (err) {
@@ -5138,6 +5482,13 @@
   }
 
   document.addEventListener('pulseforge:shell-ready', applyClientCommandDeckPresentation);
+  document.addEventListener('pulseforge:living-ask', event => {
+    if (!currentModel) return;
+    openWorkspaceFromAction({ page: 'command-deck', context: 'daily_brief', prompt: String(event.detail?.prompt || '') });
+  });
+  document.addEventListener('pulseforge:living-refresh', () => loadDeck({ force: true }));
+  document.addEventListener('pulseforge:content-reviewed', () => loadDeck({ force: true }));
+  document.addEventListener('pulseforge:review-will-render', () => closeWorkspace(true));
   document.addEventListener('pulseforge:tenant-changed', applyClientCommandDeckPresentation);
   document.addEventListener('pulseforge:tenant-changed', onTenantChanged);
   if (window.PulseforgeShell) applyClientCommandDeckPresentation();
@@ -5155,12 +5506,7 @@
           prompt: null,
         }),
       onOpenMission: (missionId) => openMissionWorkspace(missionId),
-      onReviewRecommendation: (recommendationId) =>
-        openWorkspaceFromAction({
-          page: 'command-deck',
-          context: 'content_recommendation',
-          recommendationId,
-        }),
+      onReviewRecommendation: () => window.PulseforgeContentReview?.open(),
       onAskMax: (payload) => openWorkspaceFromAction(payload || {}),
     });
   }

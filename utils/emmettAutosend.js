@@ -252,6 +252,7 @@ async function autorun(clientId, options = {}) {
       WHERE client_id = $1
         AND event_type IN ('hard_bounce', 'soft_bounce', 'blocked')
         AND (event_at AT TIME ZONE $3)::date = $2::date
+        AND COALESCE(sender_identity_status, 'match') <> 'mismatch'
     `, [id, local.date, timeZone]).catch(err => {
       if (err.code === '42P01') return { rows: [{ bounced_today: 0 }] };
       throw err;
@@ -279,6 +280,7 @@ async function autorun(clientId, options = {}) {
       WHERE p.client_id = $1
         AND p.status IN ('cold', 'contacted', 'warm')
         AND COALESCE(p.do_not_contact, FALSE) = FALSE
+        AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
         AND ${syntheticGuard}
         AND p.email IS NOT NULL
         AND p.email <> ''

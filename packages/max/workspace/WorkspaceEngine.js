@@ -10,6 +10,7 @@ const {
 const { SessionStore } = require('./SessionStore');
 const { composeResponse } = require('./ResponseComposer');
 const { buildStructuredResponse } = require('./WorkspaceTypes');
+const { parseReviewNavigation, resolveReviewNavigation } = require('./ReviewNavigation');
 const {
   buildMarketIntelligenceContext,
 } = require('./MarketIntelligenceContext');
@@ -21,10 +22,12 @@ const {
 } = require('./SpecialistDirectionContext');
 const {
   maybeHandleOperatorObjectiveTurn,
+  attachActiveObjectiveContext,
   synthesizeObjectivePaigeResponse,
 } = require('./OperatorObjectiveContext');
 const {
   maybeHandleClientIntelligenceTurn,
+  isAdvisoryNextStepQuestion,
 } = require('./ClientIntelligenceContext');
 const {
   maybeHandleScoutAcquisitionTurn,
@@ -33,16 +36,99 @@ const {
   maybeHandleSpecialistInterrogationTurn,
 } = require('./SpecialistInterrogationContext');
 const {
+  maybeHandleWorkspaceMissionInspection,
+} = require('./WorkspaceMissionInspection');
+const {
+  maybeHandleAcquisitionOwnershipTurn,
+} = require('./AcquisitionOwnership');
+const acquisitionMissionExecution = require('./AcquisitionMissionExecution');
+const { maybeHandleOperatorStatusQuery } = require('./OperatorStatusQueryRouter');
+const {
+  resolveActiveMissionLock,
+  guardExecutionDomain,
+  isExplicitMissionExit,
+} = require('./ActiveMissionGuard');
+const {
+  resolveWorkspaceOwner,
+  WORKSPACE_OWNERS,
+} = require('./WorkspaceOwnershipResolver');
+const {
+  classifyOperatorCognition,
+  attachSpecialists,
+  isReadOnlyCognition,
+} = require('../operatorCognition');
+const { analyzeOperatorIntent } = require('./OperatorIntent');
+const { resolveConversationContract } = require('./ConversationContractEngine');
+const { resolveSessionState } = require('./SessionStateManager');
+const { MESSAGE_TYPES } = require('./MessageType');
+const {
+  resolveMessageType,
+  messageTypeBypassesReasoning,
+} = require('./MessageTypeClassifier');
+const {
+  resolveExecutionContract,
+  primaryObjectiveBypassesReasoning,
+  mapPrimaryObjectiveToMessageType,
+} = require('./OperatorObjectiveResolutionEngine');
+const { PRIMARY_OBJECTIVES } = require('./PrimaryObjective');
+const { buildMessageClassification } = require('./MessageType');
+const { extractIntents, isCompoundMessage } = require('./IntentExtractor');
+const { buildExecutionPlan } = require('./ExecutionPlanner');
+const { executeMultiIntentPlan } = require('./MultiIntentExecutor');
+const { buildSessionConfigurationResponse } = require('./SessionConfigurationAcknowledgement');
+const {
+  inspectCurrentSession,
+  explainCurrentSession,
+  isSessionStateExplanationQuestion,
+} = require('./SessionInspectionOperator');
+const {
+  inspectExecutionState,
+  isExecutionInspectionQuestion,
+} = require('./ExecutionInspectionOperator');
+const { serializeExecutionState, getExecutionState } = require('./ExecutionState');
+const { maybeHandleOperatorCognitionTurn } = require('./CognitionRouting');
+const { maybeHandlePendingDecisionTurn } = require('./PendingDecisionTurn');
+const { pendingDecisionOwnsTurn } = require('./PendingDecisionResolver');
+const { advanceConversationalState } = require('./ConversationalStateMachine');
+const { advanceActiveReasoningContext } = require('./ActiveReasoningContext');
+const { maybeHandleReflectionTurn } = require('./ReflectionRouting');
+const { maybeHandleIdentityTurn } = require('./IdentityConversationContext');
+const { maybeHandleConversationTurn } = require('./ConversationTurnContext');
+const { attachRoutingTrace, buildRoutingTrace } = require('./SubjectRoutingTrace');
+const {
+  createWorkspaceOwnershipAudit,
+} = require('./audit/WorkspaceOwnershipAudit');
+const { maybeHandleCalCoachingTurn } = require('./CalCoachingContext');
+const {
   maybeHandleRetrievalBeforeDelegationTurn,
 } = require('./RetrievalBeforeDelegationContext');
+const {
+  maybeHandleOperatorOperatingUpdate,
+} = require('./OperatorOperatingUpdate');
+const {
+  shouldHandleAnchorIcpScoutCombinedTurn,
+  maybeHandleAnchorIcpScoutTurn,
+} = require('./AnchorIcpScoutRouting');
 const { loadOperatorContextForSession } = require('./OperatorContextLoader');
 const {
   classifyCognitiveMode,
 } = require('../specialistDelegation/CognitiveMode');
 const {
+  CONTRACT_IDS,
+  selectResponseContract,
+  composeAccordingToContract,
+  attachContractMetadata,
+} = require('./ResponseContract');
+const {
   composeMissionResponse,
   composeActiveMissionResponse,
 } = require('./MissionResponse');
+const { maybeHandleMissionFirstTurn } = require('./MissionFirstRouting');
+const {
+  resolveMissionRuntime,
+  logMissionRuntimeSelected,
+  MISSION_RUNTIMES,
+} = require('./MissionRuntimeDispatch');
 const { PresentationEngine } = require('./PresentationEngine');
 const {
   selectExecutionDomain,
@@ -125,23 +211,22 @@ const {
 } = require('../../mission-engine');
 
 const { detectOperatorProspectListInMessage } = OperatorArtifactInjection;
+const askPathTrace = require('./audit/AskPathTrace');
+const { DecisionService, beginShadow, completeShadow } = require('../../decision-service/DecisionService');
+const { applyJevActiveRoutingPromotion } = require('./jevActiveRouting');
 
 /**
- * WorkspaceEngine — SPEC-009 + SPEC-022 + SPEC-039 routing.
+ * WorkspaceEngine — SPEC-009 + SPEC-022 + SPEC-039 + SPEC-125 routing.
  *
- * Execution flow (operator intent owns the subsystem):
+ * Execution flow (ownership-first):
  *   Operator Input
  *   → Resolve tenant/operator/client
- *   → Retrieve active objectives (SPEC-095)
- *   → Reference resolution
- *   → Intent Understanding in context (via selectExecutionDomain)
- *   → Select Execution Domain
- *   → Select/Attach Context
- *   → Execute (Mission Engine | domain-owned intelligence)
+ *   → Workspace Ownership Resolver (SPEC-125)
+ *   → Owner Pipeline (Mission | Blueprint | Specialist | Knowledge | Reasoning)
+ *   → Response
  *
- * Active conversation never selects the execution domain.
+ * Intent classification runs only in the Reasoning fallback owner.
  * Active Mission Resolver still runs inside the Mission domain (ADR-025).
- * Durable objectives are Pulseforge state — not provider/LLM memory.
  */
 class WorkspaceEngine {
   /**
@@ -166,10 +251,16 @@ class WorkspaceEngine {
    * @param {object} [options.specialistDelegationOpts] - SPEC-098 delegation store opts (tests)
    * @param {object} [options.scoutAcquisitionOpts] - SPEC-100 Scout loop opts (tests)
    * @param {object} [options.operatingEvidenceOpts] - SPEC-105 operating evidence loaders (tests)
+   * @param {object} [options.operatingUpdateOpts] - SPEC-106 operator-reported evidence (tests)
    * @param {object} [options.operatorContextOpts] - SPEC-104 operator context store opts (tests)
+   * @param {object} [options.runtimeProvider] - SPEC-140 acquisition mission runtime provider (tests)
+   * @param {DecisionService} [options.decisionService] - SPEC-JEV-001 shadow observer (tests)
+   * @param {typeof resolveWorkspaceOwner} [options.resolveWorkspaceOwner] - test seam (SPEC-JEV-006)
    */
   constructor(options = {}) {
     this._sessions = options.sessions || new SessionStore();
+    this._decisionService = options.decisionService || new DecisionService();
+    this._resolveWorkspaceOwner = options.resolveWorkspaceOwner || resolveWorkspaceOwner;
     this._presentation =
       options.presentation ||
       new PresentationEngine({
@@ -201,6 +292,12 @@ class WorkspaceEngine {
     this._scoutAcquisitionOpts = options.scoutAcquisitionOpts || null;
     this._operatorContextOpts = options.operatorContextOpts || null;
     this._operatingEvidenceOpts = options.operatingEvidenceOpts || null;
+    this._operatingUpdateOpts = options.operatingUpdateOpts || null;
+    this._runtimeProvider =
+      options.runtimeProvider ||
+      (options.acquisitionMissionRuntime
+        ? () => options.acquisitionMissionRuntime
+        : null);
     this._loadOperatorContext =
       options.loadOperatorContext != null
         ? options.loadOperatorContext !== false
@@ -210,6 +307,30 @@ class WorkspaceEngine {
   /** @returns {SessionStore} */
   get sessions() {
     return this._sessions;
+  }
+
+  _resolveAmoRuntime() {
+    if (this._runtimeProvider) return this._runtimeProvider();
+    const { getAcquisitionMissionRuntime } = require('../../../services/acquisitionMissionRuntime');
+    return getAcquisitionMissionRuntime();
+  }
+
+  _amoRuntimeInput(extra = {}) {
+    const runtime = this._resolveAmoRuntime();
+    return {
+      acquisitionMissionRuntime: runtime,
+      runtimeProvider: this._runtimeProvider || undefined,
+      ...runtime.persistOpts(extra),
+      ...extra,
+    };
+  }
+
+  /**
+   * SPEC-139 — pool + persist flags for transactional AMO stage commits.
+   * @returns {{ persist?: boolean, pool?: object }}
+   */
+  _amoStagePersistOpts() {
+    return this._resolveAmoRuntime().persistOpts();
   }
 
   /**
@@ -306,21 +427,52 @@ class WorkspaceEngine {
    * @param {object} [input.rawContext] - alias
    */
   async ask(input) {
+    const shadow = beginShadow(
+      this._decisionService, input,
+      input?.sessionId ? this._sessions.get(input.sessionId) : null,
+    );
+    try {
+      const result = await this._askProduction(input, shadow);
+      completeShadow(shadow, result);
+      return result;
+    } catch (error) {
+      completeShadow(shadow, null, error);
+      throw error;
+    }
+  }
+
+  async _askProduction(input, shadow = null) {
     if (!input || !String(input.question || '').trim()) {
       throw new Error('question is required');
     }
     const question = String(input.question).trim().slice(0, 100000);
+    askPathTrace.beginTrace(question);
+    askPathTrace.traceEnter('WorkspaceEngine.ask', {
+      sessionId: input.sessionId || null,
+    });
     const rawContext = input.context || input.rawContext || null;
 
     let session = input.sessionId
       ? this._sessions.get(input.sessionId)
       : null;
     let envelopeSwitch = null;
+    let workspaceOwnership = null;
+    let conversationSubject = null;
+    let conversationIntent = null;
+    let operatorIntent = null;
+    let conversationContract = null;
+    let sessionState = null;
+    let messageClassification = null;
+    let objectiveResolution = null;
+    let executionContract = null;
+    let traceAskReturn = (label, value, meta = {}) => value;
 
+    try {
     if (!session) {
       if (!rawContext) {
         throw new Error('sessionId or context is required');
       }
+      askPathTrace.traceEnter('WorkspaceEngine.open');
       const opened = await this.open(rawContext, {
       loadOperatorContext: false,
     });
@@ -340,313 +492,2413 @@ class WorkspaceEngine {
       session = switched.session;
     }
 
-    this._sessions.appendMessage(session.id, {
-      role: 'operator',
-      text: question,
-    });
+    const miepInternal = input._miepInternal === true;
 
-    // SPEC-101 — interrogate recent specialist work before domain routing.
-    // A follow-up about existing work must not replay or rerun the specialist.
-    const interrogationTurn = await maybeHandleSpecialistInterrogationTurn({
-      question,
-      session,
-      context: rawContext || session.context,
-      delegationService: this._specialistDelegationService || undefined,
-      delegationOpts: this._specialistDelegationOpts || undefined,
-    });
-    if (interrogationTurn) {
-      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
-      if (session.context && typeof session.context === 'object') {
-        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
-        session.context._answerCorpus = 'workspace';
-      }
-      const structuredInterrogate = interrogationTurn.structured;
-      const presentedInterrogate = await this._presentation.present(structuredInterrogate);
-      const proseInterrogate = presentedInterrogate.prose || interrogationTurn.prose;
+    if (!miepInternal) {
       this._sessions.appendMessage(session.id, {
-        role: 'max',
-        text: proseInterrogate,
-        structured: structuredInterrogate,
+        role: 'operator',
+        text: question,
       });
-      return {
-        sessionId: session.id,
-        prose: proseInterrogate,
-        structured: structuredInterrogate,
-        metadata: presentedInterrogate.metadata,
-        suggestions: resolveResultSuggestions({
-          structured: structuredInterrogate,
-          session,
-          question,
-        }),
-        recommendedActions: structuredInterrogate.recommendedActions,
-        contextSwitch: envelopeSwitch,
-        domainSwitch: null,
-        context: session.context,
-        presentation: presentedInterrogate.presentation,
-        route: ROUTE_KINDS.INTELLIGENCE,
-        mission: null,
-        resolution: null,
-        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
-        interrogation: interrogationTurn.interrogation || null,
-        domainDecision: {
-          domain: EXECUTION_DOMAINS.WORKSPACE,
-          reason: interrogationTurn.reason,
-          missionType: null,
-          missionIntent: null,
-          confidence: 1,
-          previousDomain: session.previousExecutionDomain || null,
-          domainSwitched: false,
-        },
-        executionContext: {
-          domain: EXECUTION_DOMAINS.WORKSPACE,
-          routeKind: ROUTE_KINDS.INTELLIGENCE,
-          reason: interrogationTurn.reason,
-          missionType: null,
-          missionId: null,
-        },
-      };
     }
 
-    // SPEC-102 / SPEC-103 / SPEC-105 — retrieve durable knowledge before any
-    // specialist path. Operating-evidence questions inspect AO/prospects/Scout
-    // state/missions/activity first. Retrieval never invokes Scout.
-    const cognitive = classifyCognitiveMode(question, {
-      session,
-      context: rawContext || session.context,
-    });
-    const retrievalTurn = await maybeHandleRetrievalBeforeDelegationTurn({
-      question,
-      session,
-      context: rawContext || session.context,
-      cognitive,
-      cieService: this._clientIntelligenceService || undefined,
-      cieOpts: this._clientIntelligenceOpts || undefined,
-      operatingEvidenceOpts: this._operatingEvidenceOpts || undefined,
-      ...(this._scoutAcquisitionOpts || {}),
-    });
-    if (retrievalTurn) {
-      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
-      if (session.context && typeof session.context === 'object') {
-        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
-        session.context._answerCorpus = 'workspace';
-      }
-      const structuredRetrieve = retrievalTurn.structured;
-      const presentedRetrieve = await this._presentation.present(structuredRetrieve);
-      const proseRetrieve = presentedRetrieve.prose || retrievalTurn.prose;
-      this._sessions.appendMessage(session.id, {
-        role: 'max',
-        text: proseRetrieve,
-        structured: structuredRetrieve,
-      });
-      return {
-        sessionId: session.id,
-        prose: proseRetrieve,
-        structured: structuredRetrieve,
-        metadata: presentedRetrieve.metadata,
-        suggestions: resolveResultSuggestions({
-          structured: structuredRetrieve,
-          session,
-          question,
-        }),
-        recommendedActions: structuredRetrieve.recommendedActions,
-        contextSwitch: envelopeSwitch,
-        domainSwitch: null,
-        context: session.context,
-        presentation: presentedRetrieve.presentation,
-        route: ROUTE_KINDS.INTELLIGENCE,
-        mission: null,
-        resolution: null,
-        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
-        retrieval: {
-          mode: retrievalTurn.mode,
-          sourcesUsed: retrievalTurn.sourcesUsed,
-          delegated: false,
-        },
-        domainDecision: {
-          domain: EXECUTION_DOMAINS.WORKSPACE,
-          reason: retrievalTurn.reason,
-          missionType: null,
-          missionIntent: null,
-          confidence: 1,
-          previousDomain: session.previousExecutionDomain || null,
-          domainSwitched: false,
-        },
-        executionContext: {
-          domain: EXECUTION_DOMAINS.WORKSPACE,
-          routeKind: ROUTE_KINDS.INTELLIGENCE,
-          reason: retrievalTurn.reason,
-          missionType: null,
-          missionId: null,
-        },
-      };
+    // Reviewing existing content is a workspace navigation request, not mission
+    // inspection, delegation, approval, or execution. Resolve before mission locks.
+    const reviewIntent = parseReviewNavigation(question, input.reviewNavigation);
+    if (reviewIntent) {
+      // Scope here is an internal dependency, never taken from conversational context.
+      // HTTP requests resolve against current authenticated principals in the route.
+      const suppliedScope = input.reviewNavigationScope || {};
+      const scopeMatches = suppliedScope.tenantId == null || String(suppliedScope.tenantId) === String(session.context?.tenantId);
+      const navigation = resolveReviewNavigation(reviewIntent, scopeMatches ? { ...suppliedScope, tenantId: session.context?.tenantId } : {});
+      const { prose, metadata, uiAction } = navigation;
+      const structured = buildStructuredResponse({ answer: prose, recommendedActions: navigation.recommendedActions, metadata });
+      this._sessions.appendMessage(session.id, { role: 'max', text: prose, structured });
+      return { ...navigation, sessionId: session.id, structured, context: session.context,
+        route: ROUTE_KINDS.INTELLIGENCE, executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+        workspaceOwnership: { owner: reviewIntent.kind, reason: 'explicit_review_request', confidence: 1, specialist: null } };
     }
 
-    // SPEC-100 — Max ↔ Scout acquisition intelligence (before CIE so
-    // market-opportunity questions are not swallowed as Blueprint chat).
-    // SPEC-102 already answered retrieval/explanation/reflection above.
-    // Scout's own entry gate refuses those modes for new delegations.
-    const scoutTurn = await maybeHandleScoutAcquisitionTurn({
-      question,
-      session,
-      context: rawContext || session.context,
-      action: rawContext?.action || null,
-      delegationService: this._specialistDelegationService || undefined,
-      delegationOpts: this._specialistDelegationOpts || undefined,
-      ...(this._scoutAcquisitionOpts || {}),
-    });
-    if (scoutTurn) {
-      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
-      if (session.context && typeof session.context === 'object') {
-        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
-        session.context._answerCorpus = 'workspace';
-        session.context.acquisitionLoop = true;
+    // SPEC-167 — Operator Objective Resolution precedes routing (ADR-087).
+    const objectiveContractResolution = resolveExecutionContract({ question, session });
+    objectiveResolution = objectiveContractResolution.objectiveResolution;
+    executionContract = objectiveContractResolution.executionContract;
+    const resolvedObjective = objectiveContractResolution.resolvedObjective || null;
+    if (session.context && typeof session.context === 'object') {
+      session.context.objectiveResolution = objectiveResolution;
+      session.context.executionContract = executionContract;
+      session.context.lastObjectiveResolution = objectiveResolution;
+      if (resolvedObjective) {
+        session.context.resolvedObjective = resolvedObjective;
+        session.context.canonicalObjective = resolvedObjective.objective || null;
       }
-
-      const structuredScout = scoutTurn.structured;
-      const routeScout = {
-        kind: ROUTE_KINDS.INTELLIGENCE,
-        missionType: null,
-        reason: scoutTurn.reason,
-        missionIntent: null,
-        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
-      };
-      const presentedScout = await this._presentation.present(structuredScout);
-      const proseScout = presentedScout.prose || scoutTurn.prose;
-
-      this._sessions.appendMessage(session.id, {
-        role: 'max',
-        text: proseScout,
-        structured: structuredScout,
-      });
-
-      return {
-        sessionId: session.id,
-        prose: proseScout,
-        structured: structuredScout,
-        metadata: presentedScout.metadata,
-        suggestions: resolveResultSuggestions({
-          structured: structuredScout,
-          session,
-          question,
-        }),
-        recommendedActions: structuredScout.recommendedActions,
-        contextSwitch: envelopeSwitch,
-        domainSwitch: null,
-        context: session.context,
-        presentation: presentedScout.presentation,
-        route: routeScout.kind,
-        mission: null,
-        resolution: null,
-        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
-        scoutLoop: scoutTurn.loop || null,
-        domainDecision: {
-          domain: EXECUTION_DOMAINS.WORKSPACE,
-          reason: scoutTurn.reason,
-          missionType: null,
-          missionIntent: null,
-          confidence: 1,
-          previousDomain: session.previousExecutionDomain || null,
-          domainSwitched: false,
-        },
-        executionContext: {
-          domain: EXECUTION_DOMAINS.WORKSPACE,
-          routeKind: ROUTE_KINDS.INTELLIGENCE,
-          reason: scoutTurn.reason,
-          missionType: null,
-          missionId: null,
-        },
-      };
     }
-
-    // SPEC-098 / SPEC-103 — approved client intelligence before intent routing.
-    // Reconstruct durable Blueprint/Playbook context for the authenticated tenant.
-    // Handles recall + bounded business reasoning; never invents client facts;
-    // never grants execution authority; never creates Missions from advice.
-    const cieTurn = await maybeHandleClientIntelligenceTurn({
-      question,
-      session,
-      context: rawContext || session.context,
-      cieService: this._clientIntelligenceService || undefined,
-      cieOpts: this._clientIntelligenceOpts || undefined,
+    askPathTrace.traceBranch('objective_resolution', {
+      primaryObjective: objectiveResolution.primaryObjective,
+      supportingObjectives: objectiveResolution.supportingObjectives,
+      executionModifiers: objectiveResolution.executionModifiers,
+      conversationModifiers: objectiveResolution.conversationModifiers,
+      routingOwner: objectiveResolution.routingDecision.owner,
+      confidence: objectiveResolution.confidence,
     });
-    if (cieTurn && cieTurn.handled) {
-      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
-      if (session.context && typeof session.context === 'object') {
-        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
-        session.context._answerCorpus = 'workspace';
-        if (cieTurn.attachment) {
-          Object.assign(session.context, cieTurn.attachment);
+
+    // SPEC-149 — Message Type Classifier (legacy trace; routing uses primaryObjective).
+    const messageTypeResolution = resolveMessageType({ question, session });
+    messageClassification = messageTypeResolution.classification;
+    const mappedType = mapPrimaryObjectiveToMessageType(objectiveResolution.primaryObjective);
+    if (mappedType) {
+      messageClassification = buildMessageClassification(
+        mappedType,
+        objectiveResolution.confidence,
+        objectiveResolution.evidence,
+        {
+          mutatesSession: objectiveResolution.executionModifiers.length > 0 ||
+            objectiveResolution.supportingObjectives.includes('session_configuration'),
+          mutatesMission:
+            objectiveResolution.primaryObjective === PRIMARY_OBJECTIVES.MISSION_CREATION ||
+            objectiveResolution.primaryObjective === PRIMARY_OBJECTIVES.MISSION_EXECUTION,
+          via: 'objective_resolution',
         }
-        // Keep last CIE turn for multi-turn "Why?" continuity (session only).
-        if (session.context.lastClientIntelligenceTurn == null && cieTurn.turnKind) {
-          session.context.lastClientIntelligenceTurn = {
-            kind: cieTurn.turnKind,
-            reason: cieTurn.reason,
-            recommendationFocus: cieTurn.recommendationFocus || null,
+      );
+    }
+    if (session.context && typeof session.context === 'object') {
+      session.context.messageClassification = messageClassification;
+    }
+    askPathTrace.traceBranch('message_classification', {
+      type: messageClassification.type,
+      confidence: messageClassification.confidence,
+      mutatesSession: messageClassification.mutatesSession,
+      mutatesMission: messageClassification.mutatesMission,
+    });
+
+    // SPEC-146 — Operator Cognition runs before mission runtime or execution.
+    const previousTurnContext =
+      session.context && typeof session.context === 'object'
+        ? {
+            conversationIntent: session.context.conversationIntent || null,
+            workspaceOwner: session.context.workspaceOwner || null,
+            workspaceOwnerReason: session.context.workspaceOwnerReason || null,
+          }
+        : null;
+
+    // SPEC-148 — Session State precedes conversation contract (ADR-068).
+    const sessionStateResolution = resolveSessionState({
+      question,
+      session,
+    });
+    sessionState = sessionStateResolution.state;
+    if (session.context && typeof session.context === 'object') {
+      session.context.sessionState = sessionState;
+    }
+    askPathTrace.traceBranch('session_state', {
+      operatingMode: sessionState.operatingMode,
+      executionPolicy: sessionState.executionPolicy,
+      reasoningMode: sessionState.reasoningMode,
+      conversationStyle: sessionState.conversationStyle,
+      evaluationMode: sessionState.evaluationMode,
+      changed: sessionStateResolution.changed,
+    });
+
+    const hasActiveMissionContext = Boolean(
+      session.context &&
+        (session.context.missionId || session.context.acquisitionMissionId)
+    );
+    const intentExtraction = extractIntents({
+      question,
+      hasActiveMission: hasActiveMissionContext,
+      mission: session.context && session.context.mission,
+    });
+    const executionPlan = buildExecutionPlan({
+      intents: intentExtraction.intents,
+      sessionState,
+    });
+    const isCompoundTurn =
+      !miepInternal && isCompoundMessage(intentExtraction.intents);
+    if (session.context && typeof session.context === 'object') {
+      session.context.detectedIntents = intentExtraction.intents;
+      session.context.executionPlan = isCompoundTurn ? executionPlan : null;
+    }
+    askPathTrace.traceBranch('miep_compound_turn', {
+      compound: isCompoundTurn,
+      intentCount: intentExtraction.intents.length,
+      stepCount: executionPlan.steps.length,
+    });
+
+    // SPEC-167 — WORKSPACE_OPERATION bypasses reasoning, ownership, and mission runtime.
+    if (
+      !isCompoundTurn &&
+      objectiveResolution.primaryObjective === PRIMARY_OBJECTIVES.WORKSPACE_OPERATION &&
+      primaryObjectiveBypassesReasoning(objectiveResolution.primaryObjective)
+    ) {
+      askPathTrace.traceBranch('owner_pipeline:session_configuration');
+      const sessionConfigTurn = buildSessionConfigurationResponse({
+        sessionState,
+        changed: sessionStateResolution.changed,
+        messageClassification,
+      });
+      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+      if (session.context && typeof session.context === 'object') {
+        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        session.context._answerCorpus = 'session_configuration';
+      }
+      const presentedConfig = await this._presentation.present(sessionConfigTurn.structured);
+      const proseConfig = presentedConfig.prose || sessionConfigTurn.prose;
+      this._sessions.appendMessage(session.id, {
+        role: 'max',
+        text: proseConfig,
+        structured: sessionConfigTurn.structured,
+      });
+      askPathTrace.traceEarlyReturn('WorkspaceEngine.ask', 'session_configuration', {
+        responseOwner: 'session_state_manager',
+        pipeline: 'SessionStateManager',
+      });
+      return attachRoutingTrace(
+        {
+          sessionId: session.id,
+          prose: proseConfig,
+          structured: sessionConfigTurn.structured,
+          metadata: {
+            ...(presentedConfig.metadata || {}),
+            messageClassification,
+            sessionState,
+          },
+          suggestions: [],
+          recommendedActions: sessionConfigTurn.structured.recommendedActions,
+          contextSwitch: envelopeSwitch,
+          domainSwitch: null,
+          context: session.context,
+          presentation: presentedConfig.presentation,
+          route: ROUTE_KINDS.INTELLIGENCE,
+          mission: null,
+          resolution: {
+            action: 'session_configured',
+            reason: sessionConfigTurn.reason,
+          },
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          interrogation: null,
+          conversationIntent: null,
+          conversationSubject: null,
+          messageClassification,
+          sessionState,
+          domainDecision: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            reason: sessionConfigTurn.reason,
+            missionType: null,
+            missionIntent: null,
+            confidence: messageClassification.confidence,
+            previousDomain: session.previousExecutionDomain || null,
+            domainSwitched: false,
+          },
+          executionContext: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            routeKind: ROUTE_KINDS.INTELLIGENCE,
+            reason: sessionConfigTurn.reason,
+            missionType: null,
+            missionId: null,
+          },
+          workspaceOwnership: {
+            owner: 'session_state_manager',
+            reason: 'session_configuration_bypass',
+            confidence: messageClassification.confidence,
+            specialist: null,
+            fallback: false,
+          },
+        },
+        {
+          pipeline: 'SessionStateManager',
+          claimedBy: 'message_type_classifier',
+          messageClassification,
+          sessionState,
+        }
+      );
+    }
+
+    // SPEC-167 — SESSION_INSPECTION bypasses reasoning and ownership.
+    if (
+      !isCompoundTurn &&
+      objectiveResolution.primaryObjective === PRIMARY_OBJECTIVES.SESSION_INSPECTION &&
+      primaryObjectiveBypassesReasoning(objectiveResolution.primaryObjective)
+    ) {
+      askPathTrace.traceBranch('owner_pipeline:session_inspection');
+      const inspectionCognition = classifyOperatorCognition(question);
+      const inspectionTurn = inspectCurrentSession({
+        question,
+        session,
+        sessionState,
+        messageClassification,
+        conversationIntent: inspectionCognition,
+      });
+      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+      if (session.context && typeof session.context === 'object') {
+        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        session.context._answerCorpus = 'session_inspection';
+      }
+      const presentedInspection = await this._presentation.present(inspectionTurn.structured);
+      const proseInspection = presentedInspection.prose || inspectionTurn.prose;
+      this._sessions.appendMessage(session.id, {
+        role: 'max',
+        text: proseInspection,
+        structured: inspectionTurn.structured,
+      });
+      askPathTrace.traceEarlyReturn('WorkspaceEngine.ask', 'session_inspection', {
+        responseOwner: 'session_state_manager',
+        pipeline: 'SessionStateManager',
+      });
+      return attachRoutingTrace(
+        {
+          sessionId: session.id,
+          prose: proseInspection,
+          structured: inspectionTurn.structured,
+          metadata: {
+            ...(presentedInspection.metadata || {}),
+            messageClassification,
+            sessionState,
+          },
+          suggestions: [],
+          recommendedActions: inspectionTurn.structured.recommendedActions,
+          contextSwitch: envelopeSwitch,
+          domainSwitch: null,
+          context: session.context,
+          presentation: presentedInspection.presentation,
+          route: ROUTE_KINDS.INTELLIGENCE,
+          mission: null,
+          resolution: {
+            action: 'session_inspected',
+            reason: inspectionTurn.reason,
+          },
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          interrogation: null,
+          conversationIntent: inspectionCognition,
+          conversationSubject: null,
+          messageClassification,
+          sessionState,
+          domainDecision: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            reason: inspectionTurn.reason,
+            missionType: null,
+            missionIntent: inspectionCognition && inspectionCognition.intent,
+            confidence: messageClassification.confidence,
+            previousDomain: session.previousExecutionDomain || null,
+            domainSwitched: false,
+          },
+          executionContext: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            routeKind: ROUTE_KINDS.INTELLIGENCE,
+            reason: inspectionTurn.reason,
+            missionType: null,
+            missionId: null,
+          },
+          workspaceOwnership: {
+            owner: 'session_state_manager',
+            reason: 'session_inspection_bypass',
+            confidence: messageClassification.confidence,
+            specialist: null,
+            fallback: false,
+          },
+        },
+        {
+          pipeline: 'SessionStateManager',
+          claimedBy: 'session_inspection_operator',
+          messageClassification,
+          sessionState,
+        }
+      );
+    }
+
+    // An advisory plan has no execution state. A bare next-step follow-up keeps
+    // that advisory context; explicit execution inspection still reports none.
+    const advisoryNextStep = isAdvisoryNextStepQuestion(question, session);
+
+    // SPEC-152 — EXECUTION_INSPECTION reads stored Execution State (ADR-073).
+    if (
+      !miepInternal &&
+      isExecutionInspectionQuestion(question) && !advisoryNextStep
+    ) {
+      askPathTrace.traceBranch('owner_pipeline:execution_inspection');
+      const executionInspectionTurn = inspectExecutionState({
+        question,
+        session,
+      });
+      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+      if (session.context && typeof session.context === 'object') {
+        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        session.context._answerCorpus = 'execution_inspection';
+      }
+      const presentedExecutionInspection = await this._presentation.present(
+        executionInspectionTurn.structured
+      );
+      const proseExecutionInspection =
+        presentedExecutionInspection.prose || executionInspectionTurn.prose;
+      this._sessions.appendMessage(session.id, {
+        role: 'max',
+        text: proseExecutionInspection,
+        structured: executionInspectionTurn.structured,
+      });
+      askPathTrace.traceEarlyReturn('WorkspaceEngine.ask', 'execution_inspection', {
+        responseOwner: 'execution_state_manager',
+        pipeline: 'ExecutionInspectionOperator',
+      });
+      const executionStateSnapshot =
+        executionInspectionTurn.structured.metadata?.executionState ||
+        serializeExecutionState(getExecutionState(session));
+      return attachRoutingTrace(
+        {
+          sessionId: session.id,
+          prose: proseExecutionInspection,
+          structured: executionInspectionTurn.structured,
+          metadata: {
+            ...(presentedExecutionInspection.metadata || {}),
+            ...(executionInspectionTurn.structured.metadata || {}),
+            messageClassification,
+            sessionState,
+            executionState: executionStateSnapshot,
+          },
+          executionState: executionStateSnapshot,
+          suggestions: [],
+          recommendedActions: executionInspectionTurn.structured.recommendedActions,
+          contextSwitch: envelopeSwitch,
+          domainSwitch: null,
+          context: session.context,
+          presentation: presentedExecutionInspection.presentation,
+          route: ROUTE_KINDS.INTELLIGENCE,
+          mission: null,
+          resolution: {
+            action: 'execution_inspected',
+            reason: executionInspectionTurn.reason,
+          },
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          interrogation: null,
+          conversationIntent: null,
+          conversationSubject: null,
+          messageClassification,
+          sessionState,
+          domainDecision: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            reason: executionInspectionTurn.reason,
+            missionType: null,
+            missionIntent: null,
+            confidence: 1,
+            previousDomain: session.previousExecutionDomain || null,
+            domainSwitched: false,
+          },
+          executionContext: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            routeKind: ROUTE_KINDS.INTELLIGENCE,
+            reason: executionInspectionTurn.reason,
+            missionType: null,
+            missionId: null,
+          },
+          workspaceOwnership: {
+            owner: 'execution_state_manager',
+            reason: 'execution_inspection_bypass',
+            confidence: 1,
+            specialist: null,
+            fallback: false,
+          },
+        },
+        {
+          pipeline: 'ExecutionInspectionOperator',
+          claimedBy: 'execution_inspection_operator',
+          messageClassification,
+          sessionState,
+        }
+      );
+    }
+
+    // SPEC-151 — Multi-Intent Execution Planner (ADR-072).
+    if (isCompoundTurn) {
+      askPathTrace.traceBranch('owner_pipeline:multi_intent_execution_planner');
+      const miepResult = await executeMultiIntentPlan(this, {
+        plan: executionPlan,
+        session,
+        sessionState,
+        input,
+        envelopeSwitch,
+        messageClassification,
+      });
+      if (!miepInternal || input._miepFinalStep) {
+        this._sessions.appendMessage(session.id, {
+          role: 'max',
+          text: miepResult.prose || '',
+          structured: miepResult.structured || null,
+        });
+      }
+      askPathTrace.traceEarlyReturn('WorkspaceEngine.ask', 'multi_intent_plan', {
+        responseOwner: 'multi_intent_execution_planner',
+        pipeline: 'MultiIntentExecutionPlanner',
+      });
+      return miepResult;
+    }
+
+    // SPEC-155 — Conversation Contract precedes ownership (ADR-062).
+    const contractResolution = resolveConversationContract({
+      question,
+      session,
+      sessionState,
+    });
+    conversationContract = contractResolution.contract;
+    if (session.context && typeof session.context === 'object') {
+      session.context.conversationContract = conversationContract;
+    }
+    askPathTrace.traceBranch('conversation_contract', {
+      executionAllowed: conversationContract.executionAllowed,
+      reasoningMode: conversationContract.reasoningMode,
+      maintainContext: conversationContract.maintainContext,
+      locked: conversationContract.locked,
+      conversationGoal: conversationContract.conversationGoal,
+      changed: contractResolution.changed,
+    });
+
+    // SPEC-153 — interpret operator language exactly once (ADR-061).
+    operatorIntent = await analyzeOperatorIntent({
+      question,
+      session,
+      context: rawContext || session.context,
+      conversationContract,
+      sessionState,
+      missionEngine: this._missionEngine,
+      missionsEnabled: this._missionsEnabled,
+      resolverEnabled: this._resolverEnabled,
+      ...this._amoRuntimeInput(),
+    });
+    // Snapshot the already-resolved mission before approval/execution mutates it.
+    // The evaluator receives no production classification or authority to act.
+    try { shadow?.captureMission(operatorIntent.mission); } catch (_) { /* shadow only */ }
+    let jevActiveRoutingEvaluation = null;
+    if (!miepInternal) {
+      try {
+        jevActiveRoutingEvaluation = await this._decisionService.evaluateActiveRouting({
+          question,
+          session,
+          context: rawContext || session.context,
+          mission: operatorIntent.mission,
+        });
+      } catch (_) { /* active routing is fail-closed */ }
+    }
+    conversationSubject = operatorIntent.conversationSubject;
+    conversationIntent = operatorIntent.conversationIntent;
+    let resolvedQuestion = operatorIntent.resolvedQuestion;
+    let continuityApplied = operatorIntent.continuityApplied;
+
+    if (session.context && typeof session.context === 'object') {
+      session.context.conversationSubject = conversationSubject.subject;
+      session.context.conversationSubjectLocked = conversationSubject.locked;
+      session.context.conversationSubjectReason = conversationSubject.reason;
+      session.context.conversationIntent = conversationIntent;
+      session.context.operatorIntent = operatorIntent;
+      session.context.conversationContract = conversationContract;
+      session.context.sessionState = sessionState;
+      if (continuityApplied) {
+        session.context.resolvedQuestion = resolvedQuestion;
+      }
+    }
+    askPathTrace.traceBranch('conversation_subject', {
+      subject: conversationSubject.subject,
+      locked: conversationSubject.locked,
+      reason: conversationSubject.reason,
+      confidence: conversationSubject.confidence,
+    });
+    askPathTrace.traceBranch('operator_cognition', {
+      intent: conversationIntent.intent,
+      thinkingMode: conversationIntent.thinkingMode,
+      mutatesMission: conversationIntent.mutatesMission,
+      confidence: conversationIntent.confidence,
+    });
+    askPathTrace.traceBranch('operator_intent', {
+      intent: operatorIntent.intent,
+      executionRequested: operatorIntent.executionRequested,
+      planningRequested: operatorIntent.planningRequested,
+      conversationLocked: operatorIntent.conversationLocked,
+      executionAllowed:
+        conversationContract && conversationContract.executionAllowed,
+    });
+    if (continuityApplied) {
+      askPathTrace.traceBranch('conversation_continuity', {
+        subject: conversationSubject.subject,
+        intent: conversationIntent.intent,
+        resolvedQuestion,
+        via: conversationIntent.via,
+      });
+    }
+
+    traceAskReturn = (label, value, meta = {}) => {
+      askPathTrace.traceEarlyReturn('WorkspaceEngine.ask', label, {
+        responseOwner:
+          meta.responseOwner ||
+          (value && value.workspaceOwnership && value.workspaceOwnership.owner) ||
+          (workspaceOwnership && workspaceOwnership.owner) ||
+          null,
+        missionRuntime:
+          meta.missionRuntime ||
+          (value && value.workspaceOwnership && value.workspaceOwnership.missionRuntime) ||
+          null,
+        route: value && value.route != null ? value.route : meta.route || null,
+        ...meta,
+      });
+      const conversationalState = advanceConversationalState(session, {
+        question,
+        conversationSubject,
+        conversationIntent,
+        workspaceOwnership:
+          (value && value.workspaceOwnership) || workspaceOwnership,
+        resolvedQuestion,
+        continuityApplied,
+        structured: value && value.structured,
+        conversationContract,
+      });
+      const activeReasoningContext = advanceActiveReasoningContext(session, {
+        question,
+        conversationSubject,
+        conversationIntent,
+        resolvedQuestion,
+        arcFollowUp: operatorIntent && operatorIntent.arcFollowUp,
+        structured: value && value.structured,
+      });
+      const enriched = attachRoutingTrace(value, {
+        conversationSubject,
+        conversationIntent,
+        workspaceOwnership:
+          (value && value.workspaceOwnership) || workspaceOwnership,
+        pipeline: meta.pipeline || null,
+        claimedBy: meta.claimedBy || null,
+        conversationalState,
+        resolvedQuestion,
+        activeReasoningContext,
+        conversationContract,
+        messageClassification,
+        objectiveResolution,
+        executionContract,
+      });
+      if (enriched && typeof enriched === 'object') {
+        enriched.conversationalState = conversationalState;
+        enriched.resolvedQuestion = resolvedQuestion;
+        enriched.activeReasoningContext = activeReasoningContext;
+        enriched.conversationContract = conversationContract;
+        enriched.sessionState = sessionState;
+        enriched.messageClassification = messageClassification;
+        enriched.objectiveResolution = objectiveResolution;
+        enriched.executionContract = executionContract;
+      }
+      return enriched;
+    };
+
+    // SPEC-150 — "Why are you using that operating mode?" reasons over stored Session State.
+    if (isSessionStateExplanationQuestion(question)) {
+      askPathTrace.traceBranch('owner_pipeline:session_state_explanation');
+      const explanationTurn = explainCurrentSession({
+        session,
+        sessionState,
+        question,
+        conversationIntent,
+        messageClassification,
+      });
+      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+      if (session.context && typeof session.context === 'object') {
+        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        session.context._answerCorpus = 'session_state_explanation';
+      }
+      const presentedExplanation = await this._presentation.present(explanationTurn.structured);
+      const proseExplanation = presentedExplanation.prose || explanationTurn.prose;
+      this._sessions.appendMessage(session.id, {
+        role: 'max',
+        text: proseExplanation,
+        structured: explanationTurn.structured,
+      });
+      return traceAskReturn(
+        'session_state_explanation',
+        {
+          sessionId: session.id,
+          prose: proseExplanation,
+          structured: explanationTurn.structured,
+          metadata: {
+            ...(presentedExplanation.metadata || {}),
+            conversationIntent,
+            messageClassification,
+            sessionState,
+          },
+          suggestions: [],
+          recommendedActions: explanationTurn.structured.recommendedActions,
+          contextSwitch: envelopeSwitch,
+          domainSwitch: null,
+          context: session.context,
+          presentation: presentedExplanation.presentation,
+          route: ROUTE_KINDS.INTELLIGENCE,
+          mission: null,
+          resolution: {
+            action: 'explained',
+            reason: explanationTurn.reason,
+          },
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          interrogation: null,
+          conversationIntent,
+          conversationSubject,
+          messageClassification,
+          sessionState,
+          domainDecision: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            reason: explanationTurn.reason,
+            missionType: null,
+            missionIntent: conversationIntent && conversationIntent.intent,
+            confidence: (conversationIntent && conversationIntent.confidence) || 0.9,
+            previousDomain: session.previousExecutionDomain || null,
+            domainSwitched: false,
+          },
+          executionContext: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            routeKind: ROUTE_KINDS.INTELLIGENCE,
+            reason: explanationTurn.reason,
+            missionType: null,
+            missionId: null,
+          },
+          workspaceOwnership: {
+            owner: 'session_state_manager',
+            reason: 'session_state_explanation',
+            confidence: (conversationIntent && conversationIntent.confidence) || 0.9,
+            specialist: null,
+            fallback: false,
+          },
+        },
+        {
+          responseOwner: 'session_state_manager',
+          pipeline: 'SessionStateManager',
+          claimedBy: 'session_inspection_operator',
+        }
+      );
+    }
+
+    // SPEC-095 — durable objectives are interpretive context before ownership.
+    // Resolve against a detached context: ResolvedObjective is also the canonical
+    // mission contract and must not be overwritten by an operator-objective row.
+    const operatorObjectiveContext = await attachActiveObjectiveContext({
+      question,
+      session: { id: session.id, context: { ...session.context } },
+      context: rawContext || session.context,
+      objectiveService: this._operatorObjectiveService || undefined,
+      objectiveOpts: this._operatorObjectiveOpts || undefined,
+    });
+
+    // SPEC-125 — Ownership-first runtime. Subject governs owner before business pipelines.
+    const ownershipAudit =
+      this._ownershipAudit || createWorkspaceOwnershipAudit();
+    workspaceOwnership = await this._resolveWorkspaceOwner({
+      question,
+      session,
+      context: rawContext || session.context,
+      conversationSubject,
+      operatorIntent,
+      conversationContract,
+      executionContract,
+      objectiveResolution,
+      operatorObjectiveContext,
+      missionEngine: this._missionEngine,
+      missionsEnabled: this._missionsEnabled,
+      resolverEnabled: this._resolverEnabled,
+      ...this._amoRuntimeInput(),
+    });
+    const jevPromotion = applyJevActiveRoutingPromotion({
+      workspaceOwnership,
+      evaluation: jevActiveRoutingEvaluation,
+      question,
+      session,
+      operatorIntent,
+      context: rawContext || session.context,
+      ...this._amoRuntimeInput(),
+    });
+    if (jevPromotion.applied) {
+      workspaceOwnership = jevPromotion.workspaceOwnership;
+      if (jevPromotion.objectivePatch && objectiveResolution) {
+        objectiveResolution = {
+          ...objectiveResolution,
+          ...jevPromotion.objectivePatch,
+          confidence: jevPromotion.workspaceOwnership.confidence,
+        };
+        if (session.context && typeof session.context === 'object') {
+          session.context.objectiveResolution = objectiveResolution;
+        }
+      }
+    }
+    if (session.context && typeof session.context === 'object') {
+      session.context.jevActiveRouting = jevPromotion.audit;
+      session.context.jevActiveRoutingEvaluation = jevActiveRoutingEvaluation;
+    }
+    askPathTrace.traceOwner(workspaceOwnership.owner, workspaceOwnership.reason, {
+      confidence: workspaceOwnership.confidence,
+      fallback: workspaceOwnership.fallback || false,
+      jevPromotion: Boolean(jevPromotion.applied),
+    });
+    ownershipAudit.logOwnerSelected({
+      ...workspaceOwnership,
+      question,
+    });
+    if (workspaceOwnership.owner === WORKSPACE_OWNERS.ACTIVE_MISSION) {
+      // Objective-first ownership may return before the lock is attached.
+      // Resolve the same tenant-bound state for audit without changing routing.
+      const auditMissionLock = workspaceOwnership.missionLock || await resolveActiveMissionLock({
+        question,
+        session,
+        context: rawContext || session.context,
+        missionEngine: this._missionEngine,
+        missionsEnabled: this._missionsEnabled,
+        resolverEnabled: this._resolverEnabled,
+        operatorIntent,
+        ...this._amoRuntimeInput(),
+      });
+      if (auditMissionLock.active) {
+        ownershipAudit.logMissionOwnerSelected({
+          owner: workspaceOwnership.owner,
+          reason: workspaceOwnership.reason,
+          missionId: auditMissionLock.missionId,
+          source: auditMissionLock.source,
+          question,
+        });
+      }
+    }
+    if (session.context && typeof session.context === 'object') {
+      session.context.workspaceOwner = workspaceOwnership.owner;
+      session.context.workspaceOwnerReason = workspaceOwnership.reason;
+    }
+
+    const ownerIs = (...owners) => owners.includes(workspaceOwnership.owner);
+
+    if (
+      shouldHandleAnchorIcpScoutCombinedTurn({
+        question,
+        session,
+        context: rawContext || session.context,
+        mission: operatorIntent.mission,
+      })
+    ) {
+      const anchorIcpTurn = await maybeHandleAnchorIcpScoutTurn({
+        question,
+        session,
+        context: rawContext || session.context,
+        mission: operatorIntent.mission,
+        operatorIntent,
+        allowFixtureFallback:
+          (this._scoutAcquisitionOpts &&
+            this._scoutAcquisitionOpts.allowFixtureFallback) === true,
+        fixtureScoutDiscoveryResult:
+          this._scoutAcquisitionOpts &&
+          this._scoutAcquisitionOpts.fixtureScoutDiscoveryResult,
+        ...this._amoRuntimeInput(),
+      });
+      if (anchorIcpTurn) {
+        session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        if (session.context && typeof session.context === 'object') {
+          session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          session.context._answerCorpus = 'workspace';
+          if (anchorIcpTurn.mission) {
+            session.context.missionId = anchorIcpTurn.mission.id;
+            session.context.acquisitionMissionId = anchorIcpTurn.mission.id;
+          }
+        }
+        const structuredAnchor = anchorIcpTurn.structured;
+        const presentedAnchor = await this._presentation.present(structuredAnchor);
+        const proseAnchor = presentedAnchor.prose || anchorIcpTurn.prose;
+        this._sessions.appendMessage(session.id, {
+          role: 'max',
+          text: proseAnchor,
+          structured: structuredAnchor,
+        });
+        return traceAskReturn('anchor_icp_scout_combined', {
+          sessionId: session.id,
+          prose: proseAnchor,
+          structured: structuredAnchor,
+          metadata: presentedAnchor.metadata,
+          suggestions: resolveResultSuggestions({
+            structured: structuredAnchor,
+            session,
             question,
+          }),
+          recommendedActions: structuredAnchor.recommendedActions,
+          contextSwitch: envelopeSwitch,
+          domainSwitch: null,
+          context: session.context,
+          presentation: presentedAnchor.presentation,
+          route: ROUTE_KINDS.INTELLIGENCE,
+          mission: anchorIcpTurn.mission || null,
+          resolution: {
+            action: 'anchor_icp_scout_combined',
+            reason: anchorIcpTurn.reason,
+          },
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          interrogation: null,
+          conversationIntent,
+          domainDecision: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            reason: anchorIcpTurn.reason,
+            missionType: 'acquisition_mission',
+            missionIntent: conversationIntent.intent,
+            confidence: conversationIntent.confidence,
+            previousDomain: session.previousExecutionDomain || null,
+            domainSwitched: false,
+          },
+          executionContext: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            routeKind: ROUTE_KINDS.INTELLIGENCE,
+            reason: anchorIcpTurn.reason,
+            missionType: 'acquisition_mission',
+            missionId:
+              anchorIcpTurn.mission && anchorIcpTurn.mission.id
+                ? anchorIcpTurn.mission.id
+                : null,
+          },
+          workspaceOwnership: {
+            ...workspaceOwnership,
+            missionRuntime: MISSION_RUNTIMES.AMO,
+            missionType: 'acquisition_mission',
+          },
+        }, {
+          missionRuntime: MISSION_RUNTIMES.AMO,
+          responseOwner: workspaceOwnership.owner,
+        });
+      }
+    }
+
+    const fallbackToReasoning = (reason) => {
+      askPathTrace.traceFallback(
+        workspaceOwnership.owner,
+        WORKSPACE_OWNERS.REASONING,
+        reason
+      );
+      ownershipAudit.logOwnerFallback({
+        claimedOwner: workspaceOwnership.owner,
+        fallbackOwner: WORKSPACE_OWNERS.REASONING,
+        reason,
+        question,
+      });
+      workspaceOwnership = {
+        owner: WORKSPACE_OWNERS.REASONING,
+        reason: `fallback_${reason}`,
+        confidence: 0.5,
+        specialist: null,
+        fallback: true,
+      };
+      if (session.context && typeof session.context === 'object') {
+        session.context.workspaceOwner = workspaceOwnership.owner;
+        session.context.workspaceOwnerReason = workspaceOwnership.reason;
+      }
+    };
+
+    // SPEC-148 — Reflection. Subject = reasoning locks ownership; no business subsystem may claim.
+    if (ownerIs(WORKSPACE_OWNERS.REFLECTION)) {
+      askPathTrace.traceBranch('owner_pipeline:reflection');
+      const reflectionTurn = await maybeHandleReflectionTurn({
+        question,
+        session,
+        context: rawContext || session.context,
+        conversationIntent,
+        conversationSubject,
+        previousTurnContext,
+      });
+      if (reflectionTurn && reflectionTurn.handled) {
+        session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        if (session.context && typeof session.context === 'object') {
+          session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          session.context._answerCorpus = 'reflection';
+        }
+        const structuredReflection = reflectionTurn.structured;
+        const presentedReflection = await this._presentation.present(structuredReflection);
+        const proseReflection = presentedReflection.prose || reflectionTurn.prose;
+        this._sessions.appendMessage(session.id, {
+          role: 'max',
+          text: proseReflection,
+          structured: structuredReflection,
+        });
+        return traceAskReturn('reflective_cognition', {
+          sessionId: session.id,
+          prose: proseReflection,
+          structured: structuredReflection,
+          metadata: {
+            ...(presentedReflection.metadata || {}),
+            conversationIntent,
+            conversationSubject,
+          },
+          suggestions: resolveResultSuggestions({
+            structured: structuredReflection,
+            session,
+            question,
+          }),
+          recommendedActions: structuredReflection.recommendedActions,
+          contextSwitch: envelopeSwitch,
+          domainSwitch: null,
+          context: session.context,
+          presentation: presentedReflection.presentation,
+          route: ROUTE_KINDS.INTELLIGENCE,
+          mission: null,
+          resolution: { action: 'reflected', reason: reflectionTurn.reason },
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          interrogation: null,
+          conversationIntent,
+          conversationSubject,
+          domainDecision: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            reason: reflectionTurn.reason,
+            missionType: null,
+            missionIntent: conversationIntent.intent,
+            confidence: conversationIntent.confidence,
+            previousDomain: session.previousExecutionDomain || null,
+            domainSwitched: false,
+          },
+          executionContext: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            routeKind: ROUTE_KINDS.INTELLIGENCE,
+            reason: reflectionTurn.reason,
+            missionType: null,
+            missionId: null,
+          },
+          workspaceOwnership,
+        }, { responseOwner: WORKSPACE_OWNERS.REFLECTION });
+      }
+      fallbackToReasoning('reflection_unhandled');
+    }
+
+    // SPEC-149 — Identity Conversation. Subject = identity; no Blueprint or business intelligence.
+    if (ownerIs(WORKSPACE_OWNERS.CONVERSATION_IDENTITY)) {
+      askPathTrace.traceBranch('owner_pipeline:identity');
+      const identityTurn = await maybeHandleIdentityTurn({
+        question,
+        session,
+        context: rawContext || session.context,
+        conversationIntent,
+        conversationSubject,
+        resolvedQuestion,
+        activeReasoningContext: operatorIntent.activeReasoningContext,
+        arcFollowUp: operatorIntent.arcFollowUp,
+        operatorIntent,
+        conversationContract,
+      });
+      if (identityTurn && identityTurn.handled) {
+        session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        if (session.context && typeof session.context === 'object') {
+          session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          session.context._answerCorpus = 'identity';
+        }
+        const structuredIdentity = identityTurn.structured;
+        const presentedIdentity = await this._presentation.present(structuredIdentity);
+        const proseIdentity = presentedIdentity.prose || identityTurn.prose;
+        this._sessions.appendMessage(session.id, {
+          role: 'max',
+          text: proseIdentity,
+          structured: structuredIdentity,
+        });
+        return traceAskReturn('identity_conversation', {
+          sessionId: session.id,
+          prose: proseIdentity,
+          structured: structuredIdentity,
+          metadata: {
+            ...(presentedIdentity.metadata || {}),
+            conversationIntent,
+            conversationSubject,
+          },
+          suggestions: resolveResultSuggestions({
+            structured: structuredIdentity,
+            session,
+            question,
+          }),
+          recommendedActions: structuredIdentity.recommendedActions,
+          contextSwitch: envelopeSwitch,
+          domainSwitch: null,
+          context: session.context,
+          presentation: presentedIdentity.presentation,
+          route: ROUTE_KINDS.INTELLIGENCE,
+          mission: null,
+          resolution: { action: 'explained', reason: identityTurn.reason },
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          interrogation: null,
+          conversationIntent,
+          conversationSubject,
+          domainDecision: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            reason: identityTurn.reason,
+            missionType: null,
+            missionIntent: conversationIntent.intent,
+            confidence: conversationIntent.confidence,
+            previousDomain: session.previousExecutionDomain || null,
+            domainSwitched: false,
+          },
+          executionContext: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            routeKind: ROUTE_KINDS.INTELLIGENCE,
+            reason: identityTurn.reason,
+            missionType: null,
+            missionId: null,
+          },
+          workspaceOwnership,
+        }, {
+          responseOwner: WORKSPACE_OWNERS.CONVERSATION_IDENTITY,
+          pipeline: 'IdentityConversation',
+          claimedBy: 'identity_subject_router',
+        });
+      }
+      fallbackToReasoning('identity_unhandled');
+    }
+
+    // SPEC-149 — Conversation layer (repeat / recall prior turn).
+    if (ownerIs(WORKSPACE_OWNERS.CONVERSATION_LAYER)) {
+      askPathTrace.traceBranch('owner_pipeline:conversation_layer');
+      const conversationTurn = await maybeHandleConversationTurn({
+        question,
+        session,
+        context: rawContext || session.context,
+        conversationIntent,
+        conversationSubject,
+      });
+      if (conversationTurn && conversationTurn.handled) {
+        session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        if (session.context && typeof session.context === 'object') {
+          session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          session.context._answerCorpus = 'conversation';
+        }
+        const structuredConversation = conversationTurn.structured;
+        const presentedConversation = await this._presentation.present(structuredConversation);
+        const proseConversation = presentedConversation.prose || conversationTurn.prose;
+        this._sessions.appendMessage(session.id, {
+          role: 'max',
+          text: proseConversation,
+          structured: structuredConversation,
+        });
+        return traceAskReturn('conversation_layer', {
+          sessionId: session.id,
+          prose: proseConversation,
+          structured: structuredConversation,
+          metadata: {
+            ...(presentedConversation.metadata || {}),
+            conversationIntent,
+            conversationSubject,
+          },
+          suggestions: resolveResultSuggestions({
+            structured: structuredConversation,
+            session,
+            question,
+          }),
+          recommendedActions: structuredConversation.recommendedActions,
+          contextSwitch: envelopeSwitch,
+          domainSwitch: null,
+          context: session.context,
+          presentation: presentedConversation.presentation,
+          route: ROUTE_KINDS.INTELLIGENCE,
+          mission: null,
+          resolution: { action: 'recalled', reason: conversationTurn.reason },
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          conversationIntent,
+          conversationSubject,
+          domainDecision: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            reason: conversationTurn.reason,
+            missionType: null,
+            missionIntent: conversationIntent.intent,
+            confidence: conversationIntent.confidence,
+            previousDomain: session.previousExecutionDomain || null,
+            domainSwitched: false,
+          },
+          executionContext: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            routeKind: ROUTE_KINDS.INTELLIGENCE,
+            reason: conversationTurn.reason,
+            missionType: null,
+            missionId: null,
+          },
+          workspaceOwnership,
+        }, {
+          responseOwner: WORKSPACE_OWNERS.CONVERSATION_LAYER,
+          pipeline: 'ConversationLayer',
+          claimedBy: 'conversation_subject_router',
+        });
+      }
+      fallbackToReasoning('conversation_layer_unhandled');
+    }
+
+    // 1 — Active Mission. Owner is not enough: dispatch by mission type (SPEC-129).
+    if (ownerIs(WORKSPACE_OWNERS.ACTIVE_MISSION)) {
+      askPathTrace.traceBranch('owner_pipeline:active_mission');
+      const runtimeDecision = await resolveMissionRuntime({
+        question,
+        session,
+        context: rawContext || session.context,
+        operatorIntent,
+        conversationContract,
+        missionEngine: this._missionEngine,
+        missionsEnabled: this._missionsEnabled,
+        resolverEnabled: this._resolverEnabled,
+        ...this._amoRuntimeInput(),
+      });
+      logMissionRuntimeSelected({
+        runtime: runtimeDecision.runtime,
+        reason: runtimeDecision.reason,
+        missionId: runtimeDecision.mission && runtimeDecision.mission.id,
+        missionType: runtimeDecision.missionType,
+        question,
+      });
+
+      if (runtimeDecision.runtime === MISSION_RUNTIMES.SPEC_022) {
+        askPathTrace.traceBranch('runtime:spec_022');
+        const missionFirstTurn = await maybeHandleMissionFirstTurn({
+          question,
+          session,
+          missionEngine: this._missionEngine,
+          missionsEnabled: this._missionsEnabled,
+          resolverEnabled: this._resolverEnabled,
+          rawContext,
+          envelopeSwitch,
+          presentation: this._presentation,
+          sessions: this._sessions,
+        });
+        if (missionFirstTurn) {
+          return traceAskReturn('mission_first_turn', {
+            ...missionFirstTurn,
+            suggestions: resolveResultSuggestions({
+              structured: missionFirstTurn.structured,
+              session,
+              question,
+            }),
+            recommendedActions: missionFirstTurn.structured.recommendedActions,
+            interrogation: null,
+            workspaceOwnership: {
+              ...workspaceOwnership,
+              missionRuntime: MISSION_RUNTIMES.SPEC_022,
+            },
+          }, { missionRuntime: MISSION_RUNTIMES.SPEC_022 });
+        }
+      } else if (runtimeDecision.runtime === MISSION_RUNTIMES.AMO) {
+        askPathTrace.traceBranch('runtime:amo');
+
+        const pendingDecisionTurn = await maybeHandlePendingDecisionTurn({
+          question,
+          session,
+          context: rawContext || session.context,
+          operatorIntent,
+          ...this._amoRuntimeInput(),
+        });
+        if (pendingDecisionTurn) {
+          session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          if (session.context && typeof session.context === 'object') {
+            session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+            session.context._answerCorpus = 'workspace';
+          }
+          const structuredPending = pendingDecisionTurn.structured;
+          const presentedPending = await this._presentation.present(structuredPending);
+          const prosePending = presentedPending.prose || pendingDecisionTurn.prose;
+          this._sessions.appendMessage(session.id, {
+            role: 'max',
+            text: prosePending,
+            structured: structuredPending,
+          });
+          return traceAskReturn('pending_decision_turn_ownership', {
+            sessionId: session.id,
+            prose: prosePending,
+            structured: structuredPending,
+            metadata: presentedPending.metadata,
+            suggestions: resolveResultSuggestions({
+              structured: structuredPending,
+              session,
+              question,
+            }),
+            recommendedActions: structuredPending.recommendedActions,
+            contextSwitch: envelopeSwitch,
+            domainSwitch: null,
+            context: session.context,
+            presentation: presentedPending.presentation,
+            route: ROUTE_KINDS.INTELLIGENCE,
+            mission: pendingDecisionTurn.mission || null,
+            resolution: {
+              action: pendingDecisionTurn.action || 'clarify',
+              reason: pendingDecisionTurn.reason,
+            },
+            executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+            interrogation: null,
+            conversationIntent,
+            domainDecision: {
+              domain: EXECUTION_DOMAINS.WORKSPACE,
+              reason: pendingDecisionTurn.reason,
+              missionType: 'acquisition_mission',
+              missionIntent: conversationIntent.intent,
+              confidence: conversationIntent.confidence,
+              previousDomain: session.previousExecutionDomain || null,
+              domainSwitched: false,
+            },
+            executionContext: {
+              domain: EXECUTION_DOMAINS.WORKSPACE,
+              routeKind: ROUTE_KINDS.INTELLIGENCE,
+              reason: pendingDecisionTurn.reason,
+              missionType: 'acquisition_mission',
+              missionId:
+                pendingDecisionTurn.mission && pendingDecisionTurn.mission.id
+                  ? pendingDecisionTurn.mission.id
+                  : null,
+            },
+            workspaceOwnership: {
+              ...workspaceOwnership,
+              missionRuntime: MISSION_RUNTIMES.AMO,
+              missionType: 'acquisition_mission',
+            },
+          }, { missionRuntime: MISSION_RUNTIMES.AMO, responseOwner: workspaceOwnership.owner });
+        }
+
+        if (
+          isReadOnlyCognition(conversationIntent) &&
+          !(operatorIntent && operatorIntent.pendingDecisionResolution &&
+            operatorIntent.pendingDecisionResolution.resolvedFromPendingDecision) &&
+          !pendingDecisionOwnsTurn(
+            operatorIntent && operatorIntent.pendingDecisionResolution
+          )
+        ) {
+          const cognitionTurn = await maybeHandleOperatorCognitionTurn({
+            question,
+            session,
+            context: rawContext || session.context,
+            conversationIntent,
+            ...this._amoRuntimeInput(),
+          });
+          if (cognitionTurn) {
+            session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+            if (session.context && typeof session.context === 'object') {
+              session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+              session.context._answerCorpus = 'workspace';
+            }
+            const structuredCognition = cognitionTurn.structured;
+            const presentedCognition = await this._presentation.present(structuredCognition);
+            const proseCognition = presentedCognition.prose || cognitionTurn.prose;
+            this._sessions.appendMessage(session.id, {
+              role: 'max',
+              text: proseCognition,
+              structured: structuredCognition,
+            });
+            return traceAskReturn('operator_cognition_inspection', {
+              sessionId: session.id,
+              prose: proseCognition,
+              structured: structuredCognition,
+              metadata: {
+                ...(presentedCognition.metadata || {}),
+                conversationIntent: cognitionTurn.conversationIntent || conversationIntent,
+              },
+              suggestions: resolveResultSuggestions({
+                structured: structuredCognition,
+                session,
+                question,
+              }),
+              recommendedActions: structuredCognition.recommendedActions,
+              contextSwitch: envelopeSwitch,
+              domainSwitch: null,
+              context: session.context,
+              presentation: presentedCognition.presentation,
+              route: ROUTE_KINDS.INTELLIGENCE,
+              mission:
+                cognitionTurn.answered &&
+                cognitionTurn.answered.mission ||
+                null,
+              resolution: { action: 'explained', reason: cognitionTurn.reason },
+              executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+              interrogation: null,
+              conversationIntent: cognitionTurn.conversationIntent || conversationIntent,
+              domainDecision: {
+                domain: EXECUTION_DOMAINS.WORKSPACE,
+                reason: cognitionTurn.reason,
+                missionType: 'acquisition_mission',
+                missionIntent: conversationIntent.intent,
+                confidence: conversationIntent.confidence,
+                previousDomain: session.previousExecutionDomain || null,
+                domainSwitched: false,
+              },
+              executionContext: {
+                domain: EXECUTION_DOMAINS.WORKSPACE,
+                routeKind: ROUTE_KINDS.INTELLIGENCE,
+                reason: cognitionTurn.reason,
+                missionType: 'acquisition_mission',
+                missionId:
+                  cognitionTurn.answered &&
+                  cognitionTurn.answered.mission
+                    ? cognitionTurn.answered.mission.id
+                    : null,
+              },
+              workspaceOwnership: {
+                ...workspaceOwnership,
+                missionRuntime: MISSION_RUNTIMES.AMO,
+                missionType: 'acquisition_mission',
+              },
+            }, { missionRuntime: MISSION_RUNTIMES.AMO, responseOwner: workspaceOwnership.owner });
+          }
+        }
+
+        const statusQueryTurn = await maybeHandleOperatorStatusQuery({
+          question,
+          session,
+          context: rawContext || session.context,
+          mission: runtimeDecision.mission || null,
+          missionId:
+            (runtimeDecision.mission && runtimeDecision.mission.id) ||
+            (session.context && session.context.missionId) ||
+            null,
+          hasSinglePendingOperatorApproval: Boolean(
+            runtimeDecision.mission &&
+              runtimeDecision.mission.pendingOperatorDecision &&
+              runtimeDecision.mission.pendingOperatorDecision.kind
+          ),
+        });
+        if (statusQueryTurn) {
+          session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          if (session.context && typeof session.context === 'object') {
+            session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+            session.context._answerCorpus = 'workspace';
+          }
+          const structuredStatus = statusQueryTurn.structured;
+          const presentedStatus = await this._presentation.present(structuredStatus);
+          const proseStatus = presentedStatus.prose || statusQueryTurn.prose;
+          this._sessions.appendMessage(session.id, {
+            role: 'max',
+            text: proseStatus,
+            structured: structuredStatus,
+          });
+          return traceAskReturn('operator_status_query', {
+            sessionId: session.id,
+            prose: proseStatus,
+            structured: structuredStatus,
+            metadata: presentedStatus.metadata,
+            suggestions: resolveResultSuggestions({
+              structured: structuredStatus,
+              session,
+              question,
+            }),
+            recommendedActions: structuredStatus.recommendedActions,
+            contextSwitch: envelopeSwitch,
+            domainSwitch: null,
+            context: session.context,
+            presentation: presentedStatus.presentation,
+            route: ROUTE_KINDS.INTELLIGENCE,
+            mission: runtimeDecision.mission || null,
+            resolution: {
+              action: 'status_query',
+              reason: statusQueryTurn.reason,
+            },
+            executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+            interrogation: null,
+            conversationIntent,
+            domainDecision: {
+              domain: EXECUTION_DOMAINS.WORKSPACE,
+              reason: statusQueryTurn.reason,
+              missionType: 'acquisition_mission',
+              missionIntent: conversationIntent.intent,
+              confidence: conversationIntent.confidence,
+              previousDomain: session.previousExecutionDomain || null,
+              domainSwitched: false,
+            },
+            executionContext: {
+              domain: EXECUTION_DOMAINS.WORKSPACE,
+              routeKind: ROUTE_KINDS.INTELLIGENCE,
+              reason: statusQueryTurn.reason,
+              missionType: 'acquisition_mission',
+              missionId:
+                runtimeDecision.mission && runtimeDecision.mission.id
+                  ? runtimeDecision.mission.id
+                  : null,
+            },
+            workspaceOwnership: {
+              ...workspaceOwnership,
+              missionRuntime: MISSION_RUNTIMES.AMO,
+              missionType: 'acquisition_mission',
+            },
+          }, { missionRuntime: MISSION_RUNTIMES.AMO, responseOwner: workspaceOwnership.owner });
+        }
+
+        const amoExecutionTurn = await acquisitionMissionExecution.maybeHandleAcquisitionMissionExecution({
+          question,
+          session,
+          context: rawContext || session.context,
+          conversationIntent,
+          operatorIntent,
+          ...(this._scoutAcquisitionOpts || {}),
+          ...this._amoRuntimeInput(),
+          missionEngine: this._missionEngine || undefined,
+          ...this._amoStagePersistOpts(),
+        });
+        if (amoExecutionTurn) {
+        session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        if (session.context && typeof session.context === 'object') {
+          session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          session.context._answerCorpus = 'workspace';
+          session.context.acquisitionOwner = 'AMO';
+          if (amoExecutionTurn.mission) {
+            session.context.missionId = amoExecutionTurn.mission.id;
+            session.context.acquisitionMissionId = amoExecutionTurn.mission.id;
+          }
+        }
+        const structuredAmoExec = amoExecutionTurn.structured;
+        let presentedAmoExec;
+        try {
+          presentedAmoExec = await this._presentation.present(structuredAmoExec);
+        } catch (err) {
+          presentedAmoExec = {
+            prose: amoExecutionTurn.prose,
+            metadata: {
+              presentationError: true,
+              presentationMessage: err && err.message,
+            },
+            presentation: { retryable: true, spec: 'SPEC-131' },
+          };
+        }
+        const proseAmoExec = presentedAmoExec.prose || amoExecutionTurn.prose;
+        this._sessions.appendMessage(session.id, {
+          role: 'max',
+          text: proseAmoExec,
+          structured: structuredAmoExec,
+        });
+        return traceAskReturn('amo_execution', {
+          sessionId: session.id,
+          prose: proseAmoExec,
+          structured: structuredAmoExec,
+          metadata: presentedAmoExec.metadata,
+          suggestions: resolveResultSuggestions({
+            structured: structuredAmoExec,
+            session,
+            question,
+          }),
+          recommendedActions: structuredAmoExec.recommendedActions,
+          contextSwitch: envelopeSwitch,
+          domainSwitch: null,
+          context: session.context,
+          presentation: presentedAmoExec.presentation,
+          route: ROUTE_KINDS.INTELLIGENCE,
+          mission: amoExecutionTurn.mission || null,
+          resolution: {
+            action: amoExecutionTurn.action || 'executed',
+            reason: amoExecutionTurn.reason,
+          },
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          interrogation: null,
+          domainDecision: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            reason: amoExecutionTurn.reason,
+            missionType: 'acquisition_mission',
+            missionIntent: null,
+            confidence: 1,
+            previousDomain: session.previousExecutionDomain || null,
+            domainSwitched: false,
+          },
+          executionContext: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            routeKind: ROUTE_KINDS.INTELLIGENCE,
+            reason: amoExecutionTurn.reason,
+            missionType: 'acquisition_mission',
+            missionId:
+              amoExecutionTurn.mission && amoExecutionTurn.mission.id
+                ? amoExecutionTurn.mission.id
+                : null,
+          },
+          workspaceOwnership: {
+            ...workspaceOwnership,
+            missionRuntime: MISSION_RUNTIMES.AMO,
+            missionType: 'acquisition_mission',
+          },
+        }, { missionRuntime: MISSION_RUNTIMES.AMO, responseOwner: workspaceOwnership.owner });
+        }
+      }
+
+      const activeContinuationEarly = await maybeHandleActiveWorkContinuation({
+        question,
+        session,
+      });
+      if (activeContinuationEarly) {
+        askPathTrace.traceBranch('active_work_continuation_early');
+        session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        if (session.context && typeof session.context === 'object') {
+          session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          session.context._answerCorpus = 'workspace';
+        }
+        const structuredEarly = activeContinuationEarly.structured;
+        const presentedEarly = await this._presentation.present(structuredEarly);
+        const proseEarly = presentedEarly.prose;
+        envelopeSwitch = null;
+        this._sessions.appendMessage(session.id, {
+          role: 'max',
+          text: proseEarly,
+          structured: structuredEarly,
+        });
+        return traceAskReturn('active_continuation_early', {
+          sessionId: session.id,
+          prose: proseEarly,
+          structured: structuredEarly,
+          metadata: presentedEarly.metadata,
+          suggestions: resolveResultSuggestions({
+            structured: structuredEarly,
+            session,
+            question,
+          }),
+          recommendedActions: structuredEarly.recommendedActions,
+          contextSwitch: envelopeSwitch,
+          domainSwitch: null,
+          context: session.context,
+          presentation: presentedEarly.presentation,
+          route: ROUTE_KINDS.INTELLIGENCE,
+          mission: null,
+          resolution: null,
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          domainDecision: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            reason: activeContinuationEarly.reason,
+            missionType: null,
+            missionIntent: null,
+            confidence: 1,
+            previousDomain: session.previousExecutionDomain || null,
+            domainSwitched: false,
+          },
+          executionContext: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            routeKind: ROUTE_KINDS.INTELLIGENCE,
+            reason: activeContinuationEarly.reason,
+            missionType: null,
+            missionId: null,
+          },
+          workspaceOwnership,
+        });
+      }
+
+      fallbackToReasoning('active_mission_unhandled');
+    }
+
+    // 2 — Mission Creation (acquisition objectives)
+    if (ownerIs(WORKSPACE_OWNERS.MISSION_CREATION)) {
+      askPathTrace.traceBranch('owner_pipeline:mission_creation');
+      const acquisitionOwnershipTurn = await maybeHandleAcquisitionOwnershipTurn({
+        question,
+        session,
+        context: rawContext || session.context,
+        resolvedObjective: (session.context && session.context.resolvedObjective) || null,
+        executionContract,
+        objectiveResolution,
+        missionLifecycleIntent: operatorIntent.missionLifecycleIntent,
+        ...this._amoRuntimeInput(),
+        cieService: this._clientIntelligenceService || undefined,
+        cieOpts: this._clientIntelligenceOpts || undefined,
+      });
+      if (acquisitionOwnershipTurn) {
+        session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        if (session.context && typeof session.context === 'object') {
+          session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          session.context._answerCorpus = 'workspace';
+          session.context.acquisitionOwner = 'AMO';
+          if (acquisitionOwnershipTurn.mission) {
+            session.context.missionId = acquisitionOwnershipTurn.mission.id;
+            session.context.acquisitionMissionId = acquisitionOwnershipTurn.mission.id;
+          }
+        }
+        const structuredOwnership = acquisitionOwnershipTurn.structured;
+        const presentedOwnership = await this._presentation.present(structuredOwnership);
+        const proseOwnership =
+          presentedOwnership.prose || acquisitionOwnershipTurn.prose;
+        this._sessions.appendMessage(session.id, {
+          role: 'max',
+          text: proseOwnership,
+          structured: structuredOwnership,
+        });
+        return {
+          sessionId: session.id,
+          prose: proseOwnership,
+          structured: structuredOwnership,
+          metadata: presentedOwnership.metadata,
+          suggestions: resolveResultSuggestions({
+            structured: structuredOwnership,
+            session,
+            question,
+          }),
+          recommendedActions: structuredOwnership.recommendedActions,
+          contextSwitch: envelopeSwitch,
+          domainSwitch: null,
+          context: session.context,
+          presentation: presentedOwnership.presentation,
+          route: ROUTE_KINDS.INTELLIGENCE,
+          mission: acquisitionOwnershipTurn.mission || null,
+          resolution: null,
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          interrogation: null,
+          domainDecision: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            reason: acquisitionOwnershipTurn.reason,
+            missionType: 'acquisition_mission',
+            missionIntent: null,
+            confidence: 1,
+            previousDomain: session.previousExecutionDomain || null,
+            domainSwitched: false,
+          },
+          executionContext: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            routeKind: ROUTE_KINDS.INTELLIGENCE,
+            reason: acquisitionOwnershipTurn.reason,
+            missionType: 'acquisition_mission',
+            missionId:
+              acquisitionOwnershipTurn.mission &&
+              acquisitionOwnershipTurn.mission.id
+                ? acquisitionOwnershipTurn.mission.id
+                : null,
+          },
+          ownershipTrace: acquisitionOwnershipTurn.ownershipTrace || null,
+          workspaceOwnership,
+        };
+      }
+      fallbackToReasoning('mission_creation_unhandled');
+    }
+
+    // 3 — Objective Persistence (SPEC-126 — never execution language)
+    if (ownerIs(WORKSPACE_OWNERS.OBJECTIVE_PERSISTENCE)) {
+      askPathTrace.traceBranch('owner_pipeline:objective_persistence');
+      const objectivePersistenceTurn = await maybeHandleOperatorObjectiveTurn({
+        question,
+        session,
+        context: rawContext || session.context,
+        objectiveService: this._operatorObjectiveService || undefined,
+        objectiveOpts: this._operatorObjectiveOpts || undefined,
+        allowEstablishment: true,
+      });
+      if (objectivePersistenceTurn && objectivePersistenceTurn.handled) {
+        session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        if (session.context && typeof session.context === 'object') {
+          session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          session.context._answerCorpus = 'workspace';
+          if (objectivePersistenceTurn.resolvedObjective) {
+            session.context.resolvedObjective = objectivePersistenceTurn.resolvedObjective;
+            session.context.objective =
+              objectivePersistenceTurn.resolvedObjective.objectiveText ||
+              session.context.objective;
+            session.context.objectiveId = objectivePersistenceTurn.resolvedObjective.id;
+          }
+          if (objectivePersistenceTurn.activeObjectives) {
+            session.context.activeObjectives = objectivePersistenceTurn.activeObjectives;
+          }
+          session.context.objectiveResolution =
+            objectivePersistenceTurn.objectiveResolution || null;
+        }
+        const structuredObj = objectivePersistenceTurn.structured;
+        const presentedObj = await this._presentation.present(structuredObj);
+        const proseObj = presentedObj.prose || objectivePersistenceTurn.prose;
+        this._sessions.appendMessage(session.id, {
+          role: 'max',
+          text: proseObj,
+          structured: structuredObj,
+        });
+        return {
+          sessionId: session.id,
+          prose: proseObj,
+          structured: structuredObj,
+          metadata: presentedObj.metadata,
+          suggestions: resolveResultSuggestions({
+            structured: structuredObj,
+            session,
+            question,
+          }),
+          recommendedActions: structuredObj.recommendedActions,
+          contextSwitch: envelopeSwitch,
+          domainSwitch: null,
+          context: session.context,
+          presentation: presentedObj.presentation,
+          route: ROUTE_KINDS.INTELLIGENCE,
+          mission: null,
+          resolution: null,
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          resolvedObjective: objectivePersistenceTurn.resolvedObjective || null,
+          activeObjectives: objectivePersistenceTurn.activeObjectives || [],
+          domainDecision: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            reason: objectivePersistenceTurn.reason,
+            missionType: null,
+            missionIntent: null,
+            confidence: 1,
+            previousDomain: session.previousExecutionDomain || null,
+            domainSwitched: false,
+          },
+          executionContext: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            routeKind: ROUTE_KINDS.INTELLIGENCE,
+            reason: objectivePersistenceTurn.reason,
+            missionType: null,
+            missionId: null,
+          },
+          workspaceOwnership,
+        };
+      }
+      fallbackToReasoning('objective_persistence_unhandled');
+    }
+
+    // 4 — Blueprint (Client Intelligence)
+    if (ownerIs(WORKSPACE_OWNERS.BLUEPRINT)) {
+      askPathTrace.traceBranch('owner_pipeline:blueprint');
+      const cieTurnBlueprint = await maybeHandleClientIntelligenceTurn({
+        question,
+        session,
+        context: rawContext || session.context,
+        conversationSubject,
+        cieService: this._clientIntelligenceService || undefined,
+        cieOpts: this._clientIntelligenceOpts || undefined,
+      });
+      if (cieTurnBlueprint && cieTurnBlueprint.handled) {
+        session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        if (session.context && typeof session.context === 'object') {
+          session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          session.context._answerCorpus = 'workspace';
+          if (cieTurnBlueprint.attachment) {
+            Object.assign(session.context, cieTurnBlueprint.attachment);
+          }
+        }
+        const structuredCie = cieTurnBlueprint.structured;
+        const presentedCie = await this._presentation.present(structuredCie);
+        const proseCie = presentedCie.prose || cieTurnBlueprint.prose;
+        this._sessions.appendMessage(session.id, {
+          role: 'max',
+          text: proseCie,
+          structured: structuredCie,
+        });
+        return traceAskReturn('blueprint_cie', {
+          sessionId: session.id,
+          prose: proseCie,
+          structured: structuredCie,
+          metadata: presentedCie.metadata,
+          suggestions: resolveResultSuggestions({
+            structured: structuredCie,
+            session,
+            question,
+          }),
+          recommendedActions: structuredCie.recommendedActions,
+          contextSwitch: envelopeSwitch,
+          domainSwitch: null,
+          context: session.context,
+          presentation: presentedCie.presentation,
+          route: ROUTE_KINDS.INTELLIGENCE,
+          mission: null,
+          resolution: null,
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          clientIntelligence:
+            (cieTurnBlueprint.attachment &&
+              cieTurnBlueprint.attachment.clientIntelligence) ||
+            null,
+          domainDecision: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            reason: cieTurnBlueprint.reason,
+            missionType: null,
+            missionIntent: null,
+            confidence: 1,
+            previousDomain: session.previousExecutionDomain || null,
+            domainSwitched: false,
+          },
+          executionContext: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            routeKind: ROUTE_KINDS.INTELLIGENCE,
+            reason: cieTurnBlueprint.reason,
+            missionType: null,
+            missionId: null,
+          },
+          workspaceOwnership,
+          conversationIntent,
+          conversationSubject,
+        }, { pipeline: 'BusinessIntelligence' });
+      }
+      fallbackToReasoning('blueprint_unhandled');
+    }
+
+    // 4 — Mission Inspection
+    if (ownerIs(WORKSPACE_OWNERS.MISSION_INSPECTION)) {
+      askPathTrace.traceBranch('owner_pipeline:mission_inspection');
+      const workspaceMissionInspectionTurn = await maybeHandleWorkspaceMissionInspection({
+        question,
+        session,
+        context: rawContext || session.context,
+        conversationIntent,
+        ...this._amoRuntimeInput(),
+      });
+      if (workspaceMissionInspectionTurn) {
+        session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        if (session.context && typeof session.context === 'object') {
+          session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          session.context._answerCorpus = 'workspace';
+        }
+        const structuredMission = workspaceMissionInspectionTurn.structured;
+        const presentedMission = await this._presentation.present(structuredMission);
+        const proseMission = presentedMission.prose || workspaceMissionInspectionTurn.prose;
+        this._sessions.appendMessage(session.id, {
+          role: 'max',
+          text: proseMission,
+          structured: structuredMission,
+        });
+        return {
+          sessionId: session.id,
+          prose: proseMission,
+          structured: structuredMission,
+          metadata: {
+            ...(presentedMission.metadata || {}),
+            conversationIntent,
+          },
+          suggestions: resolveResultSuggestions({
+            structured: structuredMission,
+            session,
+            question,
+          }),
+          recommendedActions: structuredMission.recommendedActions,
+          contextSwitch: envelopeSwitch,
+          domainSwitch: null,
+          context: session.context,
+          presentation: presentedMission.presentation,
+          route: ROUTE_KINDS.INTELLIGENCE,
+          mission:
+            workspaceMissionInspectionTurn.answered &&
+            workspaceMissionInspectionTurn.answered.mission ||
+            null,
+          resolution: null,
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          interrogation: null,
+          conversationIntent,
+          domainDecision: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            reason: workspaceMissionInspectionTurn.reason,
+            missionType: null,
+            missionIntent: conversationIntent.intent,
+            confidence: conversationIntent.confidence,
+            previousDomain: session.previousExecutionDomain || null,
+            domainSwitched: false,
+          },
+          executionContext: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            routeKind: ROUTE_KINDS.INTELLIGENCE,
+            reason: workspaceMissionInspectionTurn.reason,
+            missionType: 'acquisition_mission',
+            missionId:
+              workspaceMissionInspectionTurn.answered &&
+              workspaceMissionInspectionTurn.answered.mission
+                ? workspaceMissionInspectionTurn.answered.mission.id
+                : null,
+          },
+          ownershipTrace: workspaceMissionInspectionTurn.ownershipTrace || null,
+          workspaceOwnership,
+        };
+      }
+      fallbackToReasoning('mission_inspection_unhandled');
+    }
+
+    // 5 — Specialist Commands
+    if (
+      ownerIs(
+        WORKSPACE_OWNERS.SPECIALIST_INTERROGATION,
+        WORKSPACE_OWNERS.SPECIALIST_SCOUT,
+        WORKSPACE_OWNERS.SPECIALIST_PAIGE,
+        WORKSPACE_OWNERS.SPECIALIST_CAL,
+        WORKSPACE_OWNERS.SPECIALIST_DIRECTION
+      )
+    ) {
+      askPathTrace.traceBranch('owner_pipeline:specialist');
+      if (ownerIs(WORKSPACE_OWNERS.SPECIALIST_INTERROGATION)) {
+        const interrogationTurn = await maybeHandleSpecialistInterrogationTurn({
+          question,
+          session,
+          context: rawContext || session.context,
+          delegationService: this._specialistDelegationService || undefined,
+          delegationOpts: this._specialistDelegationOpts || undefined,
+        });
+        if (interrogationTurn) {
+          session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          if (session.context && typeof session.context === 'object') {
+            session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+            session.context._answerCorpus = 'workspace';
+          }
+          const structuredInterrogate = interrogationTurn.structured;
+          const presentedInterrogate = await this._presentation.present(structuredInterrogate);
+          const proseInterrogate = presentedInterrogate.prose || interrogationTurn.prose;
+          this._sessions.appendMessage(session.id, {
+            role: 'max',
+            text: proseInterrogate,
+            structured: structuredInterrogate,
+          });
+          return {
+            sessionId: session.id,
+            prose: proseInterrogate,
+            structured: structuredInterrogate,
+            metadata: presentedInterrogate.metadata,
+            suggestions: resolveResultSuggestions({
+              structured: structuredInterrogate,
+              session,
+              question,
+            }),
+            recommendedActions: structuredInterrogate.recommendedActions,
+            contextSwitch: envelopeSwitch,
+            domainSwitch: null,
+            context: session.context,
+            presentation: presentedInterrogate.presentation,
+            route: ROUTE_KINDS.INTELLIGENCE,
+            mission: null,
+            resolution: null,
+            executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+            interrogation: interrogationTurn.interrogation || null,
+            domainDecision: {
+              domain: EXECUTION_DOMAINS.WORKSPACE,
+              reason: interrogationTurn.reason,
+              missionType: null,
+              missionIntent: null,
+              confidence: 1,
+              previousDomain: session.previousExecutionDomain || null,
+              domainSwitched: false,
+            },
+            executionContext: {
+              domain: EXECUTION_DOMAINS.WORKSPACE,
+              routeKind: ROUTE_KINDS.INTELLIGENCE,
+              reason: interrogationTurn.reason,
+              missionType: null,
+              missionId: null,
+            },
+            workspaceOwnership,
           };
         }
       }
 
-      const structuredCie = cieTurn.structured;
-      const routeCie = {
-        kind: ROUTE_KINDS.INTELLIGENCE,
-        missionType: null,
-        reason: cieTurn.reason,
-        missionIntent: null,
-        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
-      };
-      const presentedCie = await this._presentation.present(structuredCie);
-      const proseCie = presentedCie.prose || cieTurn.prose;
-
-      this._sessions.appendMessage(session.id, {
-        role: 'max',
-        text: proseCie,
-        structured: structuredCie,
-      });
-
-      return {
-        sessionId: session.id,
-        prose: proseCie,
-        structured: structuredCie,
-        metadata: presentedCie.metadata,
-        suggestions: resolveResultSuggestions({
-          structured: structuredCie,
-          session,
+      if (ownerIs(WORKSPACE_OWNERS.SPECIALIST_SCOUT)) {
+        const scoutTurn = await maybeHandleScoutAcquisitionTurn({
           question,
-        }),
-        recommendedActions: structuredCie.recommendedActions,
-        contextSwitch: envelopeSwitch,
-        domainSwitch: null,
-        context: session.context,
-        presentation: presentedCie.presentation,
-        route: routeCie.kind,
-        mission: null,
-        resolution: null,
-        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
-        clientIntelligence:
-          (cieTurn.attachment && cieTurn.attachment.clientIntelligence) || null,
-        domainDecision: {
-          domain: EXECUTION_DOMAINS.WORKSPACE,
-          reason: cieTurn.reason,
-          missionType: null,
-          missionIntent: null,
-          confidence: 1,
-          previousDomain: session.previousExecutionDomain || null,
-          domainSwitched: false,
-        },
-        executionContext: {
-          domain: EXECUTION_DOMAINS.WORKSPACE,
-          routeKind: ROUTE_KINDS.INTELLIGENCE,
-          reason: cieTurn.reason,
-          missionType: null,
-          missionId: null,
-        },
-      };
+          session,
+          context: rawContext || session.context,
+          action: rawContext?.action || null,
+          delegationService: this._specialistDelegationService || undefined,
+          delegationOpts: this._specialistDelegationOpts || undefined,
+          ...(this._scoutAcquisitionOpts || {}),
+        });
+        if (scoutTurn) {
+          session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          if (session.context && typeof session.context === 'object') {
+            session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+            session.context._answerCorpus = 'workspace';
+            session.context.acquisitionLoop = true;
+          }
+          const structuredScout = scoutTurn.structured;
+          const presentedScout = await this._presentation.present(structuredScout);
+          const proseScout = presentedScout.prose || scoutTurn.prose;
+          this._sessions.appendMessage(session.id, {
+            role: 'max',
+            text: proseScout,
+            structured: structuredScout,
+          });
+          return {
+            sessionId: session.id,
+            prose: proseScout,
+            structured: structuredScout,
+            metadata: presentedScout.metadata,
+            suggestions: resolveResultSuggestions({
+              structured: structuredScout,
+              session,
+              question,
+            }),
+            recommendedActions: structuredScout.recommendedActions,
+            contextSwitch: envelopeSwitch,
+            domainSwitch: null,
+            context: session.context,
+            presentation: presentedScout.presentation,
+            route: ROUTE_KINDS.INTELLIGENCE,
+            mission: null,
+            resolution: null,
+            executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+            scoutLoop: scoutTurn.loop || null,
+            domainDecision: {
+              domain: EXECUTION_DOMAINS.WORKSPACE,
+              reason: scoutTurn.reason,
+              missionType: null,
+              missionIntent: null,
+              confidence: 1,
+              previousDomain: session.previousExecutionDomain || null,
+              domainSwitched: false,
+            },
+            executionContext: {
+              domain: EXECUTION_DOMAINS.WORKSPACE,
+              routeKind: ROUTE_KINDS.INTELLIGENCE,
+              reason: scoutTurn.reason,
+              missionType: null,
+              missionId: null,
+            },
+            workspaceOwnership,
+          };
+        }
+      }
+
+      if (ownerIs(WORKSPACE_OWNERS.SPECIALIST_PAIGE)) {
+        const resolvedOperatorObjective = operatorObjectiveContext.resolvedObjective || null;
+        const paigeDelegation = await maybeHandlePaigeCampaignContentDelegation({
+          question,
+          session,
+          context: {
+            ...(rawContext || session.context),
+            ...(resolvedOperatorObjective ? operatorObjectiveContext.attachment : {}),
+            ...(resolvedOperatorObjective ? {
+              objective: resolvedOperatorObjective.objectiveText,
+              objectiveId: resolvedOperatorObjective.id,
+            } : {}),
+          },
+          delegationService: this._paigeCampaignDelegationService || undefined,
+          learningOpts: this._paigeLearningOpts || undefined,
+        });
+        if (paigeDelegation) {
+          session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          if (session.context && typeof session.context === 'object') {
+            session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+            session.context._answerCorpus = 'workspace';
+            session.context.paigeRecommendation = paigeDelegation.recommendation;
+            if (paigeDelegation.recommendationId) {
+              session.context.recommendationId = paigeDelegation.recommendationId;
+              session.context.pendingRecommendationId = paigeDelegation.recommendationId;
+            }
+          }
+          const structuredPaige = paigeDelegation.structured;
+          if (resolvedOperatorObjective && structuredPaige && structuredPaige.answer) {
+            structuredPaige.answer = synthesizeObjectivePaigeResponse(
+              resolvedOperatorObjective,
+              structuredPaige.answer
+            );
+          }
+          const presentedPaige = await this._presentation.present(structuredPaige);
+          const prosePaige = presentedPaige.prose;
+          this._sessions.appendMessage(session.id, {
+            role: 'max',
+            text: prosePaige,
+            structured: structuredPaige,
+          });
+          return {
+            sessionId: session.id,
+            prose: prosePaige,
+            structured: structuredPaige,
+            metadata: presentedPaige.metadata,
+            suggestions: resolveResultSuggestions({
+              structured: structuredPaige,
+              session,
+              question,
+            }),
+            recommendedActions: structuredPaige.recommendedActions,
+            contextSwitch: envelopeSwitch,
+            domainSwitch: null,
+            context: session.context,
+            presentation: presentedPaige.presentation,
+            route: ROUTE_KINDS.INTELLIGENCE,
+            mission: null,
+            resolution: null,
+            executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+            paigeRecommendation: paigeDelegation.recommendation,
+            resolvedObjective: resolvedOperatorObjective,
+            domainDecision: {
+              domain: EXECUTION_DOMAINS.WORKSPACE,
+              reason: paigeDelegation.reason,
+              missionType: null,
+              missionIntent: null,
+              confidence: 1,
+              previousDomain: session.previousExecutionDomain || null,
+              domainSwitched: false,
+            },
+            executionContext: {
+              domain: EXECUTION_DOMAINS.WORKSPACE,
+              routeKind: ROUTE_KINDS.INTELLIGENCE,
+              reason: paigeDelegation.reason,
+              missionType: null,
+              missionId: null,
+            },
+            workspaceOwnership,
+          };
+        }
+      }
+
+      if (ownerIs(WORKSPACE_OWNERS.SPECIALIST_CAL)) {
+        const calTurn = await maybeHandleCalCoachingTurn({
+          question,
+          session,
+          context: rawContext || session.context,
+        });
+        if (calTurn) {
+          session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          if (session.context && typeof session.context === 'object') {
+            session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+            session.context._answerCorpus = 'workspace';
+          }
+          const structuredCal = calTurn.structured;
+          const presentedCal = await this._presentation.present(structuredCal);
+          const proseCal = presentedCal.prose || calTurn.prose;
+          this._sessions.appendMessage(session.id, {
+            role: 'max',
+            text: proseCal,
+            structured: structuredCal,
+          });
+          return {
+            sessionId: session.id,
+            prose: proseCal,
+            structured: structuredCal,
+            metadata: presentedCal.metadata,
+            suggestions: resolveResultSuggestions({
+              structured: structuredCal,
+              session,
+              question,
+            }),
+            recommendedActions: structuredCal.recommendedActions,
+            contextSwitch: envelopeSwitch,
+            domainSwitch: null,
+            context: session.context,
+            presentation: presentedCal.presentation,
+            route: ROUTE_KINDS.INTELLIGENCE,
+            mission: null,
+            resolution: null,
+            executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+            domainDecision: {
+              domain: EXECUTION_DOMAINS.WORKSPACE,
+              reason: calTurn.reason,
+              missionType: null,
+              missionIntent: null,
+              confidence: 1,
+              previousDomain: session.previousExecutionDomain || null,
+              domainSwitched: false,
+            },
+            executionContext: {
+              domain: EXECUTION_DOMAINS.WORKSPACE,
+              routeKind: ROUTE_KINDS.INTELLIGENCE,
+              reason: calTurn.reason,
+              missionType: null,
+              missionId: null,
+            },
+            workspaceOwnership,
+          };
+        }
+      }
+
+      if (ownerIs(WORKSPACE_OWNERS.SPECIALIST_DIRECTION)) {
+        const directionTurn = await maybeHandleSpecialistDirectionTurn({
+          question,
+          session,
+          context: rawContext || session.context,
+          action: rawContext?.action || null,
+          recommendationId: rawContext?.recommendationId || null,
+          directionService: this._specialistDirectionService || undefined,
+          directionOpts: this._specialistDirectionOpts || undefined,
+        });
+        if (directionTurn) {
+          session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          if (session.context && typeof session.context === 'object') {
+            session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+            session.context._answerCorpus = 'workspace';
+          }
+          const structuredDir = directionTurn.structured;
+          const presentedDir = await this._presentation.present(structuredDir);
+          const proseDir = presentedDir.prose || directionTurn.prose;
+          this._sessions.appendMessage(session.id, {
+            role: 'max',
+            text: proseDir,
+            structured: structuredDir,
+          });
+          return {
+            sessionId: session.id,
+            prose: proseDir,
+            structured: structuredDir,
+            metadata: presentedDir.metadata,
+            suggestions: resolveResultSuggestions({
+              structured: structuredDir,
+              session,
+              question,
+            }),
+            recommendedActions: structuredDir.recommendedActions,
+            contextSwitch: envelopeSwitch,
+            domainSwitch: null,
+            context: session.context,
+            presentation: presentedDir.presentation,
+            route: ROUTE_KINDS.INTELLIGENCE,
+            mission: null,
+            resolution: null,
+            executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+            specialistDirection: directionTurn.direction || null,
+            recommendationId: directionTurn.recommendationId || null,
+            domainDecision: {
+              domain: EXECUTION_DOMAINS.WORKSPACE,
+              reason: directionTurn.reason,
+              missionType: null,
+              missionIntent: null,
+              confidence: 1,
+              previousDomain: session.previousExecutionDomain || null,
+              domainSwitched: false,
+            },
+            executionContext: {
+              domain: EXECUTION_DOMAINS.WORKSPACE,
+              routeKind: ROUTE_KINDS.INTELLIGENCE,
+              reason: directionTurn.reason,
+              missionType: null,
+              missionId: null,
+            },
+            workspaceOwnership,
+          };
+        }
+      }
+
+      fallbackToReasoning('specialist_unhandled');
     }
 
-    // Early desk-context continuation — before domain routing, General
-    // Conversation, policy fallback, mission resolver, or mission create/resume.
+    // 6 — Knowledge Retrieval (only when no specialist owner claimed)
+    if (ownerIs(WORKSPACE_OWNERS.KNOWLEDGE_RETRIEVAL)) {
+      askPathTrace.traceBranch('owner_pipeline:knowledge_retrieval');
+      const operatingUpdateTurn = await maybeHandleOperatorOperatingUpdate({
+        question,
+        session,
+        context: rawContext || session.context,
+        operatingUpdateOpts: this._operatingUpdateOpts || undefined,
+        operatingEvidenceOpts: this._operatingEvidenceOpts || undefined,
+        knowledge:
+          (this._operatingUpdateOpts && this._operatingUpdateOpts.knowledge) ||
+          undefined,
+      });
+      if (operatingUpdateTurn) {
+        session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        if (session.context && typeof session.context === 'object') {
+          session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          session.context._answerCorpus = 'workspace';
+        }
+        const structuredUpdate = operatingUpdateTurn.structured;
+        const presentedUpdate = await this._presentation.present(structuredUpdate);
+        const proseUpdate = presentedUpdate.prose || operatingUpdateTurn.prose;
+        this._sessions.appendMessage(session.id, {
+          role: 'max',
+          text: proseUpdate,
+          structured: structuredUpdate,
+        });
+        return {
+          sessionId: session.id,
+          prose: proseUpdate,
+          structured: structuredUpdate,
+          metadata: presentedUpdate.metadata,
+          suggestions: resolveResultSuggestions({
+            structured: structuredUpdate,
+            session,
+            question,
+          }),
+          recommendedActions: structuredUpdate.recommendedActions,
+          contextSwitch: envelopeSwitch,
+          domainSwitch: null,
+          context: session.context,
+          presentation: presentedUpdate.presentation,
+          route: ROUTE_KINDS.INTELLIGENCE,
+          mission: null,
+          resolution: null,
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          operatingUpdate: {
+            turnType: operatingUpdateTurn.turnType,
+            assertions: operatingUpdateTurn.assertions,
+            results: operatingUpdateTurn.results,
+          },
+          domainDecision: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            reason: operatingUpdateTurn.reason,
+            missionType: null,
+            missionIntent: null,
+            confidence: 1,
+            previousDomain: session.previousExecutionDomain || null,
+            domainSwitched: false,
+          },
+          executionContext: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            routeKind: ROUTE_KINDS.INTELLIGENCE,
+            reason: operatingUpdateTurn.reason,
+            missionType: null,
+            missionId: null,
+          },
+          workspaceOwnership,
+        };
+      }
+
+      const retrievalCognitive = classifyCognitiveMode(question, {
+        session,
+        context: rawContext || session.context,
+      });
+      const retrievalContract = selectResponseContract(question, retrievalCognitive);
+      const retrievalTurn = await maybeHandleRetrievalBeforeDelegationTurn({
+        question,
+        session,
+        context: rawContext || session.context,
+        cognitive: retrievalCognitive,
+        responseContract: retrievalContract,
+        objectiveService: this._operatorObjectiveService || undefined,
+        objectiveOpts: this._operatorObjectiveOpts || undefined,
+        cieService: this._clientIntelligenceService || undefined,
+        cieOpts: this._clientIntelligenceOpts || undefined,
+        operatingEvidenceOpts: {
+          ...(this._operatingEvidenceOpts || {}),
+          knowledge:
+            (this._operatingEvidenceOpts && this._operatingEvidenceOpts.knowledge) ||
+            (this._operatingUpdateOpts && this._operatingUpdateOpts.knowledge) ||
+            undefined,
+        },
+        knowledge:
+          (this._operatingUpdateOpts && this._operatingUpdateOpts.knowledge) ||
+          (this._operatingEvidenceOpts && this._operatingEvidenceOpts.knowledge) ||
+          undefined,
+        ...(this._scoutAcquisitionOpts || {}),
+      });
+      if (retrievalTurn) {
+        session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        if (session.context && typeof session.context === 'object') {
+          session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          session.context._answerCorpus = 'workspace';
+        }
+        const structuredRetrieve = retrievalTurn.structured;
+        const presentedRetrieve = await this._presentation.present(structuredRetrieve);
+        const proseRetrieve = presentedRetrieve.prose || retrievalTurn.prose;
+        this._sessions.appendMessage(session.id, {
+          role: 'max',
+          text: proseRetrieve,
+          structured: structuredRetrieve,
+        });
+        return {
+          sessionId: session.id,
+          prose: proseRetrieve,
+          structured: structuredRetrieve,
+          metadata: presentedRetrieve.metadata,
+          suggestions: resolveResultSuggestions({
+            structured: structuredRetrieve,
+            session,
+            question,
+          }),
+          recommendedActions: structuredRetrieve.recommendedActions,
+          contextSwitch: envelopeSwitch,
+          domainSwitch: null,
+          context: session.context,
+          presentation: presentedRetrieve.presentation,
+          route: ROUTE_KINDS.INTELLIGENCE,
+          mission: null,
+          resolution: null,
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          retrieval: {
+            mode: retrievalTurn.mode,
+            sourcesUsed: retrievalTurn.sourcesUsed,
+            delegated: false,
+          },
+          domainDecision: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            reason: retrievalTurn.reason,
+            missionType: null,
+            missionIntent: null,
+            confidence: 1,
+            previousDomain: session.previousExecutionDomain || null,
+            domainSwitched: false,
+          },
+          executionContext: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            routeKind: ROUTE_KINDS.INTELLIGENCE,
+            reason: retrievalTurn.reason,
+            missionType: null,
+            missionId: null,
+          },
+          workspaceOwnership,
+        };
+      }
+      fallbackToReasoning('knowledge_retrieval_unhandled');
+    }
+
+    // 7 — Reasoning fallback (intent classification runs only here)
+    if (!ownerIs(WORKSPACE_OWNERS.REASONING)) {
+      askPathTrace.traceBranch('owner_pipeline:reasoning_fallback');
+      fallbackToReasoning('owner_pipeline_miss');
+    } else {
+      askPathTrace.traceBranch('owner_pipeline:reasoning');
+    }
+
+    const cognitive = classifyCognitiveMode(question, {
+      session,
+      context: rawContext || session.context,
+    });
+    const responseContract = selectResponseContract(question, cognitive);
+    if (session.context && typeof session.context === 'object') {
+      // Response contracts govern this turn, not later unrelated questions.
+      session.context.responseContract = responseContract;
+      session.context.lastResponseContract = responseContract ? responseContract.id : null;
+    }
+
     const activeContinuation = await maybeHandleActiveWorkContinuation({
       question,
       session,
@@ -657,27 +2909,15 @@ class WorkspaceEngine {
         session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
         session.context._answerCorpus = 'workspace';
       }
-
       const structuredEarly = activeContinuation.structured;
-      const routeEarly = {
-        kind: ROUTE_KINDS.INTELLIGENCE,
-        missionType: null,
-        reason: activeContinuation.reason,
-        missionIntent: null,
-        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
-      };
       const presentedEarly = await this._presentation.present(structuredEarly);
-      // Latest typed operator message owns the turn — never surface a stale
-      // recommendation/suggestion focus switch during active desk continuation.
       const proseEarly = presentedEarly.prose;
       envelopeSwitch = null;
-
       this._sessions.appendMessage(session.id, {
         role: 'max',
         text: proseEarly,
         structured: structuredEarly,
       });
-
       return {
         sessionId: session.id,
         prose: proseEarly,
@@ -693,7 +2933,7 @@ class WorkspaceEngine {
         domainSwitch: null,
         context: session.context,
         presentation: presentedEarly.presentation,
-        route: routeEarly.kind,
+        route: ROUTE_KINDS.INTELLIGENCE,
         mission: null,
         resolution: null,
         executionDomain: EXECUTION_DOMAINS.WORKSPACE,
@@ -713,18 +2953,17 @@ class WorkspaceEngine {
           missionType: null,
           missionId: null,
         },
+        workspaceOwnership,
       };
     }
 
-    // SPEC-095 — durable operator objectives before intent routing.
-    // Persist → Retrieve → Resolve → Interpret → Route.
-    // Never invents objectives; never starts Missions from status references.
     const objectiveTurn = await maybeHandleOperatorObjectiveTurn({
       question,
       session,
       context: rawContext || session.context,
       objectiveService: this._operatorObjectiveService || undefined,
       objectiveOpts: this._operatorObjectiveOpts || undefined,
+      allowEstablishment: false,
     });
     if (objectiveTurn && objectiveTurn.handled) {
       session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
@@ -744,24 +2983,14 @@ class WorkspaceEngine {
         session.context.objectiveResolution =
           objectiveTurn.objectiveResolution || null;
       }
-
       const structuredObj = objectiveTurn.structured;
-      const routeObj = {
-        kind: ROUTE_KINDS.INTELLIGENCE,
-        missionType: null,
-        reason: objectiveTurn.reason,
-        missionIntent: null,
-        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
-      };
       const presentedObj = await this._presentation.present(structuredObj);
       const proseObj = presentedObj.prose || objectiveTurn.prose;
-
       this._sessions.appendMessage(session.id, {
         role: 'max',
         text: proseObj,
         structured: structuredObj,
       });
-
       return {
         sessionId: session.id,
         prose: proseObj,
@@ -777,7 +3006,7 @@ class WorkspaceEngine {
         domainSwitch: null,
         context: session.context,
         presentation: presentedObj.presentation,
-        route: routeObj.kind,
+        route: ROUTE_KINDS.INTELLIGENCE,
         mission: null,
         resolution: null,
         executionDomain: EXECUTION_DOMAINS.WORKSPACE,
@@ -799,6 +3028,7 @@ class WorkspaceEngine {
           missionType: null,
           missionId: null,
         },
+        workspaceOwnership,
       };
     }
 
@@ -806,74 +3036,55 @@ class WorkspaceEngine {
       objectiveTurn && objectiveTurn.suppressMission
     );
 
-    // SPEC-096 — operator direction on specialist recommendations (before new Paige asks).
-    const directionTurn = await maybeHandleSpecialistDirectionTurn({
+    const cieTurn = await maybeHandleClientIntelligenceTurn({
       question,
       session,
       context: rawContext || session.context,
-      action: rawContext?.action || null,
-      recommendationId: rawContext?.recommendationId || null,
-      directionService: this._specialistDirectionService || undefined,
-      directionOpts: this._specialistDirectionOpts || undefined,
+      conversationSubject,
+      cieService: this._clientIntelligenceService || undefined,
+      cieOpts: this._clientIntelligenceOpts || undefined,
     });
-    if (directionTurn) {
+    if (cieTurn && cieTurn.handled) {
       session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
       if (session.context && typeof session.context === 'object') {
         session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
         session.context._answerCorpus = 'workspace';
-        if (directionTurn.recommendationId) {
-          session.context.recommendationId = directionTurn.recommendationId;
-          session.context.pendingRecommendationId = directionTurn.recommendationId;
-        }
-        if (directionTurn.refinedRecommendation) {
-          session.context.paigeRecommendation = directionTurn.refinedRecommendation;
-        }
-        if (directionTurn.discussMode) {
-          session.context.discussRecommendation = true;
+        if (cieTurn.attachment) {
+          Object.assign(session.context, cieTurn.attachment);
         }
       }
-
-      const structuredDir = directionTurn.structured;
-      const routeDir = {
-        kind: ROUTE_KINDS.INTELLIGENCE,
-        missionType: null,
-        reason: directionTurn.reason,
-        missionIntent: null,
-        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
-      };
-      const presentedDir = await this._presentation.present(structuredDir);
-      const proseDir = presentedDir.prose || directionTurn.prose;
-
+      const structuredCie = cieTurn.structured;
+      const presentedCie = await this._presentation.present(structuredCie);
+      const proseCie = presentedCie.prose || cieTurn.prose;
       this._sessions.appendMessage(session.id, {
         role: 'max',
-        text: proseDir,
-        structured: structuredDir,
+        text: proseCie,
+        structured: structuredCie,
       });
-
-      return {
+      return traceAskReturn('client_intelligence', {
         sessionId: session.id,
-        prose: proseDir,
-        structured: structuredDir,
-        metadata: presentedDir.metadata,
+        prose: proseCie,
+        structured: structuredCie,
+        metadata: presentedCie.metadata,
         suggestions: resolveResultSuggestions({
-          structured: structuredDir,
+          structured: structuredCie,
           session,
           question,
         }),
-        recommendedActions: structuredDir.recommendedActions,
+        recommendedActions: structuredCie.recommendedActions,
         contextSwitch: envelopeSwitch,
         domainSwitch: null,
         context: session.context,
-        presentation: presentedDir.presentation,
-        route: routeDir.kind,
+        presentation: presentedCie.presentation,
+        route: ROUTE_KINDS.INTELLIGENCE,
         mission: null,
         resolution: null,
         executionDomain: EXECUTION_DOMAINS.WORKSPACE,
-        specialistDirection: directionTurn.direction || null,
-        recommendationId: directionTurn.recommendationId || null,
+        clientIntelligence:
+          (cieTurn.attachment && cieTurn.attachment.clientIntelligence) || null,
         domainDecision: {
           domain: EXECUTION_DOMAINS.WORKSPACE,
-          reason: directionTurn.reason,
+          reason: cieTurn.reason,
           missionType: null,
           missionIntent: null,
           confidence: 1,
@@ -883,16 +3094,101 @@ class WorkspaceEngine {
         executionContext: {
           domain: EXECUTION_DOMAINS.WORKSPACE,
           routeKind: ROUTE_KINDS.INTELLIGENCE,
-          reason: directionTurn.reason,
+          reason: cieTurn.reason,
           missionType: null,
           missionId: null,
         },
+        workspaceOwnership,
+      }, { pipeline: 'ClientIntelligence', claimedBy: cieTurn.reason });
+    }
+
+    if (responseContract && responseContract.id === CONTRACT_IDS.INVESTIGATION) {
+      const known =
+        (session.context && session.context.investigationKnown) ||
+        'No prior investigation result is on file.';
+      const investigationProse = composeAccordingToContract(responseContract, {
+        known,
+        needSpecialist:
+          'Yes. This is new external discovery work. I will not answer it from Blueprint memory or an ungrounded prior recommendation.',
+        expectedOutputs:
+          'A bounded specialist investigation: candidate companies, coverage, and fit. Not a strategy recommendation.',
+      });
+      const structuredInvestigate = attachContractMetadata(
+        buildStructuredResponse({
+          answer: investigationProse,
+          reasoning: [
+            `Classified operator intent as ${cognitive.kind}.`,
+            'Selected Investigation response contract before specialist delegation.',
+            'Known operating/durable state was inspected first. Unsupported memory is not an investigation result.',
+          ],
+          supportingEvidence: [],
+          contradictingEvidence: [],
+          confidence: 0.7,
+          nextInvestigations: [],
+          recommendedActions: [{ id: 'acknowledge', type: 'review', label: 'Continue' }],
+          confidenceContributors: ['spec_109', 'investigation_contract'],
+          timelineReferences: [],
+          relatedEntities: [],
+          metadata: {
+            sourcesUsed: { briefing: false, reasoning: true, memory: true, policy: true, knowledge: true },
+            evidenceCount: 0,
+            asOf: new Date().toISOString(),
+            unavailable: [],
+            cognitiveMode: cognitive.kind,
+            responseContract: responseContract.id,
+            intentBoundResponse: true,
+            specialistDelegated: false,
+            scoutDelegated: false,
+          },
+        }),
+        responseContract
+      );
+      const presentedInvestigate = await this._presentation.present(structuredInvestigate);
+      const proseInvestigate = presentedInvestigate.prose || investigationProse;
+      this._sessions.appendMessage(session.id, {
+        role: 'max',
+        text: proseInvestigate,
+        structured: structuredInvestigate,
+      });
+      return {
+        sessionId: session.id,
+        prose: proseInvestigate,
+        structured: structuredInvestigate,
+        metadata: presentedInvestigate.metadata,
+        suggestions: resolveResultSuggestions({
+          structured: structuredInvestigate,
+          session,
+          question,
+        }),
+        recommendedActions: structuredInvestigate.recommendedActions,
+        contextSwitch: envelopeSwitch,
+        domainSwitch: null,
+        context: session.context,
+        presentation: presentedInvestigate.presentation,
+        route: ROUTE_KINDS.INTELLIGENCE,
+        mission: null,
+        resolution: null,
+        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+        domainDecision: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          reason: 'intent_bound_investigation',
+          missionType: null,
+          missionIntent: null,
+          confidence: 1,
+          previousDomain: session.previousExecutionDomain || null,
+          domainSwitched: false,
+        },
+        executionContext: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          routeKind: ROUTE_KINDS.INTELLIGENCE,
+          reason: 'intent_bound_investigation',
+          missionType: null,
+          missionId: null,
+        },
+        workspaceOwnership,
       };
     }
 
-    // SPEC-094 — Max → Paige campaign content delegation (read-only advisory).
-    // Runs before mission create so launch/content asks stay conversational.
-    // SPEC-095: recovered objective context is already on session.context.
     const paigeDelegation = await maybeHandlePaigeCampaignContentDelegation({
       question,
       session,
@@ -911,9 +3207,7 @@ class WorkspaceEngine {
           session.context.pendingRecommendationId = paigeDelegation.recommendationId;
         }
       }
-
       const structuredPaige = paigeDelegation.structured;
-      // SPEC-095 — present Paige inside recovered objective when available.
       const resolvedForSynth =
         (session.context && session.context.resolvedObjective) ||
         (objectiveTurn && objectiveTurn.resolvedObjective) ||
@@ -924,22 +3218,13 @@ class WorkspaceEngine {
           structuredPaige.answer
         );
       }
-      const routePaige = {
-        kind: ROUTE_KINDS.INTELLIGENCE,
-        missionType: null,
-        reason: paigeDelegation.reason,
-        missionIntent: null,
-        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
-      };
       const presentedPaige = await this._presentation.present(structuredPaige);
       const prosePaige = presentedPaige.prose;
-
       this._sessions.appendMessage(session.id, {
         role: 'max',
         text: prosePaige,
         structured: structuredPaige,
       });
-
       return {
         sessionId: session.id,
         prose: prosePaige,
@@ -955,7 +3240,7 @@ class WorkspaceEngine {
         domainSwitch: null,
         context: session.context,
         presentation: presentedPaige.presentation,
-        route: routePaige.kind,
+        route: ROUTE_KINDS.INTELLIGENCE,
         mission: null,
         resolution: null,
         executionDomain: EXECUTION_DOMAINS.WORKSPACE,
@@ -977,19 +3262,94 @@ class WorkspaceEngine {
           missionType: null,
           missionId: null,
         },
+        workspaceOwnership,
       };
     }
 
-    // 1–2) Intent Understanding → Select Execution Domain (ignore active convo)
+    // Intent Understanding → Select Execution Domain (reasoning fallback only)
     // SPEC-095: pass resolved objective so status references do not become Missions.
-    const domainDecision = selectExecutionDomain(question, {
+    // SPEC-127: block GC / briefing while an active mission is engaged.
+    const activeMissionLockState = await resolveActiveMissionLock({
+      question,
+      session,
+      context: rawContext || session.context,
+      missionEngine: this._missionEngine,
+      missionsEnabled: this._missionsEnabled,
+      resolverEnabled: this._resolverEnabled,
+      detectExecution: true,
+      operatorIntent,
+      ...this._amoRuntimeInput(),
+    });
+    const explicitMissionExit = isExplicitMissionExit(question).explicit;
+
+    let domainDecision = selectExecutionDomain(question, {
       previousDomain: session.executionDomain || null,
       resolvedObjective:
         (session.context && session.context.resolvedObjective) ||
         (objectiveTurn && objectiveTurn.resolvedObjective) ||
         null,
       suppressMissionForObjective,
+      activeMissionLock:
+        activeMissionLockState.active && !explicitMissionExit,
+      explicitMissionExit,
+      executionCommand: activeMissionLockState.executionCommand,
+      operatorIntent,
     });
+
+    if (
+      activeMissionLockState.active &&
+      !explicitMissionExit &&
+      (domainDecision.activeMissionGuard ||
+        domainDecision.blockedDomain ||
+        domainDecision.reason === 'active_mission_lock' ||
+        domainDecision.reason === 'mission_execution_command')
+    ) {
+      ownershipAudit.logActiveMissionGuard({
+        missionId: activeMissionLockState.missionId,
+        source: activeMissionLockState.source,
+        blockedDomain:
+          domainDecision.blockedDomain ||
+          (domainDecision.reason === 'active_mission_lock'
+            ? 'general_conversation'
+            : null),
+        executionCommand: activeMissionLockState.executionCommand,
+        question,
+        reason: domainDecision.reason,
+      });
+    }
+
+    const guardedDomain = guardExecutionDomain(
+      domainDecision,
+      activeMissionLockState,
+      question,
+      operatorIntent
+    );
+    if (guardedDomain.guarded) {
+      ownershipAudit.logActiveMissionGuard({
+        missionId: activeMissionLockState.missionId,
+        source: activeMissionLockState.source,
+        blockedDomain: guardedDomain.blockedDomain,
+        executionCommand: activeMissionLockState.executionCommand,
+        question,
+        reason: guardedDomain.decision.reason,
+      });
+      domainDecision = guardedDomain.decision;
+    }
+
+    if (
+      activeMissionLockState.active &&
+      activeMissionLockState.executionCommand &&
+      !explicitMissionExit &&
+      (domainDecision.domain === EXECUTION_DOMAINS.GENERAL_CONVERSATION ||
+        domainDecision.domain === EXECUTION_DOMAINS.MORNING_BRIEFING)
+    ) {
+      ownershipAudit.logMissionOwnerBypassed({
+        attemptedOwner: domainDecision.domain,
+        missionId: activeMissionLockState.missionId,
+        question,
+        reason: 'execution_command_reached_blocked_domain',
+      });
+    }
 
     let structured;
     let mission = null;
@@ -1228,7 +3588,7 @@ class WorkspaceEngine {
 
     const context = (domainAttach && domainAttach.context) || session.context;
 
-    return {
+    return traceAskReturn('reasoning_fallback_final', {
       sessionId: session.id,
       prose,
       structured,
@@ -1252,7 +3612,11 @@ class WorkspaceEngine {
       domainDecision,
       executionContext:
         (domainAttach && domainAttach.executionContext) || null,
-    };
+      workspaceOwnership,
+    }, { route: route.kind });
+    } finally {
+      askPathTrace.endTrace();
+    }
   }
 
   /**
@@ -1351,12 +3715,19 @@ function preserveActiveWorkFocusOverStaleRecommendation(input) {
  * @returns {Promise<{ structured: object, reason: string }|null>}
  */
 async function maybeHandleActiveWorkContinuation(input) {
+  askPathTrace.traceEnter('maybeHandleActiveWorkContinuation');
   const question = String(input.question || '');
   const session = input.session || null;
-  if (!question.trim()) return null;
+  if (!question.trim()) {
+    askPathTrace.traceEarlyReturn('maybeHandleActiveWorkContinuation', 'empty_question');
+    return null;
+  }
 
   // Explicit new campaign/mission work always goes through normal routing.
-  if (isExplicitNewMissionRequest(question)) return null;
+  if (isExplicitNewMissionRequest(question)) {
+    askPathTrace.traceEarlyReturn('maybeHandleActiveWorkContinuation', 'explicit_new_mission');
+    return null;
+  }
 
   // Pasted fillable verification table / readiness summary table → desk
   // context before packet review, table mutation, prospect extraction, or

@@ -16,6 +16,7 @@ const {
   createMemoryStore: createOutcomeMemoryStore,
   createPostgresStore: createOutcomePostgresStore,
 } = require('./contentOutcomeIntelligence');
+const { briefPaige, qualifyProspect } = require('../packages/aim');
 
 const LEARNING_TYPES = Object.freeze([
   'distribution_pattern',
@@ -1548,7 +1549,25 @@ async function generateContentRecommendation(context = {}, opts = {}) {
     autonomousPublish: false,
     autonomousStrategyMutation: false,
     generated_at: nowIso(),
+    ...aimBriefingFields(context, opts),
   };
+}
+
+function aimBriefingFields(context = {}, opts = {}) {
+  const qualification = context.aimQualification || context.aim_qualification || null;
+  const aimModel =
+    context.aim ||
+    (opts.aimStore && typeof opts.aimStore.getAim === 'function'
+      ? opts.aimStore.getAim(context.aimClientKey || context.clientKey)
+      : null);
+  if (qualification) {
+    return { aim_briefing: briefPaige({ aim: aimModel, qualification }) };
+  }
+  if (aimModel && context.prospect) {
+    const scored = qualifyProspect(aimModel, context.prospect);
+    return { aim_briefing: briefPaige({ aim: aimModel, qualification: scored }) };
+  }
+  return {};
 }
 
 /**

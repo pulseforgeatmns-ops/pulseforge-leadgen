@@ -31,6 +31,9 @@ const {
 const {
   shouldRetrieveOperatingEvidence,
 } = require('./OperatingEvidenceRetrieval');
+const { isOperatorOperatingUpdate } = require('./OperatorOperatingUpdate');
+const { detectAcquisitionObjective } = require('./AcquisitionObjectiveDetection');
+const { blocksBusinessSubsystemClaim } = require('./WorkspaceRoutingPatterns');
 
 const ACTIVE_ONBOARDING_STATUSES = new Set([
   'NEW',
@@ -176,12 +179,213 @@ function goalPhraseFromFacts(facts) {
   return presentText(raw);
 }
 
+const MAX_CANONICAL_ADAPTER_VERSION = '1.0.0-spec-225';
+
+function isCanonicalProjectionFacts(facts) {
+  return Boolean(
+    facts &&
+      facts._projection_metadata &&
+      facts._projection_metadata.source_snapshot_id
+  );
+}
+
+function labelFromCanonicalValue(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return presentText(value);
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return presentText(String(value));
+  }
+  if (typeof value !== 'object') return '';
+  return presentText(value.name || value.label || value.canonical_label || value.value || '');
+}
+
+function canonicalList(value) {
+  return (Array.isArray(value) ? value : value ? [value] : [])
+    .map(labelFromCanonicalValue)
+    .filter(Boolean);
+}
+
+function canonicalServiceLabel(service) {
+  if (!service || typeof service !== 'object') return labelFromCanonicalValue(service);
+  const name = labelFromCanonicalValue(service);
+  const variants = canonicalList(service.variants);
+  return variants.length ? `${name} (${joinNatural(variants)})` : name;
+}
+
+function canonicalCustomerLabel(facts) {
+  const parts = [labelFromCanonicalValue(facts.ideal_customers)];
+  if (facts.ideal_customers_role) parts.push(labelFromCanonicalValue(facts.ideal_customers_role));
+  if (facts.ideal_customers_stage) parts.push(labelFromCanonicalValue(facts.ideal_customers_stage));
+  if (facts.ideal_customers_employee_range) parts.push(labelFromCanonicalValue(facts.ideal_customers_employee_range));
+  if (facts.ideal_customers_geography) parts.push(labelFromCanonicalValue(facts.ideal_customers_geography));
+  return joinNatural(parts.filter(Boolean));
+}
+
+function legacyFallbackValue(legacyFacts, field) {
+  if (!legacyFacts || typeof legacyFacts !== 'object') return '';
+  return legacyFacts[field];
+}
+
+function buildSourceDescriptor(source, details = {}) {
+  return { source, ...details };
+}
+
+function canonicalSourceDescriptor(facts, field) {
+  const meta = facts._projection_metadata || {};
+  const trace = facts._canonical_trace || {};
+  return buildSourceDescriptor('CANONICAL', {
+    field,
+    canonical_snapshot_id: meta.source_snapshot_id || null,
+    projection_version: meta.version || null,
+    adapter_version: MAX_CANONICAL_ADAPTER_VERSION,
+    epistemic_state: (trace.unresolved_fields || []).includes(field)
+      ? 'UNRESOLVED'
+      : 'KNOWN',
+    canonical_entity_ids: trace.entity_ids || [],
+    canonical_fact_ids: trace.fact_ids || [],
+  });
+}
+
+function legacySourceDescriptor(field) {
+  return buildSourceDescriptor('LEGACY_FALLBACK', { field });
+}
+
+function unavailableSourceDescriptor(field) {
+  return buildSourceDescriptor('UNAVAILABLE', { field });
+}
+
+function hasSemanticValue(value) {
+  if (Array.isArray(value)) return value.length > 0;
+  if (value && typeof value === 'object') return Object.keys(value).length > 0;
+  return Boolean(value);
+}
+
+function semanticFieldsFromCanonicalProjectionFacts(facts, legacyFacts = null) {
+  const fieldSources = {};
+  const legacyFallbackFields = [];
+  const unavailableFields = [];
+
+  function canonicalField(outputField, canonicalFieldName, value) {
+    if (value) fieldSources[outputField] = canonicalSourceDescriptor(facts, canonicalFieldName);
+    else {
+      fieldSources[outputField] = unavailableSourceDescriptor(canonicalFieldName);
+      unavailableFields.push(outputField);
+    }
+    return value;
+  }
+
+  function legacyField(outputField, legacyFieldName, transform = presentText) {
+    const raw = legacyFallbackValue(legacyFacts, legacyFieldName);
+    const value = transform(raw);
+    if (hasSemanticValue(value)) {
+      fieldSources[outputField] = legacySourceDescriptor(legacyFieldName);
+      legacyFallbackFields.push(outputField);
+    } else {
+      fieldSources[outputField] = unavailableSourceDescriptor(legacyFieldName);
+      unavailableFields.push(outputField);
+    }
+    return value;
+  }
+
+  const serviceList = (Array.isArray(facts.services) ? facts.services : [])
+    .map(canonicalServiceLabel)
+    .filter(Boolean);
+  const idealCustomers = canonicalCustomerLabel(facts);
+  const idealCustomerList = idealCustomers ? [idealCustomers] : [];
+  const outcomeList = canonicalList(facts.ninety_day_outcomes);
+
+  const businessName = canonicalField(
+    'businessName',
+    'business_name',
+    labelFromCanonicalValue(facts.business_name) || null
+  );
+  const services = canonicalField('services', 'services', joinNatural(serviceList));
+  const targetMarkets = canonicalField(
+    'targetMarkets',
+    'target_markets',
+    labelFromCanonicalValue(facts.target_markets)
+  );
+  const idealCustomersGeography = labelFromCanonicalValue(facts.ideal_customers_geography) || '';
+  const differentiation = canonicalField(
+    'competitiveAdvantages',
+    'differentiation',
+    labelFromCanonicalValue(facts.differentiation)
+  );
+
+  const avoidCustomers = labelFromCanonicalValue(facts.avoid_customers);
+  fieldSources.avoidCustomers = avoidCustomers
+    ? canonicalSourceDescriptor(facts, 'avoid_customers')
+    : unavailableSourceDescriptor('avoid_customers');
+  if (!avoidCustomers) unavailableFields.push('avoidCustomers');
+
+  const campaignGoals = outcomeList.length
+    ? canonicalField('campaignGoals', 'ninety_day_outcomes', joinNatural(outcomeList))
+    : legacyField('campaignGoals', 'ninety_day_outcomes', goalPhraseFromFacts);
+
+  const growthFocus = legacyField('growthFocus', 'growth_focus');
+  const brandVoice = legacyField('brandVoice', 'brand_voice', (value) =>
+    presentText(String(value || '').replace(/[.]+$/, ''))
+  );
+  const successMetricList = legacyField('successMetricList', 'success_metrics', (value) =>
+    (Array.isArray(value) ? value : value ? [value] : [])
+      .map((item) => presentText(String(item || '').replace(/[.]+$/, '')))
+      .filter(Boolean)
+  );
+  const businessFacts = legacyField('businessFacts', 'business_facts', (value) => value || {});
+
+  fieldSources.identity = fieldSources.businessName;
+  fieldSources.geography = fieldSources.targetMarkets;
+  fieldSources.idealCustomersGeography = facts.ideal_customers_geography
+    ? canonicalSourceDescriptor(facts, 'ideal_customers_geography')
+    : unavailableSourceDescriptor('ideal_customers_geography');
+  fieldSources.idealCustomers = idealCustomers
+    ? canonicalSourceDescriptor(facts, 'ideal_customers')
+    : unavailableSourceDescriptor('ideal_customers');
+  if (!idealCustomers) unavailableFields.push('idealCustomers');
+  fieldSources.commercialPreference = unavailableSourceDescriptor('commercialPreference');
+  unavailableFields.push('commercialPreference');
+
+  return {
+    businessName,
+    identity: businessName || '',
+    services: sanitizeFactSummary(services),
+    serviceList,
+    idealCustomers: sanitizeFactSummary(idealCustomers),
+    idealCustomerList,
+    avoidCustomers: sanitizeFactSummary(avoidCustomers),
+    targetMarkets: sanitizeFactSummary(targetMarkets),
+    geography: sanitizeFactSummary(targetMarkets),
+    idealCustomersGeography: sanitizeFactSummary(idealCustomersGeography),
+    growthFocus: sanitizeFactSummary(growthFocus),
+    commercialPreference: false,
+    competitiveAdvantages: sanitizeFactSummary(differentiation),
+    brandVoice: sanitizeFactSummary(brandVoice),
+    campaignGoals: sanitizeFactSummary(campaignGoals),
+    successMetrics: sanitizeFactSummary(joinNatural(successMetricList)),
+    successMetricList,
+    businessFacts,
+    semanticSource: 'canonical_projection',
+    semanticAuthority: 'CANONICAL',
+    canonicalSnapshotId: facts._projection_metadata.source_snapshot_id || null,
+    projectionVersion: facts._projection_metadata.version || null,
+    adapterVersion: MAX_CANONICAL_ADAPTER_VERSION,
+    fieldSources,
+    legacyFallbackFields: [...new Set(legacyFallbackFields)].sort(),
+    unavailableFields: [...new Set(unavailableFields)].sort(),
+    canonicalTrace: facts._canonical_trace || null,
+  };
+}
+
 /**
  * Build Max reasoning/recall context from structured normalizedFacts.
  * These are semantic values — not rendered Blueprint explanations.
  */
 function semanticFieldsFromNormalizedFacts(facts) {
   if (!facts || typeof facts !== 'object') return null;
+
+  if (isCanonicalProjectionFacts(facts)) {
+    return semanticFieldsFromCanonicalProjectionFacts(facts, facts._legacy_fallback_facts || null);
+  }
 
   const businessName = presentText(facts.business_name || '') || null;
   const description = presentText(
@@ -241,6 +445,7 @@ function semanticFieldsFromNormalizedFacts(facts) {
     campaignGoals: sanitizeFactSummary(goalPhraseFromFacts(facts)),
     successMetrics: sanitizeFactSummary(joinNatural(metricList)),
     successMetricList: metricList,
+    businessFacts: facts.business_facts || {},
     semanticSource: 'normalized_facts',
   };
 }
@@ -376,6 +581,9 @@ function normalizeBlueprintSummary(blueprint) {
     blueprint.normalizedFacts ||
     blueprint.normalized_facts ||
     null;
+  if (facts && isCanonicalProjectionFacts(facts) && blueprint._legacyFallbackFacts) {
+    facts._legacy_fallback_facts = blueprint._legacyFallbackFacts;
+  }
   const semantic =
     semanticFieldsFromNormalizedFacts(facts) ||
     semanticFieldsFromSections(sections);
@@ -399,6 +607,7 @@ function normalizeBlueprintSummary(blueprint) {
     avoidCustomers: semantic.avoidCustomers,
     targetMarkets: semantic.targetMarkets,
     geography: semantic.geography || semantic.targetMarkets,
+    idealCustomersGeography: semantic.idealCustomersGeography || null,
     growthFocus: semantic.growthFocus || '',
     commercialPreference: Boolean(semantic.commercialPreference),
     competitiveAdvantages: semantic.competitiveAdvantages,
@@ -406,7 +615,20 @@ function normalizeBlueprintSummary(blueprint) {
     campaignGoals: semantic.campaignGoals,
     successMetrics: semantic.successMetrics,
     successMetricList: semantic.successMetricList || [],
+    businessFacts: facts && facts.business_facts ? facts.business_facts : blueprint.epistemicFacts || {},
     semanticSource: semantic.semanticSource || null,
+    semanticAuthority: semantic.semanticAuthority || blueprint._semantic_authority || null,
+    canonicalSnapshotId:
+      semantic.canonicalSnapshotId ||
+      blueprint.canonicalSnapshotId ||
+      blueprint.canonical_snapshot_id ||
+      null,
+    projectionVersion: semantic.projectionVersion || null,
+    semanticAdapterVersion: semantic.adapterVersion || null,
+    fieldSources: semantic.fieldSources || {},
+    legacyFallbackFields: semantic.legacyFallbackFields || [],
+    unavailableFields: semantic.unavailableFields || [],
+    canonicalTrace: semantic.canonicalTrace || null,
     unknowns,
     confidence,
     playbookId: blueprint.playbookId || blueprint.playbook_id || null,
@@ -594,6 +816,18 @@ function workspaceStructured(answer, reasoning, extras = {}) {
   };
   if (extras.internalReasoning) {
     metadata.internalReasoning = extras.internalReasoning;
+  }
+  if (extras.missionCommunication === true) {
+    metadata.missionCommunication = true;
+  }
+  if (extras.missionCommunicationPayload) {
+    metadata.missionCommunicationPayload = extras.missionCommunicationPayload;
+  }
+  if (extras.reasoningEvidence) {
+    metadata.reasoningEvidence = extras.reasoningEvidence;
+  }
+  if (extras.showReasoningDisclosure === true) {
+    metadata.showReasoningDisclosure = true;
   }
   return buildStructuredResponse({
     answer,
@@ -1267,13 +1501,46 @@ function isClearlyNonBusinessUtterance(question, session) {
   return false;
 }
 
+function isAdvisoryNextStepQuestion(question, session) {
+  const active = getActiveClientReasoning(session);
+  if (!active || !Array.isArray(active.planSteps) || !active.planSteps.length) return false;
+  if (require('./ExecutionState').getExecutionState(session)) return false;
+  const matches = require('./ExecutionInspectionRegistry').matchExecutionInspectionIntents(question);
+  return matches.length > 0 && matches.every((intent) => intent.mode === 'next_step');
+}
+
 /**
  * SPEC-103B inverted claim: with approved Blueprint, unrecognized client
  * wording that looks like a question/advisory turn stays in CIE by default.
  * Concept scores select mode; they do not exclusively gate entry.
  */
 function shouldClaimClientIntelligenceTurn(question, session, opts = {}) {
+  if (blocksBusinessSubsystemClaim(opts.conversationSubject)) {
+    return false;
+  }
+  try {
+    const challenge = require('./RecommendationClaimChallenge');
+    if (challenge.isClaimChallenge(question) || challenge.isOperatorClaimCorrection(question)) {
+      return false;
+    }
+  } catch (_) {
+    // continue CIE classification if challenge helper is unavailable
+  }
+  // SPEC-124 — acquisition objectives belong to Mission Engine, not CIE essays.
+  if (detectAcquisitionObjective(question)) return false;
+  try {
+    const { isExecutionInspectionQuestion } = require('./ExecutionInspectionRegistry');
+    if (isExecutionInspectionQuestion(question) && !isAdvisoryNextStepQuestion(question, session)) return false;
+  } catch (_) {
+    /* registry unavailable */
+  }
   if (shouldRetrieveOperatingEvidence(question)) return false;
+  const sessionContract =
+    opts.responseContract ||
+    (session && session.context && session.context.responseContract) ||
+    null;
+  if (sessionContract && sessionContract.forbidsCieClaim) return false;
+  if (isOperatorOperatingUpdate(question)) return false;
   if (isClientContextExecutionRequest(question)) return false;
   if (isOperationalDeskOrMissionRequest(question)) return false;
   if (isAmbiguousExecutionAdjacentRequest(question)) return true;
@@ -1577,76 +1844,23 @@ function formatTargetingAnswer(summary) {
   );
 }
 
-function formatUnknownsAnswer(summary) {
-  const icp = summary.idealCustomers || null;
-  const market = summary.geography || summary.targetMarkets || null;
-  const goals = summary.campaignGoals || null;
-  const metrics = summary.successMetrics || null;
-  const knownBits = [];
-  if (summary.identity || summary.businessName) {
-    knownBits.push(presentText(summary.identity || summary.businessName));
-  }
-  if (icp) knownBits.push(`ideal customers center on ${icp}`);
-  if (market) knownBits.push(`geography is anchored to ${market}`);
-  if (goals) knownBits.push(`near-term goal is ${goals}`);
-  if (metrics) knownBits.push(`success is judged by ${metrics}`);
-
-  const paragraphs = [];
-  paragraphs.push(
-    'We have enough clarity to begin, but there are still several things I would not claim to know yet.'
-  );
-
-  if (knownBits.length) {
-    paragraphs.push(
-      `KNOWN from your approved Blueprint: ${knownBits.slice(0, 3).join('; ')}.`
-    );
-  }
-
-  const inferenceBits = [];
-  if (icp) {
-    inferenceBits.push(
-      `starting with ${icp}${market ? ` in ${market}` : ''} is a reasonable first motion`
-    );
-  } else {
-    inferenceBits.push(
-      'a tighter commercial acquisition motion is the right shape of first experiment'
-    );
-  }
-  paragraphs.push(
-    `INFERENCE (Max reasoning, not new fact): ${inferenceBits.join('; ')}. ` +
-      'That is directional guidance from approved understanding — not observed performance.'
-  );
-
-  const unknownBits = [];
-  if (market) {
-    unknownBits.push(
-      `which part of the ${market} commercial market will respond best`
-    );
-  } else {
-    unknownBits.push('which part of the commercial market will respond best');
-  }
-  if (icp && /property|facility/i.test(icp)) {
-    unknownBits.push(
-      'whether property managers will outperform facility managers'
-    );
-  } else {
-    unknownBits.push('which decision-maker segment will outperform the others');
-  }
-  unknownBits.push(
-    'which acquisition motion will produce the strongest recurring contracts'
-  );
-  for (const u of summary.unknowns || []) {
-    if (u) unknownBits.push(presentText(u));
-  }
-  paragraphs.push(`UNKNOWN: ${unknownBits.slice(0, 4).join('; ')}.`);
-
-  paragraphs.push(
-    'EVIDENCE NEEDED: we do not yet have enough campaign evidence to know expected walkthrough rate, close rate, or acquisition cost. ' +
-      "Those are not reasons to wait — they are the things the first acquisition experiment should help us learn. " +
-      'I will not invent live companies, signals, or performance claims.'
-  );
-
-  return paragraphs.join('\n\n');
+function formatUnknownsAnswer(summary, opts = {}) {
+  const {
+    buildUnknownsMissionCommunication,
+    formatMissionProse,
+    looksLikeReasoningRequest,
+  } = require('./MissionCommunication');
+  const comm = buildUnknownsMissionCommunication(summary, {
+    presentText,
+    explicitReasoningRequest:
+      opts.explicitReasoningRequest === true ||
+      looksLikeReasoningRequest(opts.question),
+  });
+  return formatMissionProse(comm, {
+    explicitReasoningRequest:
+      opts.explicitReasoningRequest === true ||
+      looksLikeReasoningRequest(opts.question),
+  });
 }
 
 /**
@@ -1871,11 +2085,24 @@ function composeClientContextReasoning(summary, question, opts = {}) {
   }
 
   if (mode === 'unknowns') {
+    const {
+      buildUnknownsMissionCommunication,
+      formatMissionProse,
+      looksLikeReasoningRequest,
+    } = require('./MissionCommunication');
+    const explicitReasoning = looksLikeReasoningRequest(question);
+    const missionCommunication = buildUnknownsMissionCommunication(summary, {
+      presentText,
+      explicitReasoningRequest: explicitReasoning,
+    });
     return {
-      prose: formatUnknownsAnswer(summary),
+      prose: formatMissionProse(missionCommunication, {
+        explicitReasoningRequest: explicitReasoning,
+      }),
       kind: 'unknowns',
       confidenceLabel: 'high',
       confidence: 0.9,
+      missionCommunication,
     };
   }
 
@@ -2152,10 +2379,28 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
   const question = String(input.question || '').trim();
   if (!question) return null;
 
+  if (blocksBusinessSubsystemClaim(input.conversationSubject)) {
+    return {
+      handled: false,
+      skipReason: 'subject_owner_lock',
+    };
+  }
+
   const session = input.session || null;
   const pre = await attachClientIntelligenceContext(input);
   const summary = pre.summary;
   const attachment = pre.attachment;
+
+  // SPEC-124 — Mission Engine owns acquisition objectives.
+  if (detectAcquisitionObjective(question)) {
+    return {
+      handled: false,
+      summary,
+      attachment,
+      clientId: pre.clientId,
+      skipReason: 'acquisition_objective_owned_by_mission',
+    };
+  }
 
   // Operating-state questions depend on recorded activity CIE does not contain.
   if (shouldRetrieveOperatingEvidence(question)) {
@@ -2165,6 +2410,17 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
       attachment,
       clientId: pre.clientId,
       skipReason: 'operating_evidence',
+    };
+  }
+
+  // SPEC-106 — operator-reported operating updates are not Blueprint claims.
+  if (isOperatorOperatingUpdate(question)) {
+    return {
+      handled: false,
+      summary,
+      attachment,
+      clientId: pre.clientId,
+      skipReason: 'operating_update',
     };
   }
 
@@ -2288,6 +2544,7 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
   if (
     !shouldClaimClientIntelligenceTurn(question, session, {
       approvedBlueprint,
+      conversationSubject: input.conversationSubject,
     })
   ) {
     return {
@@ -2406,6 +2663,7 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
 
   let planSteps = null;
   let conversationalFocusIndex = null;
+  let missionCommunicationPayload = null;
 
   if (looksLikeBusinessUnderstandingAsk(question)) {
     prose = formatUnderstandingAnswer(summary);
@@ -2433,6 +2691,9 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
       conversationalFocusIndex = composed.conversationalFocusIndex;
       confidence = composed.confidence != null ? composed.confidence : 0.74;
       confidenceLabel = composed.confidenceLabel || 'moderate';
+      if (composed.missionCommunication) {
+        missionCommunicationPayload = composed.missionCommunication;
+      }
       if (turnKind === 'understanding') {
         reason = 'client_intelligence_understanding';
       } else if (turnKind === 'targeting') {
@@ -2496,6 +2757,16 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
         : turnKind === 'evidence_gap'
           ? []
           : ['What do we still not know?', 'Why that direction?'],
+    ...(missionCommunicationPayload
+      ? {
+          missionCommunication: true,
+          missionCommunicationPayload,
+          reasoningEvidence: missionCommunicationPayload.reasoningEvidence,
+          showReasoningDisclosure: Boolean(
+            missionCommunicationPayload.reasoningEvidence
+          ),
+        }
+      : {}),
   });
 
   recordLastCieTurn(session, {
@@ -2541,6 +2812,7 @@ module.exports = {
   looksLikeAmbiguousBusinessReferent,
   isClearlyNonBusinessUtterance,
   shouldClaimClientIntelligenceTurn,
+  isAdvisoryNextStepQuestion,
   isOperationalDeskOrMissionRequest,
   normalizeClientUtterance,
   scoreClientBusinessSemantics,

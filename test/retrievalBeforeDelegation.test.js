@@ -56,7 +56,7 @@ describe('SPEC-102 cognitive mode classification', () => {
     );
     assert.equal(
       classifyCognitiveMode('What are you uncertain about?').kind,
-      COGNITIVE_MODES.REFLECTION
+      COGNITIVE_MODES.UNKNOWN_ANALYSIS
     );
   });
 

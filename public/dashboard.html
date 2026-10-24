@@ -1475,6 +1475,27 @@ body.light-mode .ask-max-answer { color: var(--text-primary); }
   text-decoration: none;
 }
 .client-home-secondary:hover { border-color: var(--gold); color: var(--gold); }
+.client-home-runtime {
+  margin-top: 1.2rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.55rem;
+}
+.client-home-runtime-item {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.55rem 0.65rem;
+}
+.client-home-runtime-item span {
+  display: block;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.52rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--gray);
+  margin-bottom: 0.2rem;
+}
 .client-home-meta {
   margin-top: 1.35rem;
   padding-top: 1rem;
@@ -2760,7 +2781,7 @@ body.viewer-role .prospect-pipeline-card { cursor: pointer; }
   <div class="sidebar-foot">
     <div class="client-switcher">
       <label for="clientSelector">Client</label>
-      <select id="clientSelector"></select>
+      <select id="clientSelector" data-pf-tenant-select aria-label="Active business workspace"></select>
     </div>
   </div>
 </div>
@@ -2832,9 +2853,10 @@ body.viewer-role .prospect-pipeline-card { cursor: pointer; }
         what you offer, where you're trying to go, and what still needs to be understood.
       </div>
       <div class="client-home-actions" id="clientHomeActions">
-        <a class="client-home-cta" id="clientHomeCta" href="/client-intel">Start with Max</a>
+        <a class="client-home-cta" id="clientHomeCta" href="/client-intel">Begin Client Intelligence</a>
         <a class="client-home-secondary" id="clientHomeSecondary" href="/client-intel" hidden>My Business</a>
       </div>
+      <div class="client-home-runtime" id="clientHomeRuntime" hidden></div>
       <div class="client-home-meta" id="clientHomeMeta" hidden></div>
     </div>
 
@@ -3161,7 +3183,7 @@ body.viewer-role .prospect-pipeline-card { cursor: pointer; }
         </div>
         <div class="agent-card-footer">
           <div class="agent-card-name">MAX</div>
-          <div class="agent-card-role">Manager Agent</div>
+          <div class="agent-card-role">Business Operating System</div>
           <div class="agent-card-status">
             <div class="status-tag st-live">LIVE</div>
             <button class="deploy-btn live-btn" onclick="event.stopPropagation(); runAgent(this)">RUN</button>
@@ -3597,6 +3619,12 @@ body.viewer-role .prospect-pipeline-card { cursor: pointer; }
         <div class="area-title">ANALYTICS</div>
         <div class="area-sub" id="analyticsSub">Loading...</div>
       </div>
+    </div>
+
+    <div class="an-card" style="margin-bottom:1rem">
+      <div class="an-card-title">API usage &amp; spending</div>
+      <p>Review tracked requests, gross cost estimates, coverage gaps, and limits.</p>
+      <a href="/api-usage" style="color:var(--accent)">Open API usage (operators)</a>
     </div>
 
     <div class="analytics-grid">
@@ -4048,6 +4076,24 @@ function clientWorkspaceLabel() {
   );
 }
 
+function renderClientRuntime(runtime) {
+  const el = document.getElementById('clientHomeRuntime');
+  if (!el || !runtime) return;
+  const rows = [
+    ['Workspace', runtime.workspace || 'Provisioned'],
+    ['Business Blueprint', runtime.blueprint || 'Not Started'],
+    ['AIM', runtime.aim || 'No Published AIM'],
+    ['Prospects', String(runtime.prospects ?? 0)],
+    ['Campaigns', String(runtime.campaigns ?? 0)],
+    ['Knowledge', String(runtime.knowledge ?? 0)],
+    ['Outcomes', String(runtime.outcomes ?? 0)],
+  ];
+  el.hidden = false;
+  el.innerHTML = rows.map(function(row) {
+    return '<div class="client-home-runtime-item"><span>' + row[0] + '</span>' + row[1] + '</div>';
+  }).join('');
+}
+
 async function loadClientHomeOnboarding() {
   const titleEl = document.getElementById('clientHomeTitle');
   const bodyEl = document.getElementById('clientHomeBody');
@@ -4059,6 +4105,7 @@ async function loadClientHomeOnboarding() {
 
   const company = clientWorkspaceLabel();
   let onboarding = null;
+  let workspaceMe = null;
   try {
     const res = await fetch('/api/v1/client-intel/onboarding', {
       credentials: 'include',
@@ -4068,20 +4115,32 @@ async function loadClientHomeOnboarding() {
   } catch (_err) {
     onboarding = null;
   }
+  try {
+    const wsRes = await fetch('/api/v1/workspace/me', {
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    if (wsRes.ok) workspaceMe = await wsRes.json();
+  } catch (_err) {
+    workspaceMe = null;
+  }
+  if (workspaceMe && workspaceMe.runtime) renderClientRuntime(workspaceMe.runtime);
 
   const state = onboarding?.onboardingState || 'none';
   const interviewId = onboarding?.interviewId || null;
+  const gates = workspaceMe && workspaceMe.gates;
+  const greeting = workspaceMe && workspaceMe.greeting;
 
   if (state === 'none') {
-    if (eyebrowEl) eyebrowEl.textContent = 'Welcome to Pulseforge';
-    titleEl.textContent = "Max doesn't know your business yet";
+    if (eyebrowEl) eyebrowEl.textContent = 'Welcome to PulseForge';
+    titleEl.textContent = (greeting && greeting.greeting) || ('Welcome, ' + company + '.');
     if (bodyEl) {
-      bodyEl.textContent =
-        'Before Max can give you useful guidance, he needs to understand your business. ' +
-        'This conversation helps Max learn who you serve, what you offer, where you\'re trying to go, ' +
-        'and what still needs to be understood.';
+      bodyEl.textContent = greeting && greeting.fullText
+        ? greeting.body.join('\n\n')
+        : "Let's begin by understanding your business.\n\nThe first step is completing Client Intelligence.\n\nEverything I learn from you becomes the foundation for prospecting, reasoning, and recommendations.";
+      bodyEl.style.whiteSpace = 'pre-wrap';
     }
-    ctaEl.textContent = 'Start with Max';
+    ctaEl.textContent = 'Begin Client Intelligence';
     ctaEl.href = '/client-intel';
     if (secondaryEl) secondaryEl.hidden = true;
     if (metaEl) metaEl.hidden = true;
@@ -4113,27 +4172,48 @@ async function loadClientHomeOnboarding() {
     return;
   }
 
-  // Approved / completed — normal client Home
+  // Approved / completed — AIM, then Max, then Scout. Never skip AIM.
   if (eyebrowEl) eyebrowEl.textContent = company;
+  if (gates && !gates.maxUnlocked) {
+    titleEl.textContent = 'Publish your Acquisition Intelligence Model';
+    if (bodyEl) {
+      bodyEl.textContent =
+        'Client Intelligence is approved. Upload market documents, compile, review, and publish an AIM before Max answers acquisition questions.';
+    }
+    ctaEl.textContent = 'Open Acquisition Intelligence';
+    ctaEl.href = '/aim';
+    if (secondaryEl) {
+      secondaryEl.hidden = false;
+      secondaryEl.textContent = 'My Business';
+      secondaryEl.href = '/client-intel';
+    }
+    if (metaEl) {
+      metaEl.hidden = false;
+      metaEl.innerHTML =
+        '<div><div class="client-home-card-label">AIM</div>' +
+        '<div class="client-home-card-value">' + ((gates.aim && gates.aim.label) || 'No Documents') + '</div></div>';
+    }
+    return;
+  }
   titleEl.textContent = 'Max understands your business.';
   if (bodyEl) {
     bodyEl.textContent =
-      'Ask Max for guidance, or open My Business to inspect the durable understanding anytime.';
+      'Ask Max for guidance, run Scout for tenant-scoped prospects, or open My Business anytime.';
   }
   ctaEl.textContent = 'Ask Max';
   ctaEl.href = '/command-deck';
   if (secondaryEl) {
     secondaryEl.hidden = false;
-    secondaryEl.textContent = 'My Business';
-    secondaryEl.href = '/client-intel';
+    secondaryEl.textContent = 'Run Scout';
+    secondaryEl.href = '/aim';
   }
   if (metaEl) {
     metaEl.hidden = false;
     metaEl.innerHTML =
       '<div><div class="client-home-card-label">My Business</div>' +
       '<div class="client-home-card-value">Approved understanding available</div></div>' +
-      '<div><div class="client-home-card-label">Current intelligence</div>' +
-      '<div class="client-home-card-value">No prospects yet. Max will surface opportunities as your strategy develops.</div></div>';
+      '<div><div class="client-home-card-label">AIM</div>' +
+      '<div class="client-home-card-value">Published</div></div>';
   }
 }
 
@@ -4149,7 +4229,7 @@ const agentData = {
   ivy: { face:'📸', name:'IVY', role:'Instagram Agent', title:'Ivy — Instagram Agent', desc:'Ivy handles Instagram engagement — targeting local hashtags, commenting on before/after posts, and replying to stories. Instagram is the highest-visual channel for local service businesses.', tasks:['Targets local hashtags — #manchesternh #nhsmallbusiness','Engages with before/after and workspace posts naturally','Replies to business owners\' stories for personal outreach','Drafts DMs for warm prospects showing high engagement','Same approval gate as Link and Faye'], ringOffset: 230 },
   sam: { face:'📱', name:'SAM', role:'SMS Agent', title:'Sam — SMS Agent', desc:'Sam handles warm follow-up via text. SMS open rates hit 95%+ and response rates for warm prospects reach 30–45%. Sam only texts people who\'ve already shown interest — never cold outreach.', tasks:['Triggers when a prospect opens emails 3+ times without reply','Follows up on web form submissions within minutes','Sends reactivation texts to cold prospects','Built on Twilio — ~$0.008 per message','Only texts confirmed opt-in contacts'], ringOffset: 230 },
   cal: { face:'📞', name:'CAL', role:'Calling Agent', title:'Cal — Calling Agent', metric:'calls made', desc:'Cal makes outbound calls to warm prospects who have received 3+ emails with no reply. He introduces himself as calling on behalf of Jacob at Pulseforge, handles objections naturally, and books discovery calls directly into the calendar.', tasks:['Targets warm prospects with ICP score ≥60 and 3+ unanswered emails','Calls via Bland.ai — real AI voice, not robotic','Script focuses on booking a 20-minute discovery call with Jacob','Handles objections — cost, timing, existing marketing — and redirects','Parses call transcript and creates Google Calendar event automatically'], ringOffset: 230 },
-  max: { face:'🧠', name:'MAX', role:'Manager Agent', title:'Max — Manager Agent', metric:'digests sent', desc:'Max is the brain of the operation. He reads everything all other agents have done, scores prospects by engagement, decides who should get touched next and how, and sends a daily briefing to your inbox every morning.', tasks:['Reads the entire second brain every morning','Scores and ranks prospects by engagement signals across all channels','Decides which agent should contact each prospect next','Sends a daily digest with activity summary and recommended actions','Live — Phase 5 complete'], ringOffset: 12 },
+  max: { face:'🧠', name:'MAX', role:'Business Operating System', title:'Max — Business Operating System', metric:'digests sent', desc:'Max is the business operating system. He maintains an accurate understanding of the pipeline, coordinates specialist execution, synthesizes evidence, and keeps every mission moving toward measurable outcomes — with a daily briefing every morning.', tasks:['Reads the entire second brain every morning','Synthesizes evidence across channels and specialists','Identifies priorities and recommends next actions grounded in data','Coordinates specialist execution under operator governance','Sends a daily digest with activity summary and recommended actions','Live — Phase 5 complete'], ringOffset: 12 },
   rex: { face:'📊', name:'REX', role:'Reporting Agent', title:'Rex — Reporting Agent', metric:'reports run', desc:'Rex tracks what\'s working. He pulls data from the second brain weekly and turns it into a performance report — cost per lead, channel performance, trends, and strategic recommendations.', tasks:['Pulls weekly activity data from the second brain','Calculates actions by channel and agent','Identifies which channels are producing the most engagement','Generates a clean weekly report and sends to your inbox','Eventually becomes a client-facing deliverable'], ringOffset: 25 },
   riley: { face:'🙋', name:'RILEY', role:'Receptionist Agent', title:'Riley — Receptionist Agent', metric:'emails processed', desc:'Riley handles inbound. When a prospect fills out a contact form or messages through Google Business Profile, Riley responds immediately, qualifies the lead, and books a call without you lifting a finger.', tasks:['Responds to web form submissions within 60 seconds','Handles Google Business Profile message inquiries','Qualifies leads with natural follow-up questions','Books appointments into the owner\'s calendar','Closes the loop — Pulseforge brings leads in and handles them on arrival'], ringOffset: 230 },
   penny: { face:'💰', name:'PENNY', role:'Ads Agent', title:'Penny — Ads Agent', metric:'reports generated', desc:'Penny pulls 7-day performance data from Google Ads and Meta for every active client account, flags threshold violations, and drafts a plain-English report with specific recommendations. She never makes changes automatically — everything goes to the approval queue first.', tasks:['Pulls campaign data from Google Ads REST API and Meta Marketing API','Flags CTR below 1%, frequency above 3, ROAS below 2.0, budget pacing issues, low Quality Scores','Generates a structured report per client per platform via Claude','Drafts ad copy variations when CTR is flagged','All reports queued for approval — Penny reads, analyzes, and recommends. She never changes live campaigns.'], ringOffset: 230 },
@@ -4497,52 +4577,44 @@ document.addEventListener('pulseforge:shell-ready', (event) => {
   window.addEventListener('resize', () => { if (!isMobile()) collapse(); });
 })();
 
+async function reloadDashboardTenantScopedData(detail) {
+  const selectedId = Number(detail?.active_client_id);
+  if (Number.isFinite(selectedId)) _activeClientId = selectedId;
+  if (detail?.features) {
+    applyPipelineFeatures(detail.features, { source: 'tenant_switch' });
+  } else if (Number.isFinite(selectedId)) {
+    if (Object.prototype.hasOwnProperty.call(_clientFeatureMap, String(selectedId))) {
+      applyPipelineFeatures({
+        client_id: selectedId,
+        setter_pipeline_v2_enabled: _clientFeatureMap[String(selectedId)] === true,
+      }, { source: 'client_cache' });
+    } else {
+      setPipelineExperiencePending('Resolving Pipeline for selected client…');
+    }
+  }
+  _statsCacheTime = 0;
+  _activityCacheTime = 0;
+  await Promise.all([loadLiveData(), loadActivityFeed(), loadApprovals(), loadProspects(), loadActions(), loadCieSessions()]);
+  if (document.getElementById('analyticsArea')?.style.display !== 'none') loadAnalytics();
+  if (isPipelineTabActive()) loadPipeline();
+  loadAgentVisibility();
+}
+
 async function loadClientSelector() {
   const selector = document.getElementById('clientSelector');
-  if (!selector) return;
+  const coord = window.PulseforgeTenantCoordinator;
+  if (!selector || !coord) return;
   try {
     const res = await fetch('/api/clients', { credentials: 'include' });
     if (!res.ok) return;
     const data = await res.json();
-    _clientFeatureMap = Object.fromEntries(
-      (data.clients || []).map(c => [String(c.id), c.setter_pipeline_v2_enabled === true])
-    );
-    _activeClientId = Number(data.active_client_id) || null;
+    coord.hydrateFromClientsApi(data);
+    _clientFeatureMap = coord.getFeatureMap();
+    _activeClientId = coord.getActiveClientId();
     if (data.features) applyPipelineFeatures(data.features, { source: 'clients' });
-    selector.innerHTML = (data.clients || []).map(c =>
-      `<option value="${c.id}" ${Number(c.id) === Number(data.active_client_id) ? 'selected' : ''}>${_esc(c.name)}</option>`
-    ).join('');
-    selector.onchange = async () => {
-      const selectedId = Number(selector.value);
-      _activeClientId = selectedId;
-      // Apply cached tenant flag immediately so Pipeline never flashes the
-      // wrong experience while /api/clients/active + /features hydrate.
-      if (Object.prototype.hasOwnProperty.call(_clientFeatureMap, String(selectedId))) {
-        applyPipelineFeatures({
-          client_id: selectedId,
-          setter_pipeline_v2_enabled: _clientFeatureMap[String(selectedId)] === true,
-        }, { source: 'client_cache' });
-      } else {
-        setPipelineExperiencePending('Resolving Pipeline for selected client…');
-      }
-      const switchRes = await fetch('/api/clients/active', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ client_id: selector.value })
-      });
-      if (switchRes.ok) {
-        const switched = await switchRes.json();
-        if (switched.features) applyPipelineFeatures(switched.features, { source: 'clients_active' });
-      }
-      _statsCacheTime = 0;
-      _activityCacheTime = 0;
-      await Promise.all([loadLiveData(), loadActivityFeed(), loadApprovals(), loadProspects(), loadActions(), loadCieSessions()]);
-      if (document.getElementById('analyticsArea')?.style.display !== 'none') loadAnalytics();
-      if (isPipelineTabActive()) loadPipeline();
-      loadAgentVisibility();
-    };
-  } catch(e) {
+    coord.bindTenantSelect(selector);
+    coord.registerReloadHandler(reloadDashboardTenantScopedData);
+  } catch (e) {
     console.error('loadClientSelector:', e);
   }
 }
@@ -7666,20 +7738,16 @@ async function loadCieSessions() {
   }
 }
 
-loadClientSelector();
-loadLiveData();
-loadAgentHealth();
-loadActivityFeed();
-loadCieSessions();
-loadAgentSparklines();
-setInterval(loadLiveData, 60000);
-setInterval(loadAgentHealth, 30000);
-setInterval(loadActivityFeed, 30000);
-setInterval(loadCieSessions, 60000);
-setInterval(loadAgentSparklines, 300000);
-setInterval(() => {
-  if (isPipelineTabActive()) loadPipeline();
-}, 300000);
+function startDashboardRefreshIntervals() {
+  setInterval(loadLiveData, 60000);
+  setInterval(loadAgentHealth, 30000);
+  setInterval(loadActivityFeed, 30000);
+  setInterval(loadCieSessions, 60000);
+  setInterval(loadAgentSparklines, 300000);
+  setInterval(() => {
+    if (isPipelineTabActive()) loadPipeline();
+  }, 300000);
+}
 
 // Deep-link: /dashboard?tab=pipeline opens Pipeline after client features hydrate.
 (async function openPipelineDeepLink() {
@@ -7911,7 +7979,7 @@ async function loadActions() {
     }
 
     if (empty) empty.style.display = 'none';
-    if (sub)   sub.textContent = `${actions.length} pending action${actions.length !== 1 ? 's' : ''} from Max`;
+    if (sub)   sub.textContent = `${actions.length} pending action${actions.length !== 1 ? 's' : ''}`;
 
     const urgentTypes = ['follow_up_clicked'];
     if (grid) grid.innerHTML = actions.map(a => {
@@ -7924,6 +7992,7 @@ async function loadActions() {
         return `${Math.round(mins/1440)}d ago`;
       })();
       const isAoEscalation = a.action_type === 'ao_escalation';
+      const isAssessment = a.action_type === 'website_assessment_request';
       let payload = {};
       try { payload = typeof a.payload === 'string' ? JSON.parse(a.payload || '{}') : (a.payload || {}); } catch (_) {}
       const visitHref = isAoEscalation && payload.lead_id
@@ -7934,7 +8003,7 @@ async function loadActions() {
         <div class="action-card-title">${_esc(a.title)}</div>
         <div class="action-card-desc">${_esc(a.description)}</div>
         <div class="action-card-footer">
-          ${isAoEscalation ? `<a class="action-btn-exec" href="${visitHref}" style="text-decoration:none;display:inline-flex;align-items:center;">View visit</a>` : `<button type="button" class="action-btn-exec" onclick="execAction('${a.id}')">Execute</button>`}
+          ${isAssessment ? `<button type="button" class="action-btn-exec" onclick="markAssessmentReviewed('${a.id}')">Mark reviewed</button>` : isAoEscalation ? `<a class="action-btn-exec" href="${visitHref}" style="text-decoration:none;display:inline-flex;align-items:center;">View visit</a>` : `<button type="button" class="action-btn-exec" onclick="execAction('${a.id}')">Execute</button>`}
           <button type="button" class="action-btn-dismiss" onclick="dismissAction('${a.id}')">Dismiss</button>
         </div>
         <div class="action-max-response" id="ac-response-${a.id}"></div>
@@ -7958,6 +8027,29 @@ function updateActionsBadgeCount() {
     if (empty) empty.style.display = 'block';
     const sub = document.getElementById('actionsSub');
     if (sub) sub.textContent = 'No pending action items';
+  }
+}
+
+// Assessment requests are reviewed by a person; never hand them to Max.
+async function markAssessmentReviewed(id) {
+  if (!canTakeDashboardActions()) return;
+  const card = document.getElementById(`ac-${id}`);
+  const button = card?.querySelector('.action-btn-exec');
+  const response = card?.querySelector('.action-max-response');
+  if (!button || button.disabled) return;
+  button.disabled = true;
+  try {
+    const result = await fetch(`/api/actions/${encodeURIComponent(id)}/execute`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ result: 'Human review marked complete by the operator. No automated assessment or email was sent.' }),
+    });
+    if (!result.ok) throw new Error('Could not save review status. Please try again.');
+    card.remove();
+    updateActionsBadgeCount();
+  } catch (error) {
+    if (response) { response.textContent = error.message; response.classList.add('visible'); }
+    button.disabled = false;
   }
 }
 
@@ -8066,7 +8158,19 @@ updateAgentCounts();
 <script src="/shared/phone.js"></script>
 <script src="/shared/lifecycle.js"></script>
 <script src="/shared/prospect-workspace.js"></script>
+<script src="/shared/tenantCoordinator.js"></script>
 <script src="/shared/shell.js"></script>
+<script>
+document.addEventListener('pulseforge:shell-ready', async () => {
+  await loadClientSelector();
+  loadLiveData();
+  loadAgentHealth();
+  loadActivityFeed();
+  loadCieSessions();
+  loadAgentSparklines();
+  startDashboardRefreshIntervals();
+});
+</script>
 <script>
 // Phase A2 wiring: dial handoff for tel: links rendered by this page, and
 // canonical-lifecycle refresh so Pipeline reflects workspace writes.
@@ -8091,5 +8195,14 @@ updateAgentCounts();
   });
 })();
 </script>
+<script>
+(() => {
+  const link = document.createElement('a');
+  link.href = '/paige-social'; link.textContent = 'Paige social review';
+  link.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:50;background:#173a48;color:white;padding:10px 16px;border-radius:8px;font:14px system-ui';
+  document.body.appendChild(link);
+})();
+</script>
 </body>
 </html>
+

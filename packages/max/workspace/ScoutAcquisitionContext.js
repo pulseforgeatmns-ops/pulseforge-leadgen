@@ -15,6 +15,12 @@ const {
   investigationFromResult,
 } = require('../scoutAcquisition/InvestigationProvenance');
 const { inspectionSummary } = require('../specialistDelegation/CognitiveTrace');
+const {
+  CONTRACT_IDS,
+  selectResponseContract,
+  composeAccordingToContract,
+  attachContractMetadata,
+} = require('./ResponseContract');
 
 function defaultLoop(input = {}) {
   return input.runLoop || scoutAcquisition.runAcquisitionIntelligenceLoop;
@@ -171,7 +177,7 @@ async function maybeHandleScoutAcquisitionTurn(input = {}) {
     }
   }
 
-  const prose =
+  let prose =
     result.prose ||
     'I checked current acquisition intelligence before deciding whether Scout needed to investigate.';
 
@@ -191,7 +197,34 @@ async function maybeHandleScoutAcquisitionTurn(input = {}) {
     evaluationId: result.evaluation && result.evaluation.id,
   });
 
-  const structured = buildStructuredResponse({
+  const known =
+    (session && session.context && session.context.investigationKnown) ||
+    (result.need && result.need.reason) ||
+    'Existing acquisition intelligence was inspected before deciding whether Scout needed new work.';
+  const contract =
+    input.responseContract ||
+    (session && session.context && session.context.responseContract) ||
+    selectResponseContract(question, classifyCognitiveMode(question, { session, context: envelope }));
+  if (contract && contract.id === CONTRACT_IDS.INVESTIGATION) {
+    prose = [
+      composeAccordingToContract(contract, {
+        known,
+        needSpecialist: result.delegated
+          ? 'Yes. Scout is running a bounded commercial-prospect investigation because current records do not answer this as retrieval.'
+          : result.kind === 'interrogate'
+            ? 'No new specialist run. I am inspecting the existing investigation trace.'
+            : 'Yes if new external coverage is required; I will not invent prospects from Blueprint memory.',
+        expectedOutputs:
+          'Candidate companies, coverage, and fit from the investigation — not a strategy recommendation from unsupported memory.',
+      }),
+      prose,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+  }
+
+  const structured = attachContractMetadata(
+    buildStructuredResponse({
     answer: prose,
     reasoning: [
       result.need && result.need.reason,
@@ -248,7 +281,9 @@ async function maybeHandleScoutAcquisitionTurn(input = {}) {
       coverageConfidence: investigation && investigation.coverageConfidence,
       coverageBand: investigation && investigation.coverageBand,
     },
-  });
+  }),
+    contract
+  );
 
   return {
     reason: result.delegated
@@ -257,6 +292,7 @@ async function maybeHandleScoutAcquisitionTurn(input = {}) {
     structured,
     prose,
     loop: result,
+    responseContract: contract,
   };
 }
 

@@ -5,7 +5,7 @@
  * Lives beneath Highest Leverage Action on the Command Deck.
  */
 
-const { ACTION_TYPES } = require('../CommandDeckTypes');
+const { buildOpenMissionAction } = require('../../workspace/MissionActions');
 
 /**
  * @param {object} input
@@ -78,14 +78,15 @@ function toOperationsCard(mission, updatedAt) {
     estimatedCompletion: mission.estimatedCompletion || null,
     createdAt: mission.createdAt || null,
     type: mission.type || null,
+    runtime: mission.runtime || null,
     updatedAt,
     actions: [
-      {
-        id: `expand_${mission.id}`,
-        type: ACTION_TYPES.OPEN_MISSION || 'open_mission',
+      buildOpenMissionAction({
+        missionId: mission.id,
+        runtime: mission.runtime,
         label: 'Expand',
-        payload: { missionId: mission.id },
-      },
+        id: `expand_${mission.id}`,
+      }),
     ],
   };
 }

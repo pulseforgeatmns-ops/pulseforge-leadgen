@@ -539,6 +539,22 @@ describe('Campaign 001 canary prospect block extraction', () => {
     assert.equal(detected.suppressedFillableTableUpdate, true);
   });
 
+  it('does not sniff Anchor ICP batch-composition strategy as ProspectList', () => {
+    const prompt = [
+      'Scout: update Anchor Cleaning prospecting criteria',
+      '',
+      "Decision: refining Anchor's ICP away from small professional offices",
+      'First controlled batch: 25 daycares, 25 industrial, 15 schools, 15 property managers, 10 larger offices',
+      'Outreach remains disabled',
+    ].join('\n');
+
+    const detected = detectOperatorProspectListInMessage(prompt);
+    assert.equal(detected.detected, false);
+    assert.equal(detected.promptImport, false);
+    assert.equal(detected.prospectCount, 0);
+    assert.equal(detected.rejectedAsProspectingCriteria, true);
+  });
+
   it('does not sniff pasted fillable verification markdown table as ProspectList', () => {
     const prompt = [
       'Campaign 001 preparation-only canary table:',

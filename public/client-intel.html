@@ -1134,7 +1134,9 @@
       </div>
       <div id="sidePanel"><p class="blueprint-empty">When you're ready, begin the conversation.</p></div>
       <div class="actions" id="blueprintActions" hidden>
+        <button type="button" id="regenerateBlueprintBtn" class="secondary" disabled>Regenerate Blueprint</button>
         <button type="button" id="reviseBtn" class="secondary" disabled>Save edits</button>
+        <button type="button" id="refineWithMaxBtn" class="secondary" disabled>Refine with Max</button>
         <button type="button" id="approveBtn" disabled>Approve Blueprint</button>
       </div>
       <div class="status-bar" id="blueprintStatus"></div>
@@ -1142,6 +1144,7 @@
   </div>
   <div class="error" id="errorBox" hidden></div>
 
+  <script src="/shared/tenantCoordinator.js"></script>
   <script src="/shared/shell.js"></script>
   <script src="/shared/growth-workspace-panel.js"></script>
   <script src="/shared/operator-review-digest.js"></script>
@@ -1196,6 +1199,7 @@
       stickToBottom: true,
       pendingCompletion: null,
       approveInFlight: false,
+      regenerateInFlight: false,
       turnInFlight: false,
       revealAbort: null,
       initialGrowthDirection: null,
@@ -1246,7 +1250,9 @@
       sidePanel: document.getElementById('sidePanel'),
       sidePanelTitle: document.getElementById('sidePanelTitle'),
       sidePanelSub: document.getElementById('sidePanelSub'),
+      regenerateBlueprintBtn: document.getElementById('regenerateBlueprintBtn'),
       reviseBtn: document.getElementById('reviseBtn'),
+      refineWithMaxBtn: document.getElementById('refineWithMaxBtn'),
       approveBtn: document.getElementById('approveBtn'),
       blueprintStatus: document.getElementById('blueprintStatus'),
       blueprintActions: document.getElementById('blueprintActions'),
@@ -1538,10 +1544,40 @@
             : '') +
           (section.body ? '<p style="margin-top:0.65rem">' + escapeHtml(section.body) + '</p>' : '');
       } else if (kind === 'list') {
-        inner =
+          inner =
           (section.body ? '<p>' + escapeHtml(section.body) + '</p>' : '') +
           '<ul class="exec-list">' +
-            (section.items || []).map((item) => '<li>' + escapeHtml(item) + '</li>').join('') +
+            (section.items || []).map((item) => {
+              if (item && typeof item === 'object') {
+                return '<li><strong>' + escapeHtml(item.name || item.label || '') + '</strong>' +
+                  (item.reason ? ' — ' + escapeHtml(item.reason) : '') +
+                  (item.businessOutcome ? ' Supports ' + escapeHtml(item.businessOutcome) + '.' : '') +
+                  (item.confidencePercent != null ? ' Confidence ' + escapeHtml(String(item.confidencePercent)) + '%.' : '') +
+                  '</li>';
+              }
+              return '<li>' + escapeHtml(item) + '</li>';
+            }).join('') +
+          '</ul>';
+      } else if (kind === 'scorecard') {
+        inner =
+          (section.body ? '<p>' + escapeHtml(section.body) + '</p>' : '') +
+          '<ul class="exec-list scorecard-list">' +
+            (section.items || []).map((item) => {
+              if (!item || typeof item !== 'object') {
+                return '<li>' + escapeHtml(item) + '</li>';
+              }
+              return '<li class="scorecard-metric">' +
+                '<strong>' + escapeHtml(item.name || '') + '</strong>' +
+                (item.reason ? '<div>' + escapeHtml(item.reason) + '</div>' : '') +
+                (item.businessOutcome ? '<div>Supports ' + escapeHtml(item.businessOutcome) + '</div>' : '') +
+                '<div class="assessment-explain">' +
+                  escapeHtml(
+                    [item.category, item.indicator, item.confidencePercent != null ? item.confidencePercent + '%' : '']
+                      .filter(Boolean)
+                      .join(' · ')
+                  ) +
+                '</div></li>';
+            }).join('') +
           '</ul>';
       } else {
         inner = '<p>' + escapeHtml(section.body || '') + '</p>';
@@ -1600,7 +1636,9 @@
       const status = blueprintStatusOf(bp);
       if (approved) {
         els.blueprintActions.hidden = true;
+        els.regenerateBlueprintBtn.disabled = true;
         els.reviseBtn.disabled = true;
+        els.refineWithMaxBtn.disabled = true;
         els.approveBtn.disabled = true;
         els.approveBtn.textContent = 'Blueprint approved';
         return;
@@ -1608,15 +1646,23 @@
       // Superseded / historical rows are never approvable and must not look current.
       if (status === 'superseded' || !bp) {
         els.blueprintActions.hidden = true;
+        els.regenerateBlueprintBtn.disabled = true;
         els.reviseBtn.disabled = true;
+        els.refineWithMaxBtn.disabled = true;
         els.approveBtn.disabled = true;
         els.approveBtn.textContent = 'Approve Blueprint';
         return;
       }
       const canEdit = editable && isBlueprintAwaitingApproval(bp);
       els.blueprintActions.hidden = !editable || !canEdit;
-      els.reviseBtn.disabled = !canEdit || state.approveInFlight;
-      els.approveBtn.disabled = !canEdit || state.approveInFlight;
+      const regenBusy = state.regenerateInFlight || state.approveInFlight;
+      els.regenerateBlueprintBtn.disabled = !canEdit || regenBusy;
+      els.regenerateBlueprintBtn.textContent = state.regenerateInFlight
+        ? 'Regenerating…'
+        : 'Regenerate Blueprint';
+      els.reviseBtn.disabled = !canEdit || regenBusy;
+      els.refineWithMaxBtn.disabled = !canEdit || !state.interviewId || regenBusy;
+      els.approveBtn.disabled = !canEdit || regenBusy;
       els.approveBtn.textContent = state.approveInFlight ? 'Approving…' : 'Approve Blueprint';
     }
 
@@ -1703,6 +1749,10 @@
         statusLabel +
         ' · v' +
         bp.version +
+        (state.lastRegeneratedBlueprintVersion &&
+        String(state.lastRegeneratedBlueprintVersion) === String(bp.version)
+          ? ' · regenerated just now'
+          : '') +
         (bp.playbookId
           ? ' · playbook ' + bp.playbookId + '@' + bp.playbookVersion
           : '');
@@ -4603,6 +4653,7 @@
 
     async function resumeConversation() {
       try {
+        if (!state.interviewId) return;
         const data = await api('POST', '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/resume', {});
         setPhase('discovery');
         applyDiscoveryPayload(data);
@@ -4614,6 +4665,46 @@
 
     els.refineBtn.addEventListener('click', resumeConversation);
     els.keepTalkingBtn.addEventListener('click', resumeConversation);
+    els.refineWithMaxBtn.addEventListener('click', resumeConversation);
+
+    els.regenerateBlueprintBtn.addEventListener('click', async () => {
+      try {
+        if (!state.interviewId || !isBlueprintAwaitingApproval(state.blueprint)) return;
+        if (state.regenerateInFlight || state.approveInFlight) return;
+        const confirmed = window.confirm(
+          'Regenerate the Business Blueprint from your current answers? Stale generated text will be replaced with a new version. Your interview answers are kept.'
+        );
+        if (!confirmed) return;
+        state.regenerateInFlight = true;
+        setApproveButtonState(state.blueprint, { editable: true });
+        const data = await api(
+          'POST',
+          '/api/v1/interview/' +
+            encodeURIComponent(state.interviewId) +
+            '/blueprint/regenerate',
+          {}
+        );
+        state.regenerateInFlight = false;
+        state.lastRegeneratedBlueprintVersion =
+          (data.blueprint && data.blueprint.version) || null;
+        state.blueprint = data.blueprint || state.blueprint;
+        state.executiveSummary = data.executiveSummary || state.executiveSummary;
+        if (data.executiveSummary) {
+          renderExecutiveSummary(data.executiveSummary);
+        }
+        renderBlueprint(state.blueprint, { editable: true });
+        addBubble(
+          'meta',
+          data.message ||
+            'Regenerated Business Blueprint from current understanding.'
+        );
+        setPhase('blueprint');
+      } catch (err) {
+        state.regenerateInFlight = false;
+        setApproveButtonState(state.blueprint, { editable: true });
+        showError(err.message);
+      }
+    });
 
     els.reviseBtn.addEventListener('click', async () => {
       try {

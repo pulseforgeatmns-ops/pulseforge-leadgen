@@ -1,5 +1,14 @@
 # Anchor Pilot 0 — Operator-Reported Operating Memory Audit
 
+> **Historical audit — retained 2026-10-24.** Original audit date: 2026-08-17. This document records findings from the original PR revision and is **not a current production assessment**.
+>
+> Source: [PR #318](https://github.com/pulseforgeatmns-ops/pulseforge-leadgen/pull/318), head commit `bfb8be70f2b1c2efc72fe0b63f764b8ad3b9d9c0`.
+>
+> Subsequent implementation / current reference: [SPEC-106 — Operator-Reported Operating Evidence](../specs/SPEC-106_Operator_Reported_Operating_Evidence.md).
+>
+> The original failure analysis predates the SPEC-106 thin-slice implementation. Its present-tense statements describe the audited revision, not the current implementation. SPEC-106 deliberately limits durable handling of AO training; this notice does not claim every historical gap has been eliminated.
+
+
 | Field | Value |
 |---|---|
 | **Status** | Audit only — no implementation |

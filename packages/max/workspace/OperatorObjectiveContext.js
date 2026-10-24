@@ -179,8 +179,10 @@ async function maybeHandleOperatorObjectiveTurn(input = {}) {
     };
   }
 
-  // 2) Explicit establishment
-  const establish = service.detectObjectiveEstablishment(question);
+  // 2) Explicit establishment (SPEC-126 — only when objective_persistence owns the turn)
+  const allowEstablishment = input.allowEstablishment !== false;
+  const establish =
+    allowEstablishment && service.detectObjectiveEstablishment(question);
   if (establish && establish.kind === 'establish') {
     // Fail closed if we somehow lack tenant
     if (!tenantId) return null;

@@ -1,0 +1,14 @@
+{
+  "name": "@pulseforge/operator-scorecard",
+  "version": "0.1.0",
+  "description": "Operator Scorecard Intelligence — Max recommends, operators approve (SPEC-116 / ADR-053)",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "license": "ISC",
+  "engines": {
+    "node": ">=18"
+  }
+}
