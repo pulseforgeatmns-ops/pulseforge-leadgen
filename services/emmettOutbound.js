@@ -14,6 +14,8 @@ const {
   loadLearning,
 } = require('./emmettOutboundPersistence');
 const { buildInboxSnapshot, loadQueueProspects } = require('./emmettOutboundSnapshot');
+const { buildTenantMailboxInboxSnapshot } = require('./emmettTenantMailboxSnapshot');
+const { buildCapacityEnvelope } = require('../packages/emmett-outbound/CapacityEnvelope');
 
 let engine = null;
 
@@ -114,6 +116,14 @@ async function ingestOutcome(input = {}, opts = {}) {
 }
 
 async function ingestBrevoResult(result = {}, opts = {}) {
+  const identityStatus = result.sender_identity_status || result.senderIdentityStatus;
+  if (identityStatus === 'mismatch' || result.reputation_ingest === false) {
+    return {
+      skipped: true,
+      reason: 'sender_identity_mismatch',
+      sender_identity_status: identityStatus || 'mismatch',
+    };
+  }
   const clientId = result.client_id || result.clientId;
   if (!clientId) return null;
   return ingestOutcome({
@@ -156,12 +166,33 @@ function getApprovedPlan(tenantId, localDate, opts = {}) {
   return getEngine(opts).getApprovedPlan(tenantId, localDate);
 }
 
+async function assessTenantMailboxCapacity(input = {}, opts = {}) {
+  const snapshot = input.snapshot || await buildTenantMailboxInboxSnapshot(input, opts);
+  const instance = await hydrateTenant(snapshot.tenantId || input.tenantId, opts);
+  const assessed = instance.assess({
+    tenantId: snapshot.tenantId,
+    clientId: snapshot.clientId,
+    snapshot,
+    prospects: input.prospects || [],
+    now: opts.now,
+  });
+  const envelope = buildCapacityEnvelope({
+    ...assessed,
+    snapshot,
+    sendingIdentityId: input.sendingIdentityId || snapshot.sendingIdentityId,
+    mailboxIntegrationId: input.mailboxIntegrationId || snapshot.mailboxIntegrationId,
+    scheduledToday: input.scheduledToday ?? snapshot.scheduledToday,
+  });
+  return { ...assessed, envelope };
+}
+
 module.exports = {
   getEngine,
   resetEngine,
   hydrateTenant,
   planDay,
   assess,
+  assessTenantMailboxCapacity,
   approvePlan,
   acknowledgeHalt,
   ingestOutcome,
@@ -170,5 +201,8 @@ module.exports = {
   canSend,
   getApprovedPlan,
   buildInboxSnapshot,
+  buildTenantMailboxInboxSnapshot,
+  buildCapacityEnvelope,
   loadQueueProspects,
 };
+

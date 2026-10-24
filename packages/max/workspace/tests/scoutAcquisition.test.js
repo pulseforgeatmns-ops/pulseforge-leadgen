@@ -58,7 +58,10 @@ describe('SPEC-100 Max workspace Scout acquisition loop', () => {
   let aoStore;
   let session;
 
-  beforeEach(() => {
+  beforeEach((t) => {
+    // These scenario fixtures describe July 2026 evidence. Keep the scenario
+    // clock fixed rather than letting its signals expire as CI wall time moves.
+    t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-08-01T00:00:00.000Z') });
     store = createMemoryStore();
     service = createSpecialistDelegationService({ store });
     aoStore = createMemoryAcquisitionState();
@@ -127,6 +130,25 @@ describe('SPEC-100 Max workspace Scout acquisition loop', () => {
     assert.ok(follow);
     assert.equal(follow.loop.delegated, false);
     assert.match(follow.prose, /Granite State|Queen City/i);
+  });
+
+  it('keeps the freshest named opportunity at the inclusive 90-day boundary', async (t) => {
+    t.mock.timers.setTime(Date.parse('2026-10-18T00:00:00.000Z'));
+    await handle(ANCHOR_QUESTION, { applyPriority: true });
+    const follow = await handle('Which four?', { action: 'discuss_with_max' });
+    assert.equal(follow.loop.delegated, false);
+    assert.match(follow.prose, /Queen City/i);
+  });
+
+  it('does not retain named opportunities once fixture evidence exceeds 90 days', async (t) => {
+    // The freshest fixture is July 20; the inclusive 90-day boundary is Oct 18.
+    t.mock.timers.setTime(Date.parse('2026-10-18T00:00:00.001Z'));
+    await handle(ANCHOR_QUESTION, { applyPriority: true });
+    const follow = await handle('Which four?', { action: 'discuss_with_max' });
+    assert.ok(follow);
+    assert.equal(follow.loop.delegated, false);
+    assert.doesNotMatch(follow.prose, /Granite State|Queen City/i);
+    assert.match(follow.prose, /do not have named opportunities/i);
   });
 
   it('answers coverage questions from durable investigation provenance', async () => {

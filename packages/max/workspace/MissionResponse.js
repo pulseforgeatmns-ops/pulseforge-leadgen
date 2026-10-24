@@ -6,6 +6,7 @@
  */
 
 const { buildStructuredResponse } = require('./WorkspaceTypes');
+const { buildOpenMissionAction, MISSION_RUNTIMES, resolveMissionActionRuntime } = require('./MissionActions');
 const {
   buildEngineMissionCommunication,
   formatMissionProse,
@@ -302,17 +303,19 @@ function buildMissionStructured(input) {
       'Check Operations on the Command Deck for live progress',
     ],
     recommendedActions: [
-      {
-        id: 'open_mission',
-        type: 'open_mission',
+      buildOpenMissionAction({
+        missionId: mission.id,
+        runtime: mission.runtime || MISSION_RUNTIMES.SPEC_022,
         label: 'Open Mission Workspace',
-        payload: { missionId: mission.id },
-      },
+      }),
       {
         id: 'review_mission',
         type: 'review_mission',
         label: 'Review results',
-        payload: { missionId: mission.id },
+        payload: {
+          missionId: mission.id,
+          runtime: resolveMissionActionRuntime(mission.runtime || MISSION_RUNTIMES.SPEC_022),
+        },
       },
       ...((input.recommendedExtras) || []),
     ],

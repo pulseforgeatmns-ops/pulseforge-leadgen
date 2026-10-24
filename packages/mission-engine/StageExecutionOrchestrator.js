@@ -190,6 +190,13 @@ async function executeCurrentStage(input) {
       result = await executeScoutDiscovery({
         mission,
         missionEngine,
+        // Inject dependencies only, never delegation, tenant, approval or execution flags.
+        opts: missionEngine.scoutDiscoveryOpts ? {
+          companies: missionEngine.scoutDiscoveryOpts.companies,
+          people: missionEngine.scoutDiscoveryOpts.people,
+          loadCompanies: missionEngine.scoutDiscoveryOpts.loadCompanies,
+          acquisitionMissionRuntime: missionEngine.scoutDiscoveryOpts.acquisitionMissionRuntime,
+        } : undefined,
         operatorId,
         message,
       });

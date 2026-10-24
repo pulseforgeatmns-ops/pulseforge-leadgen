@@ -30,6 +30,13 @@ const {
   reasoningMetadata,
 } = require('../identity/IdentityReasoning');
 const { getConversationalState } = require('./ConversationalStateMachine');
+const {
+  isSessionInspectionQuestion,
+  formatSessionInspection,
+  formatSessionFieldInspection,
+  resolveSessionStateField,
+  getCurrentState,
+} = require('./SessionStateManager');
 const { getActiveReasoningContext } = require('./ActiveReasoningContext');
 
 function normalizeText(value) {
@@ -45,6 +52,7 @@ function capabilitySummary(registry) {
 
 function classifyIdentityQuestion(question) {
   const q = normalizeText(question).toLowerCase();
+  if (isSessionInspectionQuestion(question)) return 'session_inspection';
   if (/\b(?:who are you|tell me about yourself)\b/.test(q)) return 'introduction';
   if (/\bwhen should i ignore\b/.test(q)) return 'failure_modes';
   if (/\bwhen would you disagree\b/.test(q)) return 'operating_model_reasoning';
@@ -83,12 +91,19 @@ function classifyIdentityQuestion(question) {
 
 function composeIdentityProse(question, session, registry) {
   const kind = classifyIdentityQuestion(question);
+  const storedSessionState = getCurrentState(session);
   const mode = operatingModeLabel(session);
   const callable = capabilitySummary(registry);
   const introduction = composeWorkspaceIntroduction(session);
   let prose;
 
   switch (kind) {
+    case 'session_inspection':
+      prose = formatSessionFieldInspection(
+        storedSessionState,
+        resolveSessionStateField(question)
+      );
+      break;
     case 'introduction':
       prose =
         `${introduction} ${mode} ` +
@@ -131,7 +146,7 @@ function composeIdentityProse(question, session, registry) {
         ].join(' → ')}. ${mode}`;
       break;
     case 'operating_mode':
-      prose = `${MAX_ROLE} ${mode}`;
+      prose = formatSessionInspection(storedSessionState);
       break;
     case 'role':
     default:
@@ -255,7 +270,13 @@ async function maybeHandleIdentityTurn(input = {}) {
     input.activeReasoningContext || getActiveReasoningContext(session);
   const arcFollowUp = input.arcFollowUp || null;
 
-  if (shouldUseOperatingModelReasoning({
+  if (answerKind === 'session_inspection' || answerKind === 'operating_mode') {
+    prose = formatSessionFieldInspection(
+      getCurrentState(session),
+      resolveSessionStateField(question)
+    );
+    answerKind = 'session_inspection';
+  } else if (shouldUseOperatingModelReasoning({
     question,
     resolvedQuestion: input.resolvedQuestion,
     conversationIntent,

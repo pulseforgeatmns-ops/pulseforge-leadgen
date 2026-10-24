@@ -117,6 +117,12 @@ async function runIntelligencePipeline(input = {}) {
     scoutPayload: input.scoutPayload,
     opts,
   });
+  if (candidateUniverse.available === false || candidateUniverse.error) {
+    throw Object.assign(new Error('Existing tenant intelligence is unavailable.'), {
+      code: 'existing_intelligence_unavailable',
+    });
+  }
+
   stages.push(
     buildStageResult(INTELLIGENCE_STAGES.CANDIDATE_DISCOVERY, {
       output: {
@@ -203,6 +209,7 @@ async function runIntelligencePipeline(input = {}) {
     qualification,
     ranking,
     evidenceCollection,
+    universeEstimate: opts.universeEstimate || candidateUniverse.universeEstimate,
   });
   stages.push(
     buildStageResult(INTELLIGENCE_STAGES.MARKET_COVERAGE, { output: coverage })

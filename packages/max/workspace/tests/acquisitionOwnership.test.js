@@ -118,7 +118,7 @@ describe('SPEC-124 — Acquisition Ownership Convergence', () => {
 
     const ownerEvent = audit.log.find((row) => row.event === 'ACQUISITION_OWNER');
     assert.ok(ownerEvent);
-    assert.equal(ownerEvent.owner, 'MissionEngine');
+    assert.equal(ownerEvent.owner, 'AMO');
     assert.equal(ownerEvent.action, 'created');
 
     const ciEvent = audit.log.find(
@@ -142,6 +142,7 @@ describe('SPEC-124 — Acquisition Ownership Convergence', () => {
       context: { tenantId: '10' },
       acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       persist: false,
+      cieService: { getApprovedClientBlueprint: async () => null },
     });
 
     assert.ok(turn);
@@ -201,6 +202,7 @@ describe('SPEC-124 — Acquisition Ownership Convergence', () => {
       context: { tenantId: '10' },
       acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       persist: false,
+      cieService: { getApprovedClientBlueprint: async () => null },
     });
 
     const events = listAcquisitionOwnershipAuditLog();

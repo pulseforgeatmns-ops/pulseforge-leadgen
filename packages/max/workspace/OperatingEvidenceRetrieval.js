@@ -274,9 +274,19 @@ function isClaimChallengeQuestion(question) {
   }
 }
 
+function isExecutionInspectionTurn(question) {
+  try {
+    const { isExecutionInspectionQuestion } = require('./ExecutionInspectionRegistry');
+    return isExecutionInspectionQuestion(question);
+  } catch (_) {
+    return false;
+  }
+}
+
 function isOperatingEvidenceQuestion(question) {
   const q = String(question || '').trim();
   if (!q) return false;
+  if (isExecutionInspectionTurn(q)) return false;
   if (isClaimChallengeQuestion(q)) return false;
   if (isBusinessUnderstandingQuestion(q)) return false;
   if (isNewInvestigationRequest(q)) return false;
@@ -336,6 +346,7 @@ function isOperatingGroundedRecommendation(question) {
 }
 
 function shouldRetrieveOperatingEvidence(question) {
+  if (isExecutionInspectionTurn(question)) return false;
   try {
     const cognitive = require('../specialistDelegation/CognitiveMode');
     if (cognitive.looksLikeSummary(question) || cognitive.looksLikeCompletedRetrieval(question)) {

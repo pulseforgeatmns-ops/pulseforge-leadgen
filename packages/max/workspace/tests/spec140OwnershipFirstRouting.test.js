@@ -10,7 +10,7 @@ const {
   isExplicitMissionResume,
 } = require('../WorkspaceOwnershipResolver');
 const { isMissionExecutionCommand } = require('../ExecutionLanguageDetection');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { clearWorkspaceOwnershipAuditLog } = require('../audit/WorkspaceOwnershipAudit');
 
 const AUDIT_028_PROMPT = [
@@ -46,9 +46,11 @@ describe('SPEC-140 — Ownership-First Routing', () => {
     assert.equal(isExplicitMissionResume('Approved. Begin Discovery.').explicit, false);
   });
 
-  it('execution language alone does not preempt acquisition objective ownership', () => {
+  it('distinguishes an execution command from a human-approval policy constraint', () => {
     assert.equal(isMissionExecutionCommand('Execute every stage automatically.'), true);
-    assert.equal(isMissionExecutionCommand('Pause only for human approval.'), true);
+    assert.equal(isMissionExecutionCommand('Pause only for human approval.'), false);
+    assert.equal(isMissionExecutionCommand('Approved. Begin discovery.'), true);
+    assert.equal(isMissionExecutionCommand('Do not approve this yet.'), false);
   });
 
   it('AUDIT-028 prompt selects mission_creation when AMO mission is active', async () => {

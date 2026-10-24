@@ -1,5 +1,7 @@
 'use strict';
 
+const { rethrowResearchProviderControl } = require('../../../utils/anchorResearchProviderPause');
+
 /**
  * Prospect Acquisition orchestrator (SPEC-060 / ADR-044).
  * Selects a provider, acquires Candidates, optionally verifies → ProspectList.
@@ -160,6 +162,7 @@ function createProspectAcquisition(deps = {}) {
           strategy,
         });
       } catch (err) {
+        rethrowResearchProviderControl(err);
         return {
           ok: false,
           strategy,

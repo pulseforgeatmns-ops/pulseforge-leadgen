@@ -31,6 +31,13 @@ const {
   classifyError,
   formatRollbackProse,
 } = require('./ExecutionErrors');
+const {
+  beginTmeTransaction,
+  endTmeTransaction,
+  acquireMissionDurableLock,
+  releaseMissionDurableLock,
+} = require('./TransactionalPersistence');
+const { attachProviderDiagnostics } = require('../scout/coverage/ProviderExecution');
 
 const RUNTIME_STATES = Object.freeze({
   PLANNED: 'planned',
@@ -171,6 +178,23 @@ async function executeMissionStage(input = {}) {
   const startedAt = Date.now();
   const store = engine.store;
 
+  beginTmeTransaction(missionId, transactionId);
+
+  const lockPool = input.pool || input.lockPool || null;
+  let globalLockHeld = false;
+  if (lockPool) {
+    try {
+      const lockResult = await acquireMissionDurableLock(missionId, lockPool, {
+        tryOnly: true,
+        transactionId,
+      });
+      globalLockHeld = lockResult.acquired === true && lockResult.reentrant !== true;
+    } catch (err) {
+      endTmeTransaction(missionId, transactionId);
+      throw wrapAs(TME_CLASSES.PERSISTENCE, err, err.code || 'tme_transaction_overlap', err.message);
+    }
+  }
+
   let snapshot;
   try {
     snapshot = snapshotStore(store);
@@ -263,6 +287,7 @@ async function executeMissionStage(input = {}) {
           transactionId,
         });
       } catch (err) {
+        attachProviderDiagnostics(err, output);
         throw wrapAs(TME_CLASSES.VALIDATION, err, 'tme_validation', err.message || 'Output validation failed.');
       }
     }
@@ -380,6 +405,11 @@ async function executeMissionStage(input = {}) {
     wrapped.rollback = true;
     wrapped.audit = audit;
     throw wrapped;
+  } finally {
+    if (globalLockHeld && lockPool) {
+      await releaseMissionDurableLock(missionId, lockPool);
+    }
+    endTmeTransaction(missionId, transactionId);
   }
 }
 

@@ -333,6 +333,18 @@ function buildResponseMetadata(partial = {}) {
     meta.conversationIntent = String(partial.conversationIntent);
   }
   if (partial.readOnlyCognition === true) meta.readOnlyCognition = true;
+  if (partial.sessionInspection === true) meta.sessionInspection = true;
+  if (partial.sessionConfiguration === true) meta.sessionConfiguration = true;
+  if (partial.sessionStateRead === true) meta.sessionStateRead = true;
+  if (partial.sessionStateEvidence === true) meta.sessionStateEvidence = true;
+  // SPEC-152: execution state introspection metadata
+  if (partial.executionInspection === true) meta.executionInspection = true;
+  if (partial.executionStateRead === true) meta.executionStateRead = true;
+  if (partial.executionState != null) meta.executionState = partial.executionState;
+  // SPEC-167: objective resolution inspection
+  if (partial.objectiveResolutionRead === true) meta.objectiveResolutionRead = true;
+  if (partial.objectiveResolution != null) meta.objectiveResolution = partial.objectiveResolution;
+  if (partial.inspectionMode != null) meta.inspectionMode = String(partial.inspectionMode);
   return meta;
 }
 

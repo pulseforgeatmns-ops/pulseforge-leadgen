@@ -2,9 +2,8 @@
 
 /**
  * SPEC-147 — Autonomous Mission Progression (ADR-066).
- * ADR-067 — Stage Contracts Are Authoritative.
+ * ADR-067 — Human-decision contracts are independent of pause presentation.
  * Mission execution is progress. The runtime advances until genuine operator judgment is required.
- * Stage Contracts govern behavior; presentation objects explain but never determine execution.
  */
 
 const {
@@ -22,9 +21,14 @@ const {
   hasPendingPlanClarification,
   hasPendingPlanApproval,
   hasPendingDiscoveryApproval,
+  hasPendingDiscoveryInvestigation,
   hasPendingPrioritizationApproval,
+  hasPendingExecutionApproval,
+  hasConsumedExecutionApproval,
   hasDiscoveryArtifact,
+  hasConsumablePendingDecision,
 } = require('./PendingOperatorDecision');
+const { isStructuredMissionApproved } = require('./StructuredMission');
 const {
   presentationFromDiscoveryPayload,
   findLatestDiscoveryContribution,
@@ -32,20 +36,28 @@ const {
 const { currentBlocker } = require('./Blockers');
 const { canEnter, specialistContext } = require('./Lifecycle');
 
-/** Logical progression stages (SPEC-147 vocabulary). */
+/** Logical progression stages (SPEC-147 + ADR-074 execution-state vocabulary). */
 const PROGRESSION_STAGES = Object.freeze({
-  UNDERSTANDING: 'understanding',
-  DISCOVERY: 'discovery',
+  MISSION_PLANNING: 'mission_planning',
+  DISCOVERY_APPROVAL: 'discovery_approval',
+  DISCOVERY_RUNNING: 'discovery_running',
   DISCOVERY_REVIEW: 'discovery_review',
   OUTREACH_PLANNING: 'outreach_planning',
+  ACQUISITION_PLANNING: 'acquisition_planning',
   EXECUTION: 'execution',
+  /** @deprecated Use MISSION_PLANNING */
+  UNDERSTANDING: 'mission_planning',
+  /** @deprecated Use DISCOVERY_APPROVAL or DISCOVERY_RUNNING */
+  DISCOVERY: 'discovery_approval',
 });
 
 const PROGRESSION_STAGE_LABELS = Object.freeze({
-  [PROGRESSION_STAGES.UNDERSTANDING]: 'Understanding',
-  [PROGRESSION_STAGES.DISCOVERY]: 'Discovery',
+  [PROGRESSION_STAGES.MISSION_PLANNING]: 'Mission Planning',
+  [PROGRESSION_STAGES.DISCOVERY_APPROVAL]: 'Discovery Approval',
+  [PROGRESSION_STAGES.DISCOVERY_RUNNING]: 'Discovery Running',
   [PROGRESSION_STAGES.DISCOVERY_REVIEW]: 'Discovery Review',
   [PROGRESSION_STAGES.OUTREACH_PLANNING]: 'Outreach Planning',
+  [PROGRESSION_STAGES.ACQUISITION_PLANNING]: 'Acquisition Planning',
   [PROGRESSION_STAGES.EXECUTION]: 'Execution',
 });
 
@@ -63,16 +75,24 @@ const SCOUT_PIPELINE_STAGES = Object.freeze([
 ]);
 
 const MISSION_STAGE_CONTRACTS = Object.freeze({
-  [PROGRESSION_STAGES.UNDERSTANDING]: {
-    stage: PROGRESSION_STAGES.UNDERSTANDING,
+  [PROGRESSION_STAGES.MISSION_PLANNING]: {
+    stage: PROGRESSION_STAGES.MISSION_PLANNING,
     amoStage: STAGES.DISCOVER,
     executesAutomatically: true,
     requiresHumanDecision: false,
     completionCriteria: 'Mission plan ready for lock with no ambiguities.',
-    nextStage: PROGRESSION_STAGES.DISCOVERY,
+    nextStage: PROGRESSION_STAGES.DISCOVERY_APPROVAL,
   },
-  [PROGRESSION_STAGES.DISCOVERY]: {
-    stage: PROGRESSION_STAGES.DISCOVERY,
+  [PROGRESSION_STAGES.DISCOVERY_APPROVAL]: {
+    stage: PROGRESSION_STAGES.DISCOVERY_APPROVAL,
+    amoStage: STAGES.DISCOVER,
+    executesAutomatically: true,
+    requiresHumanDecision: false,
+    completionCriteria: 'Operator or autonomous policy consumes discovery approval.',
+    nextStage: PROGRESSION_STAGES.DISCOVERY_RUNNING,
+  },
+  [PROGRESSION_STAGES.DISCOVERY_RUNNING]: {
+    stage: PROGRESSION_STAGES.DISCOVERY_RUNNING,
     amoStage: STAGES.DISCOVER,
     executesAutomatically: true,
     requiresHumanDecision: false,
@@ -85,14 +105,14 @@ const MISSION_STAGE_CONTRACTS = Object.freeze({
     executesAutomatically: false,
     requiresHumanDecision: true,
     completionCriteria: 'Operator approves findings before outreach planning.',
-    nextStage: PROGRESSION_STAGES.OUTREACH_PLANNING,
+    nextStage: PROGRESSION_STAGES.ACQUISITION_PLANNING,
   },
-  [PROGRESSION_STAGES.OUTREACH_PLANNING]: {
-    stage: PROGRESSION_STAGES.OUTREACH_PLANNING,
+  [PROGRESSION_STAGES.ACQUISITION_PLANNING]: {
+    stage: PROGRESSION_STAGES.ACQUISITION_PLANNING,
     amoStage: STAGES.PLAN,
     executesAutomatically: true,
     requiresHumanDecision: false,
-    completionCriteria: 'Outreach plan drafted.',
+    completionCriteria: 'Acquisition approach decision committed.',
     nextStage: PROGRESSION_STAGES.EXECUTION,
   },
   [PROGRESSION_STAGES.EXECUTION]: {
@@ -133,119 +153,86 @@ function createExecutionBlock(input = {}) {
     unmetPrecondition: asText(input.unmetPrecondition) || null,
     blockingComponent: asText(input.blockingComponent) || null,
     recommendedAction: asText(input.recommendedAction) || null,
-    pauseFallback: input.pauseFallback === true,
+    ...(input.pauseFallback === true ? { pauseFallback: true } : {}),
   };
 }
 
 function getStageContract(progressionStage) {
-  if (!progressionStage) return null;
-  return MISSION_STAGE_CONTRACTS[progressionStage] || null;
-}
-
-function validateStageTransition(fromStage, toStage) {
-  const contract = getStageContract(fromStage);
-  if (!contract) {
-    return { ok: false, reason: 'Unknown progression stage.' };
-  }
-  if (contract.requiresHumanDecision) {
-    return { ok: false, reason: 'Stage contract requires operator judgment before transition.' };
-  }
-  if (!contract.executesAutomatically) {
-    return { ok: false, reason: 'Stage does not execute automatically.' };
-  }
-  if (contract.nextStage !== toStage) {
-    return { ok: false, reason: `Transition ${fromStage} → ${toStage} is not permitted by stage contract.` };
-  }
-  return { ok: true };
+  if (!Object.prototype.hasOwnProperty.call(MISSION_STAGE_CONTRACTS, progressionStage)) return null;
+  return MISSION_STAGE_CONTRACTS[progressionStage];
 }
 
 function createPauseFallbackBlock(snapshot = {}, contract = null) {
-  const stage = (contract && contract.stage) || deriveProgressionStage(snapshot);
-  const mission = snapshot.mission || snapshot;
-  const pending = mission && mission.pendingOperatorDecision;
   return createExecutionBlock({
-    stage,
-    unmetPrecondition: (pending && (pending.prompt || pending.clarificationPrompt))
-      || (contract && contract.completionCriteria)
+    stage: (contract && contract.stage) || deriveProgressionStage(snapshot),
+    unmetPrecondition: (contract && contract.completionCriteria)
       || 'Operator judgment required before progression.',
     blockingComponent: 'Stage Contract',
-    recommendedAction: 'Provide operator decision to continue mission progression.',
+    recommendedAction: 'Review the mission and resolve the required operator decision before continuing.',
     pauseFallback: true,
   });
 }
 
-/**
- * ADR-067 — Stage Contract is authoritative for human-decision gates.
- * MissionPause explains the pause when available; ExecutionBlock is the required fallback.
- */
+/** A human-decision contract must stop progression even without presentation metadata. */
 function resolveHumanDecisionGate(snapshot = {}) {
+  const mission = snapshot.mission || snapshot;
   const progressionStage = deriveProgressionStage(snapshot);
   const contract = getStageContract(progressionStage);
-  if (!contract || !contract.requiresHumanDecision) {
-    return {
-      shouldPause: false,
-      progressionStage,
-      contract,
-      pause: null,
-      block: null,
-    };
-  }
-
-  const pause = deriveMissionPause(snapshot);
-  if (pause) {
-    return { shouldPause: true, progressionStage, contract, pause, block: null };
-  }
-
+  // Existing approval validation binds the decision to the current prepared artifact
+  // revision and excludes invalidated/superseded approvals. Never trust a raw flag.
+  const executionDecisionSatisfied = progressionStage === PROGRESSION_STAGES.EXECUTION
+    && hasConsumedExecutionApproval(snapshot);
+  // Cancellation remains terminal; neither it nor a satisfied decision is reopened.
+  const shouldPause = Boolean(mission && !mission.planCancelled && contract
+    && contract.requiresHumanDecision && !executionDecisionSatisfied);
+  const pause = shouldPause ? deriveMissionPause(snapshot) : null;
   return {
-    shouldPause: true,
+    shouldPause,
     progressionStage,
     contract,
-    pause: null,
-    block: createPauseFallbackBlock(snapshot, contract),
+    pause,
+    block: shouldPause && !pause ? createPauseFallbackBlock(snapshot, contract) : null,
   };
 }
 
 function resolveProgressionState(snapshot = {}) {
-  const progressionStage = deriveProgressionStage(snapshot);
-  const contract = getStageContract(progressionStage);
   const gate = resolveHumanDecisionGate(snapshot);
+  const pause = gate.shouldPause ? gate.pause : deriveMissionPause(snapshot);
+  // Preserve actionable runtime blockers instead of disguising them as a pause fallback.
+  const block = deriveExecutionBlock(snapshot) || gate.block;
+  return {
+    progressionStage: gate.progressionStage,
+    contract: gate.contract,
+    outcome: block && !block.pauseFallback ? 'blocked' : gate.shouldPause || pause ? 'paused' : 'active',
+    pause,
+    block,
+  };
+}
 
-  if (gate.shouldPause) {
-    return {
-      progressionStage,
-      contract,
-      outcome: 'paused',
-      pause: gate.pause,
-      block: gate.block,
-    };
-  }
-
-  const block = deriveExecutionBlock(snapshot);
-  if (block) {
-    return { progressionStage, contract, outcome: 'blocked', pause: null, block };
-  }
-
-  const pause = deriveMissionPause(snapshot);
-  if (pause) {
-    return { progressionStage, contract, outcome: 'paused', pause, block: null };
-  }
-
-  return { progressionStage, contract, outcome: 'active', pause: null, block: null };
+function isDiscoveryRunning(snapshot = {}) {
+  const mission = snapshot.mission || snapshot;
+  if (!mission) return false;
+  if (hasPendingPlanClarification(snapshot) || hasPendingPlanApproval(snapshot)) return false;
+  if (hasPendingDiscoveryApproval(snapshot)) return false;
+  if (hasPendingPrioritizationApproval(snapshot)) return false;
+  if (hasDiscoveryArtifact(snapshot)) return false;
+  if (!isStructuredMissionApproved(mission)) return false;
+  if (mission.stage && mission.stage !== STAGES.DISCOVER) return false;
+  return true;
 }
 
 function deriveProgressionStage(snapshot = {}) {
   const mission = snapshot.mission || snapshot;
-  const contributions = snapshot.contributions || [];
   if (!mission) return null;
 
   if (hasPendingPlanClarification(snapshot)) {
-    return PROGRESSION_STAGES.UNDERSTANDING;
+    return PROGRESSION_STAGES.MISSION_PLANNING;
   }
   if (hasPendingPlanApproval(snapshot)) {
-    return PROGRESSION_STAGES.UNDERSTANDING;
+    return PROGRESSION_STAGES.MISSION_PLANNING;
   }
   if (hasPendingDiscoveryApproval(snapshot)) {
-    return PROGRESSION_STAGES.DISCOVERY;
+    return PROGRESSION_STAGES.DISCOVERY_APPROVAL;
   }
   if (hasPendingPrioritizationApproval(snapshot)) {
     return PROGRESSION_STAGES.DISCOVERY_REVIEW;
@@ -253,18 +240,21 @@ function deriveProgressionStage(snapshot = {}) {
   if (hasDiscoveryArtifact(snapshot) && mission.stage === STAGES.DISCOVER) {
     return PROGRESSION_STAGES.DISCOVERY_REVIEW;
   }
+  if (isDiscoveryRunning(snapshot)) {
+    return PROGRESSION_STAGES.DISCOVERY_RUNNING;
+  }
   if (mission.stage === STAGES.UNDERSTAND || mission.stage === STAGES.PLAN) {
-    return PROGRESSION_STAGES.OUTREACH_PLANNING;
+    return PROGRESSION_STAGES.ACQUISITION_PLANNING;
   }
   if (mission.stage === STAGES.EXECUTE || mission.stage === STAGES.READY) {
     return PROGRESSION_STAGES.EXECUTION;
   }
   if (mission.stage === STAGES.DISCOVER && !hasDiscoveryArtifact(snapshot)) {
     return hasPendingDiscoveryApproval(snapshot)
-      ? PROGRESSION_STAGES.DISCOVERY
-      : PROGRESSION_STAGES.UNDERSTANDING;
+      ? PROGRESSION_STAGES.DISCOVERY_APPROVAL
+      : PROGRESSION_STAGES.MISSION_PLANNING;
   }
-  return PROGRESSION_STAGES.UNDERSTANDING;
+  return PROGRESSION_STAGES.MISSION_PLANNING;
 }
 
 function deriveMissionPause(snapshot = {}) {
@@ -274,7 +264,7 @@ function deriveMissionPause(snapshot = {}) {
   if (hasPendingPlanClarification(snapshot)) {
     const pending = mission.pendingOperatorDecision || {};
     return createMissionPause({
-      stage: PROGRESSION_STAGES.UNDERSTANDING,
+      stage: PROGRESSION_STAGES.MISSION_PLANNING,
       reason: 'Mission understanding has unresolved ambiguities.',
       requiredDecision: pending.prompt || pending.clarificationPrompt || 'Clarify mission parameters.',
       availableOptions: pending.choices || [],
@@ -283,10 +273,30 @@ function deriveMissionPause(snapshot = {}) {
 
   if (hasPendingPlanApproval(snapshot)) {
     return createMissionPause({
-      stage: PROGRESSION_STAGES.UNDERSTANDING,
+      stage: PROGRESSION_STAGES.MISSION_PLANNING,
       reason: 'Mission understanding complete. Operator approval required before Scout investigation.',
       requiredDecision: 'Approve mission plan?',
       availableOptions: ['Approve', 'Edit', 'Cancel'],
+    });
+  }
+
+  if (hasPendingDiscoveryApproval(snapshot)) {
+    return createMissionPause({
+      stage: PROGRESSION_STAGES.DISCOVERY_APPROVAL,
+      reason: 'Mission plan approved. Operator approval required before Scout investigation.',
+      requiredDecision: 'Approve discovery?',
+      availableOptions: ['Approve discovery', 'Cancel'],
+    });
+  }
+
+  if (hasPendingDiscoveryInvestigation(snapshot)) {
+    const pending = mission.pendingOperatorDecision || {};
+    return createMissionPause({
+      stage: PROGRESSION_STAGES.DISCOVERY_RUNNING,
+      reason: pending.reason || pending.blocker || 'Discovery evidence is insufficient for prioritization.',
+      requiredDecision: pending.prompt || 'Continue investigation?',
+      availableOptions: (pending.choices || []).map((row) => row.label || row),
+      waitingOn: pending.waitingOn || 'More discovery evidence',
     });
   }
 
@@ -301,6 +311,15 @@ function deriveMissionPause(snapshot = {}) {
         'Adjust mission',
         'Cancel',
       ],
+    });
+  }
+
+  if (hasPendingExecutionApproval(snapshot)) {
+    return createMissionPause({
+      stage: PROGRESSION_STAGES.EXECUTION,
+      reason: 'Prepared outreach is ready. Operator authorization is required before external execution.',
+      requiredDecision: 'Authorize external execution of prepared outreach?',
+      availableOptions: ['Approve execution', 'Review execution review', 'Cancel'],
     });
   }
 
@@ -324,7 +343,7 @@ function deriveExecutionBlock(snapshot = {}, err = null) {
 
   if (err && err.code === 'tme_plan_ambiguous') {
     return createExecutionBlock({
-      stage: PROGRESSION_STAGES.UNDERSTANDING,
+      stage: PROGRESSION_STAGES.MISSION_PLANNING,
       unmetPrecondition: 'Mission plan has unresolved ambiguities.',
       blockingComponent: 'Mission Planning Engine',
       recommendedAction: 'Answer clarification questions before retrying.',
@@ -333,7 +352,7 @@ function deriveExecutionBlock(snapshot = {}, err = null) {
 
   if (message && /investigation planner|scout/i.test(message)) {
     return createExecutionBlock({
-      stage: PROGRESSION_STAGES.DISCOVERY,
+      stage: PROGRESSION_STAGES.DISCOVERY_RUNNING,
       unmetPrecondition: message,
       blockingComponent: 'Scout Investigation Runtime',
       recommendedAction: 'Retry planning.',
@@ -342,18 +361,26 @@ function deriveExecutionBlock(snapshot = {}, err = null) {
 
   const discovery = findLatestDiscoveryContribution(snapshot.contributions || []);
   if (discovery && discovery.payload && discovery.payload.blocked) {
+    const summary = discovery.payload.summary || 'Discovery blocked.';
+    const isCapabilityBlock =
+      discovery.payload.blockerCode === 'external_discovery_capability_unavailable' ||
+      /external discovery capability unavailable/i.test(summary);
     return createExecutionBlock({
-      stage: PROGRESSION_STAGES.DISCOVERY,
-      unmetPrecondition: discovery.payload.summary || 'Discovery blocked.',
-      blockingComponent: 'Scout Intelligence Pipeline',
-      recommendedAction: 'Resolve discovery blocker and retry.',
+      stage: PROGRESSION_STAGES.DISCOVERY_RUNNING,
+      unmetPrecondition: summary,
+      blockingComponent: isCapabilityBlock
+        ? 'External Discovery Provider Registry'
+        : 'Scout Intelligence Pipeline',
+      recommendedAction: isCapabilityBlock
+        ? 'Configure an external discovery provider before retrying.'
+        : 'Resolve discovery blocker and retry.',
     });
   }
 
-  const gate = canEnter(STAGES.UNDERSTAND, specialistContext(snapshot.contributions || []));
-  if (progressionStage === PROGRESSION_STAGES.OUTREACH_PLANNING && !gate.ok) {
+  const gate = canEnter(STAGES.PREPARE, specialistContext(snapshot.contributions || []));
+  if (progressionStage === PROGRESSION_STAGES.ACQUISITION_PLANNING && !gate.ok) {
     return createExecutionBlock({
-      stage: PROGRESSION_STAGES.OUTREACH_PLANNING,
+      stage: PROGRESSION_STAGES.ACQUISITION_PLANNING,
       unmetPrecondition: gate.reason,
       blockingComponent: 'Mission Lifecycle',
       recommendedAction: 'Complete prior stage prerequisites.',
@@ -404,6 +431,58 @@ function canAutoAdvanceDiscovery(snapshot) {
   if (!hasPendingDiscoveryApproval(snapshot)) return false;
   const mission = snapshot.mission || snapshot;
   return Boolean(mission && mission.structuredMissionApproved);
+}
+
+function canAutoAdvanceMaxPrioritization(snapshot) {
+  const mission = snapshot.mission || snapshot;
+  if (!mission || mission.planCancelled) return false;
+  if (mission.stage !== STAGES.UNDERSTAND) return false;
+  if (hasPendingPrioritizationApproval(snapshot)) return false;
+  const ctx = specialistContext(snapshot.contributions || []);
+  if (!ctx.scoutComplete || ctx.maxComplete) return false;
+  const { findPrioritizationApproval } = require('../max/workspace/AmoOperatorApproval');
+  return Boolean(findPrioritizationApproval(snapshot.contributions || []));
+}
+
+function canAutoAdvanceAcquisitionApproach(snapshot) {
+  const mission = snapshot.mission || snapshot;
+  if (!mission || mission.planCancelled) return false;
+  const ctx = specialistContext(snapshot.contributions || []);
+  if (!ctx.maxComplete || ctx.acquisitionApproachComplete) return false;
+  return [STAGES.UNDERSTAND, STAGES.PLAN].includes(mission.stage);
+}
+
+function canAutoAdvanceOutreachToPaige(snapshot) {
+  const mission = snapshot.mission || snapshot;
+  if (!mission || mission.planCancelled) return false;
+  if (hasPendingPrioritizationApproval(snapshot)) return false;
+  const ctx = specialistContext(snapshot.contributions || []);
+  if (!ctx.maxComplete || ctx.paigeComplete) return false;
+  if (
+    !ctx.paidAcquisitionComplete &&
+    (ctx.acquisitionApproach === 'paid' || ctx.acquisitionApproach === 'both')
+  ) {
+    return false;
+  }
+  if (!ctx.acquisitionApproachComplete || !ctx.acquisitionApproachPermitsOutbound) return false;
+  return [STAGES.UNDERSTAND, STAGES.PLAN, STAGES.PREPARE].includes(mission.stage);
+}
+
+function canAutoAdvancePennyPaidAcquisition(snapshot) {
+  const mission = snapshot.mission || snapshot;
+  if (!mission || mission.planCancelled) return false;
+  const ctx = specialistContext(snapshot.contributions || []);
+  if (!ctx.maxComplete || !ctx.acquisitionApproachComplete || ctx.paidAcquisitionComplete) return false;
+  if (ctx.acquisitionApproach !== 'paid' && ctx.acquisitionApproach !== 'both') return false;
+  return [STAGES.UNDERSTAND, STAGES.PLAN].includes(mission.stage);
+}
+
+function canAutoAdvanceOutreachToEmmett(snapshot) {
+  const mission = snapshot.mission || snapshot;
+  if (!mission || mission.planCancelled) return false;
+  const ctx = specialistContext(snapshot.contributions || []);
+  if (!ctx.paigeComplete || ctx.emmettComplete) return false;
+  return mission.stage === STAGES.PREPARE;
 }
 
 function buildDiscoveryPipelineStatus(snapshot = {}) {
@@ -472,8 +551,8 @@ function formatMissionProgressPresentation(snapshot = {}, result = {}) {
   for (const t of transitions) {
     lines.push(`✓ ${PROGRESSION_STAGE_LABELS[t.from] || t.from} completed automatically.`);
   }
-  if (progressionStage === PROGRESSION_STAGES.DISCOVERY) {
-    lines.push('', 'Beginning Scout Investigation.', '', 'Current Stage', '', 'Discovery', '', 'Executing', '');
+  if (progressionStage === PROGRESSION_STAGES.DISCOVERY_RUNNING) {
+    lines.push('', 'Beginning Scout Investigation.', '', 'Current Stage', '', 'Discovery Running', '', 'Executing', '');
     for (const row of pipeline) {
       const mark = row.status === 'complete' ? '✓ ' : row.status === 'executing' ? '• ' : '  ';
       lines.push(`${mark}${row.label}`);
@@ -511,6 +590,14 @@ async function runAutonomousProgression(input = {}) {
     || require('../max/workspace/AmoOperatorApproval').advancePlanAfterApproval;
   const advanceDiscovery = deps.advanceDiscoveryAfterApproval
     || require('../max/workspace/AmoOperatorApproval').advanceDiscoveryAfterApproval;
+  const advanceMaxPrioritization = deps.advanceMaxPrioritization
+    || require('../max/workspace/AmoOperatorApproval').advanceMaxPrioritization;
+  const advanceAcquisitionApproach = deps.advanceAcquisitionApproach
+    || require('../max/workspace/AmoOperatorApproval').advanceAcquisitionApproach;
+  const advancePaigeVariants = deps.advancePaigeVariants
+    || require('../max/workspace/AmoOperatorApproval').advancePaigeVariants;
+  const advanceEmmettCapacity = deps.advanceEmmettCapacity
+    || require('../max/workspace/AmoOperatorApproval').advanceEmmettCapacity;
 
   const transitions = [];
   let steps = 0;
@@ -543,11 +630,6 @@ async function runAutonomousProgression(input = {}) {
     }
 
     if (canAutoAdvanceUnderstanding(snapshot)) {
-      const transitionCheck = validateStageTransition(
-        PROGRESSION_STAGES.UNDERSTANDING,
-        PROGRESSION_STAGES.DISCOVERY
-      );
-      if (!transitionCheck.ok) break;
       try {
         await advancePlan({
           engine,
@@ -559,8 +641,8 @@ async function runAutonomousProgression(input = {}) {
           ...input,
         });
         transitions.push(createStageTransition({
-          from: PROGRESSION_STAGES.UNDERSTANDING,
-          to: PROGRESSION_STAGES.DISCOVERY,
+          from: PROGRESSION_STAGES.MISSION_PLANNING,
+          to: PROGRESSION_STAGES.DISCOVERY_RUNNING,
           trigger: 'Mission understanding complete. No ambiguity detected.',
         }));
         recordStageTransition(engine, missionId, transitions[transitions.length - 1], { tenantId });
@@ -572,11 +654,6 @@ async function runAutonomousProgression(input = {}) {
     }
 
     if (canAutoAdvanceDiscovery(snapshot)) {
-      const transitionCheck = validateStageTransition(
-        PROGRESSION_STAGES.DISCOVERY,
-        PROGRESSION_STAGES.DISCOVERY_REVIEW
-      );
-      if (!transitionCheck.ok) break;
       try {
         const result = await advanceDiscovery({
           engine,
@@ -588,7 +665,7 @@ async function runAutonomousProgression(input = {}) {
           ...input,
         });
         transitions.push(createStageTransition({
-          from: PROGRESSION_STAGES.DISCOVERY,
+          from: PROGRESSION_STAGES.DISCOVERY_RUNNING,
           to: PROGRESSION_STAGES.DISCOVERY_REVIEW,
           trigger: result.executionOutcome === 'blocked'
             ? 'Scout investigation blocked.'
@@ -601,17 +678,213 @@ async function runAutonomousProgression(input = {}) {
           return {
             spec: 'SPEC-147',
             outcome: 'blocked',
-            progressionStage: PROGRESSION_STAGES.DISCOVERY,
+            progressionStage: PROGRESSION_STAGES.DISCOVERY_RUNNING,
             pause: null,
             block: deriveExecutionBlock(after, { message: 'Discovery blocked.' }),
             transitions,
             snapshot: after,
             presentation: formatMissionProgressPresentation(after, {
-              progressionStage: PROGRESSION_STAGES.DISCOVERY,
+              progressionStage: PROGRESSION_STAGES.DISCOVERY_RUNNING,
               block: deriveExecutionBlock(after),
               transitions,
             }),
           };
+        }
+        continue;
+      } catch (err) {
+        lastError = err;
+        break;
+      }
+    }
+
+    if (canAutoAdvanceMaxPrioritization(snapshot)) {
+      try {
+        await advanceMaxPrioritization({
+          engine,
+          mission: engine.get(missionId, tenantId),
+          tenantId,
+          operatorId,
+          allowFixtureFallback,
+          ...input,
+        });
+        transitions.push(createStageTransition({
+          from: PROGRESSION_STAGES.ACQUISITION_PLANNING,
+          to: PROGRESSION_STAGES.ACQUISITION_PLANNING,
+          trigger: 'Max prioritization committed.',
+        }));
+        recordStageTransition(engine, missionId, transitions[transitions.length - 1], { tenantId });
+        continue;
+      } catch (err) {
+        lastError = err;
+        break;
+      }
+    }
+
+    if (canAutoAdvanceAcquisitionApproach(snapshot)) {
+      try {
+        await advanceAcquisitionApproach({
+          engine,
+          mission: engine.get(missionId, tenantId),
+          tenantId,
+          operatorId,
+          allowFixtureFallback,
+          ...input,
+        });
+        transitions.push(createStageTransition({
+          from: PROGRESSION_STAGES.ACQUISITION_PLANNING,
+          to: PROGRESSION_STAGES.ACQUISITION_PLANNING,
+          trigger: 'Max acquisition approach committed.',
+        }));
+        recordStageTransition(engine, missionId, transitions[transitions.length - 1], { tenantId });
+        continue;
+      } catch (err) {
+        lastError = err;
+        break;
+      }
+    }
+
+    if (canAutoAdvancePennyPaidAcquisition(snapshot)) {
+      try {
+        const advancePennyPaidAcquisition = deps.advancePennyPaidAcquisition
+          || require('../max/workspace/AmoOperatorApproval').advancePennyPaidAcquisition;
+        await advancePennyPaidAcquisition({
+          engine,
+          mission: engine.get(missionId, tenantId),
+          tenantId,
+          operatorId,
+          allowFixtureFallback,
+          ...input,
+        });
+        transitions.push(createStageTransition({
+          from: PROGRESSION_STAGES.ACQUISITION_PLANNING,
+          to: PROGRESSION_STAGES.ACQUISITION_PLANNING,
+          trigger: 'Penny paid acquisition assessment committed.',
+        }));
+        recordStageTransition(engine, missionId, transitions[transitions.length - 1], { tenantId });
+        continue;
+      } catch (err) {
+        lastError = err;
+        break;
+      }
+    }
+
+    if (canAutoAdvanceOutreachToPaige(snapshot)) {
+      try {
+        const beforeStage = snapshot.mission.stage;
+        const result = await advancePaigeVariants({
+          engine,
+          mission: engine.get(missionId, tenantId),
+          tenantId,
+          operatorId,
+          allowFixtureFallback,
+          question: `${AUTONOMOUS_COMMAND} Generate outreach variants.`,
+          ...input,
+        });
+        if (result.executionOutcome === 'blocked') {
+          const after = engine.inspect(missionId, { tenantId });
+          return {
+            spec: 'SPEC-147',
+            outcome: 'blocked',
+            progressionStage: deriveProgressionStage(after),
+            pause: null,
+            block: deriveExecutionBlock(after, { message: 'Paige execution blocked.' }),
+            transitions,
+            snapshot: after,
+            presentation: formatMissionProgressPresentation(after, {
+              progressionStage: deriveProgressionStage(after),
+              block: deriveExecutionBlock(after),
+              transitions,
+            }),
+          };
+        }
+        const after = engine.inspect(missionId, { tenantId });
+        transitions.push(createStageTransition({
+          from: beforeStage === STAGES.PREPARE
+            ? PROGRESSION_STAGES.ACQUISITION_PLANNING
+            : PROGRESSION_STAGES.ACQUISITION_PLANNING,
+          to: PROGRESSION_STAGES.ACQUISITION_PLANNING,
+          trigger: 'Paige variants committed.',
+        }));
+        recordStageTransition(engine, missionId, transitions[transitions.length - 1], { tenantId });
+        continue;
+      } catch (err) {
+        lastError = err;
+        break;
+      }
+    }
+
+    if (canAutoAdvanceOutreachToEmmett(snapshot)) {
+      try {
+        const beforeStage = snapshot.mission.stage;
+        const result = await advanceEmmettCapacity({
+          engine,
+          mission: engine.get(missionId, tenantId),
+          tenantId,
+          operatorId,
+          allowFixtureFallback,
+          infrastructureSnapshot: input.infrastructureSnapshot,
+          question: `${AUTONOMOUS_COMMAND} Plan outbound capacity.`,
+          ...input,
+        });
+        if (result.executionOutcome === 'blocked') {
+          const after = engine.inspect(missionId, { tenantId });
+          return {
+            spec: 'SPEC-147',
+            outcome: 'blocked',
+            progressionStage: deriveProgressionStage(after),
+            pause: null,
+            block: deriveExecutionBlock(after, { message: 'Emmett execution blocked.' }),
+            transitions,
+            snapshot: after,
+            presentation: formatMissionProgressPresentation(after, {
+              progressionStage: deriveProgressionStage(after),
+              block: deriveExecutionBlock(after),
+              transitions,
+            }),
+          };
+        }
+        const after = engine.inspect(missionId, { tenantId });
+        transitions.push(createStageTransition({
+          from: beforeStage === STAGES.PREPARE
+            ? PROGRESSION_STAGES.ACQUISITION_PLANNING
+            : PROGRESSION_STAGES.ACQUISITION_PLANNING,
+          to: PROGRESSION_STAGES.EXECUTION,
+          trigger: 'Emmett capacity committed.',
+        }));
+        recordStageTransition(engine, missionId, transitions[transitions.length - 1], { tenantId });
+        if (after.mission.stage === STAGES.READY && hasPendingExecutionApproval(after)) {
+          return {
+            spec: 'SPEC-147',
+            outcome: 'paused',
+            progressionStage: deriveProgressionStage(after),
+            pause: deriveMissionPause(after),
+            block: null,
+            transitions,
+            snapshot: after,
+            presentation: formatMissionProgressPresentation(after, {
+              progressionStage: deriveProgressionStage(after),
+              pause: deriveMissionPause(after),
+              transitions,
+            }),
+          };
+        }
+        if (after.mission.stage === STAGES.PREPARE) {
+          const ctx = specialistContext(after.contributions || [], { missionId: after.mission.id });
+          if (ctx.emmettComplete) {
+            return {
+              spec: 'SPEC-147',
+              outcome: 'complete',
+              progressionStage: deriveProgressionStage(after),
+              pause: null,
+              block: null,
+              transitions,
+              snapshot: after,
+              presentation: formatMissionProgressPresentation(after, {
+                progressionStage: deriveProgressionStage(after),
+                transitions,
+              }),
+            };
+          }
         }
         continue;
       } catch (err) {
@@ -625,31 +898,12 @@ async function runAutonomousProgression(input = {}) {
 
   const snapshot = engine.inspect(missionId, { tenantId });
   const gate = resolveHumanDecisionGate(snapshot);
-  if (gate.shouldPause) {
-    return {
-      spec: 'SPEC-147',
-      outcome: 'paused',
-      progressionStage: gate.progressionStage,
-      pause: gate.pause,
-      block: gate.block,
-      transitions,
-      snapshot,
-      presentation: formatMissionProgressPresentation(snapshot, {
-        progressionStage: gate.progressionStage,
-        pause: gate.pause,
-        block: gate.block,
-        transitions,
-      }),
-      error: lastError || null,
-    };
-  }
-
-  const pause = deriveMissionPause(snapshot);
-  const block = lastError ? deriveExecutionBlock(snapshot, lastError) : null;
+  const pause = gate.shouldPause ? gate.pause : deriveMissionPause(snapshot);
+  const block = lastError ? deriveExecutionBlock(snapshot, lastError) : gate.block;
 
   return {
     spec: 'SPEC-147',
-    outcome: block ? 'blocked' : pause ? 'paused' : 'complete',
+    outcome: block && !block.pauseFallback ? 'blocked' : gate.shouldPause || pause ? 'paused' : 'complete',
     progressionStage: deriveProgressionStage(snapshot),
     pause,
     block,
@@ -677,6 +931,107 @@ function isAutonomousProgressionCommand(text) {
   );
 }
 
+const { EXECUTION_INTENTS, actionFromIntent } = require('./ExecutionRequest');
+
+const CANONICAL_PROGRESSION_CHECKS = Object.freeze([
+  {
+    check: canAutoAdvanceUnderstanding,
+    intent: EXECUTION_INTENTS.APPROVE_PLAN,
+    label: 'Approve mission plan',
+  },
+  {
+    check: canAutoAdvanceDiscovery,
+    intent: EXECUTION_INTENTS.APPROVE_DISCOVERY,
+    label: 'Begin Scout investigation',
+  },
+  {
+    check: canAutoAdvanceMaxPrioritization,
+    intent: EXECUTION_INTENTS.MISSION_CONTINUATION,
+    label: 'Run Max prioritization',
+  },
+  {
+    check: canAutoAdvanceAcquisitionApproach,
+    intent: EXECUTION_INTENTS.DECIDE_ACQUISITION_APPROACH,
+    label: 'Decide acquisition approach',
+  },
+  {
+    check: canAutoAdvancePennyPaidAcquisition,
+    intent: EXECUTION_INTENTS.ASSESS_PAID_ACQUISITION,
+    label: 'Assess paid acquisition',
+  },
+  {
+    check: canAutoAdvanceOutreachToPaige,
+    intent: EXECUTION_INTENTS.GENERATE_VARIANTS,
+    label: 'Generate outreach variants',
+  },
+  {
+    check: canAutoAdvanceOutreachToEmmett,
+    intent: EXECUTION_INTENTS.GENERATE_CAPACITY,
+    label: 'Plan outbound capacity',
+  },
+]);
+
+/**
+ * SPEC-208 — eligible canonical next actions from mission graph predicates.
+ * @param {object} snapshot
+ * @returns {Array<{ intent: string, action: string|null, label: string }>}
+ */
+function resolveEligibleCanonicalProgressions(snapshot = {}) {
+  const eligible = [];
+  for (const row of CANONICAL_PROGRESSION_CHECKS) {
+    if (row.check(snapshot)) {
+      eligible.push({
+        intent: row.intent,
+        action: actionFromIntent(row.intent),
+        label: row.label,
+      });
+    }
+  }
+  return eligible;
+}
+
+/**
+ * SPEC-208 — resolve bare "continue" against active mission executable state.
+ * @param {object} snapshot
+ * @returns {{
+ *   kind: 'no_mission'|'pending_decision'|'execute'|'ambiguous'|'inspect',
+ *   progression?: { intent: string, action: string|null, label: string },
+ *   eligible?: Array<{ intent: string, action: string|null, label: string }>,
+ *   pause?: object|null,
+ *   options?: string[],
+ * }}
+ */
+function resolveMissionContinuation(snapshot = {}) {
+  const mission = snapshot.mission || snapshot;
+  if (!mission) {
+    return { kind: 'no_mission' };
+  }
+
+  if (mission.pendingOperatorDecision || hasConsumablePendingDecision(snapshot)) {
+    return { kind: 'pending_decision' };
+  }
+
+  const eligible = resolveEligibleCanonicalProgressions(snapshot);
+  if (eligible.length === 1) {
+    return { kind: 'execute', progression: eligible[0] };
+  }
+  if (eligible.length > 1) {
+    return { kind: 'ambiguous', eligible };
+  }
+
+  const pause = deriveMissionPause(snapshot);
+  if (pause && Array.isArray(pause.availableOptions) && pause.availableOptions.length > 1) {
+    return {
+      kind: 'ambiguous',
+      eligible: [],
+      pause,
+      options: pause.availableOptions,
+    };
+  }
+
+  return { kind: 'inspect' };
+}
+
 module.exports = {
   PROGRESSION_STAGES,
   PROGRESSION_STAGE_LABELS,
@@ -684,7 +1039,6 @@ module.exports = {
   MISSION_STAGE_CONTRACTS,
   AUTONOMOUS_OPERATOR_ID,
   getStageContract,
-  validateStageTransition,
   createPauseFallbackBlock,
   resolveHumanDecisionGate,
   resolveProgressionState,
@@ -695,10 +1049,19 @@ module.exports = {
   deriveMissionPause,
   deriveExecutionBlock,
   recordStageTransition,
+  isDiscoveryRunning,
   canAutoAdvanceUnderstanding,
   canAutoAdvanceDiscovery,
+  canAutoAdvanceMaxPrioritization,
+  canAutoAdvanceAcquisitionApproach,
+  canAutoAdvancePennyPaidAcquisition,
+  canAutoAdvanceOutreachToPaige,
+  canAutoAdvanceOutreachToEmmett,
   buildDiscoveryPipelineStatus,
   formatMissionProgressPresentation,
   runAutonomousProgression,
   isAutonomousProgressionCommand,
+  resolveEligibleCanonicalProgressions,
+  resolveMissionContinuation,
+  CANONICAL_PROGRESSION_CHECKS,
 };

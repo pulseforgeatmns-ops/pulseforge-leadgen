@@ -18,8 +18,14 @@ const { applyActiveReasoningContinuity } = require('./ActiveReasoningContext');
 const {
   hasExecutionLanguage,
   detectMissionExecutionLanguage,
+  isNonExecutingOperatingTurn,
 } = require('./ExecutionLanguageDetection');
+const { resolveMissionLifecycleIntent } = require('./MissionLifecycleIntent');
 const { resolveAcquisitionActiveMission } = require('./ActiveMissionGuard');
+const {
+  resolveTenantId,
+  resolveAcquisitionMissionRuntime,
+} = require('./WorkspaceMissionInspection');
 const {
   evaluateMissionContinuation,
   evaluateMissionEscape,
@@ -36,7 +42,18 @@ const {
   contractRequiresContinuity,
   contractLocksConversation,
 } = require('./ConversationContract');
+const { sessionStateBlocksExecution, getSessionState } = require('./SessionState');
 const { CONVERSATION_SUBJECTS } = require('./ConversationSubject');
+const {
+  resolvePendingOperatorDecision,
+  pendingDecisionRequestsExecution,
+  pendingDecisionOwnsTurn,
+} = require('./PendingDecisionResolver');
+const { THINKING_MODES: COGNITION_MODES } = require('../operatorCognition/ThinkingModes');
+const {
+  classifyOperatorMissionTurnIntent,
+  OPERATOR_TURN_INTENT_TYPES,
+} = require('./OperatorMissionTurnIntent');
 
 /**
  * @typedef {object} OperatorIntent
@@ -57,6 +74,9 @@ const { CONVERSATION_SUBJECTS } = require('./ConversationSubject');
  * @property {boolean} executionLanguagePresent
  * @property {boolean} missionCreationRequested
  * @property {string|null} missionCreationReason
+ * @property {string} missionLifecycleIntent — SPEC-200 canonical lifecycle decision
+ * @property {string|null} missionLifecycleReason
+ * @property {object|null} pendingDecisionResolution — SPEC-197 canonical pending decision intent
  */
 
 function normalizeText(value) {
@@ -67,6 +87,10 @@ function deriveExecutionRequested(conversationIntent) {
   if (!conversationIntent) return false;
   if (conversationIntent.continuity) return false;
   if (conversationIntent.via === 'conversational_continue') return false;
+  if (conversationIntent.via === 'mission_continuation_ambiguous') return false;
+  if (conversationIntent.via === 'mission_continuation') return true;
+  // SPEC-217: REVISE_PREPARED_OUTREACH must be execution-capable for canonical routing.
+  if (conversationIntent.executionIntent === 'REVISE_PREPARED_OUTREACH') return true;
   return (
     conversationIntent.intent === THINKING_MODES.EXECUTE ||
     conversationIntent.intent === THINKING_MODES.EDIT ||
@@ -76,12 +100,82 @@ function deriveExecutionRequested(conversationIntent) {
   );
 }
 
-function derivePlanningRequested(conversationIntent) {
+function derivePlanningRequested(conversationIntent, pendingDecisionResolution = null) {
   if (!conversationIntent) return false;
+  if (
+    pendingDecisionResolution &&
+    pendingDecisionResolution.resolved &&
+    pendingDecisionResolution.outcome === 'modify'
+  ) {
+    return true;
+  }
+  if (
+    pendingDecisionResolution &&
+    pendingDecisionResolution.resolved &&
+    pendingDecisionResolution.outcome === 'request_revision'
+  ) {
+    return false;
+  }
   return (
     conversationIntent.via === 'mission_planning_turn' ||
-    conversationIntent.via === 'mission_plan_edit'
+    conversationIntent.via === 'mission_plan_edit' ||
+    conversationIntent.via === 'pending_decision_modify'
   );
+}
+
+function buildPendingDecisionOwnershipIntent(pendingDecisionResolution) {
+  return {
+    intent: COGNITION_MODES.INSPECT,
+    confidence: 0.98,
+    mutatesMission: false,
+    thinkingMode: 'pending_decision',
+    via: 'pending_decision_ownership',
+    specialists: null,
+    pendingDecisionOutcome: pendingDecisionResolution.outcome,
+  };
+}
+
+function buildPendingDecisionConversationIntent(pendingDecisionResolution) {
+  if (!pendingDecisionResolution || !pendingDecisionResolution.resolved) {
+    return null;
+  }
+  if (pendingDecisionResolution.outcome === 'modify') {
+    return {
+      intent: COGNITION_MODES.EDIT,
+      confidence: pendingDecisionResolution.confidence || 0.92,
+      mutatesMission: true,
+      thinkingMode: 'execution',
+      via: 'pending_decision_modify',
+      specialists: null,
+    };
+  }
+  if (pendingDecisionResolution.outcome === 'request_revision') {
+    return {
+      intent: COGNITION_MODES.EDIT,
+      confidence: pendingDecisionResolution.confidence || 0.95,
+      mutatesMission: true,
+      thinkingMode: 'execution_revision',
+      via: 'pending_decision_revision_request',
+      specialists: null,
+      pendingDecisionOutcome: 'request_revision',
+      executionIntent: pendingDecisionResolution.executionIntent,
+      executionAction: pendingDecisionResolution.executionAction,
+    };
+  }
+  if (
+    pendingDecisionResolution.resolvedFromPendingDecision &&
+    pendingDecisionResolution.executionIntent
+  ) {
+    return {
+      intent: COGNITION_MODES.EXECUTE,
+      confidence: pendingDecisionResolution.confidence || 0.98,
+      mutatesMission: true,
+      thinkingMode: 'execution',
+      via: 'pending_decision_resolved',
+      specialists: null,
+    };
+  }
+  return null;
 }
 
 function deriveIntentLabel(conversationSubject, conversationIntent) {
@@ -142,13 +236,34 @@ async function resolveLegacyMissionContinuation(input = {}, question) {
   }
 
   const continuation = evaluateMissionContinuation(question, activeMission);
+  // A legacy default-resume is not positive continuation evidence. An explicit
+  // request owned by Market Intelligence must be free to leave the mission.
+  const { selectExecutionDomain, EXECUTION_DOMAINS } = require('./ExecutionDomain');
+  const independentMarketRequest = continuation.reason === 'default_resume_active' &&
+    selectExecutionDomain(question).domain === EXECUTION_DOMAINS.MARKET_INTELLIGENCE;
   return {
     requested:
-      continuation.continues && continuation.confidence >= CONTINUATION_THRESHOLD,
+      !independentMarketRequest && continuation.continues &&
+      continuation.confidence >= CONTINUATION_THRESHOLD,
     confidence: continuation.confidence,
     classification: continuation.classification,
     reason: continuation.reason,
   };
+}
+
+function bareWhyHasNonDecisionAnchor(question, session) {
+  if (!/^why\??$/i.test(normalizeText(question))) return false;
+  const lastAnswer = [...(session && session.messages || [])]
+    .reverse().find((message) => message.role === 'max' || message.role === 'assistant');
+  const metadata = lastAnswer && lastAnswer.structured && lastAnswer.structured.metadata;
+  // A decision actually surfaced most recently remains the question's referent.
+  if (metadata && (metadata.pendingDecisionTurnOwnership || metadata.pendingDecisionResolution ||
+      metadata.missionCommunicationPayload && metadata.missionCommunicationPayload.operatorDecision)) {
+    return false;
+  }
+  if (metadata && metadata.sessionConfiguration) return true;
+  const prior = getConversationalState(session);
+  return Boolean(prior && prior.subject === CONVERSATION_SUBJECTS.IDENTITY);
 }
 
 /**
@@ -215,6 +330,30 @@ function applyConversationContractToIntent(baseIntent, conversationContract) {
   return baseIntent;
 }
 
+function applySessionStateToIntent(baseIntent, sessionState) {
+  if (!sessionState || !sessionStateBlocksExecution(sessionState)) {
+    if (sessionState) {
+      baseIntent.sessionState = sessionState;
+    }
+    return baseIntent;
+  }
+
+  baseIntent.executionRequested = false;
+  baseIntent.planningRequested = false;
+  baseIntent.mutatesMission = false;
+  baseIntent.missionContinuationRequested = false;
+  baseIntent.conversationLocked = true;
+  baseIntent.ownerHints = {
+    ...(baseIntent.ownerHints || {}),
+    readOnly: true,
+    executionLanguagePresent: false,
+    missionContinuation: false,
+    sessionExecutionPolicy: sessionState.executionPolicy,
+  };
+  baseIntent.sessionState = sessionState;
+  return baseIntent;
+}
+
 async function analyzeOperatorIntent(input = {}) {
   resetOperatorIntentAudit();
 
@@ -222,11 +361,12 @@ async function analyzeOperatorIntent(input = {}) {
   const session = input.session || null;
   const context = input.context || (session && session.context) || null;
   const conversationContract = input.conversationContract || null;
+  const sessionState = input.sessionState || getSessionState(session);
 
   let mission = input.mission || null;
   if (!mission && input.resolveMission !== false) {
     try {
-      mission = await resolveAcquisitionActiveMission({
+      mission = (await resolveAcquisitionActiveMission({
         session,
         context,
         question,
@@ -235,28 +375,101 @@ async function analyzeOperatorIntent(input = {}) {
         resolverEnabled: input.resolverEnabled,
         acquisitionMissionRuntime: input.acquisitionMissionRuntime,
         runtimeProvider: input.runtimeProvider,
-      });
+      })).mission;
     } catch (_) {
       mission = null;
     }
   }
 
+  let snapshot = input.snapshot || null;
+  if (!snapshot && mission) {
+    try {
+      const runtime = resolveAcquisitionMissionRuntime(input);
+      const engine = runtime && typeof runtime.engine === 'function' ? runtime.engine() : null;
+      const tenantId = resolveTenantId({ session, context });
+      if (engine && tenantId && mission.id) {
+        snapshot = engine.inspect(mission.id, { tenantId });
+      }
+    } catch (_) {
+      snapshot = null;
+    }
+  }
+
   let conversationSubject = detectConversationSubject(question, null, session);
 
-  let conversationIntent = attachSpecialists(
-    classifyOperatorCognition(question, {
-      session,
-      context,
-      mission,
-    })
-  );
+  const operatingEvidenceTurn = isNonExecutingOperatingTurn(question);
+  const objectiveEstablishment = require('../../../services/operatorObjectives')
+    .detectObjectiveEstablishment(question);
+
+  let pendingDecisionResolution = mission
+    ? resolvePendingOperatorDecision(question, mission, {
+        sessionId: session && session.id,
+        tenantId: resolveTenantId({ session, context }),
+        shadowDecision:
+          input.shadowDecision ||
+          (context && context.shadowDecision) ||
+          (session && session.context && session.context.shadowDecision) ||
+          null,
+      })
+    : { resolved: false };
+
+  // SPEC-149/154 — bare follow-ups refer to the last conversational answer,
+  // not an unrelated approval that merely exists in the tenant's mission state.
+  if (pendingDecisionResolution.outcome === 'question' &&
+      bareWhyHasNonDecisionAnchor(question, session)) {
+    pendingDecisionResolution = {
+      ...pendingDecisionResolution,
+      outcome: 'unrelated',
+      captureIntent: 'conversation_follow_up',
+      captureGuarded: true,
+    };
+  }
+
+  let conversationIntent = buildPendingDecisionConversationIntent(pendingDecisionResolution);
+  if (conversationIntent) {
+    conversationIntent = attachSpecialists(conversationIntent);
+  } else if (pendingDecisionOwnsTurn(pendingDecisionResolution)) {
+    conversationIntent = attachSpecialists(
+      buildPendingDecisionOwnershipIntent(pendingDecisionResolution)
+    );
+  } else {
+    conversationIntent = attachSpecialists(
+      classifyOperatorCognition(question, {
+        session,
+        context,
+        mission,
+        snapshot,
+        contributions: snapshot && snapshot.contributions,
+      })
+    );
+  }
+
+  // Evidence reports and durable strategic objectives are not mission execution.
+  // Topic words such as "begin", "launch", or "own" are insufficient authority.
+  if ((operatingEvidenceTurn || objectiveEstablishment) &&
+      !pendingDecisionRequestsExecution(pendingDecisionResolution)) {
+    conversationIntent = attachSpecialists({
+      intent: COGNITION_MODES.INSPECT,
+      confidence: 0.95,
+      mutatesMission: false,
+      thinkingMode: 'inspection',
+      via: operatingEvidenceTurn ? 'operating_evidence' : 'operator_objective',
+    });
+  }
 
   const executionLanguagePresent = hasExecutionLanguage(question);
   const creationLanguage = detectMissionExecutionLanguage(question);
+  const lifecycleResolution = resolveMissionLifecycleIntent(question);
   const legacyContinuation = await resolveLegacyMissionContinuation(input, question);
 
-  let executionRequested = deriveExecutionRequested(conversationIntent);
-  let planningRequested = derivePlanningRequested(conversationIntent);
+  // SPEC-217: The prepared-outreach revision intent routes through pending decision resolution.
+  let executionRequested =
+    pendingDecisionRequestsExecution(pendingDecisionResolution) ||
+    deriveExecutionRequested(conversationIntent);
+  let planningRequested = derivePlanningRequested(
+    conversationIntent,
+    pendingDecisionResolution
+  );
   let missionContinuationRequested = legacyContinuation.requested;
 
   let resolvedQuestion = question;
@@ -274,6 +487,12 @@ async function analyzeOperatorIntent(input = {}) {
       // SPEC-153 — mission continuation beats generic conversational continuity.
       continuityApplied = false;
       missionContinuationRequested = true;
+    } else if (pendingDecisionRequestsExecution(pendingDecisionResolution)) {
+      // SPEC-197 — pending decision resolution beats conversational continuity.
+      continuityApplied = false;
+    } else if (pendingDecisionOwnsTurn(pendingDecisionResolution)) {
+      // SPEC-202 — unresolved pending decision retains turn ownership.
+      continuityApplied = false;
     } else {
       continuityApplied = true;
       conversationSubject = continuity.conversationSubject;
@@ -313,7 +532,10 @@ async function analyzeOperatorIntent(input = {}) {
 
   const mutatesMission = continuityApplied
     ? false
-    : Boolean(conversationIntent && conversationIntent.mutatesMission);
+    : pendingDecisionRequestsExecution(pendingDecisionResolution) ||
+      (pendingDecisionResolution.resolved &&
+        pendingDecisionResolution.outcome === 'modify') ||
+      Boolean(conversationIntent && conversationIntent.mutatesMission);
 
   let operatorIntent = {
     subject: conversationSubject.subject,
@@ -343,6 +565,8 @@ async function analyzeOperatorIntent(input = {}) {
     executionLanguagePresent,
     missionCreationRequested: creationLanguage.matched,
     missionCreationReason: creationLanguage.reason,
+    missionLifecycleIntent: lifecycleResolution.intent,
+    missionLifecycleReason: lifecycleResolution.reason,
     missionContinuationRequested,
     missionContinuationConfidence: legacyContinuation.confidence,
     missionContinuationClassification: legacyContinuation.classification,
@@ -354,9 +578,39 @@ async function analyzeOperatorIntent(input = {}) {
       (activeReasoningContext && activeReasoningContext.conversationGoal),
     primaryClaim: activeReasoningContext && activeReasoningContext.primaryClaim,
     conversationContract,
+    pendingDecisionResolution:
+      pendingDecisionResolution.resolved || pendingDecisionResolution.pending
+        ? pendingDecisionResolution
+        : null,
   };
 
   operatorIntent = applyConversationContractToIntent(operatorIntent, conversationContract);
+  operatorIntent = applySessionStateToIntent(operatorIntent, sessionState);
+
+  const missionTurnIntent = classifyOperatorMissionTurnIntent(question, {
+    hasSinglePendingOperatorApproval: Boolean(
+      mission && mission.pendingOperatorDecision && mission.pendingOperatorDecision.kind
+    ),
+    missionContinuationRequested,
+  });
+  if (missionTurnIntent.type === OPERATOR_TURN_INTENT_TYPES.STATUS_QUERY) {
+    operatorIntent.executionRequested = false;
+    operatorIntent.planningRequested = false;
+    operatorIntent.mutatesMission = false;
+    operatorIntent.missionContinuationRequested = false;
+    operatorIntent.ownerHints = {
+      ...(operatorIntent.ownerHints || {}),
+      readOnly: true,
+      executionLanguagePresent: false,
+      missionContinuation: false,
+    };
+    operatorIntent.statusQuery = {
+      intent: missionTurnIntent.type,
+      domain: missionTurnIntent.domain || null,
+      action: missionTurnIntent.action || null,
+      mutatesMissionState: false,
+    };
+  }
 
   sealOperatorIntent(operatorIntent);
   return operatorIntent;

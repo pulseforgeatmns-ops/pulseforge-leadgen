@@ -21,9 +21,9 @@ const express = require('express');
 const path = require('path');
 const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { assertAuthorizedClientSwitch } = require('../utils/tenantAuthorization');
 const {
   getRequestClientId,
-  normalizeClientId,
 } = require('../utils/clientContext');
 const {
   ContentOutcomeError,
@@ -59,11 +59,12 @@ function noStore(res) {
 }
 
 function resolveClientId(req, body = {}) {
-  const fromBody = normalizeClientId(body.clientId ?? body.client_id ?? body.tenantId);
-  if (fromBody != null) return fromBody;
-  const fromQuery = normalizeClientId(req.query.client_id ?? req.query.tenantId);
-  if (fromQuery != null) return fromQuery;
-  return getRequestClientId(req);
+  const clientId = Number(body.clientId ?? body.client_id ?? body.tenantId ?? req.query.client_id ?? req.query.tenantId ?? getRequestClientId(req));
+  if (!Number.isInteger(clientId) || clientId < 1) throw new ContentOutcomeError('client_id_required', 'A valid client is required.');
+  const access = assertAuthorizedClientSwitch(req.user, clientId);
+  if (!access.ok) throw new ContentOutcomeError(access.error, 'Client scope is not authorized.', access.status);
+  if (body.tenantId != null && String(body.tenantId) !== String(clientId)) throw new ContentOutcomeError('tenant_client_mismatch', 'Tenant and client must match.');
+  return clientId;
 }
 
 function sendError(res, err) {

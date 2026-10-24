@@ -253,10 +253,23 @@ function modeResult(kind, via, extras = {}) {
  * @param {object} [input]
  * @returns {{ kind: string, via: string, explicitInvestigation: boolean, requiresOperatingRetrieval: boolean }}
  */
+function isExecutionInspectionTurn(question) {
+  try {
+    const { isExecutionInspectionQuestion } = require('../workspace/ExecutionInspectionRegistry');
+    return isExecutionInspectionQuestion(question);
+  } catch (_) {
+    return false;
+  }
+}
+
 function classifyCognitiveMode(question, input = {}) {
   const q = String(question || '').trim();
   if (!q) {
     return modeResult(COGNITIVE_MODES.RETRIEVAL, 'empty');
+  }
+
+  if (isExecutionInspectionTurn(q)) {
+    return modeResult(COGNITIVE_MODES.UNCLASSIFIED, 'execution_inspection');
   }
 
   if (looksLikeExecution(q)) {

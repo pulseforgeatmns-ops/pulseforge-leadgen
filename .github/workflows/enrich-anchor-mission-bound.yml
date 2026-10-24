@@ -1,0 +1,25 @@
+name: Enrich Anchor Mission-Bound Prospects
+
+on:
+  workflow_dispatch:
+
+jobs:
+  enrich:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Enrich mission-bound prospects and regenerate CAPACITY
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PROSPEO_API_KEY: ${{ secrets.PROSPEO_API_KEY }}
+          PROSPEO_ENABLED: 'true'
+          HUNTER_API_KEY: ${{ secrets.HUNTER_API_KEY }}
+          BOUNCER_ENABLED: ${{ secrets.BOUNCER_ENABLED }}
+          BOUNCER_API_KEY: ${{ secrets.BOUNCER_API_KEY }}
+        run: node scripts/enrichAnchorMissionBoundProspects.js --confirm-production

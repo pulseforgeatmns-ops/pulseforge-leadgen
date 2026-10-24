@@ -79,10 +79,26 @@ class SessionStore {
       session.conversationalState ||
       (session.context && session.context.conversationalState) ||
       null;
-    session.context = context;
+    const preservedSessionState =
+      session.sessionState ||
+      (session.context && session.context.sessionState) ||
+      null;
+    const priorCtx =
+      session.context && typeof session.context === 'object' ? session.context : {};
+    const nextCtx = { ...context };
+    for (const key of ['missionId', 'acquisitionMissionId', 'acquisitionOwner']) {
+      if (nextCtx[key] == null && priorCtx[key] != null) {
+        nextCtx[key] = priorCtx[key];
+      }
+    }
+    session.context = nextCtx;
     if (preservedConversationalState) {
       session.conversationalState = preservedConversationalState;
       session.context.conversationalState = preservedConversationalState;
+    }
+    if (preservedSessionState) {
+      session.sessionState = preservedSessionState;
+      session.context.sessionState = preservedSessionState;
     }
     if (nextActive) {
       session.activeWorkContext = nextActive;

@@ -229,7 +229,8 @@ describe('SPEC-145 — Adaptive Investigation Planning', () => {
   });
 
   it('Scout.investigate includes adaptive planning artifacts', async () => {
-    const result = await Scout.investigate({
+    const { investigate } = require('../packages/scout');
+    const result = await investigate({
       mission: {
         id: 'mission-spec145-2',
         tenantId: '1',
@@ -289,11 +290,8 @@ describe('SPEC-145 — Adaptive Investigation Planning', () => {
       },
     });
 
-    assert.equal(plan.version, 'SPEC-145');
-    assert.ok(plan.objective);
-    assert.ok(plan.hypotheses.length >= 1);
-    assert.ok(plan.evidenceRequired.length >= 1);
-    assert.ok(plan.providerSequence.length >= 1);
+    assert.equal(plan.version, 'SPEC-180');
+    assert.ok(plan.tasks.length >= 1);
     assert.ok(plan.stoppingConditions.confidenceTarget);
     assert.ok(plan.stoppingConditions.coverageTarget);
     assert.ok(plan.estimatedCoverage);
@@ -322,7 +320,7 @@ describe('SPEC-145 — Adaptive Investigation Planning', () => {
     });
 
     assert.ok(result.investigationPlan);
-    assert.equal(result.investigationPlan.version, 'SPEC-145');
+    assert.equal(result.investigationPlan.version, 'SPEC-180');
     assert.ok(plan.createdAt);
     assert.ok(providerCalled);
   });

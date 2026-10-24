@@ -10,6 +10,7 @@
 
 const { ANCHOR_QUESTIONS, humanSetterPlaybook } = require('../utils/setterPlaybooks');
 const { getProspectWorkspace } = require('./prospectWorkspace');
+const { callSuppressionError } = require('../utils/callEligibility');
 
 const PAIN_POINT_HYPOTHESES = Object.freeze({
   cleaning_company_overflow: [
@@ -112,6 +113,7 @@ function fallbackOutcomeFor(stage) {
 async function getCallPreparation({ pool, clientId, prospectId, user = {}, clientName = 'the client' } = {}) {
   const workspace = await getProspectWorkspace({ pool, clientId, prospectId, user });
   if (!workspace) return null;
+  if (workspace.prospect.callProhibited) throw callSuppressionError();
 
   const vertical = workspace.prospect.vertical || 'general';
   const playbook = humanSetterPlaybook({ clientId, clientName, vertical });
