@@ -438,6 +438,7 @@ function explainSpecialistStop(snapshot, question = '') {
   const workspace = snapshot.workspace || {};
   const scout = workspace.scout || {};
   const mission = snapshot.mission || {};
+  const pending = snapshot.executableDecision || mission.pendingOperatorDecision;
   const blocker = snapshot.blocker || currentBlocker(mission.blockers || []);
   const specialist = /\bpaige\b/.test(q)
     ? 'Paige'
@@ -455,8 +456,10 @@ function explainSpecialistStop(snapshot, question = '') {
         ? `${specialist} finished discovery; the mission awaits operator review before advancing.`
         : `${specialist} is idle at the current lifecycle gate.`;
 
-  if (mission.pendingOperatorDecision && mission.pendingOperatorDecision.prompt) {
-    summary = `${specialist} stopped because the mission requires operator input: ${mission.pendingOperatorDecision.prompt}`;
+  if (pending && pending.prompt) {
+    summary = pending.consumable === false
+      ? pending.prompt
+      : `${specialist} stopped because the mission requires operator input: ${pending.prompt}`;
   }
 
   return {
@@ -467,8 +470,8 @@ function explainSpecialistStop(snapshot, question = '') {
       { label: 'Specialist', detail: specialist },
       { label: 'Scout state', detail: scout.state || 'unknown' },
       ...(blocker ? [{ label: blocker.label, detail: blocker.reason || blocker.label }] : []),
-      ...(mission.pendingOperatorDecision
-        ? [{ label: 'Pending decision', detail: mission.pendingOperatorDecision.prompt }]
+      ...(pending
+        ? [{ label: 'Pending decision', detail: pending.prompt }]
         : []),
     ],
     headline: `Why ${specialist} Stopped`,

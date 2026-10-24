@@ -40,6 +40,7 @@ function normalizeSpecialist(value) {
 
 function pendingDecisionType(pending) {
   if (!pending || !pending.kind) return null;
+  if (pending.consumable === false) return null;
   const map = {
     [OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL]: 'approve_discovery',
     [OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL]: 'approve_prioritization',
@@ -103,11 +104,14 @@ function findLatestCompletedSpecialistAction(snapshot = {}) {
 
 function resolveWaitingState(snapshot = {}) {
   const mission = snapshot.mission || {};
-  const pending = mission.pendingOperatorDecision || null;
+  const pending = snapshot.executableDecision || mission.pendingOperatorDecision || null;
   const blocker = snapshot.blocker || currentBlocker(mission.blockers || []);
   const ctx = specialistContext(snapshot.contributions || [], {});
 
   if (pending && pending.prompt) {
+    if (pending.consumable === false) {
+      return { waiting_on: 'evidence', waiting_reason: pending.reason || pending.prompt };
+    }
     if (
       pending.kind === OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL ||
       hasPendingDiscoveryApproval(snapshot)
@@ -175,6 +179,7 @@ function resolveWaitingState(snapshot = {}) {
 }
 
 function resolveNextAction(snapshot = {}, waiting = {}, pendingDecision = null) {
+  if (pendingDecision && pendingDecision.consumable === false) return pendingDecision.prompt;
   if (pendingDecision && pendingDecision.type === 'approve_discovery') {
     return 'Approve discovery if you want Scout to begin prospect discovery';
   }
@@ -224,13 +229,14 @@ function buildMissionInspectionSnapshot(inspectResult = {}, resolution = {}) {
   const mission = inspectResult.mission || {};
   const health = inspectResult.health || {};
   const waiting = resolveWaitingState(inspectResult);
-  const pending = mission.pendingOperatorDecision || null;
+  const pending = inspectResult.executableDecision || mission.pendingOperatorDecision || null;
   const pendingDecision = pending
     ? {
         type: pendingDecisionType(pending),
         kind: pending.kind,
         prompt: pending.prompt || null,
         stage: pending.stage || mission.stage || null,
+        ...(pending.consumable === false ? { consumable: false } : {}),
       }
     : null;
   const lastCompleted = findLatestCompletedSpecialistAction(inspectResult);

@@ -82,6 +82,7 @@ const {
 } = require('./MissionCommunication');
 const {
   presentationFromDiscoveryPayload,
+  findLatestDiscoveryContribution,
 } = require('../../acquisition-mission/DiscoveryPresentation');
 const {
   normalizeScoutDiscoveryPayload,
@@ -127,6 +128,7 @@ const {
   assertMissionStateConsistent,
 } = require('../../acquisition-mission/PendingOperatorDecision');
 const {
+  evaluatePrioritizationReadiness,
   buildPostDiscoveryPendingDecision,
   discoveryNeedsInvestigation,
 } = require('../../acquisition-mission/DecisionReadiness');
@@ -480,12 +482,8 @@ function findPrioritizationApproval(contributions = []) {
     );
 }
 
-function findLatestScoutDiscovery(contributions = []) {
-  return [...contributions]
-    .reverse()
-    .find(
-      (row) => row.specialist === SPECIALISTS.SCOUT && row.kind === CONTRIBUTION_KINDS.DISCOVERY
-    );
+function findLatestScoutDiscovery(contributions = [], mission = null) {
+  return findLatestDiscoveryContribution(contributions, mission);
 }
 
 function discoveryHasCandidates(contribution) {
@@ -525,7 +523,7 @@ function discoveryHasCandidates(contribution) {
  */
 function repairEmptyDiscoveryInvestigationGate(engine, mission, tenantId, snapshot) {
   if (hasPendingDiscoveryInvestigation(snapshot)) return snapshot;
-  const discovery = findLatestScoutDiscovery(snapshot.contributions || []);
+  const discovery = findLatestScoutDiscovery(snapshot.contributions || [], mission);
   if (!discovery || discoveryHasCandidates(discovery)) return snapshot;
 
   const current = engine.get(mission.id, tenantId);
@@ -1301,19 +1299,21 @@ function validatePrioritizationPreconditions({ mission, engine, tenantId }) {
     throw planningError('tme_plan_missing', 'Mission Plan missing.');
   }
   const snapshot = engine.inspect(mission.id, { tenantId });
-  if (!hasPendingPrioritizationApproval(snapshot)) {
+  if (snapshot.mission.pendingOperatorDecision?.kind !== OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL) {
     throw planningError('tme_no_pending_prioritization', 'No prioritization approval is pending.');
   }
   if (mission.stage && mission.stage !== STAGES.DISCOVER) {
     throw planningError('tme_wrong_stage', `Prioritization cannot execute while the mission is at ${mission.stage}.`);
   }
-  const discovery = findLatestScoutDiscovery(snapshot.contributions || []);
+  const discovery = findLatestScoutDiscovery(snapshot.contributions || [], mission);
   if (!discovery) {
     throw planningError('tme_discovery_missing', 'Discovery artifact is required before prioritization approval.');
   }
-  const presentation = presentationFromDiscoveryPayload(discovery.payload || {});
-  if (!hasSufficientEvidenceForPrioritization(presentation)) {
+  if (!evaluatePrioritizationReadiness(discovery.payload || {}).sufficient) {
     throw validationError('tme_evidence_insufficient', 'Insufficient evidence for prioritization approval.');
+  }
+  if (!hasPendingPrioritizationApproval(snapshot)) {
+    throw planningError('tme_no_pending_prioritization', 'No prioritization approval is pending.');
   }
   return {
     missionExists: true,
@@ -1474,6 +1474,10 @@ async function advancePrioritizationAfterApproval(input = {}) {
     };
   }
 
+  // Reject unavailable decisions before acquiring a durable lock or writing a
+  // transaction audit. The transaction revalidates the same gate before running.
+  validatePrioritizationPreconditions({ mission: snapshot.mission, engine, tenantId });
+
   let staged;
   try {
     staged = await executeMissionStage({
@@ -1567,7 +1571,7 @@ function findPennyPaidAcquisitionRecommendation(contributions = []) {
 }
 
 function buildMaxPrioritizationPayload(mission, contributions = []) {
-  const scout = findLatestScoutDiscovery(contributions);
+  const scout = findLatestScoutDiscovery(contributions, mission);
   const scoutPayload = scout?.payload || {};
   const plan = mission.structuredMission || {};
   return buildPrioritizationPayload(mission, scoutPayload, plan);
@@ -2102,7 +2106,7 @@ function validateMaxPrioritizationPreconditions({ mission, engine, tenantId }) {
   if (!findPrioritizationApproval(snapshot.contributions || [])) {
     throw planningError('tme_prioritization_not_approved', 'Operator prioritization approval is required.');
   }
-  if (!findLatestScoutDiscovery(snapshot.contributions || [])) {
+  if (!findLatestScoutDiscovery(snapshot.contributions || [], mission)) {
     throw planningError('tme_discovery_missing', 'Scout discovery is required before Max prioritization.');
   }
   if (findMaxPrioritization(snapshot.contributions || [])) {

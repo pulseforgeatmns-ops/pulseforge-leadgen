@@ -19,6 +19,8 @@ const {
   canAdvertiseExecutionApproval,
 } = require('./ExecutionApproval');
 const { isUpstreamArtifactChainCoherent } = require('./UpstreamArtifactCoherence');
+const { findLatestDiscoveryContribution } = require('./DiscoveryPresentation');
+const { evaluatePrioritizationReadiness, buildPostDiscoveryPendingDecision } = require('./DecisionReadiness');
 
 const MISSION_STATE_INCONSISTENT = 'MISSION_STATE_INCONSISTENT';
 
@@ -86,7 +88,9 @@ function hasConsumedPrioritizationApproval(snapshotOrMission, extras = {}) {
   );
 }
 
-function hasPendingPrioritizationApproval(snapshot) {
+// Structural pending state survives evidence becoming stale. Readiness controls
+// consumption, not whether an operator can inspect the mission to diagnose it.
+function hasPendingPrioritizationDecision(snapshot) {
   const mission = missionFrom(snapshot) || {};
   if (hasPendingPlanClarification(snapshot)) return false;
   if (hasPendingPlanApproval(snapshot)) return false;
@@ -94,8 +98,15 @@ function hasPendingPrioritizationApproval(snapshot) {
   if (hasPendingDiscoveryInvestigation(snapshot)) return false;
   if (!isStructuredMissionApproved(mission)) return false;
   if (mission.stage && mission.stage !== STAGES.DISCOVER) return false;
-  if (!hasDiscoveryArtifact(snapshot)) return false;
+  if (mission.planCancelled) return false;
   return pendingKind(mission) === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL;
+}
+
+function hasPendingPrioritizationApproval(snapshot) {
+  if (!hasPendingPrioritizationDecision(snapshot)) return false;
+  const mission = missionFrom(snapshot) || {};
+  const discovery = findLatestDiscoveryContribution(contributionsFrom(snapshot), mission);
+  return Boolean(discovery && evaluatePrioritizationReadiness(discovery.payload || {}).sufficient);
 }
 
 function hasPendingDiscoveryInvestigation(snapshot) {
@@ -134,6 +145,15 @@ function hasConsumablePendingDecision(snapshot) {
 function presentableOperatorDecision(snapshot) {
   const mission = missionFrom(snapshot) || {};
   const pending = mission.pendingOperatorDecision || null;
+  if (hasPendingPrioritizationDecision(snapshot) && !hasPendingPrioritizationApproval(snapshot)) {
+    const discovery = findLatestDiscoveryContribution(contributionsFrom(snapshot), mission);
+    return {
+      ...buildPostDiscoveryPendingDecision(discovery ? discovery.payload || {} : {}),
+      prompt: 'Prioritization unavailable: more discovery evidence required.',
+      choices: [],
+      consumable: false,
+    };
+  }
   if (!hasConsumablePendingDecision(snapshot) || !pending) return null;
   return {
     ...pending,
@@ -281,7 +301,7 @@ function assertMissionStateConsistent(missionOrSnapshot, extras = {}) {
     );
   }
 
-  if (kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL && !hasPendingPrioritizationApproval(snapshot)) {
+  if (kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL && !hasPendingPrioritizationDecision(snapshot)) {
     throw missionStateInconsistent(
       'pendingOperatorDecision.kind is a prioritization approval that the execution engine cannot consume.',
       details

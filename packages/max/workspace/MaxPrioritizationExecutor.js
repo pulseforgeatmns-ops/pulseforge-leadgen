@@ -8,7 +8,6 @@
 const amo = require('../../acquisition-mission');
 const {
   SPECIALISTS,
-  CONTRIBUTION_KINDS,
 } = amo;
 const {
   buildExecutionInput,
@@ -21,6 +20,7 @@ const {
   buildRuntimeDependencies,
 } = require('../../acquisition-mission/MissionExecutionContext');
 const { maxInput } = require('../../acquisition-mission/SpecialistInputs');
+const { findLatestDiscoveryContribution } = require('../../acquisition-mission/DiscoveryPresentation');
 const {
   evaluateMaxPriorLearningInfluence,
   applyMaxPriorLearningAdjustments,
@@ -146,12 +146,8 @@ function buildPrioritizationPayload(mission, discoveryPayload, plan) {
   };
 }
 
-function findLatestScoutDiscovery(contributions = []) {
-  return [...contributions]
-    .reverse()
-    .find(
-      (row) => row.specialist === SPECIALISTS.SCOUT && row.kind === CONTRIBUTION_KINDS.DISCOVERY
-    );
+function findLatestScoutDiscovery(contributions = [], mission = null) {
+  return findLatestDiscoveryContribution(contributions, mission);
 }
 
 async function runMaxPrioritization(executionInput = {}) {
@@ -255,7 +251,7 @@ async function runMaxForAmoMission(mission, opts = {}) {
     engine: opts.engine,
   });
 
-  const discovery = findLatestScoutDiscovery(contributions);
+  const discovery = findLatestScoutDiscovery(contributions, mission);
   const input = buildExecutionInput({
     mission,
     specialist: SPECIALISTS.MAX,

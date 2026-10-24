@@ -816,7 +816,7 @@ function createAcquisitionMissionEngine(opts = {}) {
     const context = buildSharedContext(mission, contributions);
     const timeline = formatTimeline(store.listEvents(mission.id));
     const why = explainWhy(mission, contributions, explainExtras);
-    const discoveryContribution = findLatestDiscoveryContribution(contributions);
+    const discoveryContribution = findLatestDiscoveryContribution(contributions, mission);
     const acquisitionApproach = latestApproachDecision(contributions);
     const paidAcquisition = [...contributions].reverse().find(
       (row) =>
@@ -827,6 +827,18 @@ function createAcquisitionMissionEngine(opts = {}) {
       ? presentationFromDiscoveryPayload(discoveryContribution.payload || {})
       : null;
     assertMissionStateConsistent(mission, { contributions });
+    const executableDecision = presentableOperatorDecision({ mission, contributions });
+    const readinessBlocker = executableDecision && executableDecision.consumable === false
+      ? { label: executableDecision.blocker, reason: executableDecision.reason }
+      : null;
+    const storedBlocker = currentBlocker(mission.blockers);
+    const blocker = readinessBlocker && (!storedBlocker || storedBlocker.kind === BLOCKER_KINDS.WAITING_FOR_SCOUT)
+      ? readinessBlocker
+      : storedBlocker;
+    if (blocker === readinessBlocker && readinessBlocker) {
+      health.currentBlocker = readinessBlocker.label;
+      health.blocker = readinessBlocker;
+    }
     const progression = require('./MissionProgression');
     const progressionState = progression.resolveProgressionState({ mission, contributions });
     const { buildWorkspaceContext } = require('./WorkspaceMode');
@@ -862,7 +874,7 @@ function createAcquisitionMissionEngine(opts = {}) {
       observeAssessment,
       lifecycleLearning: learningEligibilityFromStore(store, mission),
       workspaceContext,
-      executableDecision: presentableOperatorDecision({ mission, contributions }),
+      executableDecision,
       executionReview: mission.stage === STAGES.READY
         ? buildExecutionReview(mission, contributions)
         : null,
@@ -879,7 +891,7 @@ function createAcquisitionMissionEngine(opts = {}) {
       executionRecords: store.listExecutionRecords
         ? store.listExecutionRecords(mission.id)
         : [],
-      blocker: currentBlocker(mission.blockers),
+      blocker,
       discoveryArtifact,
       acquisitionApproach: acquisitionApproach ? acquisitionApproach.decision : null,
       paidAcquisitionRecommendation: paidAcquisition

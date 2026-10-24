@@ -27,6 +27,7 @@ const {
   hasConsumedExecutionApproval,
   hasDiscoveryArtifact,
   hasConsumablePendingDecision,
+  presentableOperatorDecision,
 } = require('./PendingOperatorDecision');
 const { isStructuredMissionApproved } = require('./StructuredMission');
 const {
@@ -215,6 +216,7 @@ function isDiscoveryRunning(snapshot = {}) {
   if (hasPendingPlanClarification(snapshot) || hasPendingPlanApproval(snapshot)) return false;
   if (hasPendingDiscoveryApproval(snapshot)) return false;
   if (hasPendingPrioritizationApproval(snapshot)) return false;
+  if (mission.pendingOperatorDecision?.kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL) return false;
   if (hasDiscoveryArtifact(snapshot)) return false;
   if (!isStructuredMissionApproved(mission)) return false;
   if (mission.stage && mission.stage !== STAGES.DISCOVER) return false;
@@ -234,7 +236,9 @@ function deriveProgressionStage(snapshot = {}) {
   if (hasPendingDiscoveryApproval(snapshot)) {
     return PROGRESSION_STAGES.DISCOVERY_APPROVAL;
   }
-  if (hasPendingPrioritizationApproval(snapshot)) {
+  if (hasPendingPrioritizationApproval(snapshot)
+    || (mission.stage === STAGES.DISCOVER
+      && mission.pendingOperatorDecision?.kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL)) {
     return PROGRESSION_STAGES.DISCOVERY_REVIEW;
   }
   if (hasDiscoveryArtifact(snapshot) && mission.stage === STAGES.DISCOVER) {
@@ -260,6 +264,15 @@ function deriveProgressionStage(snapshot = {}) {
 function deriveMissionPause(snapshot = {}) {
   const mission = snapshot.mission || snapshot;
   if (!mission) return null;
+  const presented = presentableOperatorDecision(snapshot);
+  if (presented && presented.consumable === false) {
+    return createMissionPause({
+      stage: PROGRESSION_STAGES.DISCOVERY_REVIEW,
+      reason: presented.reason,
+      requiredDecision: presented.prompt,
+      availableOptions: [],
+    });
+  }
 
   if (hasPendingPlanClarification(snapshot)) {
     const pending = mission.pendingOperatorDecision || {};

@@ -19,7 +19,7 @@ const INVESTIGATION_CHOICES = Object.freeze([
 function hasTypedBuyingSignals(presentation) {
   const signals = (presentation && presentation.buyingSignalsRaw) || [];
   return signals.some((signal) => {
-    if (typeof signal === 'object') return Boolean(signal.label && signal.type);
+    if (typeof signal === 'object') return Boolean(signal && signal.label && signal.type);
     return String(signal).split(/\s+/).length >= 2;
   });
 }
@@ -28,7 +28,7 @@ function hasRealProvenance(presentation) {
   const evidenceItems = (presentation && presentation.evidenceRaw) || [];
   return evidenceItems.some((item) => {
     if (typeof item === 'object') {
-      return item.source && !/test fixture/i.test(String(item.source));
+      return item && item.source && !/test fixture/i.test(String(item.source));
     }
     return item && String(item).toLowerCase() !== 'fixture';
   });
