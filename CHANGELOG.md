@@ -58,6 +58,8 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Preserve [AUDIT-044](docs/architecture/AUDIT-044_Discovery_Coverage_Investigative_Reasoning.md) and [ADR-076](docs/adr/ADR-076_Coverage_Before_Conclusion.md) from PR #421 as dated historical records (2026-10-24), with later pipeline and estimation context. No new decision or runtime change.
+
 - [SPEC-SCOUT-CONT-002](docs/specs/SPEC-SCOUT-CONT-002_Explicit_Legacy_Coverage_Epoch.md)
   and [ADR-102](docs/adr/ADR-102_Explicit_Immutable_Legacy_Coverage_Epoch.md):
   default-off explicit same-fingerprint epoch1 for exact legacy query roots,
