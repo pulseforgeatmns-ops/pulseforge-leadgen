@@ -27,7 +27,7 @@ const {
   formatObjectiveResolution,
 } = require('../ExecutionInspectionOperator');
 const { WORKSPACE_OWNERS } = require('../WorkspaceOwnershipResolver');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { createTestAmoRuntime } = require('./amoTestRuntime');
 
 const AUDIT_046_PROMPT = [

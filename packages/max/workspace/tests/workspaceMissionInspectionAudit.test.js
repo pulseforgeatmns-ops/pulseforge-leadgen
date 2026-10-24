@@ -14,7 +14,7 @@ const {
   clearWorkspaceMissionInspectionAuditLog,
   buildOwnershipTrace,
 } = require('../audit/WorkspaceMissionInspectionAudit');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 
 function lawFirmMission(engine, overrides = {}) {
   const mission = engine.create({

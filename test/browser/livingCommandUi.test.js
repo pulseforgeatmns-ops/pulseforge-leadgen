@@ -38,7 +38,7 @@ function reviewModel() {
   ] };
 }
 
-async function setup(t, { role = 'admin', width = 1440, motion = 'no-preference', askReview = false, previewError = 0, decisionError = 0, reviewDelay = 0, accountDelay = 0, accountError = 0 } = {}) {
+async function setup(t, { role = 'admin', width = 1440, motion = 'no-preference', askReview = false, previewError = 0, decisionError = 0, reviewDelay = 0, reviewResponseGate = null, onReviewRequest = () => {}, accountDelay = 0, accountError = 0 } = {}) {
   const browser = await puppeteer.launch({ executablePath: process.env.CHROMIUM_PATH || undefined, headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
   t.after(() => browser.close());
   const page = await browser.newPage();
@@ -68,8 +68,13 @@ async function setup(t, { role = 'admin', width = 1440, motion = 'no-preference'
         ] };
       } else if (url.pathname.startsWith('/api/v1/max/account-review/')) data = { tenant_id: 10, ao_id: 24, account: { summary: { assigned_ao_id: 24, why_account_matters: 'Recurring facility cleaning opportunity.' }, contact: { name: 'Alex Morgan', role: 'Operations manager', email: 'operations@example.test', phone: '603-555-0100' }, history: [{ created_at: '2026-10-19T15:00:00Z', activity_type: 'call', outcome: 'decision_maker_reached', notes: '<img src=x onerror="window.injected=true"> is a literal source note.' }] } };
       else if (url.pathname === '/api/v1/max/workspace/open') data = { sessionId: 'fixture-session', opening: { fullText: 'Test opening' }, suggestions: [] };
-      else if (url.pathname === '/api/v1/max/workspace/ask') data = { sessionId: 'fixture-session', prose: 'Test answer', suggestions: [], ...(askReview ? { uiAction: { type: 'open_content_review' } } : {}) };
-      else if (url.pathname === '/api/content-review') { if (reviewDelay) await new Promise(resolve => setTimeout(resolve, reviewDelay)); data = { ...review, pendingCount: review.items.length }; }
+      else if (url.pathname === '/api/v1/max/workspace/review-navigation' || url.pathname === '/api/v1/max/workspace/ask') {
+        const body = JSON.parse(request.postData() || '{}');
+        const { parseReviewNavigation, resolveReviewNavigation } = require('../../packages/max/workspace/ReviewNavigation');
+        const intent = parseReviewNavigation(body.question, body.reviewNavigation);
+        data = intent ? resolveReviewNavigation(intent, { tenantId: 10, aos: [{ id: 24, name: 'Tony' }, { id: 20, name: 'Mike' }] }) : { sessionId: 'fixture-session', prose: 'Test answer', suggestions: [], ...(askReview ? { uiAction: { type: 'open_content_review', tenantId: '10' } } : {}) };
+      }
+      else if (url.pathname === '/api/content-review') { onReviewRequest(request); if (reviewResponseGate) await reviewResponseGate; if (reviewDelay) await new Promise(resolve => setTimeout(resolve, reviewDelay)); data = { ...review, pendingCount: review.items.length }; }
       else if (url.pathname === '/api/paige/social/post-a/preview') {
         status = previewError || 200;
         data = previewError ? { error: 'social_account_invalid' } : { artifact: { body: review.items[0].body, mediaRefs: ['/fixture-content.svg'] }, account: { id: 'account-10', platform: 'facebook_page', displayName: 'Test business page' }, approvalHash: 'exact-preview-hash' };
@@ -146,7 +151,7 @@ test('content review opens visual drafts directly, without chat or approval side
   await page.click('.lc-brief-line:nth-child(3)');
   await page.waitForFunction(() => !document.getElementById('contentReview').hidden && document.querySelector('.cr-primary')?.disabled === false);
   assert.equal(await page.$eval('#maxWorkspace', el => el.hidden), true);
-  assert.equal(writes.length, 0);
+  assert.equal(writes.filter(write => !write.path.endsWith('/review-navigation')).length, 0);
   assert.equal(await page.$eval('.cr-media', el => el.getAttribute('src')), '/fixture-content.svg');
   assert.match(await page.$eval('.cr-destination', el => el.textContent), /Test business page/);
   if (process.env.LIVING_COMMAND_QA_DIR) await page.screenshot({ path: path.join(process.env.LIVING_COMMAND_QA_DIR, 'living-command-content-review.png'), fullPage: true });
@@ -170,7 +175,7 @@ test('content review opens visual drafts directly, without chat or approval side
   assert.equal(await page.$eval('#contentReview', el => el.hidden), true);
   await page.click('a[href="/command-deck#content-review"]');
   await page.waitForSelector('.cr-draft');
-  assert.equal(writes.length, 0);
+  assert.equal(writes.filter(write => !write.path.endsWith('/review-navigation')).length, 0);
   assert.deepEqual(errors, []);
 });
 
@@ -213,7 +218,7 @@ test('changed drafts and missing connections cannot be silently approved', async
   await blocked.page.click('.lc-brief-line:nth-child(3)');
   await blocked.page.waitForFunction(() => document.querySelector('.cr-blocker')?.textContent.includes('connection'));
   assert.equal(await blocked.page.$eval('.cr-primary', el => el.disabled), true);
-  assert.equal(blocked.writes.length, 0);
+  assert.equal(blocked.writes.filter(write => !write.path.endsWith('/review-navigation')).length, 0);
   assert.deepEqual([...stale.errors, ...blocked.errors], []);
 });
 
@@ -227,11 +232,29 @@ test('mobile review fits the viewport and tenant changes discard late draft resp
   await page.evaluate(() => document.dispatchEvent(new CustomEvent('pulseforge:tenant-changed')));
   assert.equal(await page.$eval('#contentReview', el => el.hidden), true);
   assert.equal(await page.$eval('#crDetail', el => el.textContent), '');
-  const delayed = await setup(t, { reviewDelay: 300 });
+  let releaseReview, markReviewStarted;
+  const started = new Promise(resolve => { markReviewStarted = resolve; });
+  const reviewResponseGate = new Promise(resolve => { releaseReview = resolve; });
+  t.after(() => releaseReview());
+  const delayed = await setup(t, { reviewResponseGate, onReviewRequest: markReviewStarted });
+  // Navigation is now authorized asynchronously before the draft read starts.
+  // Switch only after that read is in flight, otherwise cancellation correctly
+  // prevents the request and there is no late response for this test to inspect.
+  // Puppeteer request observers queue behind the async interception handler.
+  // Signal start inside that handler before its gate, never via waitForRequest.
+  const response = delayed.page.waitForResponse(res => new URL(res.url()).pathname === '/api/content-review');
   await delayed.page.click('.lc-brief-line:nth-child(3)');
-  const response = delayed.page.waitForResponse(res => res.url().endsWith('/api/content-review'));
+  let startTimeout, draftRequest;
+  try {
+    draftRequest = await Promise.race([started, new Promise((_, reject) => {
+      startTimeout = setTimeout(() => reject(new Error('Content review request did not enter the fixture interceptor within 30000ms')), 30000);
+    })]);
+  } finally { clearTimeout(startTimeout); }
+  assert.equal(draftRequest.method(), 'GET');
+  assert.equal(new URL(draftRequest.url()).searchParams.get('client_id'), '10');
   await delayed.page.evaluate(() => document.dispatchEvent(new CustomEvent('pulseforge:tenant-changed')));
-  await response;
+  releaseReview();
+  await (await response).json();
   assert.equal(await delayed.page.$eval('#contentReview', el => el.hidden), true);
   assert.equal(await delayed.page.$eval('#crDetail', el => el.textContent), '');
   assert.deepEqual([...errors, ...delayed.errors], []);
@@ -253,7 +276,7 @@ test('Tony account picker opens real account review independently of unavailable
   assert.match(await page.$eval('#arDetail', el => el.textContent), /North River Properties|Alex Morgan|Operations manager|Review the facilities proposal/);
   assert.equal(await page.$('#arDetail img'), null);
   assert.equal(await page.evaluate(() => window.injected), undefined);
-  assert.equal(writes.filter(write => !write.path.endsWith('/workspace/open')).length, 0);
+  assert.equal(writes.filter(write => !write.path.endsWith('/workspace/open') && !write.path.endsWith('/review-navigation')).length, 0);
   assert.ok(reads.includes('/api/v1/max/account-review/account-a'));
   if (process.env.LIVING_COMMAND_QA_DIR) await page.screenshot({ path: path.join(process.env.LIVING_COMMAND_QA_DIR, 'living-command-account-review.png'), fullPage: true });
   await page.select('#arFilter', 'overdue');
@@ -271,7 +294,7 @@ test('typing review Tony’s accounts routes to verified account data before gen
   await page.click('#mxAskSend');
   await page.waitForSelector('#arDetail .ar-event');
   assert.equal(await page.$eval('#arTitle', el => el.textContent), 'Tony’s accounts');
-  assert.equal(writes.filter(write => write.path.endsWith('/ask')).length, 0);
+  assert.equal(writes.filter(write => write.path.endsWith('/ask')).length, 1);
   assert.equal(reads.filter(path => path.includes('/spreadsheet/proposals')).length, 0);
   assert.deepEqual(errors, []);
 });
@@ -287,7 +310,7 @@ test('mobile account review fits the viewport and workspace changes clear late r
   await page.evaluate(() => document.dispatchEvent(new CustomEvent('pulseforge:tenant-changed')));
   assert.equal(await page.$eval('#accountReview', el => el.hidden), true);
   assert.equal(await page.$eval('#arDetail', el => el.textContent), '');
-  assert.equal(writes.filter(write => !write.path.endsWith('/workspace/open')).length, 0);
+  assert.equal(writes.filter(write => !write.path.endsWith('/workspace/open') && !write.path.endsWith('/review-navigation')).length, 0);
   const delayed = await setup(t, { accountDelay: 300 });
   await delayed.page.click('#cdSpatialMax'); await delayed.page.waitForSelector('[data-spreadsheet-ao]');
   await delayed.page.select('[data-spreadsheet-ao]', '24'); await delayed.page.click('[data-account-review]');

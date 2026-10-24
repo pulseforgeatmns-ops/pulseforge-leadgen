@@ -30,6 +30,8 @@ function resolveTickTenantIds(options = {}) {
 }
 
 async function runGovernedOutboundTickCycle(options = {}) {
+  const durable = require('./governedOutboundStageScheduler');
+  if (durable.durableSchedulingEnabled()) return durable.dispatchStages({ ...options, tenantIds: resolveTickTenantIds(options), stages: ['tick'] });
   const pool = options.pool || require('../db');
   const cron = options.cron || require('../anchorDailyOutboundCron');
   const tenantIds = resolveTickTenantIds(options);
@@ -44,6 +46,8 @@ async function runGovernedOutboundTickCycle(options = {}) {
 }
 
 async function runGovernedOutboundPollCycle(options = {}) {
+  const durable = require('./governedOutboundStageScheduler');
+  if (durable.durableSchedulingEnabled()) return durable.dispatchStages({ ...options, tenantIds: resolveTickTenantIds(options), stages: ['poll'] });
   const pool = options.pool || require('../db');
   const cron = options.cron || require('../anchorDailyOutboundCron');
   const tenantIds = options.tenantIds || parseGovernedOutboundTenantIds();
@@ -52,6 +56,8 @@ async function runGovernedOutboundPollCycle(options = {}) {
 
 function startGovernedOutboundExecutionClock(options = {}) {
   if (!executionClockEnabled(options)) return null;
+  const durable = require('./governedOutboundStageScheduler');
+  if (durable.durableSchedulingEnabled()) return durable.startDurableClock({ ...options, tenantIds: resolveTickTenantIds(options), maxControlEnabled: options.maxControlEnabled ?? process.env.ANCHOR_MAX_OUTBOUND_CONTROL_ENABLED === 'true' });
   const cron = options.cron || require('../anchorDailyOutboundCron');
   const logger = options.logger || console;
   const schedule = options.setInterval || setInterval;

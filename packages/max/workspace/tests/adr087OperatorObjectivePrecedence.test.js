@@ -21,7 +21,7 @@ const {
   CONVERSATION_STYLES,
   getSessionState,
 } = require('../SessionState');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { createTestAmoRuntime } = require('./amoTestRuntime');
 
 const AUDIT_046_PROMPT = [
@@ -103,6 +103,7 @@ describe('ADR-087 — Operator Objective Takes Precedence', () => {
       const runtime = createTestAmoRuntime({ engine: amoEngine });
       const engine = createWorkspaceEngine({
         disableLlm: true,
+        clientIntelligenceService: { getApprovedClientBlueprint: async () => null },
         acquisitionMissionRuntime: runtime,
       });
 

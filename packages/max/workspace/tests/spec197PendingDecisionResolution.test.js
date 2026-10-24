@@ -38,7 +38,7 @@ const {
   createExecutionRequestFromApprovalButton,
   canonicalRequestShape,
 } = require('../../../acquisition-mission/ExecutionRequest');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { createTestAmoRuntime, installTestAmoRuntime } = require('./amoTestRuntime');
 const { MISSION_RUNTIMES } = require('../MissionActions');
 

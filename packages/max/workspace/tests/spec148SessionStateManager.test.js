@@ -34,7 +34,7 @@ const {
   WORKSPACE_OWNERS,
 } = require('../WorkspaceOwnershipResolver');
 const { resolveMissionRuntime } = require('../MissionRuntimeDispatch');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { createTestAmoRuntime } = require('./amoTestRuntime');
 
 const OBJECTIVE =

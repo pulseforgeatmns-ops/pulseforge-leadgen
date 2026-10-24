@@ -33,7 +33,7 @@ const {
 } = require('../OperatorIntent');
 
 const {
-  resolveWorkspaceOwner,
+  resolveWorkspaceOwner: rawResolveWorkspaceOwner,
   WORKSPACE_OWNERS,
 } = require('../WorkspaceOwnershipResolver');
 
@@ -412,3 +412,6 @@ describe('SPEC-217 — Prepared outreach revision executes in the canonical path
     assert.equal(sent.length, 0);
   });
 });
+
+const { createTestAmoRuntime } = require('./amoTestRuntime');
+const resolveWorkspaceOwner = input => rawResolveWorkspaceOwner({ acquisitionMissionRuntime: createTestAmoRuntime(), ...input });

@@ -16,6 +16,7 @@ function shouldRouteAoQuestion(question) {
 }
 
 const router = express.Router();
+const { reviewNavigationForRequest } = require('../services/reviewNavigation');
 const requireDashboardAuth = [sessionAuth, requireRole('admin', 'manager')];
 const anthropic = new Anthropic();
 
@@ -157,6 +158,11 @@ router.post('/api/max/ask', requireDashboardAuth, async (req, res) => {
   try {
     const question = String(req.body?.question || '').trim().slice(0, 100000);
     if (!question) return res.status(400).json({ error: 'Question is required' });
+
+    let reviewNavigation;
+    try { reviewNavigation = await reviewNavigationForRequest(req); }
+    catch (error) { return res.status(error.statusCode || 503).json({ error: 'review_navigation_unavailable', message: 'Review scope could not be verified. No review was opened.' }); }
+    if (reviewNavigation) { res.set('Cache-Control', 'no-store'); return res.json({ ...reviewNavigation, answer: reviewNavigation.prose, reply: reviewNavigation.prose }); }
 
     if (isApiUsageQuestion(question) || parseApiSpendCommand(question)) {
       if (parseApiSpendCommand(question)) {

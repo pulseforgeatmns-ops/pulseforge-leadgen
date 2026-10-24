@@ -25,7 +25,7 @@ const {
 } = require('../SessionState');
 const { resolveSessionState } = require('../SessionStateManager');
 const { classifyOperatorCognition, THINKING_MODES } = require('../../operatorCognition');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { createTestAmoRuntime } = require('./amoTestRuntime');
 
 const OBJECTIVE =

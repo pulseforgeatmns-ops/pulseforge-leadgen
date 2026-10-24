@@ -17,7 +17,7 @@ const { maybeHandleOperatorCognitionTurn } = require('../CognitionRouting');
 const { maybeHandleAcquisitionMissionExecution } = require('../AcquisitionMissionExecution');
 const { installTestAmoRuntime } = require('./amoTestRuntime');
 const { advancePlanAfterApproval } = require('../AmoOperatorApproval');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const {
   composeConversationalResponse,
   extractMissionFacts,

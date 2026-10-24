@@ -27,7 +27,8 @@ async function boot() {
     feedUrl:process.env.SIGNAL_OPERATOR_FEED_URL,
     marketProvider:new GeckoTerminalMarketDataProvider(),
     onEvent:distribution ? event=>distribution.register(event) : undefined,
-    relay:createBrevoRelay({enabled:sendEnabled(),consented:sendEnabled(),apiKey:process.env.BREVO_API_KEY,gate})});
+    relay:createBrevoRelay({enabled:sendEnabled(),consented:sendEnabled(),apiKey:process.env.BREVO_API_KEY,gate,
+      operationalTestApproved:process.env.SIGNAL_OPERATOR_TRANSPORT_TEST_APPROVED==='1'})});
   const stopOperator=startOperatorTimers(worker);
   return {worker,stop:()=>{stopOperator();distribution?.stop();}};
 }

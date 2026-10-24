@@ -2887,7 +2887,8 @@
       : page.replace(/-/g, ' ');
   }
 
-  function closeWorkspace() {
+  function closeWorkspace(preserveNavigation = false) {
+    if (!preserveNavigation) window.PulseforgeReviewNavigation?.invalidate();
     if (!els.workspace || els.workspace.hidden) return;
     els.workspace.hidden = true;
     document.body.style.overflow = '';
@@ -4784,12 +4785,8 @@
     const hasAttachments = mxPendingComposerFiles.length > 0;
     if (!q && !hasAttachments) return;
     if (workspaceAskInFlight) return;
-    if (!hasAttachments && spreadsheetReview.isAccountReviewRequest(q)) {
-      resetAskInput();
-      await spreadsheetReview.handleAccountReview(q);
-      return;
-    }
     workspaceAskInFlight = true;
+    const reviewToken = window.PulseforgeReviewNavigation?.begin();
     document.body.classList.add('lc-thinking');
     console.info('[mission-objective-len]', {
       stage: 'frontend',
@@ -4872,6 +4869,7 @@
         chars: q.length,
         payloadQuestionChars: String(q).length,
       });
+      if (reviewToken && !window.PulseforgeReviewNavigation?.current(reviewToken)) return;
       workspaceSessionId = result.sessionId || workspaceSessionId;
       if (result.context) {
         workspaceContext = result.context;
@@ -4881,10 +4879,9 @@
         els.mxSwitch.hidden = false;
         els.mxSwitch.textContent = result.contextSwitch;
       }
-      if (result.uiAction?.type === 'open_content_review' && window.PulseforgeContentReview) {
+      if (result.uiAction && ['open_content_review', 'open_account_review'].includes(result.uiAction.type)) {
         thinking.clear();
-        closeWorkspace();
-        window.PulseforgeContentReview.open();
+        window.PulseforgeReviewNavigation?.consume(result.uiAction, reviewToken);
         return;
       }
       await appendMaxResponse(result, {
@@ -5491,6 +5488,7 @@
   });
   document.addEventListener('pulseforge:living-refresh', () => loadDeck({ force: true }));
   document.addEventListener('pulseforge:content-reviewed', () => loadDeck({ force: true }));
+  document.addEventListener('pulseforge:review-will-render', () => closeWorkspace(true));
   document.addEventListener('pulseforge:tenant-changed', applyClientCommandDeckPresentation);
   document.addEventListener('pulseforge:tenant-changed', onTenantChanged);
   if (window.PulseforgeShell) applyClientCommandDeckPresentation();

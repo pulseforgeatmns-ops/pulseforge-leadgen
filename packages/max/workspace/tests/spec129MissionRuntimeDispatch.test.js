@@ -4,7 +4,7 @@ const { createTestAmoRuntime, runtimeProviderFromEngine, createHydratingTestRunt
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const amo = require('../../../acquisition-mission');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { createMissionEngine } = require('../../../mission-engine');
 const { createBuiltinRegistry } = require('../../../capabilities');
 const { WORKSPACE_OWNERS } = require('../WorkspaceOwnershipResolver');
@@ -37,6 +37,7 @@ function stubLegacyMissionEngine() {
 
 function realLegacyEngine() {
   return createMissionEngine({
+    scoutDiscoveryOpts: { companies: [], people: [], acquisitionMissionRuntime: createTestAmoRuntime() },
     registry: createBuiltinRegistry({ discovery: { useFixture: true } }),
     resolverEnabled: true,
   });
@@ -84,6 +85,7 @@ describe('SPEC-129 — Mission Runtime Dispatch', () => {
     await missionEngine.store.update({ id: created.id, status: 'planning' });
 
     const selected = await resolveMissionRuntime({
+      acquisitionMissionRuntime: createTestAmoRuntime(),
       question: 'approved',
       context: { tenantId: '10' },
       missionEngine,
