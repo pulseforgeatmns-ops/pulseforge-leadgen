@@ -2,6 +2,8 @@
 
 (function () {
   let latestBrief = null;
+  let latestModel = null;
+  let latestRenderOptions = {};
   const byId = id => document.getElementById(id);
   const number = value => Number.isFinite(Number(value)) ? Number(value).toLocaleString() : '—';
   const ask = prompt => document.dispatchEvent(new CustomEvent('pulseforge:living-ask', { detail: { prompt } }));
@@ -52,7 +54,61 @@
     }
   }
 
+  // PF-CLARITY-001: the server chooses and orders recommendations. This surface
+  // only renders that bounded model, never ranks evidence or approves changes.
+  function renderClarity(brief, lines) {
+    const clarity = brief.clarity;
+    const activeTenant = window.PulseforgeTenantCoordinator?.getActiveClientId?.()
+      ?? window.PulseforgeShell?.activeClientId ?? window.PulseforgeShell?.context?.active_client_id;
+    if (!clarity || ['disabled', 'not_authorized', 'authorization_required'].includes(clarity.reason)
+      || String(activeTenant) !== '10' || String(brief.clientId) !== String(activeTenant)) return;
+    const section = document.createElement('section');
+    section.className = 'lc-clarity';
+    section.setAttribute('aria-label', 'Website clarity recommendations');
+    const heading = document.createElement('h3');
+    heading.textContent = 'Website clarity';
+    section.appendChild(heading);
+    const recommendations = clarity.recommendations;
+    const validTenant = /^[1-9]\d*$/.test(String(brief.clientId));
+    const valid = clarity.available && validTenant && Array.isArray(recommendations)
+      && recommendations.length <= 3 && recommendations.every(item => item && item.id
+        && String(item.client_id) === String(brief.clientId));
+    if (!valid || !recommendations.length) {
+      const empty = document.createElement('p');
+      empty.textContent = clarity.available && valid
+        ? 'No website recommendations need review from this report.'
+        : 'No current Clarity report is available for this workspace.';
+      section.appendChild(empty);
+    } else {
+      const period = document.createElement('p');
+      const report = clarity.report || {};
+      period.textContent = [report.window_start, report.window_end].filter(Boolean).join(' to ')
+        + (report.synthetic ? ' · Synthetic test data' : '')
+        + (clarity.stale ? ' · Historical report' : '');
+      section.appendChild(period);
+      recommendations.forEach(item => {
+        const link = document.createElement('a');
+        link.className = 'lc-clarity-card';
+        link.href = '/clarity-review?' + new URLSearchParams({ id: item.id, client_id: brief.clientId });
+        const title = document.createElement('strong');
+        title.textContent = item.title;
+        const summary = document.createElement('span');
+        summary.textContent = item.summary || '';
+        const detail = document.createElement('small');
+        detail.textContent = `${item.confidence || 'Unspecified'} confidence · ${item.status || 'pending'} · Review evidence →`;
+        link.append(title, summary, detail);
+        section.appendChild(link);
+      });
+      const boundary = document.createElement('p');
+      boundary.textContent = 'Review only. Website changes require separate approval.';
+      section.appendChild(boundary);
+    }
+    lines.appendChild(section);
+  }
+
   function render(model, options = {}) {
+    latestModel = model;
+    latestRenderOptions = options;
     latestBrief = model.livingBrief || {};
     const brief = latestBrief;
     const lines = byId('lcBriefLines');
@@ -90,6 +146,8 @@
     approvals ? `${number(approvals.pending)} pending` : 'Unavailable',
     null, 'gold', () => document.dispatchEvent(new CustomEvent('pulseforge:content-review'))));
 
+    renderClarity(brief, lines);
+
     const generated = brief.generatedAt || model.meta?.generatedAt;
     const timestamp = generated ? new Date(generated).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : null;
     byId('lcBriefSource').textContent = `${options.fromCache ? 'Saved brief' : 'Workspace brief'}${timestamp ? ` · ${timestamp}` : ''}. Ads use the period shown.`;
@@ -100,6 +158,8 @@
 
   function clear() {
     latestBrief = null;
+    latestModel = null;
+    latestRenderOptions = {};
     byId('lcBriefTitle').textContent = 'Getting your brief ready.';
     byId('lcBriefIntro').textContent = 'I’m checking this workspace’s latest activity.';
     byId('lcBriefLines').replaceChildren();
@@ -124,7 +184,12 @@
   byId('cdSpatialMax').addEventListener('keydown', event => {
     if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); ask(''); }
   });
-  document.addEventListener('pulseforge:shell-ready', updateIdentity);
+  document.addEventListener('pulseforge:shell-ready', () => {
+    // The API can finish before shell identity. Only expose Clarity after the
+    // active tenant has been established, without requesting or inferring data.
+    if (latestModel) render(latestModel, latestRenderOptions);
+    else updateIdentity();
+  });
   document.addEventListener('pulseforge:tenant-changed', () => { clear(); updateIdentity(); });
   document.addEventListener('visibilitychange', () => document.body.classList.toggle('lc-motion-paused', document.hidden));
   window.LivingCommand = { render, clear, unavailable };
