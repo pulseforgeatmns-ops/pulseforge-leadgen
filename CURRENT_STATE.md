@@ -12,6 +12,16 @@
 
 # CURRENT_STATE
 
+[SPEC-266](docs/specs/SPEC-266_Signal_Default_Off_Initial_SMS.md) records PR 980's
+in-progress local, default-off initial-SMS staging and explicit UNKNOWN risk-card
+limits; proposed [ADR-109](docs/adr/ADR-109_Signal_Initial_SMS_Staging.md) records the
+two-table manual schema boundary. SQL is not applied; no activation, sends or
+research are authorized by these records. Final-head native PostgreSQL CI remains
+pending; any separately approved disabled release does not authorize SQL or sends.
+Existing priorities and frozen scope are unchanged.
+
+[PF-CLARITY-001](docs/specs/PF-CLARITY-001_Google_Workspace_Clarity.md) is an approved, in-progress default-off implementation for Anchor Clarity digest ingestion and evidence-backed Max review. The PR does not authorize Google OAuth, production migration/deployment, ingestion or website changes. Live acceptance requires separate readonly mailbox consent and rollout approval.
+
 [SPEC-261](docs/specs/SPEC-261_Anchor_Quarantined_Email_Recovery.md) is in-progress local-only gated recovery preparation. It explicitly layers PR956 safety and SPEC260 boundary diagnostics; production migration, admission policy, manifest activation and sends remain unapproved.
 
 [SPEC-260](docs/specs/SPEC-260_Anchor_Brevo_Boundary_Diagnostics.md) is an in-progress local-only boundary diagnostics repair at base 8cbeba9. Default off, tenant-10 governed Brevo only; authorization/schema, historical holds, sends and production configuration remain unchanged.

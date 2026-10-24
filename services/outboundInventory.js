@@ -420,38 +420,52 @@ async function classifyInventoryOwnership(store, candidate = {}, opts = {}) {
 
 async function loadScoutFunnelStock(pool, clientId = 10) {
   const funnel = emptyFunnel();
-  if (!pool?.query) return funnel;
+  const unavailable = () => ({
+    ...Object.fromEntries(Object.keys(funnel).map(key => [key, null])),
+    available: false,
+    error: 'scout_funnel_unavailable',
+  });
+  if (!pool?.query) return unavailable();
+  try {
 
-  const unenriched = await pool.query(`
-    SELECT
-      count(*)::int AS discovered,
-      count(*) FILTER (WHERE COALESCE(enrichment_attempts,0)=0)::int AS admitted,
-      count(*) FILTER (
-        WHERE COALESCE(enrichment_attempts,0)>0
-          AND COALESCE(enrichment_attempts,0)<3
-      )::int AS pending,
-      count(*) FILTER (WHERE COALESCE(enrichment_attempts,0)>=3)::int AS unresolved
-    FROM scout_unenriched
-    WHERE client_id=$1
-      AND source='max_buffer_replenishment'
-  `, [Number(clientId)]).catch(() => ({ rows: [{}] }));
+    const unenriched = await pool.query(`
+      SELECT
+        count(*)::int AS discovered,
+        count(*) FILTER (WHERE COALESCE(enrichment_attempts,0)=0)::int AS admitted,
+        count(*) FILTER (
+          WHERE COALESCE(enrichment_attempts,0)>0
+            AND COALESCE(enrichment_attempts,0)<3
+        )::int AS pending,
+        count(*) FILTER (WHERE COALESCE(enrichment_attempts,0)>=3)::int AS unresolved
+      FROM scout_unenriched
+      WHERE client_id=$1
+        AND source='max_buffer_replenishment'
+    `, [Number(clientId)]);
 
-  const promoted = await pool.query(`
-    SELECT count(*)::int AS n
-    FROM prospects
-    WHERE client_id=$1
-      AND email IS NOT NULL
-      AND email_verified=true
-      AND COALESCE(do_not_contact,false)=false
-  `, [Number(clientId)]).catch(() => ({ rows: [{}] }));
+    const promoted = await pool.query(`
+      SELECT count(*)::int AS n
+      FROM prospects
+      WHERE client_id=$1
+        AND email IS NOT NULL
+        AND email_verified=true
+        AND COALESCE(do_not_contact,false)=false
+    `, [Number(clientId)]);
 
-  const row = unenriched.rows[0] || {};
-  funnel.discovered = Number(row.discovered || 0);
-  funnel.admittedToEnrichment = Number(row.admitted || 0);
-  funnel.enrichmentPending = Number(row.pending || 0);
-  funnel.unresolved = Number(row.unresolved || 0);
-  funnel.promotedVerified = Number(promoted.rows[0]?.n || 0);
-  return funnel;
+    const row = unenriched?.rows?.[0];
+    const promotedCount = promoted?.rows?.[0]?.n;
+    const counts = [row?.discovered, row?.admitted, row?.pending, row?.unresolved, promotedCount];
+    // COUNT aggregates always yield a row. Missing/malformed evidence is not zero.
+    if (counts.some(value => value == null || value === '' || typeof value === 'boolean'
+      || !Number.isSafeInteger(Number(value)) || Number(value) < 0)) return unavailable();
+    funnel.discovered = Number(row.discovered);
+    funnel.admittedToEnrichment = Number(row.admitted);
+    funnel.enrichmentPending = Number(row.pending);
+    funnel.unresolved = Number(row.unresolved);
+    funnel.promotedVerified = Number(promotedCount);
+    return { ...funnel, available: true };
+  } catch (_) {
+    return unavailable();
+  }
 }
 
 async function loadInventoryTimestamps(pool, tenantId = '10') {

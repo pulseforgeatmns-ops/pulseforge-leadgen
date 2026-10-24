@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
-const { Pool } = require('pg');
+const { createTrackedPostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
 const { createCandidateTicketStore, candidateKey, TICKET_VERSION, CRASH_RETRY_MS, LEASE_MS } = require('../services/scoutCandidateTickets');
 const { PLAN_VERSION } = require('../services/scoutQueryCheckpoints');
@@ -28,8 +28,8 @@ test('real PostgreSQL: atomic raw transfer, exact leases, independent outcomes a
 }, async t => {
   assert.ok(availablePg, 'Release validation requires local PostgreSQL binaries');
   const instance = await startDisposablePostgres('scout-candidate-');
-  const db = new Pool({ connectionString: instance.connectionString, max: 6 });
-  t.after(async () => { await db.end(); await instance.stop(); });
+  const db = createTrackedPostgresPool({ connectionString: instance.connectionString, max: 6 });
+  t.after(() => closePostgresFixture(db, instance));
   const migration = name => fs.readFileSync(path.join(__dirname, '../migrations', name), 'utf8');
   await db.query(migration('2026-10-17-scout-query-checkpoints.sql'));
   const absent = createCandidateTicketStore({ pool: db, tenantId: 'absent', fingerprint: 'f' });

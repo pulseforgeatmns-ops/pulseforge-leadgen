@@ -5,7 +5,7 @@ const test = require('node:test');
 const { EventEmitter, once } = require('node:events');
 const { setImmediate: nextTurn } = require('node:timers/promises');
 const { Pool } = require('pg');
-const { createTrackedPostgresPool, closePostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
+const { createTrackedPostgresPool, trackUnopenedPostgresPool, closePostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
 
 class DeferredClient extends EventEmitter {
   constructor() { super(); this._queryable = true; this._ending = false; }
@@ -59,6 +59,29 @@ test('already evicted client is tracked even when totalCount is zero before shut
   clients[0].finishClose();
   await shutdown;
   assert.equal(finished, true);
+  noListeners(pool);
+});
+
+test('fixture stop waits for both approval-style discarded and pooled client sockets', async () => {
+  const pool = createTrackedPostgresPool({ Client: DeferredClient, idleTimeoutMillis: 0 });
+  const discarded = await pool.connect();
+  const pooled = await pool.connect();
+  // Canonical approval deliberately discards its independently committed client.
+  discarded.release(true);
+  pooled.release();
+  assert.equal(pool.totalCount, 1, 'discarded client is already absent from pool bookkeeping');
+  let stops = 0;
+  const shutdown = closePostgresFixture(pool, { stop: async () => { stops += 1; } });
+  await nextTurn();
+  assert.equal(pool.ended, true);
+  assert.equal(pool.totalCount, 0);
+  assert.equal(stops, 0, 'pool.end() alone must not allow pg_ctl stop');
+  pooled.finishClose();
+  await nextTurn();
+  assert.equal(stops, 0, 'the discarded socket must close too');
+  discarded.finishClose();
+  await shutdown;
+  assert.equal(stops, 1);
   noListeners(pool);
 });
 
@@ -172,4 +195,26 @@ test('pool and server cleanup errors are both preserved', async () => {
     return true;
   });
   noListeners(pool);
+});
+
+
+test('fresh factory-created pool is tracked in place without changing its options or TLS identity checks', async () => {
+  const ssl = { rejectUnauthorized: true, checkServerIdentity() {} };
+  const pool = new Pool({ Client: DeferredClient, idleTimeoutMillis: 0, max: 5, ssl });
+  assert.equal(trackUnopenedPostgresPool(pool), pool);
+  assert.equal(trackUnopenedPostgresPool(pool), pool);
+  assert.equal(pool.options.ssl, ssl); assert.equal(pool.options.max, 5);
+  const client = await pool.connect(); client.release();
+  let closed = false; const pending = closePostgresPool(pool).then(() => { closed = true; });
+  await nextTurn(); assert.equal(closed, false);
+  client.finishClose(); await pending; noListeners(pool);
+});
+
+test('late tracking rejects an already connected or ending pool', async () => {
+  const pool = new Pool({ Client: DeferredClient, idleTimeoutMillis: 0 });
+  const client = await pool.connect();
+  assert.throws(() => trackUnopenedPostgresPool(pool), /unopened/);
+  client.release(); const ending = pool.end();
+  assert.throws(() => trackUnopenedPostgresPool(pool), /unopened/);
+  client.finishClose(); await ending;
 });

@@ -7,7 +7,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const {
   maybeHandleClientIntelligenceTurn,
   isClientContextReasoningRequest,

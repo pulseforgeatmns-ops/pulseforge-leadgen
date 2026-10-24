@@ -1,6 +1,8 @@
 const express = require('express');
 const Anthropic = require('../utils/meteredAnthropic').forAgent('cron_summary');
 const router = express.Router();
+// PF-CLARITY-001: bearer-authenticated POST only, two flags + tenant grant fail closed.
+router.post('/cron/clarity-weekly-review', (req,res) => require('../services/clarityJobs').createClarityCronHandler()(req,res));
 // No missing-secret bypass and no GET mutation. These stay separate from legacy
 // agent enablement: the durable program is the delegated authority, not autosend.
 function anchorCron(method) {
@@ -12,7 +14,9 @@ function anchorCron(method) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     try {
-      const result = await require('../anchorDailyOutboundCron')[method]();
+      const result = method === 'poll'
+        ? await require('../services/governedOutboundExecutionClock').runGovernedOutboundPollCycle()
+        : await require('../anchorDailyOutboundCron')[method]();
       return res.set('Cache-Control', 'no-store').json(result);
     } catch (e) { return res.status(500).json({ error: e.code || 'anchor_daily_outbound_failed' }); }
   };

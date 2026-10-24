@@ -8,13 +8,6 @@
   'use strict';
   const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const display = value => escape(value === undefined ? 'Unspecified' : JSON.stringify(value, null, 2));
-  function accountReviewName(text) {
-    const value = String(text || '').trim();
-    const prefix = '(?:(?:please|can you|could you)\\s+)?(?:show(?:\\s+me)?|review|open|check)\\s+';
-    const match = value.match(new RegExp(`^${prefix}(?:the\\s+)?accounts\\s+(?:assigned\\s+to|for)\\s+(.+?)[.!?]?$`, 'i'))
-      || value.match(new RegExp(`^${prefix}(.+?)\\s+accounts[.!?]?$`, 'i'));
-    return match ? match[1].replace(/['’]s$/i, '').trim() : null;
-  }
   function intent(text) {
     const value = String(text || '').trim();
     if (/\b(do\s+not|don't|dont|never|not\s+yet|wait|cancel|hold|stop|without|preview|compare|review\s+only)\b/i.test(value)) return 'hold';
@@ -116,19 +109,16 @@
         resume(resumable[Number(value)]).catch(err => onMessage(err.message));
       });
     }
-    async function reviewAccounts(aoName = null) {
+    async function reviewAccounts() {
       if (busy || pendingRequest) throw new Error('Recover the pending save result before opening another review.');
-      await loadScope();
-      const normalize = value => String(value || '').trim().toLowerCase();
-      const matches = scope.aos.filter(ao => aoName ? normalize(ao.name) === normalize(aoName) || normalize(ao.name).split(/\s+/)[0] === normalize(aoName) : String(ao.id) === String(selectedAo));
-      if (matches.length !== 1) throw new Error('Choose the acquisition operator in the account picker so I can open the correct accounts.');
-      const ao = matches[0];
-      onReviewAccounts({ aoId: ao.id, aoName: ao.name });
+      if (!selectedAo) throw new Error('Choose the acquisition operator first.');
+      if (!globalThis.PulseforgeReviewNavigation) throw new Error('Review navigation is unavailable.');
+      return globalThis.PulseforgeReviewNavigation.open({ surface: 'account_review', aoId: selectedAo });
     }
     async function handleAccountReview(text) {
-      const name = accountReviewName(text); if (name == null) return false;
-      try { await reviewAccounts(name); } catch (error) { onMessage(error.message); }
-      return true;
+      // Compatibility entry point: text interpretation and owner choice are backend-owned.
+      if (!globalThis.PulseforgeReviewNavigation) return false;
+      return globalThis.PulseforgeReviewNavigation.open(null, text);
     }
     async function resume(item) {
       if (busy || pendingRequest) throw new Error('Recover the pending save result before opening another proposal.');
@@ -269,7 +259,7 @@
       else onMessage('Nothing saved. The proposal remains available for review. To revise it, resolve a row or upload the workbook for a fresh comparison. Close the review to return to chat.');
       return true;
     }
-    return { accept, commit, resolve, handleText, handleAccountReview, isAccountReviewRequest: text => accountReviewName(text) != null, clear, render, loadScope, listProposals, reviewAccounts, resume, appendScope, hasPending: checkScope, token: () => epoch };
+    return { accept, commit, resolve, handleText, handleAccountReview, clear, render, loadScope, listProposals, reviewAccounts, resume, appendScope, hasPending: checkScope, token: () => epoch };
   }
-  return { create, intent, proposalHtml, accountReviewName };
+  return { create, intent, proposalHtml };
 }));

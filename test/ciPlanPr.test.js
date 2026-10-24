@@ -6,8 +6,9 @@ const { buildPlan, pathMatchesPattern } = require('../.github/scripts/ci-plan-pr
 
 describe('CI plan PR selector (SPEC-CI-LEAN-001)', () => {
   it('isolated initial SMS safety edits select Signal and retain its test command coverage', () => {
-    const plan = buildPlan(['test/signalInitialSms.test.js']);
-    assert.deepEqual(plan.suites, ['global', 'signal-v1']);
+    for (const file of ['test/signalInitialSms.test.js', 'docs/sql-drafts/2026-10-22-signal-initial-sms.sql']) {
+      assert.deepEqual(buildPlan([file]).suites, ['global', 'signal-v1'], file);
+    }
     const command = require('../package.json').scripts['test:signal-v1'];
     assert.equal(command, 'node --test packages/signal-v1/tests/*.test.js test/signalDistribution*.test.js test/signalInitialSms.test.js');
   });
@@ -345,4 +346,13 @@ describe('renewable Scout coverage grants CI coverage', () => {
     const workflow = fs.readFileSync(require('node:path').join(__dirname, '../.github/workflows/pr-ci-lean.yml'), 'utf8');
     assert.match(workflow, /test\/scoutCoverageGrant\.test\.js test\/scoutCoverageGrantPostgres\.test\.js/);
   });
+});
+
+// PF-CLARITY-001: an isolated auth/parser/UI edit must retain real database/browser gates.
+it('Clarity files always select Max with non-skipping PostgreSQL and browser validation',()=>{
+ for(const file of ['services/clarityAuthorization.js','services/clarityGmail.js','routes/clarity.js','public/clarity-review.html','packages/max/clarity/parser.js','test/clarityPostgres.test.js','test/browser/clarityReviewUi.test.js']) {
+  assert.ok(buildPlan([file]).suites.includes('max'),file);
+ }
+ const fs=require('node:fs');const workflow=fs.readFileSync(require('node:path').join(__dirname,'../.github/workflows/pr-ci-lean.yml'),'utf8');
+ assert.match(workflow,/npm run test:clarity/);assert.match(workflow,/npm run test:clarity:browser/);
 });

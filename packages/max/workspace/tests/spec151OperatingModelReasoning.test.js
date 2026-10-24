@@ -32,7 +32,7 @@ const {
   resolveWorkspaceOwner,
   WORKSPACE_OWNERS,
 } = require('../WorkspaceOwnershipResolver');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { CONVERSATION_SUBJECTS } = require('../ConversationSubject');
 
 function seedIdentityState(session, depth = 1) {

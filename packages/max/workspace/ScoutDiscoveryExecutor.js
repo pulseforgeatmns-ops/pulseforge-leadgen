@@ -92,7 +92,7 @@ function buildScoutDiscoverOpts(mission, executionInput = {}, opts = {}) {
 
   if (opts.investigationContinuation === true && opts.engine) {
     const snapshot = opts.engine.inspect(mission.id, { tenantId: delegation.tenantId });
-    const priorDiscovery = findLatestScoutDiscovery(snapshot.contributions || []);
+    const priorDiscovery = findLatestScoutDiscovery(snapshot.contributions || [], mission);
     const priorPayload = extractPayloadFromDiscoveryContribution(priorDiscovery || {});
     const continuation = buildInvestigationContinuationContext({
       priorPayload,

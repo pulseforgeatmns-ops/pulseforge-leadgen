@@ -4,7 +4,8 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { createMissionEngine } = require('../../../mission-engine');
 const { createBuiltinRegistry } = require('../../../capabilities');
-const { createWorkspaceEngine, composeResponse } = require('../../index');
+const { composeResponse } = require('../../index');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine, hermeticWorkspaceOptions } = require('./workspaceTestHarness');
 
 function testMissionEngine() {
   return createMissionEngine({
@@ -62,6 +63,11 @@ describe('SPEC-022 Workspace Mission routing', () => {
   it('Monitor Microsoft stays on intelligence path', async () => {
     const missionEngine = testMissionEngine();
     const workspace = createWorkspaceEngine({
+      marketIntelligenceService: {
+        listMarketCompanies: async () => ({ companies: [], error: 'fixture_unavailable' }),
+        crossMarketPatterns: async () => ({ patterns: [], error: 'fixture_unavailable' }),
+        crossMarketSequenceStats: async () => ({ error: 'fixture_unavailable' }),
+      },
       missionEngine,
       missionsEnabled: true,
       disableLlm: true,
@@ -2006,6 +2012,7 @@ describe('Active work context continuation before domain routing', () => {
     const { createMaxReasoningRuntime } = require('../../index');
     const missionEngine = testMissionEngine();
     const max = createMaxReasoningRuntime({
+      ...hermeticWorkspaceOptions(),
       disableLlm: true,
       missionEngine,
       missionsEnabled: true,
@@ -2910,6 +2917,7 @@ describe('Active work context continuation before domain routing', () => {
     const { createMaxReasoningRuntime } = require('../../index');
     const missionEngine = testMissionEngine();
     const max = createMaxReasoningRuntime({
+      ...hermeticWorkspaceOptions(),
       disableLlm: true,
       missionEngine,
       missionsEnabled: true,
@@ -4989,6 +4997,7 @@ describe('SPEC-022 Command Deck Operations section', () => {
     );
 
     const max = createMaxReasoningRuntime({
+      ...hermeticWorkspaceOptions(),
       disableLlm: true,
       missionEngine,
     });

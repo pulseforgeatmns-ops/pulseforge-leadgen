@@ -2,6 +2,7 @@
 
 /**
  * SPEC-147 — Autonomous Mission Progression (ADR-066).
+ * ADR-067 — Human-decision contracts are independent of pause presentation.
  * Mission execution is progress. The runtime advances until genuine operator judgment is required.
  */
 
@@ -23,8 +24,10 @@ const {
   hasPendingDiscoveryInvestigation,
   hasPendingPrioritizationApproval,
   hasPendingExecutionApproval,
+  hasConsumedExecutionApproval,
   hasDiscoveryArtifact,
   hasConsumablePendingDecision,
+  presentableOperatorDecision,
 } = require('./PendingOperatorDecision');
 const { isStructuredMissionApproved } = require('./StructuredMission');
 const {
@@ -151,6 +154,59 @@ function createExecutionBlock(input = {}) {
     unmetPrecondition: asText(input.unmetPrecondition) || null,
     blockingComponent: asText(input.blockingComponent) || null,
     recommendedAction: asText(input.recommendedAction) || null,
+    ...(input.pauseFallback === true ? { pauseFallback: true } : {}),
+  };
+}
+
+function getStageContract(progressionStage) {
+  if (!Object.prototype.hasOwnProperty.call(MISSION_STAGE_CONTRACTS, progressionStage)) return null;
+  return MISSION_STAGE_CONTRACTS[progressionStage];
+}
+
+function createPauseFallbackBlock(snapshot = {}, contract = null) {
+  return createExecutionBlock({
+    stage: (contract && contract.stage) || deriveProgressionStage(snapshot),
+    unmetPrecondition: (contract && contract.completionCriteria)
+      || 'Operator judgment required before progression.',
+    blockingComponent: 'Stage Contract',
+    recommendedAction: 'Review the mission and resolve the required operator decision before continuing.',
+    pauseFallback: true,
+  });
+}
+
+/** A human-decision contract must stop progression even without presentation metadata. */
+function resolveHumanDecisionGate(snapshot = {}) {
+  const mission = snapshot.mission || snapshot;
+  const progressionStage = deriveProgressionStage(snapshot);
+  const contract = getStageContract(progressionStage);
+  // Existing approval validation binds the decision to the current prepared artifact
+  // revision and excludes invalidated/superseded approvals. Never trust a raw flag.
+  const executionDecisionSatisfied = progressionStage === PROGRESSION_STAGES.EXECUTION
+    && hasConsumedExecutionApproval(snapshot);
+  // Cancellation remains terminal; neither it nor a satisfied decision is reopened.
+  const shouldPause = Boolean(mission && !mission.planCancelled && contract
+    && contract.requiresHumanDecision && !executionDecisionSatisfied);
+  const pause = shouldPause ? deriveMissionPause(snapshot) : null;
+  return {
+    shouldPause,
+    progressionStage,
+    contract,
+    pause,
+    block: shouldPause && !pause ? createPauseFallbackBlock(snapshot, contract) : null,
+  };
+}
+
+function resolveProgressionState(snapshot = {}) {
+  const gate = resolveHumanDecisionGate(snapshot);
+  const pause = gate.shouldPause ? gate.pause : deriveMissionPause(snapshot);
+  // Preserve actionable runtime blockers instead of disguising them as a pause fallback.
+  const block = deriveExecutionBlock(snapshot) || gate.block;
+  return {
+    progressionStage: gate.progressionStage,
+    contract: gate.contract,
+    outcome: block && !block.pauseFallback ? 'blocked' : gate.shouldPause || pause ? 'paused' : 'active',
+    pause,
+    block,
   };
 }
 
@@ -160,6 +216,7 @@ function isDiscoveryRunning(snapshot = {}) {
   if (hasPendingPlanClarification(snapshot) || hasPendingPlanApproval(snapshot)) return false;
   if (hasPendingDiscoveryApproval(snapshot)) return false;
   if (hasPendingPrioritizationApproval(snapshot)) return false;
+  if (mission.pendingOperatorDecision?.kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL) return false;
   if (hasDiscoveryArtifact(snapshot)) return false;
   if (!isStructuredMissionApproved(mission)) return false;
   if (mission.stage && mission.stage !== STAGES.DISCOVER) return false;
@@ -179,7 +236,9 @@ function deriveProgressionStage(snapshot = {}) {
   if (hasPendingDiscoveryApproval(snapshot)) {
     return PROGRESSION_STAGES.DISCOVERY_APPROVAL;
   }
-  if (hasPendingPrioritizationApproval(snapshot)) {
+  if (hasPendingPrioritizationApproval(snapshot)
+    || (mission.stage === STAGES.DISCOVER
+      && mission.pendingOperatorDecision?.kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL)) {
     return PROGRESSION_STAGES.DISCOVERY_REVIEW;
   }
   if (hasDiscoveryArtifact(snapshot) && mission.stage === STAGES.DISCOVER) {
@@ -205,6 +264,15 @@ function deriveProgressionStage(snapshot = {}) {
 function deriveMissionPause(snapshot = {}) {
   const mission = snapshot.mission || snapshot;
   if (!mission) return null;
+  const presented = presentableOperatorDecision(snapshot);
+  if (presented && presented.consumable === false) {
+    return createMissionPause({
+      stage: PROGRESSION_STAGES.DISCOVERY_REVIEW,
+      reason: presented.reason,
+      requiredDecision: presented.prompt,
+      availableOptions: [],
+    });
+  }
 
   if (hasPendingPlanClarification(snapshot)) {
     const pending = mission.pendingOperatorDecision || {};
@@ -453,6 +521,13 @@ function formatMissionProgressPresentation(snapshot = {}, result = {}) {
   const pipeline = buildDiscoveryPipelineStatus(snapshot);
   const lines = [];
 
+  if (block && block.pauseFallback) {
+    lines.push('Mission Paused', '', `Stage: ${PROGRESSION_STAGE_LABELS[block.stage] || block.stage}`, '');
+    lines.push('Reason', '', block.unmetPrecondition || '', '');
+    lines.push('Action', '', block.recommendedAction || '', '');
+    return lines.join('\n').trim();
+  }
+
   if (block) {
     lines.push('Mission Blocked', '', `Stage: ${PROGRESSION_STAGE_LABELS[block.stage] || block.stage}`, '');
     lines.push('Reason', '', block.unmetPrecondition || '', '');
@@ -547,21 +622,21 @@ async function runAutonomousProgression(input = {}) {
     const mission = snapshot.mission;
     if (!mission || mission.planCancelled) break;
 
-    const pause = deriveMissionPause(snapshot);
-    const contract = MISSION_STAGE_CONTRACTS[deriveProgressionStage(snapshot)];
+    const gate = resolveHumanDecisionGate(snapshot);
 
-    if (pause && contract && contract.requiresHumanDecision) {
+    if (gate.shouldPause) {
       return {
         spec: 'SPEC-147',
         outcome: 'paused',
-        progressionStage: deriveProgressionStage(snapshot),
-        pause,
-        block: null,
+        progressionStage: gate.progressionStage,
+        pause: gate.pause,
+        block: gate.block,
         transitions,
         snapshot,
         presentation: formatMissionProgressPresentation(snapshot, {
-          progressionStage: deriveProgressionStage(snapshot),
-          pause,
+          progressionStage: gate.progressionStage,
+          pause: gate.pause,
+          block: gate.block,
           transitions,
         }),
       };
@@ -835,12 +910,13 @@ async function runAutonomousProgression(input = {}) {
   }
 
   const snapshot = engine.inspect(missionId, { tenantId });
-  const pause = deriveMissionPause(snapshot);
-  const block = lastError ? deriveExecutionBlock(snapshot, lastError) : null;
+  const gate = resolveHumanDecisionGate(snapshot);
+  const pause = gate.shouldPause ? gate.pause : deriveMissionPause(snapshot);
+  const block = lastError ? deriveExecutionBlock(snapshot, lastError) : gate.block;
 
   return {
     spec: 'SPEC-147',
-    outcome: block ? 'blocked' : pause ? 'paused' : 'complete',
+    outcome: block && !block.pauseFallback ? 'blocked' : gate.shouldPause || pause ? 'paused' : 'complete',
     progressionStage: deriveProgressionStage(snapshot),
     pause,
     block,
@@ -975,6 +1051,10 @@ module.exports = {
   SCOUT_PIPELINE_STAGES,
   MISSION_STAGE_CONTRACTS,
   AUTONOMOUS_OPERATOR_ID,
+  getStageContract,
+  createPauseFallbackBlock,
+  resolveHumanDecisionGate,
+  resolveProgressionState,
   createStageTransition,
   createMissionPause,
   createExecutionBlock,

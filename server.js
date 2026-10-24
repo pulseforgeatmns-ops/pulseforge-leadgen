@@ -122,6 +122,9 @@ app.use(session({
   cookie: { maxAge: 24 * 60 * 60 * 1000 }
 }));
 
+// Own the bounded form parser before global parsers and legacy session normalization.
+app.use('/', require('./routes/identityTenantSelection').createIdentityTenantSelectionRouter({ Router: express.Router, pool }));
+
 // Stripe signature verification needs the untouched request Buffer. This is
 // deliberately mounted before express.json() (raw-body Pattern A).
 app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }), stripeWebhookRouter);

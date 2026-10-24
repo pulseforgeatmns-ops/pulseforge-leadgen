@@ -101,7 +101,8 @@ function buildPipelineResult(partial = {}) {
     gapAnalysis: partial.gapAnalysis || null,
     existingIntelligence: partial.existingIntelligence || null,
     intelligenceResult: partial.intelligenceResult || null,
-    qualifiedCount: partial.qualifiedCount != null ? Number(partial.qualifiedCount) : 0,
+    qualifiedCount: partial.qualifiedCount === null ? null
+      : (partial.qualifiedCount != null ? Number(partial.qualifiedCount) : 0),
     blockReason: partial.blockReason || null,
     capabilityBlocked: partial.capabilityBlocked === true,
     capabilityEvaluation: partial.capabilityEvaluation || null,
@@ -187,6 +188,21 @@ async function runDiscoveryPipeline(input = {}) {
     consulted: true,
     error: existingError,
   };
+
+  // Unavailable evidence is not an exhausted market. Stop before adapter or
+  // provider invocation; callers can retry retrieval without spending on discovery.
+  if (existingError) {
+    return buildPipelineResult({
+      outcome: DISCOVERY_OUTCOMES.BLOCKED,
+      stages,
+      existingIntelligence: { ...existingIntelligence, companyCount: null, prospectCount: null, consulted: false, available: false },
+      blockReason: 'existing_intelligence_unavailable',
+      qualifiedCount: null,
+      coverageEngineUsed: false,
+      emptyMarketDecision: false,
+      confidence: null,
+    });
+  }
 
   let marketDefinition = buildMarketDefinition(input);
   if (marketMemoryRecall?.loaded && marketMemoryRecall.marketUnderstanding?.dominantTerminology?.length) {

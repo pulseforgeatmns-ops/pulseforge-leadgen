@@ -13,15 +13,31 @@ class OperatorStore {
     const evidence={id:createHash('sha256').update(JSON.stringify([event.sourceId,event.externalMessageId,event.extractedCa])).digest('hex'),
       sourceId:event.sourceId,externalMessageId:event.externalMessageId,extractedCa:event.extractedCa,
       occurredAt:event.occurredAt,ingestedAt:event.ingestedAt,provenance:event.provenance};
-    const alert=buildOperatorAlert({evidence,approvedChannelId:this.channelId});
+    const alert=buildOperatorAlert({evidence,approvedChannelId:this.channelId,independentConvergence:'none',
+      timestamps:{alertCreatedAt:now,pulseForgeReceivedAt:event.ingestedAt}});
     const minimal={...evidence,provenance:{dataClass:'EMPIRICAL',telegramChannelId:String(this.channelId)}};
     const client=await this.pool.connect();
     try {
       await client.query('BEGIN');
       await client.query('INSERT INTO signal_operator_events(id,payload) VALUES($1,$2::jsonb) ON CONFLICT DO NOTHING',[alert.id,JSON.stringify(minimal)]);
+      // Research and the immediate reader share one dedup key. If research won
+      // the insert, attach the durable operational evidence to that same row.
+      // Never replace its original evidence/payload or reset a send/retry/receipt.
       await client.query(`INSERT INTO signal_operator_alert_outbox(id,source_id,external_message_id,token_address,evidence_id,operator_event_id,payload,next_attempt_at)
         VALUES($1,$2,$3,$4,$1,$1,$5::jsonb,$6) ON CONFLICT DO NOTHING`,
       [alert.id,alert.sourceId,alert.externalMessageId,alert.tokenAddress,JSON.stringify(alert),now]);
+      // There are two unique indexes (id and source/message/CA). An untargeted
+      // insert handles either conflict, including simultaneous speculative
+      // inserts. This next statement sees the winning committed row before
+      // conditionally promoting it, all within the same transaction.
+      await client.query(`UPDATE signal_operator_alert_outbox SET
+          operator_event_id=$1,
+          next_attempt_at=CASE WHEN signal_operator_alert_outbox.delivery_state='PENDING'
+            AND signal_operator_alert_outbox.first_attempt_at IS NULL
+            AND signal_operator_alert_outbox.attempts=0
+            THEN $2 ELSE signal_operator_alert_outbox.next_attempt_at END
+        WHERE id=$1 AND source_id=$3 AND external_message_id=$4 AND token_address=$5
+          AND operator_event_id IS NULL`,[alert.id,now,alert.sourceId,alert.externalMessageId,alert.tokenAddress]);
       await client.query('COMMIT');
       return alert.id;
     } catch(err) {await client.query('ROLLBACK');throw err;} finally {client.release();}

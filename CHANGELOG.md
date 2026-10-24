@@ -1,3 +1,24 @@
+## Unreleased — AUDIT-062 offline observation safety (2026-10-24)
+
+- Preserve [AUDIT-062](docs/architecture/AUDIT-062_Warm_Routing_Necessity.md) as an explicitly dated historical report; its conclusions are not current production evidence or removal authorization.
+- Replace the manual observation with pre-import DB/provider/environment isolation, three explicit fixture paths, transport denial, deterministic cleanup and an explicit non-overwriting output path. Add focused offline regressions for the [SPEC-171](docs/specs/SPEC-171_Canonical_Execution_Router.md) routing observation. No production wiring, scheduler activation or live provider/DB execution.
+
+## Unreleased — SPEC-266 disabled initial-SMS staging (2026-10-24)
+
+- [SPEC-266](docs/specs/SPEC-266_Signal_Default_Off_Initial_SMS.md) and proposed
+  [ADR-109](docs/adr/ADR-109_Signal_Initial_SMS_Staging.md): reconcile PR 980's
+  default-off independent SMS lane and saved-evidence risk card while preserving
+  newer operator guards. Missing risk dimensions remain UNKNOWN.
+- Keep the two-table SQL manual and unapplied. Local network-denied checks passed;
+  native PostgreSQL/final-head hosted CI remains pending. This record grants no
+  publication, deployment, schema or activation authority. No sends, research or strategy change.
+
+## Unreleased — PF-CLARITY-001
+
+- Add default-off tenant-10 Gmail readonly Clarity digest ingestion with separately consented, encrypted credentials, bounded retry/backfill and tenant-scoped historical snapshots.
+- Max daily brief surfaces at most three evidence-backed hypotheses with visual, digest-bound approve/reject review through SPEC-171. Approval records review only; website changes and deployments remain separately gated.
+- Add synthetic parser, OAuth, ingestion, PostgreSQL isolation/concurrency, router/CSRF and browser acceptance coverage. Live authorized-digest acceptance remains blocked on owner OAuth consent and separately approved deployment. See [spec](docs/specs/PF-CLARITY-001_Google_Workspace_Clarity.md) and [runbook](docs/clarity-runbook.md).
+
 ## Local-only: PR960 managed-facilities enrichment boundary (2026-10-20)
 
 - Keep portal-copy experimentation off by default. Require explicit hash-bound approved tenant-10 mission opt-in; preserve legacy copy for existing high-score prospects, with no successor auto-opt-in or refill behavior expansion.
@@ -47,6 +68,8 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Preserve [AUDIT-044](docs/architecture/AUDIT-044_Discovery_Coverage_Investigative_Reasoning.md) and [ADR-076](docs/adr/ADR-076_Coverage_Before_Conclusion.md) from PR #421 as dated historical records (2026-10-24), with later pipeline and estimation context. No new decision or runtime change.
+
 - [SPEC-SCOUT-CONT-002](docs/specs/SPEC-SCOUT-CONT-002_Explicit_Legacy_Coverage_Epoch.md)
   and [ADR-102](docs/adr/ADR-102_Explicit_Immutable_Legacy_Coverage_Epoch.md):
   default-off explicit same-fingerprint epoch1 for exact legacy query roots,
@@ -54,6 +77,8 @@ All notable changes to this project are documented here. Format inspired by [Kee
   after expiry/removal, and bounded sanitized approval diagnostics. Local tests
   preserve old candidate/attempt history and enforce cumulative page ceilings.
   Production release, exact manifest and additional spend remain approval-gated.
+
+- Preserve [AUDIT-060’s pre-remediation trace](docs/architecture/AUDIT-060_Provider_Execution_Persistence_Pre_Remediation.md) from PR #460 beside its unchanged remediated summary (2026-10-24), linked to the existing [SPEC-184](docs/specs/SPEC-184_Provider_Execution_Continuity.md) implementation. No inherited runtime restored.
 
 - Default-off tenant 10/13 durable Scout candidate tickets and exact immutable
   query membership, independent backlog draining, fenced queue completion,

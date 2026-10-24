@@ -266,16 +266,22 @@ function retrieveExistingIntelligence(input = {}) {
   };
 }
 
-async function loadTenantRepository({ tenantId } = {}) {
+function repositoryUnavailable() {
+  const error = new Error('Existing tenant intelligence is unavailable.');
+  error.code = 'existing_intelligence_unavailable';
+  return error;
+}
+
+async function loadTenantRepository({ tenantId, pool } = {}) {
   const id = asText(tenantId);
-  if (!id || !process.env.DATABASE_URL) return { companies: [], people: [] };
+  if (!id || (!pool && !process.env.DATABASE_URL)) throw repositoryUnavailable();
   let db;
   try {
-    db = require('../../../db');
+    db = pool || require('../../../db');
   } catch {
-    return { companies: [], people: [] };
+    throw repositoryUnavailable();
   }
-  if (!db || typeof db.query !== 'function') return { companies: [], people: [] };
+  if (!db || typeof db.query !== 'function') throw repositoryUnavailable();
   try {
     const companies = await db.query(
       `SELECT id, client_id, name, industry, location, website, icp_score, created_at
@@ -294,8 +300,9 @@ async function loadTenantRepository({ tenantId } = {}) {
        LIMIT 500`,
       [id]
     );
+    if (!Array.isArray(companies?.rows) || !Array.isArray(prospects?.rows)) throw repositoryUnavailable();
     return {
-      companies: (companies.rows || []).map((row) => ({
+      companies: companies.rows.map((row) => ({
         id: String(row.id),
         tenantId: String(row.client_id),
         name: row.name,
@@ -306,7 +313,7 @@ async function loadTenantRepository({ tenantId } = {}) {
         updatedAt: row.created_at,
         source: 'existing_pf',
       })),
-      people: (prospects.rows || []).map((row) => ({
+      people: prospects.rows.map((row) => ({
         id: String(row.id),
         tenantId: String(row.client_id),
         companyId: row.company_id != null ? String(row.company_id) : null,
@@ -316,7 +323,7 @@ async function loadTenantRepository({ tenantId } = {}) {
       })),
     };
   } catch {
-    return { companies: [], people: [] };
+    throw repositoryUnavailable();
   }
 }
 
@@ -327,6 +334,8 @@ async function loadRepository(input = {}) {
       targetContext: input.targetContext,
       businessContext: input.businessContext,
     });
+    if (!Array.isArray(loaded) && !Array.isArray(loaded?.companies)) throw repositoryUnavailable();
+    if (loaded?.available === false) throw repositoryUnavailable();
     const companies = Array.isArray(loaded)
       ? loaded
       : (loaded && loaded.companies) || [];
@@ -337,7 +346,7 @@ async function loadRepository(input = {}) {
     const loaded = await loadTenantRepository({
       tenantId: input.authorizedTenantId || input.tenantId,
     });
-    if ((loaded.companies && loaded.companies.length) || (loaded.people && loaded.people.length)) {
+    if (loaded) {
       return retrieveExistingIntelligence({
         ...input,
         companies: loaded.companies,

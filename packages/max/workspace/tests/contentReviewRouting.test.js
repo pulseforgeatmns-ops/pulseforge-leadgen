@@ -37,7 +37,7 @@ test('an active acquisition mission cannot intercept content review or execute w
     assert.equal(result.metadata.readOnly, true);
     assert.equal(result.metadata.mutatesMissionState, false);
     assert.equal(result.mission, null);
-    assert.match(result.prose, /Opening Content review/);
+    assert.match(result.prose, /Content review requested/);
     assert.doesNotMatch(result.prose, /Acquire recurring|commercial cleaning|Mission Resumed/);
     assert.deepEqual(result.context, before);
   }
@@ -49,4 +49,13 @@ test('a new scoped conversation can navigate directly to review', async () => {
   assert.equal(result.context.tenantId, '11');
   assert.equal(result.uiAction.type, 'open_content_review');
   assert.ok(result.sessionId);
+});
+
+test('account navigation needs trusted matching roster, never conversational roster or other tenant', async () => {
+  const engine = createWorkspaceEngine({ disableLlm: true, loadOperatorContext: false });
+  const input = {question:"Review Tony's accounts",context:{tenantId:'10',aos:[{id:24,name:'Tony'}]}};
+  assert.equal((await engine.ask(input)).uiAction,null);
+  const valid=await engine.ask({...input,reviewNavigationScope:{tenantId:10,aos:[{id:24,name:'Tony'}]}});
+  assert.equal(valid.uiAction.aoId,24);assert.equal(valid.uiAction.tenantId,'10');
+  assert.equal((await engine.ask({...input,reviewNavigationScope:{tenantId:11,aos:[{id:24,name:'Tony'}]}})).uiAction,null);
 });

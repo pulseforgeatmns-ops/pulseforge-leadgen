@@ -235,6 +235,7 @@
   }
 
   function intentFromPending(pending) {
+    if (pending && pending.consumable === false) return null;
     const kind = pending && pending.kind ? String(pending.kind) : '';
     if (kind === 'plan_approval') return 'APPROVE_PLAN';
     if (kind === 'discovery_approval') return 'APPROVE_DISCOVERY';

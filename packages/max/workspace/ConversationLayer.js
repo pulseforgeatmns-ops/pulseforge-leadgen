@@ -67,7 +67,7 @@ function extractMissionFacts(snapshot = {}, answered = {}) {
   const workspace = snapshot.workspace || {};
   const scout = workspace.scout || {};
   const missionContext = answered.missionContext || buildMissionContext(snapshot);
-  const pending = mission.pendingOperatorDecision || null;
+  const pending = snapshot.executableDecision || mission.pendingOperatorDecision || null;
   const blocker = snapshot.blocker || null;
   const discoveryCount = countDiscoveryCompanies(snapshot);
   const confidence = scoutConfidence(snapshot);
@@ -103,7 +103,9 @@ function extractMissionFacts(snapshot = {}, answered = {}) {
 function buildInternalReasoning(facts, intent) {
   const lines = [];
   if (facts.pending && facts.pending.prompt) {
-    lines.push(`Mission is gated on operator input: ${facts.pending.prompt}`);
+    lines.push(facts.pending.consumable === false
+      ? facts.pending.prompt
+      : `Mission is gated on operator input: ${facts.pending.prompt}`);
   }
   if (facts.blocker && facts.blocker.reason) {
     lines.push(facts.blocker.reason);
@@ -375,14 +377,18 @@ function composeConversationalResponse(input = {}) {
   });
 
   const preface = repetitionPreface(memory, topicKey);
+  const unavailableDecision = facts.pending && facts.pending.consumable === false
+    && intent !== THINKING_MODES.TEACH && intent !== THINKING_MODES.COMPARE;
   const lead =
-    conversationIntent.via === 'mission_continuation_ambiguous'
+    unavailableDecision
+      ? `${facts.pending.prompt} ${facts.pending.reason || ''}`.trim()
+      : conversationIntent.via === 'mission_continuation_ambiguous'
       ? composeContinuationAmbiguityLead(
         facts,
         conversationIntent.missionContinuationAmbiguity || {}
       )
       : composeLead(intent, facts, reasoning, question);
-  const expansion = composeExpansion(intent, facts, reasoning, explicitReasoning);
+  const expansion = unavailableDecision ? '' : composeExpansion(intent, facts, reasoning, explicitReasoning);
 
   const paragraphs = [];
   if (preface) paragraphs.push(preface.trim());

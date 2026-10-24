@@ -7,7 +7,8 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
+const { createTestAmoRuntime } = require('./amoTestRuntime');
 const {
   classifyActiveThoughtFollowUp,
   getActiveClientReasoning,
@@ -49,6 +50,7 @@ async function openEngine(store) {
   return createWorkspaceEngine({
     disableLlm: true,
     missionsEnabled: true,
+    acquisitionMissionRuntime: createTestAmoRuntime(),
     clientIntelligenceOpts: { store },
   });
 }

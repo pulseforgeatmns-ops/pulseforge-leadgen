@@ -4,10 +4,10 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');const os=require('node:os');const path=require('node:path');const tls=require('node:tls');
 const {execFileSync}=require('node:child_process');
 const {tlsOptions,poolFor}=require('../standalone/anchor-portal/database');
-const {Pool}=require('pg');
+const {createTrackedPostgresPool,trackUnopenedPostgresPool,closePostgresPool}=require('./helpers/closePostgresPool');
 const {startDisposablePostgres}=require('./helpers/disposablePostgres');
 test('hosted TLS trusts only supplied authentic CA and still verifies intended hostname',async()=>{
- const dir=fs.mkdtempSync(path.join(os.tmpdir(),'portal-tls-'));let server,postgres,plain,verified,untrusted;
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'portal-tls-'));let server,postgres,plain,verified,untrusted,testError;
  const openssl=(...args)=>execFileSync('openssl',args,{cwd:dir,stdio:'ignore'});
  try{
   openssl('req','-x509','-newkey','rsa:2048','-nodes','-days','1','-keyout','ca.key','-out','ca.crt','-subj','/CN=Ephemeral Portal Test CA','-addext','basicConstraints=critical,CA:TRUE');
@@ -26,7 +26,7 @@ test('hosted TLS trusts only supplied authentic CA and still verifies intended h
   openssl('req','-x509','-newkey','rsa:2048','-nodes','-days','1','-keyout','other.key','-out','other.crt','-subj','/CN=Wrong Ephemeral CA','-addext','basicConstraints=critical,CA:TRUE');
   await assert.rejects(connect('private-db.example.invalid',tlsOptions({mode:'hosted',databaseCa:fs.readFileSync(path.join(dir,'other.crt'),'utf8')})));
   // Exercise the actual pg Pool TLS path against our disposable server too.
-  postgres=await startDisposablePostgres('portal-pg-tls-');plain=new Pool({connectionString:postgres.connectionString});
+  postgres=await startDisposablePostgres('portal-pg-tls-');plain=createTrackedPostgresPool({connectionString:postgres.connectionString});
   fs.chmodSync(path.join(dir,'server.key'),0o600);
   await plain.query(`ALTER SYSTEM SET ssl_cert_file='${path.join(dir,'server.crt')}'`);
   await plain.query(`ALTER SYSTEM SET ssl_key_file='${path.join(dir,'server.key')}'`);
@@ -36,9 +36,20 @@ test('hosted TLS trusts only supplied authentic CA and still verifies intended h
    if(Date.now()>deadline)throw new Error('Disposable PostgreSQL TLS did not activate');await new Promise(r=>setTimeout(r,20));
   }
   const databaseUrl=`postgresql://postgres@localhost:${postgres.port}/postgres`;
-  verified=poolFor({mode:'hosted',databaseUrl,databaseCa:ca});
+  verified=trackUnopenedPostgresPool(poolFor({mode:'hosted',databaseUrl,databaseCa:ca}));
   assert.equal((await verified.query('SELECT ssl FROM pg_stat_ssl WHERE pid=pg_backend_pid()')).rows[0].ssl,true);
-  untrusted=poolFor({mode:'hosted',databaseUrl});await assert.rejects(untrusted.query('SELECT 1'));
+  untrusted=trackUnopenedPostgresPool(poolFor({mode:'hosted',databaseUrl}));await assert.rejects(untrusted.query('SELECT 1'));
 
- }finally{if(verified)await verified.end();if(untrusted)await untrusted.end();if(plain)await plain.end();if(postgres)await postgres.stop();if(server)await new Promise(r=>server.close(r));fs.rmSync(dir,{recursive:true,force:true});}
+ }catch(error){testError=error;throw error;
+ }finally{
+  // Attempt every cleanup even if one pool fails, without hiding the failure.
+  const results=await Promise.allSettled([verified,untrusted,plain].filter(Boolean).map(pool=>closePostgresPool(pool)));
+  const errors=results.filter(result=>result.status==='rejected').map(result=>result.reason);
+  for(const cleanup of [
+   ()=>postgres?.stop(),
+   ()=>server&&new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve())),
+   ()=>fs.rmSync(dir,{recursive:true,force:true})
+  ]){try{await cleanup();}catch(error){errors.push(error);}}
+  if(errors.length)throw new AggregateError(testError?[testError,...errors]:errors,'TLS fixture cleanup failed');
+ }
 });

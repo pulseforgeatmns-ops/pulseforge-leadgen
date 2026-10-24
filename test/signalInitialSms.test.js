@@ -9,6 +9,32 @@ const CA='So11111111111111111111111111111111111111112';
 const event=(id=42)=>({sourceId:'telegram-front-runners',externalMessageId:`telegram:123:${id}`,extractedCa:CA,occurredAt:new Date().toISOString(),ingestedAt:new Date().toISOString(),provenance:{dataClass:'EMPIRICAL',telegramChannelId:'123'}});
 const row=()=>({id:'d',tenant_id:'1',namespace:'operational',channel:'sms',lease_token:'lease',payload:{tokenAddress:CA,knowledgeAt:new Date().toISOString()}});
 const config=()=>({tenantId:'1',channelId:'123',startsAt:new Date(Date.now()-60000).toISOString(),endsAt:new Date(Date.now()+3600000).toISOString(),limit:5});
+test('initial SMS default-off values never inspect scope, obtain a database client or arm transport',async()=>{
+ for(const flag of [undefined,'','0','false','true','yes',1,true]) {
+  const env=new Proxy({SIGNAL_OPERATOR_SMS_ENABLED:flag},{get:(target,key)=>{
+   assert.equal(key,'SIGNAL_OPERATOR_SMS_ENABLED','disabled lane must not inspect other configuration');return target[key];
+  }});
+  const forbidden=()=>assert.fail('disabled initial SMS lane must have no side effects');
+  assert.equal(await startInitialSms({env,pool:{query:forbidden,connect:forbidden},channelId:'123',gate:forbidden,setInterval:forbidden}),null);
+ }
+});
+test('initial SMS draft remains manual and never enters startup or automatic migration loaders',()=>{
+ const draft=fs.readFileSync(path.join(__dirname,'../docs/sql-drafts/2026-10-22-signal-initial-sms.sql'),'utf8');
+ const tables=[...draft.matchAll(/CREATE TABLE IF NOT EXISTS (\w+)/g)].map(m=>m[1]);
+ assert.deepEqual(tables,['signal_initial_sms_windows','signal_initial_sms_deliveries']);
+ assert.doesNotMatch(draft,/\b(?:ALTER|DROP|DELETE|TRUNCATE)\b/);
+ assert.equal(fs.readdirSync(path.join(__dirname,'../migrations')).some(name=>/initial-sms/.test(name)),false);
+ for(const file of ['server.js','services/signalOperator/index.js','services/signalOperator/initialSms.js','packages/signal-v1/storage/ensureSignalSchema.js']) {
+  assert.doesNotMatch(fs.readFileSync(path.join(__dirname,'..',file),'utf8'),/sql-drafts|2026-10-22-signal-initial-sms\.sql/);
+ }
+});
+test('initial event hook coexists with the newer injected email dispatcher',async()=>{
+ const e=event(),stored={...row().payload,id:'a',evidenceId:'kept',sourceId:e.sourceId,channelId:'123',externalMessageId:e.externalMessageId,occurredAt:e.occurredAt,ingestedAt:e.ingestedAt,marketAttempted:true,transportSentAt:e.ingestedAt,researchState:'FIRST_CALLER',latency:{callPersistedAt:e.ingestedAt}};
+ let initial=0,dispatched=0;const accepted=[];
+ const worker=createOperatorWorker({store:{enqueue:async()=>{},claim:async()=>({id:'a',payload:stored,attempts:1}),setPayload:async(_id,p)=>assert.deepEqual(p,stored),accepted:async(...args)=>accepted.push(args),failed:async()=>assert.fail('dispatch must retain newer behavior')},feedUrl:'http://caller.railway.internal/operator-events',token:'LOCAL-TEST-ONLY-AUTH-FIXTURE-000000',channelId:'123',gate:()=>({ok:true,startAt:new Date(Date.now()-60000).toISOString()}),fetchImpl:async()=>({ok:true,json:async()=>({events:[e]})}),onInitialEvent:async p=>{assert.equal(p,e);initial++;},relay:{send:()=>assert.fail('must dispatch through the existing abstraction')},sendAlert:async p=>{assert.equal(p,stored);dispatched++;return [{receipt:'local-test-email-receipt'}];}});
+ assert.equal((await worker.ingestOnce()).enqueued,1);assert.equal((await worker.sendOnce()).accepted,true);
+ assert.equal(initial,1);assert.equal(dispatched,1);assert.deepEqual(accepted,[['a','local-test-email-receipt',1]]);
+});
 test('SMS proceeds while independent email enrichment is unresolved',async()=>{
  let release,started;const waiting=new Promise(r=>started=r),enrichment=new Promise(r=>release=r);let queued=false,sms=false,email=false;const e=event();
  const alert={...row().payload,id:'a',externalMessageId:e.externalMessageId,occurredAt:e.occurredAt,ingestedAt:e.ingestedAt,evidenceId:'e',sourceId:e.sourceId,channelId:'123'};

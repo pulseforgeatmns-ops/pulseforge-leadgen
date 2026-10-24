@@ -1,5 +1,9 @@
 # Initial CA SMS and explicit risk-card readiness: local review
 
+The 2026-10-24 reconciliation is tracked by [SPEC-266](../specs/SPEC-266_Signal_Default_Off_Initial_SMS.md)
+and proposed [ADR-109](../adr/ADR-109_Signal_Initial_SMS_Staging.md). These record
+disabled staging only, not retrospective activation approval or changed priorities.
+
 Status: LOCAL ONLY. This patch addresses verified differences between current code and the requested Oct.23 operating contract. It does not establish that an Oct.14 warning was available or that this change would have prevented a loss. No deployment, live schema change, external SMS/email, or credential change has occurred.
 
 ## Changes

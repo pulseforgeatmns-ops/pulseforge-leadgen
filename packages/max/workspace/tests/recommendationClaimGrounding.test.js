@@ -9,9 +9,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const {
-  maybeHandleRetrievalBeforeDelegationTurn,
+  maybeHandleRetrievalBeforeDelegationTurn: rawRetrievalHandler,
 } = require('../RetrievalBeforeDelegationContext');
 const {
   shouldClaimClientIntelligenceTurn,
@@ -448,3 +448,7 @@ describe('SPEC-107A safety', () => {
     assert.equal(result.retrieval.delegated, false);
   });
 });
+
+// The same explicit CIE fixture contract applies to direct retrieval entry points.
+const { createHermeticRetrievalHandler } = require('./workspaceTestHarness');
+const maybeHandleRetrievalBeforeDelegationTurn = createHermeticRetrievalHandler(rawRetrievalHandler);

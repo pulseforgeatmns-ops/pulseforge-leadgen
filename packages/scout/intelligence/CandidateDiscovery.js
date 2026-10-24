@@ -45,8 +45,9 @@ async function discoverCandidateUniverse(input = {}) {
   } catch (err) {
     return {
       estimatedMarket: null,
-      discovered: 0,
-      coverage: 0,
+      discovered: null,
+      coverage: null,
+      available: false,
       candidates: [],
       error: err.message || String(err),
       sourceTypesChecked: [],

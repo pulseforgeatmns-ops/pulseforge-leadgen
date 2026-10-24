@@ -11,7 +11,7 @@ const amo = require('../../../acquisition-mission');
 const { STAGES } = amo;
 const { createMissionEngine } = require('../../../mission-engine');
 const { createBuiltinRegistry } = require('../../../capabilities');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const {
   resolveAcquisitionActiveMission,
   resolveActiveMissionLock,

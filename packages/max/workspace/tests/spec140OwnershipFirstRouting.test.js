@@ -10,7 +10,7 @@ const {
   isExplicitMissionResume,
 } = require('../WorkspaceOwnershipResolver');
 const { isMissionExecutionCommand } = require('../ExecutionLanguageDetection');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { clearWorkspaceOwnershipAuditLog } = require('../audit/WorkspaceOwnershipAudit');
 
 const AUDIT_028_PROMPT = [

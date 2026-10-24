@@ -50,6 +50,14 @@ async function bindings(db, input, options) {
   const program = (await db.query('SELECT * FROM acquisition_outbound_programs WHERE id=$1 AND tenant_id=$2', [input.programId, '10'])).rows[0];
   const authority = await scope.assertScopedResumeCapability(db, { program, capability: 'preparation', operation: OPERATION }, { ...options, now: time(options) });
   const grant = authority.manifest;
+  // Optional HTTP authority is checked under every canonical binding lock, not
+  // just in route preflight. Legacy one-shot callers retain their old contract.
+  if (options.actionAuthority) {
+    const a = options.actionAuthority;
+    if (grant.operatorId !== a.actorId || grant.operatorRole !== 'admin'
+      || hash(grant) !== a.manifestHash || (options.env || process.env).RAILWAY_GIT_COMMIT_SHA !== a.revision)
+      fail('anchor_crm_preparation_action_authority_changed');
+  }
   if (grant.scopes.email.enabled || grant.scopes.research.enabled) fail('anchor_crm_preparation_only_required');
   const admissions = input.admissions.map(a => grant.admissions.find(approved => hash(approved) === hash(a)));
   if (admissions.some(a => !a)) fail('anchor_scoped_resume_admission_missing');
@@ -139,7 +147,7 @@ function reviewExplanations(value) {
 }
 async function prepareExistingCrm(pool, rawInput, options = {}) {
   const input = validateInput(rawInput);
-  if (!pool?.connect || Object.keys(options).some(k => !['env', 'now'].includes(k))) fail('anchor_crm_preparation_input_invalid');
+  if (!pool?.connect || Object.keys(options).some(k => !['env', 'now', 'actionAuthority'].includes(k))) fail('anchor_crm_preparation_input_invalid');
   const reviewed = await locked(pool, async db => { const b = await bindings(db, input, options); await infrastructure(db, b, options); return b; });
   // Excludes grant ID/day/caller-generated IDs: changing any of those cannot
   // replay the same source+identity batch, even after a downstream failure.

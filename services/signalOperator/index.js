@@ -32,7 +32,8 @@ async function boot() {
     marketProvider:new GeckoTerminalMarketDataProvider(),
     onInitialEvent:initialSms ? event=>initialSms.enqueue(event) : undefined,
     onEvent:distribution ? event=>distribution.register(event) : undefined,
-    relay:createBrevoRelay({enabled:sendEnabled(),consented:sendEnabled(),apiKey:process.env.BREVO_API_KEY,gate})});
+    relay:createBrevoRelay({enabled:sendEnabled(),consented:sendEnabled(),apiKey:process.env.BREVO_API_KEY,gate,
+      operationalTestApproved:process.env.SIGNAL_OPERATOR_TRANSPORT_TEST_APPROVED==='1'})});
   } catch(error) {initialSms?.stop();distribution?.stop();throw error;}
   initialSms?.start();
   const stopOperator=startOperatorTimers(worker);

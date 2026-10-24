@@ -36,7 +36,7 @@ const {
   advancePrioritizationAfterApproval,
   advanceMaxPrioritization,
 } = require('../AmoOperatorApproval');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { createTestAmoRuntime, installTestAmoRuntime } = require('./amoTestRuntime');
 const { MISSION_RUNTIMES } = require('../MissionActions');
 const { specialistContext } = require('../../../acquisition-mission/Lifecycle');
@@ -56,6 +56,8 @@ async function seedUnderstandMaxComplete(engine, mission) {
     mission: engine.get(mission.id, '10'),
     tenantId: '10',
     question: 'Approved. Begin Discovery.',
+    scoutCompanies: [],
+    scoutPeople: [],
     allowFixtureFallback: true,
   });
   await advancePrioritizationAfterApproval({
