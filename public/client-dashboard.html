@@ -680,10 +680,20 @@ async function handleApproval(id, action, btn) {
   const card = btn.closest('.approval-card');
   card.querySelectorAll('button').forEach(b => b.disabled = true);
   try {
+    const item = approvals.find(a => String(a.id) === String(id));
+    let binding = {};
+    if (action === 'approved' && ['linkedin_page','linkedin_personal','facebook_page','google_business'].includes(item?.channel)) {
+      const preview = await api(`/api/approvals/${id}/preview`);
+      if (!window.confirm(`Approve this exact post for ${preview.account.id} (${preview.account.externalAccountId})?\n\n${preview.artifact.body}\n\nAn operator will publish after approval.`)) {
+        card.querySelectorAll('button').forEach(b => b.disabled = false);
+        return;
+      }
+      binding = { accountId: preview.account.id, expectedApprovalHash: preview.approvalHash };
+    }
     await api(`/api/approvals/${id}`, {
       method:'POST',
       headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({ action, ...binding }),
     });
     card.classList.add('fading');
     setTimeout(() => {
@@ -695,6 +705,7 @@ async function handleApproval(id, action, btn) {
       }
     }, 250);
   } catch (err) {
+    const notice = document.createElement('p'); notice.textContent = err.message || 'Unable to approve this content.'; card.appendChild(notice);
     card.querySelectorAll('button').forEach(b => b.disabled = false);
   }
 }

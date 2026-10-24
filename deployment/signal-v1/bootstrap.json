@@ -1,0 +1,104 @@
+{
+  "apply": false,
+  "approvalRequired": true,
+  "projectId": "5f6c50eb-6a61-4649-885e-dc3f3b80a2e5",
+  "environmentId": "7046b237-d3a6-4884-8a1e-bd75d809fa3b",
+  "repository": "pulseforgeatmns-ops/pulseforge-leadgen",
+  "sourceBranch": "main",
+  "service": {
+    "name": "telegramCallerFeed",
+    "rootDirectory": "/",
+    "configFile": "/services/telegramCallerFeed/railway.json",
+    "publicDomains": [],
+    "replicas": 1,
+    "volume": {
+      "mountPath": "/data",
+      "requestedSizeGB": 1
+    },
+    "variables": {
+      "PORT": "3099",
+      "TELEGRAM_CALLER_FEED_PORT": "3099",
+      "TELEGRAM_CALLER_FEED_POLL_MS": "15000",
+      "TELEGRAM_CALLER_FEED_STATE_PATH": "/data/telegram-caller-feed-state.json",
+      "TELEGRAM_CALLER_SOURCES_JSON": "[]",
+      "TELEGRAM_API_ID": "${{pulseforge-leadgen.TELEGRAM_API_ID}}",
+      "TELEGRAM_API_HASH": "${{pulseforge-leadgen.TELEGRAM_API_HASH}}",
+      "TELEGRAM_SESSION_STRING": "${{pulseforge-leadgen.TELEGRAM_SESSION_STRING}}",
+      "SIGNAL_OPERATOR_FEED_ENABLED": "0",
+      "SIGNAL_OPERATION_MODE": "unselected"
+    },
+    "resourceLimits": {
+      "cpu": 0.25,
+      "memoryBytes": 268435456,
+      "increaseWithoutNewApproval": false
+    },
+    "restartPolicy": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
+  },
+  "activationBlockedUntil": [
+    "User selects operating model and monthly budget; no pilot assumed",
+    "Approval for dedicated service, secret references, volume and persistent frontrunz access",
+    "Approved code merged; exact commit recorded",
+    "One-time source probe inside existing PulseForge confirms frontrunz identity and read access",
+    "Generated activation bundle contains the actual observed channel ID"
+  ],
+  "approvedCommit": null,
+  "budgetProposal": {
+    "selectedMonthlyBudgetUsd": null,
+    "currency": "USD",
+    "feedComputeAndVolumeUpperEstimate31Days": 8.11,
+    "excludedFromEstimate": [
+      "egress",
+      "incremental PulseForge CPU/RAM/database",
+      "mail quota overage or plan changes"
+    ],
+    "serviceCashHardCapAvailable": false,
+    "workspaceHardLimitChangeApproved": false,
+    "exactInvoiceCapGuaranteed": false,
+    "budgetEnforcement": "Monitoring only; no automatic billing stop or cost-alert delivery implemented for continuous mode",
+    "activationRequires": "User-selected operating model and monthly budget, verified resource limits and genuine source readiness"
+  },
+  "delivery": {
+    "enabled": false,
+    "destination": "current ChatGPT conversation",
+    "relayProposal": {
+      "sender": "jacob@gopulseforge.com",
+      "recipient": "pulseforgeatmns@gmail.com",
+      "consentReceived": false
+    },
+    "waitForOutcome24h": false,
+    "independentImmediateEnqueueImplemented": true,
+    "tradeDestination": null,
+    "transport": "Authenticated private 1s feed consumer -> durable minimal outbox -> Brevo -> approved Gmail event automation -> current ChatGPT conversation",
+    "newSecretRequirement": {
+      "name": "SIGNAL_OPERATOR_FEED_TOKEN",
+      "provisioned": false,
+      "userHandledOnly": true,
+      "minimumLength": 32,
+      "dedicatedServiceBinding": "${{pulseforge-leadgen.SIGNAL_OPERATOR_FEED_TOKEN}}"
+    },
+    "proposedPulseForgeVariables": {
+      "SIGNAL_OPERATOR_ENABLED": "0",
+      "SIGNAL_OPERATOR_RELAY_ENABLED": "0",
+      "SIGNAL_OPERATOR_RELAY_CONSENT": "0",
+      "SIGNAL_OPERATOR_FEED_URL": "http://${{telegramCallerFeed.RAILWAY_PRIVATE_DOMAIN}}:3099/operator-events",
+      "SIGNAL_OPERATION_MODE": "unselected"
+    }
+  },
+  "controller": {
+    "includedInCorePatch": false,
+    "enabled": false,
+    "requiredForContinuousOperation": false,
+    "RailwayProjectTokenRequiredForContinuousOperation": false
+  },
+  "operatingModel": {
+    "selected": null,
+    "continuousOption": {
+      "requiresOneFeedAuthSecret": true,
+      "requiresRailwayManagementToken": false,
+      "expiresAutomatically": false,
+      "monthlyBudgetUsd": null
+    },
+    "optionalPilot": "Separate explicit choice; excluded from core patch"
+  }
+}

@@ -1,3 +1,4 @@
+const { withResearchProviderScope, assertResearchProviderAllowed, rethrowResearchProviderControl } = require('./utils/anchorResearchProviderPause');
 /**
  * Pulseforge Lead Engine — Node.js CLI
  * =====================================
@@ -22,12 +23,19 @@ const { recordScoutBaseline } = require('./utils/icpScoring');
 const { verifyEmail } = require('./utils/emailVerifier');
 const { invalidOutreachEmailReason } = require('./utils/emailGuard');
 const { ensureEmailVerificationColumns } = require('./utils/emailVerificationSchema');
+const { applyScoutEnrichment, babrunScoutContactEvidence } = require('./utils/babrunScoutContactEvidence');
 const { ensureScoutUnenrichedTable } = require('./utils/scoutUnenrichedSchema');
 const { acquireScoutLockWithWait, releaseScoutLock, getActiveScoutLock } = require('./utils/scoutLock');
 const { awaitProspeoSlot } = require('./utils/prospeoThrottle');
 const { checkProspeoQuota, recordProspeoCall, trip429 } = require('./utils/prospeoBreaker');
 const { shouldExcludeProspect, extractEmailDomain } = require('./utils/prospectFilter');
 const { normalizeVertical } = require('./utils/normalize');
+const {
+  PLACES_FEATURES,
+  TRIGGER_MODES,
+  withPlacesContext,
+} = require('./utils/placesCostAttribution');
+const { legacyTextSearch, legacyPlaceDetails } = require('./utils/placesApi');
 const { SCOUT_SKIP_REASONS, ensureScoutSkipLogTable, logScoutSkip } = require('./utils/scoutSkipLog');
 const { reportAgentRun } = require('./utils/agentObservability');
 const { setSetterVisibility } = require('./utils/setterVisibility');
@@ -57,6 +65,10 @@ const {
   leadHasEstablishedIdentity,
 } = require('./packages/scout/identity/BusinessIdentity');
 const { expandPlacesQueriesForVertical } = require('./packages/scout/hypothesis/MarketHypothesisRegistry');
+const {
+  collectScoutPersonalizationEvidence,
+  persistScoutPersonalizationEvidence,
+} = require('./utils/scoutPersonalizationEvidence');
 
 function normalizeCompanyName(raw) {
   if (!raw || typeof raw !== 'string') return raw;
@@ -513,6 +525,10 @@ function cityFromLocation(location) {
 }
 
 function getClientScoutPlan(clientId) {
+  if (CLIENT_CONFIG?.scoring_profile === 'studio_substral') {
+    const { STUDIO_SUBSTRAL_SCOUT_PLAN } = require('./services/studioSubstralScoutIntelligence');
+    return STUDIO_SUBSTRAL_SCOUT_PLAN;
+  }
   return CLIENT_SCOUT_PLANS[Number(clientId)] || null;
 }
 
@@ -626,6 +642,14 @@ function isCleaningBuyerProfile() {
   return CONFIG.scoringProfile === 'cleaning_buyer';
 }
 
+function isWebDesignProfile() {
+  return CONFIG.scoringProfile === 'web_design' || CONFIG.scoringProfile === 'studio_substral';
+}
+
+function isStudioSubstralScoutProfile() {
+  return CONFIG.scoringProfile === 'studio_substral';
+}
+
 function validCleaningEmailOrNull(email) {
   const raw = typeof email === 'string' ? email.trim() : '';
   if (!raw || raw === '—') return null;
@@ -709,19 +733,24 @@ async function enrichWithHunter(domain) {
     return null;
   }
   try {
+    assertResearchProviderAllowed('hunter');
     const res = await axios.get('https://api.hunter.io/v2/domain-search', {
-      params: { domain, api_key: HUNTER_KEY, limit: 5, type: 'personal' }
+      params: { domain, api_key: HUNTER_KEY, limit: 10 }, timeout: 8000
     });
     const emails = res.data?.data?.emails || [];
     if (!emails.length) return null;
     const tf = (CONFIG.jobTitle || '').toLowerCase();
-    const match = emails.find(e => e.position?.toLowerCase().includes(tf)) || emails[0];
+    const match = emails.find(e => e.value && e.position?.toLowerCase().includes(tf))
+      || emails.find(e => e.value && e.type === 'personal') || emails.find(e => e.value);
+    if (!match) return null;
     return {
       contact: (match.first_name || '') + ' ' + (match.last_name || ''),
       email: match.value || null,
-      title: match.position || null
+      title: match.position || null,
+      sourceUrl: match.sources?.[0]?.uri || null
     };
   } catch (err) {
+    rethrowResearchProviderControl(err);
     return null;
   }
 }
@@ -730,43 +759,56 @@ async function enrichWithHunter(domain) {
 // ─────────────────────────────────────────────────────────────────────
 // STEP 2c: Scrape website for contact email (fallback for Places leads)
 // ─────────────────────────────────────────────────────────────────────
-async function scrapeWebsiteEmail(domain) {
-  const pages = [
-    `https://${domain}/contact`,
-    `https://${domain}/contact-us`,
-    `https://${domain}/about`,
-    `https://www.${domain}/contact`,
-    `https://www.${domain}`
-  ];
+function filterScrapedWebsiteEmails(html, companyDomain = null) {
+  const emailMatch = String(html || '').match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g);
+  if (!emailMatch) return [];
+  return emailMatch.filter((email) =>
+    (!companyDomain || require('./utils/canonicalEmailEligibility').isAllowedObservedWebsiteEmail(email, companyDomain))
+    && !email.includes('noreply')
+    && !email.includes('no-reply')
+    && !email.includes('example.com')
+    && !email.includes('sentry')
+    && !email.includes('wix')
+    && !email.includes('squarespace')
+    && !email.includes('.png')
+    && !email.includes('.jpg')
+  );
+}
 
-  for (const url of pages) {
+async function scrapeWebsiteEmail(domain, options = {}) {
+  const { crawlWebsite, normalizeDomain: crawlNormalizeDomain } = require('./utils/websiteEnrichmentCrawl');
+  const normalizedDomain = crawlNormalizeDomain(domain);
+  if (!normalizedDomain) return null;
+
+  const { pages } = await crawlWebsite(normalizedDomain, async (url) => {
     try {
       const res = await axios.get(url, {
         timeout: 5000,
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)' }
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)' },
+        validateStatus: () => true,
       });
-      const html = res.data;
+      return {
+        ok: res.status >= 200 && res.status < 400,
+        status: res.status,
+        text: res.data,
+        url: res.request?.res?.responseURL || url,
+      };
+    } catch (err) {
+      throw err;
+    }
+  }, { maxSuccessfulPages: 8 });
 
-      // Extract email from page
-      const emailMatch = html.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g);
-      if (emailMatch) {
-        // Filter out noreply, info@, support@ — prefer personal emails
-        const filtered = emailMatch.filter(e =>
-          !e.includes('noreply') &&
-          !e.includes('no-reply') &&
-          !e.includes('example.com') &&
-          !e.includes('sentry') &&
-          !e.includes('wix') &&
-          !e.includes('squarespace') &&
-          !e.includes('.png') &&
-          !e.includes('.jpg')
-        );
-        if (filtered.length > 0) {
-          return { email: filtered[0], contact: '', title: '' };
-        }
-      }
-    } catch(err) {
-      // try next page
+  if (options.ownerEvidence === true) {
+    const { extractWebsiteOwnerCandidates } = require('./utils/websiteOwnerEvidence');
+    const owner = extractWebsiteOwnerCandidates(pages, normalizedDomain).find(candidate =>
+      filterScrapedWebsiteEmails(candidate.email, normalizedDomain).length > 0);
+    if (owner) return owner;
+  }
+
+  for (const page of pages) {
+    const filtered = filterScrapedWebsiteEmails(page.text, normalizedDomain);
+    if (filtered.length > 0) {
+      return { email: filtered[0], contact: '', title: '', sourceUrl: page.url };
     }
   }
   return null;
@@ -901,9 +943,19 @@ function getProspeoTitleIncludes() {
   return [CONFIG.jobTitle];
 }
 
+function normalizeProspeoPersonRow(match) {
+  const person = match?.person || {};
+  return {
+    contact: `${person.first_name || ''} ${person.last_name || ''}`.trim(),
+    email: typeof person.email === 'object' ? person.email?.email || null : person.email || null,
+    title: person.job_title || null,
+  };
+}
+
 async function callProspeoSearchPerson(domain) {
   await awaitProspeoSlot();
 
+  assertResearchProviderAllowed('prospeo');
   const res = await axios.post('https://api.prospeo.io/search-person',
     {
       page: 1,
@@ -927,17 +979,65 @@ async function callProspeoSearchPerson(domain) {
   const results = res.data?.results || [];
   if (!results.length) return null;
 
-  const match = results[0];
-  const person = match.person || {};
+  return normalizeProspeoPersonRow(results[0]);
+}
 
-  return {
-    contact: `${person.first_name || ''} ${person.last_name || ''}`.trim(),
-    email: typeof person.email === 'object' ? person.email?.email || null : person.email || null,
-    title: person.job_title || null,
-  };
+async function searchProspeoContactsForDomain(domain, {
+  excludeEmails = [],
+  titleIncludes = null,
+} = {}) {
+  if (process.env.PROSPEO_ENABLED !== 'true' || !PROSPEO_API_KEY) {
+    return { ok: false, reason: 'provider_unavailable', contacts: [] };
+  }
+  assertResearchProviderAllowed('prospeo');
+  const quota = await checkProspeoQuota();
+  if (!quota.ok) {
+    return { ok: false, reason: 'provider_unavailable', contacts: [] };
+  }
+  await recordProspeoCall();
+  try {
+    await awaitProspeoSlot();
+    const titles = Array.isArray(titleIncludes) && titleIncludes.length
+      ? titleIncludes
+      : getProspeoTitleIncludes();
+    assertResearchProviderAllowed('prospeo');
+    const res = await axios.post('https://api.prospeo.io/search-person',
+      {
+        page: 1,
+        filters: {
+          company: { websites: { include: [domain] } },
+          person_job_title: { include: titles },
+        },
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-KEY': PROSPEO_API_KEY,
+        },
+      }
+    );
+    const excluded = new Set((excludeEmails || []).map(e => String(e || '').trim().toLowerCase()).filter(Boolean));
+    const contacts = [];
+    for (const row of res.data?.results || []) {
+      const normalized = normalizeProspeoPersonRow(row);
+      const email = String(normalized.email || '').trim().toLowerCase();
+      if (!email || excluded.has(email)) continue;
+      contacts.push(normalized);
+    }
+    return { ok: true, reason: null, contacts };
+  } catch (_err) {
+    rethrowResearchProviderControl(_err);
+    return { ok: false, reason: 'provider_error', contacts: [] };
+  }
+}
+
+async function listProspeoContactsForDomain(domain, opts = {}) {
+  const result = await searchProspeoContactsForDomain(domain, opts);
+  return result.contacts || [];
 }
 
 async function enrichWithProspeo(domain) {
+  assertResearchProviderAllowed('prospeo');
   if (process.env.PROSPEO_ENABLED !== 'true') {
     return null;
   }
@@ -947,6 +1047,7 @@ async function enrichWithProspeo(domain) {
     return null;
   }
 
+  assertResearchProviderAllowed('prospeo');
   const quota = await checkProspeoQuota();
   if (!quota.ok) {
     console.warn(`[Prospeo] Skipped (${quota.reason}): ${quota.count ?? '?'}/${quota.cap}`);
@@ -960,6 +1061,7 @@ async function enrichWithProspeo(domain) {
     try {
       return await callProspeoSearchPerson(domain);
     } catch (err) {
+      rethrowResearchProviderControl(err);
       const rateLimited = isProspeoRateLimited(err);
       if (rateLimited) trip429();
       const backoffMs = PROSPEO_RATE_LIMIT_BACKOFF_MS[attempt];
@@ -1002,17 +1104,21 @@ async function enrichWithProspeo(domain) {
 // ─────────────────────────────────────────────────────────────────────
 const PLACES_TEXTSEARCH = 'https://maps.googleapis.com/maps/api/place/textsearch/json';
 const PLACES_DETAILS    = 'https://maps.googleapis.com/maps/api/place/details/json';
+const PLACE_DETAILS_FIELDS =
+  'name,formatted_address,address_components,formatted_phone_number,website,place_id,rating,user_ratings_total,types';
 
 async function fetchPlaceDetails(placeId, apiKey) {
-  const res = await axios.get(PLACES_DETAILS, {
-    params: {
-      place_id: placeId,
-      fields: 'name,formatted_address,address_components,formatted_phone_number,website,place_id,rating,user_ratings_total,types',
-      key: apiKey,
+  const traced = await legacyPlaceDetails({
+    placeId,
+    fields: PLACE_DETAILS_FIELDS,
+    apiKey,
+    record: {
+      caller: 'leadgen.js',
+      feature: PLACES_FEATURES.LEADGEN,
     },
   });
-  if (res.data.status !== 'OK') return null;
-  return res.data.result;
+  if (traced.googleStatus !== 'OK') return null;
+  return traced.data?.result || null;
 }
 
 const B2B_SIGNAL_RE = /\b(commercial|industrial|business|facility|facilit(?:y|ies)|corporate|office|property management|hoa|association management|janitorial|staffing|recruiting|freight|logistics|insurance|managed (?:it|service)|msp|fire protection|fire sprinkler|access control|low voltage|mechanical contractor)\b/i;
@@ -1044,17 +1150,27 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
   const query = sanitizeQueueLocation(`${industry || ''} ${location || ''}`);
 
   try {
-    const res = await axios.get(PLACES_TEXTSEARCH, {
-      params: { query, key: PLACES_KEY },
+    const traced = await legacyTextSearch({
+      query,
+      apiKey: PLACES_KEY,
+      deferRecord: true,
+      record: {
+        caller: 'leadgen.js',
+        feature: PLACES_FEATURES.LEADGEN,
+        providerId: 'google_places',
+      },
     });
 
-    const status = res.data.status;
+    const status = traced.googleStatus;
     if (status !== 'OK' && status !== 'ZERO_RESULTS') {
-      console.error('[Places] Text Search status:', status, res.data.error_message || '');
+      console.error('[Places] Text Search status:', status, traced.data?.error_message || '');
+      if (typeof traced.commitRecord === 'function') {
+        await traced.commitRecord({ businessesReturned: 0, businessesAccepted: 0 });
+      }
       return [];
     }
 
-    const results = (res.data.results || []).slice(0, numResults);
+    const results = (traced.data?.results || []).slice(0, numResults);
 
     for (const hit of results) {
       try {
@@ -1088,13 +1204,21 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
 
         await new Promise(r => setTimeout(r, 200));
       } catch (err) {
+        rethrowResearchProviderControl(err);
         // skip individual place errors
       }
     }
 
     console.log(`[Places] Found ${leads.length} identity-established results`);
+    if (typeof traced.commitRecord === 'function') {
+      await traced.commitRecord({
+        businessesAccepted: leads.length,
+        candidatesCreated: leads.length,
+      });
+    }
     return leads;
   } catch (err) {
+    rethrowResearchProviderControl(err);
     console.error('[Places] Error:', err.response?.data || err.message);
     return [];
   }
@@ -1605,22 +1729,19 @@ async function main({ runId = null } = {}) {
     let enrichmentMethod = 'none';
     let enriched = await enrichWithProspeo(rootDomain);
     if (enriched) {
-      Object.assign(lead, enriched);
-      lead.source = [...(lead.source || []), 'prospeo'];
+      applyScoutEnrichment(lead, enriched, 'prospeo', CONFIG.clientId, domain);
       enrichmentMethod = 'prospeo';
       process.stdout.write(` ✓ ${enriched.email || 'no email'}\n`);
     } else {
       enriched = await enrichWithHunter(rootDomain);
       if (enriched) {
-        Object.assign(lead, enriched);
-        lead.source = [...(lead.source || []), 'hunter'];
+        applyScoutEnrichment(lead, enriched, 'hunter', CONFIG.clientId, domain);
         enrichmentMethod = 'hunter';
         process.stdout.write(` ✓ [Hunter] ${enriched.email || 'no email'}\n`);
       } else {
-        const scraped = await scrapeWebsiteEmail(rootDomain);
+        const scraped = await scrapeWebsiteEmail(rootDomain, { ownerEvidence: Number(CONFIG.clientId) === 13 });
         if (scraped) {
-          Object.assign(lead, scraped);
-          lead.source = [...(lead.source || []), 'scraped'];
+          applyScoutEnrichment(lead, scraped, 'scraped', CONFIG.clientId, domain);
           enrichmentMethod = 'scraped';
           process.stdout.write(` ✓ [Scraped] ${scraped.email}\n`);
         } else {
@@ -1689,6 +1810,7 @@ async function main({ runId = null } = {}) {
     websiteSignals:       l.websiteSignals || [],
     search_query:          l.search_query || null,
     cleaning_email_reject_reason: l.cleaning_email_reject_reason || null,
+    ...(Number(CONFIG.clientId) === 13 ? { scoutContactEvidence: l.scoutContactEvidence || null } : {}),
   }));
 
   const postEnrichmentAccepted = [];
@@ -2033,6 +2155,14 @@ function emailRejection(email) {
 }
 
 async function resolveEmailVerification(email, lead) {
+  const tenants = [lead?.client_id, lead?.clientId, lead?.tenantId].filter(value => value != null);
+  return withResearchProviderScope(tenants[0], () => {
+    for (const tenant of tenants) assertResearchProviderAllowed('verification', tenant);
+    return resolveEmailVerificationScoped(email, lead);
+  });
+}
+
+async function resolveEmailVerificationScoped(email, lead) {
   const result = await verifyEmail(email);
   const doNotContact = ['invalid', 'catchall', 'risky'].includes(result.status);
 
@@ -2093,8 +2223,24 @@ function resolveCleaningScoutContactCandidate(lead) {
   };
 }
 
+function resolveStudioSubstralScoutContactCandidate(lead) {
+  const emailCandidate = resolveScoutEmailCandidate(lead);
+  if (emailCandidate.insertTarget === 'prospect') return emailCandidate;
+  const hasPhone = !!(lead.phone && String(lead.phone).replace(/\D/g, '').length >= 10);
+  if (hasPhone) {
+    return {
+      insertTarget: 'prospect',
+      email: emailCandidate.email || null,
+      phone: lead.phone,
+      emailRejectReason: emailCandidate.reason,
+    };
+  }
+  return emailCandidate;
+}
+
 function resolveScoutContactCandidate(lead) {
   if (isCleaningBuyerProfile()) return resolveCleaningScoutContactCandidate(lead);
+  if (isStudioSubstralScoutProfile()) return resolveStudioSubstralScoutContactCandidate(lead);
   return resolveScoutEmailCandidate(lead);
 }
 
@@ -2366,6 +2512,7 @@ async function runLinkedInSourcing({ runId = null } = {}) {
       if (CONFIG.dryRun && outcome.action === 'enriched_existing') persistence.would_be_enrich_existing++;
       if (CONFIG.dryRun) console.log('[LinkedIn dry-run parse]', JSON.stringify({ record, outcome }));
     } catch (err) {
+      rethrowResearchProviderControl(err);
       persistence.errors++;
       outcomes.push({ linkedin_url: record.linkedin_url, action: 'error', error: err.message });
       console.error(`[LinkedIn] Persistence failed for ${record.linkedin_url}: ${err.message}`);
@@ -2449,7 +2596,10 @@ async function saveToDatabase(leads, {
       const isPlacesLead = Array.isArray(lead.source) && lead.source.includes('google_places');
       const rejectedLocality = isPlacesLead ? lead.places_locality || null : null;
       const serviceArea = isPlacesLead
-        ? matchServiceAreaLocality(lead.places_locality, allowedServiceAreas)
+        ? (
+          matchServiceAreaLocality(lead.places_locality, allowedServiceAreas)
+          || matchServiceAreaFromLocation(lead.address, allowedServiceAreas)
+        )
         : matchServiceAreaFromLocation(lead.address, allowedServiceAreas);
       // Persist structured Places geography before any dedupe or location
       // guard can discard this candidate.
@@ -2561,7 +2711,11 @@ async function saveToDatabase(leads, {
         contactCandidate.emailRejectReason ? `Ignored scraped email: ${contactCandidate.emailRejectReason}` : null,
       ].filter(Boolean).join(' ') || null;
 
-      const nameParts = (lead.contact && lead.contact !== '—' ? lead.contact : '').trim().split(/\s+/).filter(Boolean);
+      const babrunEvidence = Number(CONFIG.clientId) === 13
+        ? babrunScoutContactEvidence({ lead, email, verification, officialDomain: domain })
+        : null;
+      const contactName = babrunEvidence ? babrunEvidence.contactName : lead.contact;
+      const nameParts = (contactName && contactName !== '—' ? contactName : '').trim().split(/\s+/).filter(Boolean);
 
       // Use contact first name if available and looks like a real person name.
       // Keep generic inbox names null so downstream copy can use company/name fallbacks.
@@ -2585,10 +2739,11 @@ async function saveToDatabase(leads, {
         client_id, service_area_match, discovery_method, has_website, google_review_count, google_rating,
         has_facebook, has_instagram, facebook_url, instagram_url, website_url,
         email_verified, email_verification_method, verified_at, do_not_contact, preferred_channel,
-        email_status, verifier_response, verifier_checked_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28::jsonb, $29)
+        email_status, verifier_response, verifier_checked_at${babrunEvidence ? ', job_title, acquisition_metadata, enrichment_provenance' : ''}
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28::jsonb, $29${babrunEvidence ? ', $30, $31::jsonb, $32::jsonb' : ''})
       ON CONFLICT (email) DO NOTHING RETURNING id`,
-      [companyId, firstName, lastName, email, phone, 'cold', 'scout', lead.score, prospectNote, CONFIG.vertical, CONFIG.clientId, serviceArea, discoveryMethod, hasWebsite, googleReviewCount, googleRating, hasFacebook, hasInstagram, facebookUrl, instagramUrl, websiteUrl, emailVerified, emailVerificationMethod, verifiedAt, doNotContact, preferredChannel, emailStatus, JSON.stringify(verifierResponse || null), verifierCheckedAt]
+      [companyId, firstName, lastName, email, phone, 'cold', 'scout', lead.score, prospectNote, CONFIG.vertical, CONFIG.clientId, serviceArea, discoveryMethod, hasWebsite, googleReviewCount, googleRating, hasFacebook, hasInstagram, facebookUrl, instagramUrl, websiteUrl, emailVerified, emailVerificationMethod, verifiedAt, doNotContact, preferredChannel, emailStatus, JSON.stringify(verifierResponse || null), verifierCheckedAt,
+        ...(babrunEvidence ? [babrunEvidence.jobTitle, JSON.stringify(babrunEvidence.acquisitionMetadata), JSON.stringify(babrunEvidence.enrichmentProvenance)] : [])]
     );
       if (!insert.rows.length) {
         incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.INSERT_CONFLICT);
@@ -2598,6 +2753,92 @@ async function saveToDatabase(leads, {
       }
       saved++;
       const prospectId = insert.rows[0].id;
+
+      if (isCleaningBuyerProfile()) {
+        try {
+          const scoutPersonalization = await collectScoutPersonalizationEvidence({
+            ...lead,
+            vertical: CONFIG.vertical,
+            company: companyName,
+          });
+          lead.scoutPersonalization = scoutPersonalization;
+          await persistScoutPersonalizationEvidence(
+            pool,
+            prospectId,
+            scoutPersonalization,
+            CONFIG.clientId
+          );
+        } catch (personalizationErr) {
+          console.error(`[Scout] Personalization evidence failed for ${companyName}: ${personalizationErr.message}`);
+        }
+      }
+
+      if (isWebDesignProfile() && domain) {
+        try {
+          const { assessDiscoveredBusiness, mapOpportunityScoreToIcp } = require('./services/webDesignScout');
+          const webAssessment = await assessDiscoveredBusiness({
+            client_id: CONFIG.clientId,
+            prospect_id: prospectId,
+            company: companyName,
+            domain,
+            url: websiteUrl,
+            industry: CONFIG.vertical,
+            location: lead.address || CONFIG.location,
+            email,
+            phone,
+            contact: lead.contact,
+            google_rating: googleRating,
+            google_review_count: googleReviewCount,
+            skipPuppeteer: !isStudioSubstralScoutProfile(),
+          }, { pool, skipPuppeteer: !isStudioSubstralScoutProfile() });
+
+          if (isStudioSubstralScoutProfile()) {
+            const { evaluateStudioSubstralScoutProspect } = require('./services/studioSubstralScoutIntelligence');
+            const { persistStudioSubstralScoutProspect } = require('./services/studioSubstralScoutPersistence');
+            const { intelligence, outreachStatus } = evaluateStudioSubstralScoutProspect({
+              lead: {
+                ...lead,
+                company: companyName,
+                email,
+                phone,
+                url: websiteUrl,
+                vertical: CONFIG.vertical,
+              },
+              assessment: webAssessment?.assessment || webAssessment,
+              vertical: CONFIG.vertical,
+              location: lead.address || CONFIG.location,
+              rawDiscovery: CONFIG.rawDiscovery,
+            });
+            await persistStudioSubstralScoutProspect(pool, prospectId, CONFIG.clientId, {
+              intelligence,
+              outreachStatus,
+            });
+            if (!intelligence.accepted) {
+              saved--;
+              rejected++;
+              incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.LOW_SCORE);
+              skipped++;
+              await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.LOW_SCORE, {
+                studio_fit_score: intelligence.studio_fit_score,
+                studio_reject_reason: intelligence.reject_reason,
+                minimum_studio_fit_score: 65,
+              }, companyName);
+              continue;
+            }
+          } else if (webAssessment?.opportunity_score != null) {
+            const mapped = mapOpportunityScoreToIcp(
+              webAssessment.opportunity_score,
+              webAssessment.recommended_action
+            );
+            await pool.query(
+              `UPDATE prospects SET icp_score = $1 WHERE id = $2 AND client_id = $3`,
+              [mapped, prospectId, CONFIG.clientId]
+            );
+          }
+        } catch (webErr) {
+          console.error(`[Scout] Website opportunity assessment failed for ${companyName}: ${webErr.message}`);
+        }
+      }
 
       await safeIngestScoutLifecycleSignal({
         prospectId,
@@ -2631,37 +2872,40 @@ async function saveToDatabase(leads, {
       );
 
       try {
-        await pool.query(`
-          UPDATE prospects
-          SET setter_status = 'new', setter_updated_at = NOW()
-          WHERE id = $1 AND client_id = $2
-        `, [prospectId, CONFIG.clientId]);
-        const setterUpdate = await setSetterVisibility(pool, prospectId, {
-          reason: 'scout',
-          clientId: CONFIG.clientId,
-          source: 'scout',
-        });
-        if (setterUpdate?.setter_visible) {
-          await safeIngestScoutLifecycleSignal({
-            prospectId,
+        if (!isStudioSubstralScoutProfile()) {
+          await pool.query(`
+            UPDATE prospects
+            SET setter_status = 'new', setter_updated_at = NOW()
+            WHERE id = $1 AND client_id = $2
+          `, [prospectId, CONFIG.clientId]);
+          const setterUpdate = await setSetterVisibility(pool, prospectId, {
+            reason: 'scout',
             clientId: CONFIG.clientId,
-            eventType: 'prospect_qualified',
-            sourceRecordId: `setter-visibility:${prospectId}`,
-            metadata: { icp_score: lead.score, qualification_source: 'scout_setter_gate' },
+            source: 'scout',
           });
-        }
-        if (CONFIG.clientId === 1 && setterUpdate?.setter_visible) {
-          const handoff = await appendQualifiedScoutLead(lead, CONFIG.industry);
-          if (handoff.appended) setterQueued++;
-          else setterSkipped++;
-        } else {
-          setterSkipped++;
+          if (setterUpdate?.setter_visible) {
+            await safeIngestScoutLifecycleSignal({
+              prospectId,
+              clientId: CONFIG.clientId,
+              eventType: 'prospect_qualified',
+              sourceRecordId: `setter-visibility:${prospectId}`,
+              metadata: { icp_score: lead.score, qualification_source: 'scout_setter_gate' },
+            });
+          }
+          if (CONFIG.clientId === 1 && setterUpdate?.setter_visible) {
+            const handoff = await appendQualifiedScoutLead(lead, CONFIG.industry);
+            if (handoff.appended) setterQueued++;
+            else setterSkipped++;
+          } else {
+            setterSkipped++;
+          }
         }
       } catch (err) {
         setterFailed++;
         console.error(`[Setter] Handoff failed for ${companyName}: ${err.message}`);
       }
     } catch (err) {
+      rethrowResearchProviderControl(err);
       incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.DB_ERROR);
       skipped++;
       await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.DB_ERROR, { error: err.message, code: err.code || null, constraint: err.constraint || null }, companyName);
@@ -3023,7 +3267,13 @@ async function pickNextQueueItem(clientId, allowedVerticals = []) {
 // target in the queue; if it is saturated, logs vertical_saturated and rotates
 // to the least-saturated queued item. Returns { skip: true } when nothing is
 // left to scrape.
-async function resolveScoutTarget({ clientId, industry, location, verticals }) {
+function resolveScoutPlanVertical({ industry, vertical: explicitVertical }) {
+  return explicitVertical
+    ? normalizeVertical(explicitVertical)
+    : (normalizeVertical(industry) || 'unknown');
+}
+
+async function resolveScoutTarget({ clientId, industry, location, verticals, vertical: explicitVertical }) {
   await ensureScoutQueue(pool);
   await normalizeExistingVerticals(pool);
   const cleanLocation = sanitizeQueueLocation(location);
@@ -3045,7 +3295,7 @@ async function resolveScoutTarget({ clientId, industry, location, verticals }) {
   await seedExpansionQueueMarkets(clientId);
   await refreshQueueCounts(clientId);
 
-  const vertical = normalizeVertical(industry) || 'unknown';
+  const vertical = resolveScoutPlanVertical({ industry, vertical: explicitVertical });
 
   if (plannedVerticals.length && !plannedVerticals.includes(vertical)) {
     console.log(`[Scout] "${vertical}" is not in client ${clientId}'s Scout plan — rotating to planned queue`);
@@ -3114,6 +3364,27 @@ async function resolveScoutTarget({ clientId, industry, location, verticals }) {
 }
 
 async function run(params = {}) {
+  return withResearchProviderScope(params.client_id ?? params.clientId, () => {
+    if (params.client_id != null && params.clientId != null) assertResearchProviderAllowed('research', params.clientId);
+    return runResearchScoped(params);
+  });
+}
+
+async function runResearchScoped(params = {}) {
+  const triggerMode = params.cron || params.secret ? TRIGGER_MODES.CRON : TRIGGER_MODES.MANUAL;
+  return withPlacesContext(
+    {
+      caller: 'leadgen.js',
+      feature: PLACES_FEATURES.LEADGEN,
+      tenantId: params.client_id || params.clientId || process.env.ACTIVE_CLIENT_ID || null,
+      executionId: params.runId || params.run_id || null,
+      triggerMode,
+    },
+    () => runWithAttribution(params)
+  );
+}
+
+async function runWithAttribution(params = {}) {
   CONFIG.clientId = getRuntimeClientId(params);
   CONFIG.parkedRowsSkipped = 0;
   const observabilityRunId = makeScoutObservabilityRunId();
@@ -3133,6 +3404,9 @@ async function run(params = {}) {
   if (params.titleExclude != null) CONFIG.titleExclude = params.titleExclude;
   if (params.sizeSignal != null) CONFIG.sizeSignal = params.sizeSignal;
   if (params.dryRun != null) CONFIG.dryRun = booleanValue(params.dryRun);
+  if (params.raw_discovery != null || params.rawDiscovery != null) {
+    CONFIG.rawDiscovery = booleanValue(params.raw_discovery ?? params.rawDiscovery);
+  }
   if (params.maxRequests != null) CONFIG.maxRequests = positiveInteger(params.maxRequests, 20, 100);
   if (params.pageDepth != null) CONFIG.pageDepth = positiveInteger(params.pageDepth, 1, 10);
 
@@ -3150,6 +3424,7 @@ async function run(params = {}) {
         industry: CONFIG.industry,
         location: CONFIG.location,
         verticals: CLIENT_CONFIG.verticals,
+        vertical: params.vertical,
       });
   if (target.skip) {
     const result = { attempts: 0, successes: 0, skipped: 0, errorSample: null, skipped_run: true, reason: 'saturated', vertical: target.vertical };
@@ -3238,6 +3513,7 @@ async function run(params = {}) {
     await reportScoutRun({ runId: observabilityRunId, ...observability });
     return { ...(stats || {}), ...observability };
   } catch (err) {
+    rethrowResearchProviderControl(err);
     await logScoutRun('failed', {
       ...runContext,
       duration_ms: Date.now() - startedAt,
@@ -3284,7 +3560,15 @@ async function configureScoringContext(params = {}) {
   };
 }
 
-async function runEnrichmentChain(domain, jobTitle = 'owner') {
+async function runEnrichmentChain(domain, jobTitle = 'owner', options = {}) {
+  const tenants = [options.tenantId, options.clientId, options.client_id].filter(value => value != null);
+  return withResearchProviderScope(tenants[0], () => {
+    for (const tenant of tenants) assertResearchProviderAllowed('enrichment', tenant);
+    return runEnrichmentChainScoped(domain, jobTitle, options);
+  });
+}
+
+async function runEnrichmentChainScoped(domain, jobTitle = 'owner', options = {}) {
   const savedTitle = CONFIG.jobTitle;
   CONFIG.jobTitle = jobTitle;
   try {
@@ -3300,7 +3584,7 @@ async function runEnrichmentChain(domain, jobTitle = 'owner') {
       await recordEmailEnrichmentMethod(domain, 'hunter', { source: enriched.source, has_email: Boolean(enriched.email) });
       return enriched;
     }
-    enriched = await scrapeWebsiteEmail(domain);
+    enriched = await scrapeWebsiteEmail(domain, options);
     if (enriched) {
       enriched.source = ['scraped'];
       await recordEmailEnrichmentMethod(domain, 'scraped', { source: enriched.source, has_email: Boolean(enriched.email) });
@@ -3318,13 +3602,18 @@ module.exports = {
   enrichWithProspeo,
   enrichWithHunter,
   scrapeWebsiteEmail,
+  filterScrapedWebsiteEmails,
   normalizeDomain,
   resolveEmailVerification,
   runEnrichmentChain,
+  listProspeoContactsForDomain,
+  searchProspeoContactsForDomain,
   normalizeVertical,
   scoreCleaningLead,
   scoreLead,
   configureScoringContext,
+  getSearchQueriesForTarget,
+  searchGooglePlaces,
   _test: {
     searchGoogle,
     normalizeSourceMode,
@@ -3339,6 +3628,9 @@ module.exports = {
     saveToDatabase,
     CLIENT_SCOUT_PLANS,
     CLIENT_SCOUT_CITY_STATE_OVERRIDES,
+    filterScrapedWebsiteEmails,
+    resolveScoutPlanVertical,
+    resolveScoutContactCandidate,
   },
 };
 

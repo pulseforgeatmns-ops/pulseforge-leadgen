@@ -116,6 +116,9 @@ function buildBoundedScoutContext(input = {}) {
     segments,
     businessType,
     desiredSignals,
+    discoveryGeneration: Number.isInteger(Number(rawTarget.discoveryGeneration))
+      ? Math.max(0, Number(rawTarget.discoveryGeneration))
+      : 0,
     entities: Array.isArray(rawTarget.entities) ? clone(rawTarget.entities) : [],
     priorDelegationId: asText(rawTarget.priorDelegationId || input.priorDelegationId),
     priorResultId: asText(rawTarget.priorResultId || input.priorResultId),

@@ -24,7 +24,7 @@ const {
 } = require('../ReflectionLayer');
 const { maybeHandleReflectionTurn } = require('../ReflectionRouting');
 const { resolveWorkspaceOwner, WORKSPACE_OWNERS } = require('../WorkspaceOwnershipResolver');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { installTestAmoRuntime } = require('./amoTestRuntime');
 const { advancePlanAfterApproval } = require('../AmoOperatorApproval');
 

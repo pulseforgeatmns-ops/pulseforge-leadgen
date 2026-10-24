@@ -1,6 +1,85 @@
+[SPEC-SCOUT-FACILITIES-001](docs/specs/SPEC-SCOUT-FACILITIES-001_Legacy_Enrichment_Boundary.md) is an in-progress local/test PR960 compatibility repair. Canonical managed facilities are separate from legacy enrichment defaults; new Anchor facilities enrichment requires explicit mission scope. Portal-copy experimentation is off by default and requires a separate explicit hash-bound approved mission opt-in. No publication, activation or production action is authorized.
+
+[SPEC-SCOUT-SCHEMA-001](docs/specs/SPEC-SCOUT-SCHEMA-001_Promotion_Schema_Lifecycle.md) is an in-progress local-only repair for the inherited promotion schema/advisory lock race. No publication, deployment, production schema action, provider action, or activation is authorized.
+
+[SPEC-265](docs/specs/SPEC-265_Anchor_Research_Provider_Pause.md) is in-progress local-only preparation of a default-off tenant-10 research-provider pause. No publication, deployment or arming authority. See [ADR-107](docs/adr/ADR-107_Explicit_Research_Provider_Pause.md).
+
+[SPEC-264](docs/specs/SPEC-264_Anchor_Crm_One_Shot_Invocation.md) is a separate local-only one-shot operator invocation proposal; not approved for publication or production execution. Frozen SPEC262/263 artifacts remain unchanged.
+
+[SPEC-263](docs/specs/SPEC-263_Anchor_Existing_Crm_Canonical_Preparation.md) is a separate local-only CRM preparation bridge on frozen SPEC262. No current fresh production candidates or activation authority exist.
+
+[SPEC-262](docs/specs/SPEC-262_Anchor_Scoped_Resume.md) is in-progress local-only tenant-10-isolated recovery, superseding the unpublished broad-gate SPEC261 rollout. Non-Anchor flows retain their original paths. Paid research stays closed; no current ready batch has been verified. All real activation/schema/admission/preparation/send approvals remain unset. See the [current operator proposal](docs/anchor-scoped-resume-operator-proposal.md).
+
 # CURRENT_STATE
 
-> Project heartbeat. Update on every PR that changes version, priority, blockers, or active work.
+[PF-CLARITY-001](docs/specs/PF-CLARITY-001_Google_Workspace_Clarity.md) is an approved, in-progress default-off implementation for Anchor Clarity digest ingestion and evidence-backed Max review. The PR does not authorize Google OAuth, production migration/deployment, ingestion or website changes. Live acceptance requires separate readonly mailbox consent and rollout approval.
+
+[SPEC-261](docs/specs/SPEC-261_Anchor_Quarantined_Email_Recovery.md) is in-progress local-only gated recovery preparation. It explicitly layers PR956 safety and SPEC260 boundary diagnostics; production migration, admission policy, manifest activation and sends remain unapproved.
+
+[SPEC-260](docs/specs/SPEC-260_Anchor_Brevo_Boundary_Diagnostics.md) is an in-progress local-only boundary diagnostics repair at base 8cbeba9. Default off, tenant-10 governed Brevo only; authorization/schema, historical holds, sends and production configuration remain unchanged.
+
+> Repository architecture snapshot refreshed 2026-09-17. The older sprint and deployment notes below are retained as history, not current production status.
+
+## Current Repository Architecture
+
+[SPEC-SCOUT-CONT-002](docs/specs/SPEC-SCOUT-CONT-002_Explicit_Legacy_Coverage_Epoch.md)
+is an authorized local, production-wired, default-off epoch-1 implementation for legacy roots
+without continuation tokens. Required local PostgreSQL tests start with 21 legacy roots and prove
+old-ticket preservation, fresh admissions across cycles and no unchanged candidate reprocessing. Exact root scope, expiry and cumulative spending
+require later approval; old checkpoints and tickets are preserved.
+
+[Scout durable candidate integration](docs/engineering/scout-durable-candidate-integration.md)
+is locally production-wired behind the default-off tenant 10/13 flag. Immutable
+per-query membership, independent durable tickets, bounded page continuation and
+structured website outcomes prevent held identities from replaying every query.
+Disposable-PostgreSQL multi-cycle tests cover queue flow and simulated verified
+founder clean inventory. This is not deployed or live-yield validated; additive
+migrations and activation still need separate approval.
+
+[SPEC-SCOUT-CONT-001](docs/specs/SPEC-SCOUT-CONT-001_Bounded_Query_Page_Continuation.md)
+is an authorized local/test, default-off query-page continuation proposal. It
+preserves finite provider and per-cycle budgets and requires durable candidate
+responsibility transfer before progression. Legacy checkpoints without tokens
+cannot be resumed or reset implicitly. Publication, migration, activation and
+live inventory validation remain separately gated.
+
+[SPEC-SCOUT-OWNER-001](docs/specs/SPEC-SCOUT-OWNER-001_Observed_Website_Owner_Evidence.md)
+has an authorized local/test repair for explicit owner evidence on already-fetched
+website pages. Only Babrun/tenant 13 intake and promotion opt in; other callers
+retain their prior behavior. It preserves crawl/provider budgets, fallback
+results, and verification/contact gates. It is not deployed or live-validated.
+
+[SPEC-184 Provider Execution Continuity](docs/specs/SPEC-184_Provider_Execution_Continuity.md)
+includes a local observational repair preserving Places search cache provenance in
+Scout receipts and exposing sanitized receipts in normal control logs. A search
+generation cap is labeled as a cap, not proof of an exhausted market. No sourcing,
+cache, backoff, admission or sending policy changes; live Babrun coverage cause
+remains unverified pending an authorized natural-run receipt.
+
+[SPEC-PF-ACCEL-001 rollout preflight](docs/specs/SPEC-PF-ACCEL-001_Rollout_Preflight.md)
+is an in-progress, approved local/test implementation slice for PR897/899.
+The standalone command checks migration prerequisites with bounded read-only
+catalog queries and sanitized evidence. Production actions and rollout readiness
+remain separately gated; local real-PostgreSQL validation is currently blocked
+by missing server binaries. See the [operator plan](docs/rollout-preflight-operator-plan.md).
+
+The October 13 merge-readiness repair restores existing Max routing and audit
+contracts, rejects ambiguous region/identity promotion and negated execution,
+and retains complete Max CI output with bounded summaries. This is repository
+validation work; it does not activate any tenant, authorize outbound sends, or
+establish live deployment readiness. See the Unreleased changelog.
+
+[SPEC-JEV-002 Decision Shadow Review](docs/specs/SPEC-JEV-002_Decision_Shadow_Review.md)
+adds best-effort Postgres storage and an admin/developer mismatch report for Jev
+shadow evaluations. Production routing remains unchanged. Apply its migration
+before collecting durable rows; deployment/migration status is not implied by
+this repository implementation.
+
+PulseForge is a production-oriented, multi-tenant AI operating system. Its canonical acquisition path uses [execution routing](docs/specs/SPEC-171_Canonical_Execution_Router.md), [transactional mission execution](docs/specs/SPEC-131_Transactional_Mission_Execution.md), and [specialist contracts](docs/specs/SPEC-132_Specialist_Execution_Contract.md), beyond the early SPEC-022 integration milestone.
+
+Current implementation includes [tenant-scoped mission hydration and inspection](services/acquisitionMissionRuntime.js), [PostgreSQL stage persistence](services/acquisitionMissionPersistence.js), [artifact-bound execution approval](packages/acquisition-mission/ExecutionApproval.js), and [epistemic business understanding](services/clientIntelligenceEpistemic.js). See the [recruiter guide](docs/RECRUITER_GUIDE.md) for audit → implementation → regression-test evidence. This snapshot describes repository code; live deployment health and migration status require separate verification.
+
+## Historical Planning Snapshot (retained from July–August 2026)
 
 | Field | Value |
 |---|---|

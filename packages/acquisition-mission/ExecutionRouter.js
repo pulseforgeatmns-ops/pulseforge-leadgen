@@ -98,6 +98,8 @@ function defaultHandlers() {
     [EXECUTION_INTENTS.APPROVE_PLAN]: (ctx) => approval.advancePlanAfterApproval(ctx),
     [EXECUTION_INTENTS.APPROVE_DISCOVERY]: (ctx) => approval.advanceDiscoveryAfterApproval(ctx),
     [EXECUTION_INTENTS.START_DISCOVERY]: (ctx) => approval.advanceDiscoveryAfterApproval(ctx),
+    [EXECUTION_INTENTS.CONTINUE_INVESTIGATION]: (ctx) =>
+      approval.advanceDiscoveryInvestigationAfterApproval(ctx),
     [EXECUTION_INTENTS.APPROVE_PRIORITIZATION]: (ctx) => approval.advancePrioritizationAfterApproval(ctx),
     [EXECUTION_INTENTS.CLARIFY_PLAN]: (ctx) => approval.advancePlanClarification(ctx),
     [EXECUTION_INTENTS.CANCEL_PLAN]: (ctx) => approval.cancelMissionPlan(ctx),
@@ -112,7 +114,40 @@ function defaultHandlers() {
       persist: ctx.persist,
       pool: ctx.pool,
       persistStage: ctx.persistStage,
+      runPaige: ctx.runPaige,
+      runMax: ctx.runMax,
+      runEmmett: ctx.runEmmett,
+      infrastructureSnapshot: ctx.infrastructureSnapshot,
     }),
+    [EXECUTION_INTENTS.MISSION_CONTINUATION]: (ctx) => runAutonomousProgression({
+      engine: ctx.engine,
+      missionId: ctx.mission.id,
+      tenantId: ctx.tenantId,
+      operatorId: ctx.operatorId,
+      allowFixtureFallback: ctx.allowFixtureFallback,
+      maxSteps: 1,
+      persist: ctx.persist,
+      pool: ctx.pool,
+      persistStage: ctx.persistStage,
+      runPaige: ctx.runPaige,
+      runMax: ctx.runMax,
+      runEmmett: ctx.runEmmett,
+      infrastructureSnapshot: ctx.infrastructureSnapshot,
+    }),
+    [EXECUTION_INTENTS.DECIDE_ACQUISITION_APPROACH]: (ctx) =>
+      approval.advanceAcquisitionApproach(ctx),
+    [EXECUTION_INTENTS.RECONCILE_ACQUISITION_APPROACH]: (ctx) =>
+      approval.reconcileLegacyAcquisitionApproach(ctx),
+    [EXECUTION_INTENTS.ASSESS_PAID_ACQUISITION]: (ctx) =>
+      approval.advancePennyPaidAcquisition(ctx),
+    [EXECUTION_INTENTS.GENERATE_VARIANTS]: (ctx) => approval.advancePaigeVariants(ctx),
+    [EXECUTION_INTENTS.GENERATE_CAPACITY]: (ctx) => approval.advanceEmmettCapacity(ctx),
+    [EXECUTION_INTENTS.REVISE_PREPARED_OUTREACH]: (ctx) => approval.advancePreparedOutreachRevision(ctx),
+    [EXECUTION_INTENTS.APPROVE_EXECUTION]: (ctx) => approval.advanceExecutionAfterApproval(ctx),
+    [EXECUTION_INTENTS.EXECUTE_OUTBOUND]: (ctx) => {
+      const { advanceExecuteOutbound } = require('../max/workspace/EmmettOutboundExecution');
+      return advanceExecuteOutbound(ctx);
+    },
     [EXECUTION_INTENTS.OPERATOR_APPROVED]: async (ctx) => {
       const question = (ctx.executionRequest.payload && ctx.executionRequest.payload.question) || '';
       try {
@@ -207,6 +242,7 @@ function handlerContext(request, context, mission, runtimeOwner) {
   const question = (request.payload && request.payload.question)
     || context.question
     || request.intent;
+  const payload = request.payload || {};
   const owner = runtimeOwner || request.runtimeOwner || resolveMissionRuntimeOwner(mission);
   return {
     engine: context.engine,
@@ -215,13 +251,49 @@ function handlerContext(request, context, mission, runtimeOwner) {
     question,
     operatorId: request.operatorId || context.operatorId || null,
     runScout: context.runScout,
+    runPaige: context.runPaige,
+    runMax: context.runMax,
+    runMaxApproach: context.runMaxApproach,
+    runPenny: context.runPenny,
+    runEmmett: context.runEmmett,
+    infrastructureSnapshot: context.infrastructureSnapshot,
+    acquisitionEvidence: context.acquisitionEvidence || payload.acquisitionEvidence,
+    knownAcquisitionHistory: context.knownAcquisitionHistory || payload.knownAcquisitionHistory,
+    conversionReadiness: context.conversionReadiness || payload.conversionReadiness,
+    measurementReadiness: context.measurementReadiness || payload.measurementReadiness,
+    candidatePaidChannels: context.candidatePaidChannels || payload.candidatePaidChannels,
+    platformEvidence: context.platformEvidence || payload.platformEvidence,
+    resolveAccounts: context.resolveAccounts || payload.resolveAccounts,
+    observationWindow: context.observationWindow || payload.observationWindow,
+    http: context.http || payload.http,
+    skipPlatformEvidenceCollection: context.skipPlatformEvidenceCollection
+      ?? payload.skipPlatformEvidenceCollection,
+    availableBudget: context.availableBudget || payload.availableBudget,
     scoutCompanies: context.scoutCompanies,
     scoutPeople: context.scoutPeople,
     allowFixtureFallback: context.allowFixtureFallback,
+    sendEmail: context.sendEmail,
+    governedApproval: context.governedApproval,
+    governedEnvelopeId: context.governedEnvelopeId,
+    governedManifestCandidateIds: context.governedManifestCandidateIds,
+    governedRefillItem: context.governedRefillItem,
+    resolveProspectAttributes: context.resolveProspectAttributes,
+    senderIdentity: context.senderIdentity,
+    canonicalSender: context.canonicalSender,
+    client: context.client,
+    loadClient: context.loadClient,
+    brevoState: context.brevoState,
+    senderReadiness: context.senderReadiness,
+    requireProviderReadiness: context.requireProviderReadiness,
     audit: context.audit,
     persist: context.persist,
     pool: context.pool,
     persistStage: context.persistStage,
+    preinitializedSchema: context.preinitializedSchema === true,
+    maxSends: context.maxSends || payload.maxSends,
+    returnToStage: context.returnToStage || payload.returnToStage || null,
+    prospectId: context.prospectId || payload.prospectId || null,
+    prospectIds: context.prospectIds || payload.prospectIds || null,
     context: context.planningContext || context.context,
     executionRequest: request,
     // ADR-089 / SPEC-170 — AMO-owned missions never receive Mission Engine.
@@ -256,10 +328,13 @@ function persistOpts(context = {}) {
     return { persist: false, pool: context.pool, persistStage: context.persistStage };
   }
   if (typeof context.persistStage === 'function') {
-    return { persistStage: context.persistStage, pool: context.pool };
+    return { persistStage: context.persistStage, pool: context.pool, persist: context.persist };
   }
   if (context.pool) {
     return { persist: true, pool: context.pool };
+  }
+  if (context.persist === true) {
+    return { persist: true, pool: context.pool || null };
   }
   return {};
 }
@@ -285,6 +360,7 @@ async function dispatch(request, context, mission, handlers, runtimeOwner) {
       return {
         executionResult: {
           rolledBack: true,
+          rollbackReason: err.rollbackReason || err.message || null,
           error: err,
           snapshot,
           transactionId: err.transactionId,
@@ -351,6 +427,20 @@ async function routeExecutionRequest(request, context = {}) {
   assertRequest(request);
   assertPermissions(request);
   assertExecutionPolicy(request);
+
+  // PF-CLARITY-001: a review-only resource intent, never a synthetic mission.
+  // This fixed handler cannot dispatch specialists, TME, publishing or deployment.
+  // All existing mission intents continue through ownership resolution below.
+  if (request.intent === EXECUTION_INTENTS.REVIEW_CLARITY_RECOMMENDATION) {
+    const executionResult = await require('../../services/clarityRecommendations')
+      .routeClarityDecision(request, context);
+    const audit = recordRouterAudit({ requestId: request.id, source: request.source,
+      intent: request.intent, operatorId: request.operatorId, runtimeOwner: 'clarity_review',
+      specialist: 'operator', action: 'clarity_recommendation_reviewed',
+      outcome: executionResult.replay ? 'already_executed' : 'review_recorded', request });
+    return { spec: 'SPEC-171', request, executionResult, audit, routed: true,
+      runtimeOwner: 'clarity_review', specialist: 'operator', action: 'clarity_recommendation_reviewed' };
+  }
 
   const mission = resolveMission(request, context);
   const runtimeOwner = assertRuntimeOwnership(request, mission);

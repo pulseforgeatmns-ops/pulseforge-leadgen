@@ -32,7 +32,7 @@ const {
   resolveWorkspaceOwner,
   WORKSPACE_OWNERS,
 } = require('../WorkspaceOwnershipResolver');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { CONVERSATION_SUBJECTS } = require('../ConversationSubject');
 
 function seedIdentityState(session, depth = 1) {
@@ -158,6 +158,22 @@ describe('SPEC-151 — Max Operating Model Reasoning', () => {
       assert.ok(prose);
       assert.match(prose, /your judgment overrides/i);
       assert.match(prose, /evidence is thin|disagree with a recommendation/i);
+    });
+
+    it('answers an explicit limits question rather than repeating the active proposition', () => {
+      const prose = composeIdentityReasoning({
+        question: 'When should I ignore your advice?',
+        conversationIntent: { intent: THINKING_MODES.OPERATING_MODEL, continuity: true },
+        activeReasoningContext: {
+          primaryClaim: 'Max integrates evidence across specialists.',
+          reasoningChain: ['identity', 'specialization'],
+          goal: 'explain_identity',
+        },
+        session: { context: {} },
+      });
+      assert.match(prose, /your judgment overrides/i);
+      assert.match(prose, /evidence is thin|disagree with a recommendation/i);
+      assert.doesNotMatch(prose, /Blueprint|ICP/i);
     });
 
     it('synthesizes Max vs Paige comparison', () => {

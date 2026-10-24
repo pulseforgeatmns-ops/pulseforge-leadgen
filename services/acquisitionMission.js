@@ -152,7 +152,25 @@ async function executeCanonical(input = {}, opts = {}) {
     source,
   });
 
-  return amo.routeExecutionRequest(request, {
+  let canonicalSender = input.canonicalSender || opts.canonicalSender || null;
+  if (!canonicalSender && (opts.pool || opts.client || input.client || typeof opts.loadClient === 'function')) {
+    const { resolveCanonicalSenderIdentity } = require('../utils/canonicalSenderIdentity');
+    const resolved = await resolveCanonicalSenderIdentity({
+      tenantId,
+      clientId: input.clientId || tenantId,
+      client: opts.client || input.client || null,
+      pool: opts.pool,
+      loadClient: opts.loadClient,
+    });
+    if (!resolved.ok) {
+      const err = amo.amoError(resolved.code || 'canonical_sender_incomplete', resolved.blockReason);
+      err.blockReason = resolved.blockReason;
+      throw err;
+    }
+    canonicalSender = resolved.identity;
+  }
+
+  const routed = await amo.routeExecutionRequest(request, {
     engine,
     tenantId,
     question: input.question,
@@ -163,12 +181,27 @@ async function executeCanonical(input = {}, opts = {}) {
     pool: opts.pool,
     persistStage: opts.persistStage,
     missionEngine: opts.missionEngine,
+    sendEmail: input.sendEmail || opts.sendEmail,
+    resolveProspectAttributes: input.resolveProspectAttributes || opts.resolveProspectAttributes,
+    canonicalSender,
+    senderIdentity: canonicalSender,
+    client: opts.client || input.client,
+    loadClient: opts.loadClient,
+    brevoState: input.brevoState || opts.brevoState,
+    senderReadiness: input.senderReadiness || opts.senderReadiness,
+    requireProviderReadiness: input.requireProviderReadiness || opts.requireProviderReadiness,
   });
+  // Cancellation is an operator edit, not a specialist TME stage. Persist it
+  // through the runtime's canonical commit path before a subsequent hydration.
+  if (intent === amo.EXECUTION_INTENTS.CANCEL_PLAN && !routed.executionResult?.rolledBack) {
+    await runtime.persistMissionState(mission.id, opts);
+  }
+  return routed;
 }
 
 function activeMissionFor(tenantId, opts = {}) {
   const runtime = runtimeFromOpts(opts);
-  const missions = runtime.engine().list(tenantId);
+  const missions = runtime.engine().list(tenantId).filter(mission => !mission.planCancelled);
   return missions.find((row) => row.stage !== 'improve') || missions[0] || null;
 }
 

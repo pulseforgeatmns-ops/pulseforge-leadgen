@@ -24,6 +24,7 @@ const {
   buildCapabilityBlockedResult,
 } = require('../../scout/coverage/DiscoveryCapabilityGate');
 const { runHypothesisDrivenDiscovery } = require('../../scout/coverage/HypothesisDrivenDiscoveryEngine');
+const { partitionDiscoveredCandidates } = require('../../scout/investigation/CandidateBeliefState');
 
 function createMemoryDiscoveryStore(snapshot = null) {
   /** @type {Map<string, object[]>} */
@@ -150,6 +151,18 @@ async function constructCandidateUniverse(input = {}) {
       (row) => !(existing.companies || []).some((c) => String(c.id) === String(row.id))
     ),
   ];
+  const preservedCandidates = Array.isArray(input.preservedCandidates) ? input.preservedCandidates : [];
+  for (const row of preservedCandidates) {
+    if (!row || !row.id) continue;
+    if (existingCompanies.some((c) => String(c.id) === String(row.id))) continue;
+    existingCompanies.push({
+      ...row,
+      tenantId: row.tenantId || tenantId,
+      discoveredAt: row.discoveredAt || nowIso(),
+      origin: row.origin || 'prior_discovery',
+      _preservedFromContinuation: true,
+    });
+  }
   const rejectedFromRetrieve = [
     ...(existing.rejectedCandidates || []),
     ...(persistedScoped.rejectedCandidates || []),
@@ -195,6 +208,7 @@ async function constructCandidateUniverse(input = {}) {
   let investigationPlan = null;
   let revisedMarketDefinition = input.marketDefinition || null;
   let providerReports = [];
+  let providerReceipts = null;
 
   const useCoverageEngine = input.useCoverageEngine !== false;
   if (input.useCoverageEngine === false) {
@@ -203,7 +217,7 @@ async function constructCandidateUniverse(input = {}) {
     );
   }
 
-  if (input.forceDiscover === true || sufficiency.shouldDiscoverGap) {
+  if (input.forceDiscover === true || sufficiency.shouldDiscoverGap || input.entityInvestigationContinuation === true) {
     discoveryPlan = buildDiscoveryPlan(searchDefinition, {
       adapters: marketAdapters,
       marketDefinition: input.marketDefinition,
@@ -278,7 +292,11 @@ async function constructCandidateUniverse(input = {}) {
           searchDefinition,
           adapters: marketAdapters,
           investigationPlan: input.investigationPlan || null,
-          opts: input.hypothesisOpts || {},
+          opts: {
+            ...(input.hypothesisOpts || {}),
+            preservedCandidates,
+            investigationMode: input.investigationMode || null,
+          },
         });
         result = engineResult;
         discoveryPlan = engineResult.discoveryPlan;
@@ -289,10 +307,15 @@ async function constructCandidateUniverse(input = {}) {
         revisedMarketDefinition = input.marketDefinition;
         providerReports = engineResult.providerReports || [];
         actionsTaken.push({
-          text: `Canonical hypothesis-driven discovery (SPEC-180): ${(engineResult.executedTasks || []).length} investigation tasks executed; identity ${engineResult.identityComplete ? 'complete' : 'pending'}.`,
+          text:
+            input.entityInvestigationContinuation === true
+              ? `Entity investigation continuation (ADR-102): ${(engineResult.executedTasks || []).length} entity tasks executed; ${preservedCandidates.length} identities preserved.`
+              : `Canonical hypothesis-driven discovery (SPEC-180): ${(engineResult.executedTasks || []).length} investigation tasks executed; identity ${engineResult.identityComplete ? 'complete' : 'pending'}.`,
         });
       } else {
-        result = await executeCoveragePlan(discoveryPlan, searchDefinition, marketAdapters);
+        result = await executeCoveragePlan(discoveryPlan, searchDefinition, marketAdapters, {
+          marketDefinition: input.marketDefinition,
+        });
         coverageMetrics = result.coverage;
         actionsTaken.push({
           text: `Executed coverage plan: ${coverageMetrics.searches.addressed}/${coverageMetrics.searches.planned} searches across ${coverageMetrics.cities.planned} cities and ${coverageMetrics.concepts.planned} concepts.`,
@@ -301,6 +324,10 @@ async function constructCandidateUniverse(input = {}) {
     } else {
       result = await discoverCandidates(searchDefinition, marketAdapters);
     }
+    // Operational receipts are separate from evidence reports: existing artifact
+    // and qualification consumers must not gain new inputs from diagnostics.
+    providerReceipts = Array.isArray(result.providerReceipts) ? result.providerReceipts
+      : Array.isArray(result.providerReports) ? result.providerReports : null;
     discoveredRaw = (result.candidates || []).filter((row) => {
       if (row.tenantId && tenantId && String(row.tenantId) !== String(tenantId)) return false;
       return true;
@@ -312,8 +339,10 @@ async function constructCandidateUniverse(input = {}) {
     for (const src of result.sourceTypesUnavailable || []) {
       if (!sourceTypesUnavailable.includes(src)) sourceTypesUnavailable.push(src);
     }
-    const newOnly = discoveredRaw.filter((row) => !alreadyKnown(existingCompanies, row));
-    discoveredRaw = newOnly;
+    const partitioned = partitionDiscoveredCandidates(existingCompanies, discoveredRaw);
+    existingCompanies.length = 0;
+    existingCompanies.push(...partitioned.existingCompanies);
+    discoveredRaw = partitioned.discoveredRaw;
     candidateUniverseRecords = buildCandidateUniverseRecords(discoveredRaw, {
       seeded: existingCompanies.map((row) => ({ ...row, origin: 'existing_intelligence' })),
     });
@@ -321,7 +350,7 @@ async function constructCandidateUniverse(input = {}) {
       coverage: coverageMetrics,
       candidateUniverse: candidateUniverseRecords,
       searchSuccess:
-        coverageMetrics && coverageMetrics.searches.planned
+        coverageMetrics && coverageMetrics.searches && coverageMetrics.searches.planned
           ? coverageMetrics.searches.executed / coverageMetrics.searches.planned
           : discoveredRaw.length > 0
             ? 0.6
@@ -375,9 +404,15 @@ async function constructCandidateUniverse(input = {}) {
   if (store && typeof store.upsert === 'function' && companies.length) {
     await store.upsert(tenantId, companies);
   }
-  if (typeof input.persistCompanies === 'function' && companies.length) {
+  if (typeof input.persistCompanies === 'function' && (companies.length || typeof input.acknowledgeDiscovery === 'function')) {
     try {
-      await input.persistCompanies({ tenantId, companies, searchDefinition });
+      const persistenceResult = await input.persistCompanies({ tenantId, companies, searchDefinition });
+      // Durable handling must explicitly confirm completion, including empty results.
+      // Any discovery error conservatively leaves every fetched unit replayable.
+      if (persistenceResult?.checkpointComplete === true && !discoveryErrors.length
+        && typeof input.acknowledgeDiscovery === 'function') {
+        await input.acknowledgeDiscovery();
+      }
     } catch {
       discoveryErrors.push({
         code: 'persist_failed',
@@ -432,6 +467,7 @@ async function constructCandidateUniverse(input = {}) {
     investigationPlan,
     revisedMarketDefinition,
     providerReports,
+    providerReceipts,
   };
 }
 

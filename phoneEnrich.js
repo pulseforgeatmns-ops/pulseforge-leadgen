@@ -3,6 +3,10 @@ require('dotenv').config();
 const axios = require('axios');
 const { awaitProspeoSlot } = require('./utils/prospeoThrottle');
 const { checkProspeoQuota, recordProspeoCall, trip429 } = require('./utils/prospeoBreaker');
+const { PLACES_FEATURES } = require('./utils/placesCostAttribution');
+const { v1SearchText, v1PlaceDetails } = require('./utils/placesApi');
+const { withResearchProviderScope, hasResearchProviderScope, assertResearchProviderAllowed,
+  rethrowResearchProviderControl } = require('./utils/anchorResearchProviderPause');
 
 const GOOGLE_PLACES_ENDPOINT = 'https://places.googleapis.com/v1/places:searchText';
 const GOOGLE_PLACE_DETAILS_ENDPOINT = 'https://places.googleapis.com/v1/places';
@@ -96,16 +100,18 @@ async function googlePlacesAttempt(lead, options) {
   if (!key) return { source: 'google_places', phone: null, skipped: 'missing_google_places_key' };
 
   const query = queryFor(lead);
-  const searchRes = await axios.post(GOOGLE_PLACES_ENDPOINT, {
-    textQuery: query,
-    maxResultCount: 3,
-  }, {
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Goog-Api-Key': key,
-      'X-Goog-FieldMask': 'places.displayName,places.websiteUri,places.nationalPhoneNumber,places.internationalPhoneNumber,places.formattedAddress,places.id',
+  const searchRes = await v1SearchText({
+    body: {
+      textQuery: query,
+      maxResultCount: 3,
     },
-    timeout: 30000,
+    fieldMask:
+      'places.displayName,places.websiteUri,places.nationalPhoneNumber,places.internationalPhoneNumber,places.formattedAddress,places.id',
+    apiKey: key,
+    record: {
+      caller: 'phoneEnrich.js',
+      feature: PLACES_FEATURES.CANDIDATE_REFRESH,
+    },
   });
 
   logVerbose(verbose, 'Google Places text search raw response', searchRes.data);
@@ -120,13 +126,15 @@ async function googlePlacesAttempt(lead, options) {
   const placeId = places[0].id;
   if (!placeId) return { source: 'google_places', phone: null, raw: searchRes.data };
 
-  const detailsRes = await axios.get(`${GOOGLE_PLACE_DETAILS_ENDPOINT}/${placeId}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Goog-Api-Key': key,
-      'X-Goog-FieldMask': 'displayName,websiteUri,nationalPhoneNumber,internationalPhoneNumber,formattedAddress,id',
+  const detailsRes = await v1PlaceDetails({
+    placeId,
+    fieldMask:
+      'displayName,websiteUri,nationalPhoneNumber,internationalPhoneNumber,formattedAddress,id',
+    apiKey: key,
+    record: {
+      caller: 'phoneEnrich.js',
+      feature: PLACES_FEATURES.CANDIDATE_REFRESH,
     },
-    timeout: 30000,
   });
   logVerbose(verbose, 'Google Places details raw response', detailsRes.data);
   return { source: 'google_places', phone: pickGooglePhone(detailsRes.data), raw: detailsRes.data };
@@ -148,6 +156,7 @@ async function apolloAttempt(lead, options) {
     ...(domain ? { q_organization_domains: domain } : {}),
   };
 
+  assertResearchProviderAllowed('apollo');
   const res = await axios.post(APOLLO_CONTACTS_SEARCH_ENDPOINT, payload, {
     headers: {
       'Content-Type': 'application/json',
@@ -181,10 +190,12 @@ async function prospeoAttempt(lead, options) {
   }
 
   await awaitProspeoSlot();
+  assertResearchProviderAllowed('prospeo');
   await recordProspeoCall();
 
   let res;
   try {
+    assertResearchProviderAllowed('prospeo');
     res = await axios.post(PROSPEO_SEARCH_ENDPOINT, {
       page: 1,
       filters: {
@@ -203,6 +214,7 @@ async function prospeoAttempt(lead, options) {
       timeout: 30000,
     });
   } catch (err) {
+    rethrowResearchProviderControl(err);
     if (err.response?.status === 429) {
       trip429();
       return { source: 'prospeo', phone: null, skipped: 'rate_limited' };
@@ -221,10 +233,12 @@ async function prospeoAttempt(lead, options) {
 
 async function safeAttempt(name, fn, lead, options) {
   try {
+    assertResearchProviderAllowed(name);
     const result = await fn(lead, options);
     logVerbose(options.verbose, `${name} normalized result`, result);
     return result;
   } catch (err) {
+    rethrowResearchProviderControl(err);
     const payload = responsePayload(err);
     logVerbose(options.verbose, `${name} raw error response`, payload);
     return { source: name, phone: null, error: payload };
@@ -232,6 +246,20 @@ async function safeAttempt(name, fn, lead, options) {
 }
 
 async function enrichPhoneWaterfall(lead, options = {}) {
+  // Database row identity is trusted by the setter route; Places attribution is not.
+  const tenants = [lead.client_id, options.client_id, options.clientId, options.tenantId]
+    .filter(value => value != null);
+  if (!tenants.length && hasResearchProviderScope()) {
+    assertResearchProviderAllowed('phone_enrichment');
+    return enrichPhoneWaterfallScoped(lead, options);
+  }
+  if (!tenants.length) tenants.push(undefined);
+  const run = tenants.reduceRight((next, tenant) => () => withResearchProviderScope(tenant, next),
+    () => enrichPhoneWaterfallScoped(lead, options));
+  return run();
+}
+
+async function enrichPhoneWaterfallScoped(lead, options) {
   const verbose = Boolean(options.verbose);
   const continueAfterFound = Boolean(options.continueAfterFound || verbose);
   let firstHit = null;
@@ -261,13 +289,31 @@ async function enrichPhoneWaterfall(lead, options = {}) {
 }
 
 async function runCli() {
-  const query = process.argv.slice(2).join(' ') || 'All Clean Cleaners LLC Manchester NH';
+  const args = process.argv.slice(2);
+  const queryArgs = [];
+  let client_id;
+  const tenantIds = [];
+  // --client_id is required while paused; positional business text is not scope.
+  for (let index = 0; index < args.length; index++) {
+    if (args[index].startsWith('--client_id=')) {
+      client_id = args[index].slice('--client_id='.length);
+      tenantIds.push(client_id);
+    } else if (args[index] === '--client_id') {
+      client_id = args[++index] ?? '';
+      tenantIds.push(client_id);
+    }
+    else queryArgs.push(args[index]);
+  }
+  const query = queryArgs.join(' ') || 'All Clean Cleaners LLC Manchester NH';
   const lead = {
+    client_id,
     business_name: query.replace(/\s+Manchester\s+NH$/i, ''),
     city: 'Manchester NH',
     notes: `${query.replace(/\s+Manchester\s+NH$/i, '')} — allcleancleaners.com`,
   };
-  const result = await enrichPhoneWaterfall(lead, { verbose: true, continueAfterFound: true });
+  const run = tenantIds.reduceRight((next, tenant) => () => withResearchProviderScope(tenant, next),
+    () => enrichPhoneWaterfall(lead, { verbose: true, continueAfterFound: true }));
+  const result = await run();
   console.log('[phoneEnrich] Final result:', JSON.stringify(result, null, 2));
 }
 

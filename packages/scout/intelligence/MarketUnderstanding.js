@@ -82,6 +82,7 @@ function buildMarketDefinition(input = {}) {
   let semantic = buildSemanticMarketDefinition({
     mission,
     segments: [canonical.segmentKey],
+    eligibleSubsegments: marketPlan.eligibleSubsegments || segments,
     segmentKey: canonical.segmentKey,
     segmentSource: canonical.source,
     geography,
@@ -91,7 +92,7 @@ function buildMarketDefinition(input = {}) {
     constraintVertical: constraints.vertical,
   });
 
-  if (input.terminologyLearning || input.opts?.terminologyLearning) {
+  if (!semantic.explicitTradeScope && (input.terminologyLearning || input.opts?.terminologyLearning)) {
     semantic = applyTerminologyLearning(semantic, input.terminologyLearning || input.opts.terminologyLearning);
   }
 
@@ -116,7 +117,9 @@ function buildMarketDefinition(input = {}) {
 
   return {
     segment: operatorSegment,
-    segments: [canonical.segmentKey],
+    segments: semantic.segments.slice(),
+    explicitTradeScope: semantic.explicitTradeScope === true,
+    scopeError: semantic.scopeError || null,
     geography,
     buyer:
       asText(marketPlan.buyer) ||

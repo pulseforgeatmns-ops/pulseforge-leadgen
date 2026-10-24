@@ -1,0 +1,225 @@
+{
+  "itemId": "daily_b6405a6360afa44baaf23c2a_3",
+  "providerOutcome": "PROVIDER_CONFIRMED_NOT_SENT",
+  "verdict": "PASS",
+  "failed": [],
+  "criteria": {
+    "notBlockedByUncertainReconciliation": {
+      "pass": true,
+      "detail": {
+        "lastError": "spacing",
+        "uncertainCount": 0
+      }
+    },
+    "emmettGovernorProceedSubjectToNormalGates": {
+      "pass": true,
+      "detail": {
+        "mode": "active",
+        "lastError": "spacing",
+        "lastTickAt": "2026-09-29T18:25:41.440Z",
+        "emmettCapacity": 16,
+        "dispatchUnavailableNow": false
+      }
+    },
+    "reconciledItemRetriedOnlyThroughGovernedEligibility": {
+      "pass": true,
+      "detail": {
+        "status": "failed",
+        "reason": "brevo_http_400",
+        "attemptedAt": "2026-09-29T18:20:40.640Z",
+        "reconcileAt": "2026-09-29T18:18:27.536Z"
+      }
+    },
+    "remainingItemsOnCorrectedPersistencePath": {
+      "pass": true,
+      "detail": {
+        "remaining": [
+          {
+            "id": "daily_b6405a6360afa44baaf23c2a_4",
+            "status": "pending",
+            "refill": "true"
+          },
+          {
+            "id": "daily_b6405a6360afa44baaf23c2a_5",
+            "status": "pending",
+            "refill": "true"
+          },
+          {
+            "id": "daily_b6405a6360afa44baaf23c2a_6",
+            "status": "pending",
+            "refill": "true"
+          },
+          {
+            "id": "daily_b6405a6360afa44baaf23c2a_7",
+            "status": "pending",
+            "refill": "true"
+          }
+        ],
+        "liveExecutionIdentity": "91cd2a73cab1c6c82d44ed44470b1e3b5df5721c18e5b2d811b0f404a3b85a6b"
+      }
+    },
+    "noSqlstate23502": {
+      "pass": true,
+      "detail": {
+        "postReconcileReasons": [
+          "reconciled_not_sent",
+          "brevo_http_400",
+          "provider_rejected"
+        ]
+      }
+    },
+    "noNewAbandonedOrUncertainSend": {
+      "pass": true,
+      "detail": {
+        "itemStatus": "failed",
+        "itemReason": "brevo_http_400"
+      }
+    },
+    "noForceSendOrManualAdvancement": {
+      "pass": true,
+      "detail": {
+        "remainingPending": true
+      }
+    }
+  },
+  "programOperational": true,
+  "snapshot": {
+    "inspectedAt": "2026-09-29T18:27:38.962Z",
+    "program": {
+      "id": "outbound_d7e602041f828e41848df98b",
+      "tenant_id": "10",
+      "mode": "active",
+      "last_tick_at": "2026-09-29T18:25:41.440Z",
+      "last_error": "spacing"
+    },
+    "item": {
+      "id": "daily_b6405a6360afa44baaf23c2a_3",
+      "status": "failed",
+      "reason": "brevo_http_400",
+      "email": "hello@sacramentopmg.com",
+      "attempted_at": "2026-09-29T18:20:40.640Z",
+      "provider_message_id": null,
+      "refill": "true",
+      "candidate_id": "03c2e326-39c5-4e29-abda-cdb25f077e0b",
+      "company_id": "b22946db-7955-4280-b1ac-d8b2b7670e09"
+    },
+    "envelopeItems": [
+      {
+        "id": "daily_b6405a6360afa44baaf23c2a_0",
+        "status": "sent",
+        "reason": null,
+        "email": "sales@galacticservices.com",
+        "attempted_at": "2026-09-29T13:05:04.511Z",
+        "provider_message_id": "<202609291305.10018668221@smtp-relay.mailin.fr>",
+        "refill": null
+      },
+      {
+        "id": "daily_b6405a6360afa44baaf23c2a_1",
+        "status": "sent",
+        "reason": null,
+        "email": "mike.lawler@irr-re.com",
+        "attempted_at": "2026-09-29T14:09:15.702Z",
+        "provider_message_id": "<202609291409.80509256340@smtp-relay.mailin.fr>",
+        "refill": null
+      },
+      {
+        "id": "daily_b6405a6360afa44baaf23c2a_2",
+        "status": "sent",
+        "reason": null,
+        "email": "jhanson@wm.com",
+        "attempted_at": "2026-09-29T15:11:15.358Z",
+        "provider_message_id": "<202609291511.29490403126@smtp-relay.mailin.fr>",
+        "refill": null
+      },
+      {
+        "id": "daily_b6405a6360afa44baaf23c2a_3",
+        "status": "failed",
+        "reason": "brevo_http_400",
+        "email": "hello@sacramentopmg.com",
+        "attempted_at": "2026-09-29T18:20:40.640Z",
+        "provider_message_id": null,
+        "refill": "true"
+      },
+      {
+        "id": "daily_b6405a6360afa44baaf23c2a_4",
+        "status": "pending",
+        "reason": null,
+        "email": "patricia@aviseproperties.com",
+        "attempted_at": null,
+        "provider_message_id": null,
+        "refill": "true"
+      },
+      {
+        "id": "daily_b6405a6360afa44baaf23c2a_5",
+        "status": "pending",
+        "reason": null,
+        "email": "klapolla@manchesterhousing.org",
+        "attempted_at": null,
+        "provider_message_id": null,
+        "refill": "true"
+      },
+      {
+        "id": "daily_b6405a6360afa44baaf23c2a_6",
+        "status": "pending",
+        "reason": null,
+        "email": "leasing@orbitgroup.com",
+        "attempted_at": null,
+        "provider_message_id": null,
+        "refill": "true"
+      },
+      {
+        "id": "daily_b6405a6360afa44baaf23c2a_7",
+        "status": "pending",
+        "reason": null,
+        "email": "info@anagnost.com",
+        "attempted_at": null,
+        "provider_message_id": null,
+        "refill": "true"
+      }
+    ],
+    "executions": [
+      {
+        "id": "amo_send_da20677d-712f-4880-8b31-a17db4bb07c5",
+        "status": "attempted",
+        "provider_message_id": null,
+        "prospect_id": "03c2e326-39c5-4e29-abda-cdb25f077e0b",
+        "execution_identity": "91cd2a73cab1c6c82d44ed44470b1e3b5df5721c18e5b2d811b0f404a3b85a6b",
+        "attempted_at": "2026-09-29T18:20:40.655Z",
+        "sent_at": null
+      }
+    ],
+    "uncertainItems": [],
+    "reconcileAt": "2026-09-29T18:18:27.536Z",
+    "emmettCapacity": 16,
+    "dispatchUnavailableNow": false,
+    "limitingFactor": "schedule_window_spacing",
+    "lastTickAt": "2026-09-29T18:25:41.440Z",
+    "lastError": "spacing",
+    "postReconcileEvents": [
+      {
+        "created_at": "2026-09-29T18:18:27.536Z",
+        "event_type": "send_reconciled",
+        "item_id": "daily_b6405a6360afa44baaf23c2a_3",
+        "reason": "reconciled_not_sent",
+        "outcome": "not_accepted",
+        "provider_outcome": "PROVIDER_CONFIRMED_NOT_SENT"
+      },
+      {
+        "created_at": "2026-09-29T18:20:40.809Z",
+        "event_type": "send_failed",
+        "item_id": "daily_b6405a6360afa44baaf23c2a_3",
+        "reason": "brevo_http_400",
+        "outcome": null,
+        "provider_outcome": null
+      },
+      {
+        "created_at": "2026-09-29T18:20:40.938Z",
+        "event_type": "tick_blocked",
+        "item_id": null,
+        "reason": "provider_rejected",
+        "outcome": null,
+        "provider_outcome": null
+      }
+    ]
+  }
+}
