@@ -36,7 +36,7 @@ test('closed gate and pre-start events cannot reach distribution registration',a
   assert.equal(registered,0);assert.equal(enqueued,0);
 });
 
-function bootFixture({enabled=true,distributionEnabled=true}={}) {
+function bootFixture({enabled=true,distributionEnabled=true,transportTestApproved=false}={}) {
   const calls=[],module={exports:{}};
   const source=fs.readFileSync(path.join(__dirname,'../../../services/signalOperator/index.js'),'utf8');
   const distribution=distributionEnabled?{register:async e=>{calls.push(['register',e]);return {ok:true};},stop:()=>calls.push(['stopDistribution'])}:null;
@@ -46,14 +46,18 @@ function bootFixture({enabled=true,distributionEnabled=true}={}) {
     './store':{OperatorStore:class {async enqueue(e){calls.push(['enqueue',e]);}}},
     './worker':{createOperatorWorker:options=>createOperatorWorker({...options,fetchImpl:feed.fetchImpl}),
       startOperatorTimers:()=>{calls.push(['startOperator']);return ()=>calls.push(['stopOperator']);}},
-    './relay':{createBrevoRelay:options=>{assert.equal(options.enabled,false);assert.equal(options.consented,false);return {}; }},
+    './relay':{createBrevoRelay:options=>{assert.equal(options.enabled,false);assert.equal(options.consented,false);assert.equal(options.operationalTestApproved,transportTestApproved);return {}; }},
     '../../packages/signal-v1/providers/GeckoTerminalMarketDataProvider':{GeckoTerminalMarketDataProvider:class {}},
     '../../db':{query:async()=>{}},
     '../../packages/signal-v1/storage/ensureSignalSchema':{ensureSignalSchema:async()=>{}},
+    './initialSms':{startInitialSms:async options=>{
+      assert.equal(options.deferStart,true);
+      return null; // Existing distribution fixtures leave the new SMS lane off.
+    }},
     '../signalDistribution':{startDistribution:async()=>distribution},
   };
   vm.runInNewContext(source,{module,exports:module.exports,__dirname:path.join(__dirname,'../../../services/signalOperator'),
-    process:{env:{SIGNAL_OPERATOR_ENABLED:enabled?'1':'0',SIGNAL_REQUIRED_CALLER_CHANNEL_ID:'123',SIGNAL_OPERATOR_FEED_TOKEN:feed.token,SIGNAL_OPERATOR_FEED_URL:feed.feedUrl}},
+    process:{env:{SIGNAL_OPERATOR_ENABLED:enabled?'1':'0',SIGNAL_REQUIRED_CALLER_CHANNEL_ID:'123',SIGNAL_OPERATOR_FEED_TOKEN:feed.token,SIGNAL_OPERATOR_FEED_URL:feed.feedUrl,SIGNAL_OPERATOR_TRANSPORT_TEST_APPROVED:transportTestApproved?'1':'0'}},
     console:{error:()=>assert.fail('unexpected boot failure')},
     require:name=>{assert.ok(Object.hasOwn(mocks,name),`unexpected dependency ${name}`);return mocks[name];}});
   return {start:module.exports.startSignalOperator,calls};
@@ -73,4 +77,8 @@ test('disabled distribution keeps operator ingestion and shutdown available',asy
 test('default-off operator never starts either runtime',async()=>{
   const fixture=bootFixture({enabled:false});
   assert.equal(await fixture.start(),null);assert.deepEqual(fixture.calls,[]);
+});
+test('separate operational transport-test approval survives SMS integration without enabling email',async()=>{
+  const fixture=bootFixture({transportTestApproved:true});
+  const runtime=await fixture.start();assert.ok(runtime);runtime.stop();
 });

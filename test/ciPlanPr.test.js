@@ -5,6 +5,14 @@ const { describe, it } = require('node:test');
 const { buildPlan, pathMatchesPattern } = require('../.github/scripts/ci-plan-pr.js');
 
 describe('CI plan PR selector (SPEC-CI-LEAN-001)', () => {
+  it('isolated initial SMS safety edits select Signal and retain its test command coverage', () => {
+    for (const file of ['test/signalInitialSms.test.js', 'docs/sql-drafts/2026-10-22-signal-initial-sms.sql']) {
+      assert.deepEqual(buildPlan([file]).suites, ['global', 'signal-v1'], file);
+    }
+    const command = require('../package.json').scripts['test:signal-v1'];
+    assert.equal(command, 'node --test packages/signal-v1/tests/*.test.js test/signalDistribution*.test.js test/signalInitialSms.test.js');
+  });
+
   it('matches glob and directory patterns', () => {
     assert.equal(pathMatchesPattern('packages/signal-v1/foo.js', 'packages/signal-v1/'), true);
     assert.equal(pathMatchesPattern('scripts/runSignalProbe.js', 'scripts/*Signal*'), true);
