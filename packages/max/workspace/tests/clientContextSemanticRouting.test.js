@@ -10,7 +10,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine, unavailableOperatingEvidence } = require('./workspaceTestHarness');
 const {
   maybeHandleClientIntelligenceTurn,
   isClientContextReasoningRequest,
@@ -55,6 +55,22 @@ async function approveClient(store, clientId, answers) {
   assert.ok(turn.blueprint);
   await approveBlueprint(turn.blueprint.id, opts);
   return { opts, started };
+}
+
+// SPEC-111 supersedes the earlier generic client-context gap card.
+function assertUnknownAnalysis(result) {
+  assert.equal(result.domainDecision.reason, 'intent_bound_unknown_analysis');
+  assert.match(result.prose, /Critical unknowns/i);
+  assert.match(result.prose, /Evidence gaps/i);
+  assert.match(result.prose, /Why they matter/i);
+  const answer = result.prose.split('\n\nReasoning:')[0];
+  assert.doesNotMatch(answer, /probably working|likely converting|acquisition rumors/i);
+  assert.equal(result.retrieval.delegated, false);
+  assert.equal(result.mission, null);
+  const objects = result.structured.metadata.businessIntelligence.objects;
+  assert.ok(objects.length > 0);
+  assert.ok(objects.every((object) => object.category === 'unknown'));
+  assert.ok(objects.every((object) => object.supporting_claims.length > 0));
 }
 
 function priorSession(kind = 'reasoning', focus = 'property and facility managers') {
@@ -546,6 +562,7 @@ describe('SPEC-103B end-to-end routing', () => {
     const store = createMemoryStore();
     await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
     const engine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: false,
       clientIntelligenceOpts: { store },
@@ -573,6 +590,7 @@ describe('SPEC-103B end-to-end routing', () => {
     const store = createMemoryStore();
     await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
     const engine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: false,
       clientIntelligenceOpts: { store },
@@ -585,10 +603,7 @@ describe('SPEC-103B end-to-end routing', () => {
       sessionId: opened.sessionId,
       question: "What don't we know yet?",
     });
-    assert.match(
-      String(result.domainDecision && result.domainDecision.reason),
-      /client_intelligence/
-    );
+    assertUnknownAnalysis(result);
     assert.doesNotMatch(
       result.prose,
       /Switching from Workspace to General Conversation/i
@@ -598,10 +613,7 @@ describe('SPEC-103B end-to-end routing', () => {
       result.prose,
       /Unavailable in current context: detailed_answer/i
     );
-    assert.match(
-      result.prose,
-      /Mission Updated|Current Understanding|Next Step|Operator Decision/i
-    );
+
     assert.doesNotMatch(result.prose, /KNOWN from your approved Blueprint/i);
     assert.doesNotMatch(result.prose, /^INFERENCE \(Max reasoning/i);
     assert.doesNotMatch(result.prose, /^UNKNOWN:/m);
@@ -616,6 +628,7 @@ describe('SPEC-103B end-to-end routing', () => {
     const store = createMemoryStore();
     await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
     const engine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: false,
       clientIntelligenceOpts: { store },
@@ -640,6 +653,7 @@ describe('SPEC-103B end-to-end routing', () => {
     const store = createMemoryStore();
     await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
     const engine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: false,
       clientIntelligenceOpts: { store },
@@ -660,6 +674,7 @@ describe('SPEC-103B end-to-end routing', () => {
     const store = createMemoryStore();
     await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
     const engine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: true,
       clientIntelligenceOpts: { store },
@@ -691,6 +706,7 @@ describe('SPEC-103B end-to-end routing', () => {
     const store = createMemoryStore();
     await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
     const engine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: true,
       clientIntelligenceOpts: { store },
@@ -724,6 +740,7 @@ describe('SPEC-103B end-to-end routing', () => {
     const store = createMemoryStore();
     await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
     const engine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: false,
       clientIntelligenceOpts: { store },
@@ -774,6 +791,7 @@ describe('SPEC-103B end-to-end routing', () => {
   it('no approved Blueprint does not fabricate; pending is non-authoritative', async () => {
     const store = createMemoryStore();
     const engine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: false,
       clientIntelligenceOpts: { store },
@@ -804,6 +822,7 @@ describe('SPEC-103B end-to-end routing', () => {
     assert.notEqual(String(turn.blueprint.status).toLowerCase(), 'approved');
 
     const pendingEngine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: false,
       clientIntelligenceOpts: { store },
@@ -812,14 +831,16 @@ describe('SPEC-103B end-to-end routing', () => {
       tenantId: String(AS_CLEANING_ID),
       page: 'command-deck',
     });
+    const blueprintBefore = await store.getBlueprint(turn.blueprint.id);
     const pending = await pendingEngine.ask({
       sessionId: pendingOpen.sessionId,
       question: "What don't we know yet?",
     });
-    assert.match(
-      pending.prose,
-      /do not yet have an approved Business Blueprint|will not invent/i
-    );
+    assertUnknownAnalysis(pending);
+    assert.match(pending.prose, /Observed operating state does not yet demonstrate progress/i);
+    assert.doesNotMatch(pending.prose, /AS Cleaning|Greater Toronto|property managers|facility managers/i);
+    assert.deepEqual(await store.getBlueprint(turn.blueprint.id), blueprintBefore);
+    assert.deepEqual(await store.listBlueprintsForClient(AS_CLEANING_ID, { status: 'approved' }), []);
   });
 
   it('tenant isolation: AS Cleaning never surfaces Anchor', async () => {
@@ -837,6 +858,7 @@ describe('SPEC-103B end-to-end routing', () => {
       'Clearer path to commercial opportunities in 90 days.',
     ]);
     const engine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: false,
       clientIntelligenceOpts: { store },
@@ -873,6 +895,7 @@ describe('SPEC-103B end-to-end routing', () => {
       'Walkthroughs completed and recurring revenue created.',
     ]);
     const engine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: true,
       clientIntelligenceOpts: { store },
@@ -1003,6 +1026,7 @@ describe('SPEC-103B specificity escalation (SPEC-103B PATCH)', () => {
     const store = createMemoryStore();
     await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
     const engine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: true,
       clientIntelligenceOpts: { store },
@@ -1031,7 +1055,7 @@ describe('SPEC-103B specificity escalation (SPEC-103B PATCH)', () => {
       sessionId: opened.sessionId,
       question: "What don't we know yet?",
     });
-    assert.match(gaps.prose, /Mission Updated|Current Understanding|Next Step/i);
+    assertUnknownAnalysis(gaps);
     assert.doesNotMatch(gaps.prose, /KNOWN from your approved Blueprint/i);
 
     const falsification = await engine.ask({
@@ -1078,6 +1102,7 @@ describe('SPEC-103B specificity escalation (SPEC-103B PATCH)', () => {
     const store = createMemoryStore();
     await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
     const engine = createWorkspaceEngine({
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       disableLlm: true,
       missionsEnabled: true,
       clientIntelligenceOpts: { store },

@@ -1,5 +1,6 @@
 const express = require('express');
-const Anthropic = require('@anthropic-ai/sdk');
+const { isApiUsageQuestion, parseApiSpendCommand, answerApiUsageQuestion } = require('../services/apiUsageService');
+const Anthropic = require('../utils/meteredAnthropic').forAgent('max_chat');
 const pool = require('../db');
 const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
 const { getRequestClientId } = require('../utils/clientContext');
@@ -8,12 +9,14 @@ const { getMissionEngine, missionEnabled } = require('../utils/missionRuntime');
 const { detectConversationSubject } = require('../packages/max/workspace/ConversationSubject');
 const { maybeHandleIdentityTurn } = require('../packages/max/workspace/IdentityConversationContext');
 const { LEGACY_CHAT_SYSTEM } = require('../packages/max/identity/MaxIdentity');
+const { observeLegacyChat } = require('../packages/decision-service/httpObserver');
 
 function shouldRouteAoQuestion(question) {
   return /\b(ao|anchor|mike|field visit|campaign 001|direct mail|walkthrough|escalation|ao lead|who do i need to call|what happened today|what needs my attention|hottest ao|current cleaner|objection|promot.*crm)\b/i.test(question);
 }
 
 const router = express.Router();
+const { reviewNavigationForRequest } = require('../services/reviewNavigation');
 const requireDashboardAuth = [sessionAuth, requireRole('admin', 'manager')];
 const anthropic = new Anthropic();
 
@@ -156,7 +159,23 @@ router.post('/api/max/ask', requireDashboardAuth, async (req, res) => {
     const question = String(req.body?.question || '').trim().slice(0, 100000);
     if (!question) return res.status(400).json({ error: 'Question is required' });
 
+    let reviewNavigation;
+    try { reviewNavigation = await reviewNavigationForRequest(req); }
+    catch (error) { return res.status(error.statusCode || 503).json({ error: 'review_navigation_unavailable', message: 'Review scope could not be verified. No review was opened.' }); }
+    if (reviewNavigation) { res.set('Cache-Control', 'no-store'); return res.json({ ...reviewNavigation, answer: reviewNavigation.prose, reply: reviewNavigation.prose }); }
+
+    if (isApiUsageQuestion(question) || parseApiSpendCommand(question)) {
+      if (parseApiSpendCommand(question)) {
+        try {
+          if (!req.get('origin') || new URL(req.get('origin')).host !== req.get('host')) return res.status(403).json({ error: 'same_origin_required' });
+        } catch { return res.status(403).json({ error: 'same_origin_required' }); }
+      }
+      res.set('Cache-Control', 'no-store');
+      return res.json(await answerApiUsageQuestion(question));
+    }
+
     const clientId = getRequestClientId(req);
+    observeLegacyChat(req, res, undefined, clientId);
 
     const conversationSubject = detectConversationSubject(question);
     if (conversationSubject.subject === 'identity') {
@@ -347,3 +366,4 @@ ${question}`,
 });
 
 module.exports = router;
+

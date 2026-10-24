@@ -20,6 +20,8 @@ const {
   PERCEPTION_CHANNELS,
   REJECTION_REASONS,
   COVERAGE_BANDS,
+  READINESS_STATES,
+  EVIDENCE_KINDS,
 } = require('./Types');
 
 const TIMING_SIGNAL_TYPES = Object.freeze([
@@ -149,26 +151,40 @@ function qualifyCandidate(classified, company, now = Date.now()) {
     (classified.evidenceRefs && classified.evidenceRefs.length > 0) ||
     (classified.observations && classified.observations.length > 0);
   const primarySignal = timing[0] || signals.find((s) => s.type && s.type !== 'decision_maker') || null;
+  const displayName = classified.name || company.name || company.id;
 
   if (!fitBasic) {
     return {
+      qualified: false,
       supported: false,
       basicFit: false,
       signalBearing: timing.length > 0,
+      readinessState: READINESS_STATES.UNKNOWN,
+      evidenceKind: EVIDENCE_KINDS.NEGATIVE_EVIDENCE,
       reason: REJECTION_REASONS.INSUFFICIENT_BUSINESS_FIT,
       nearThreshold: false,
-      rejectedBecause: `${classified.name || company.name || company.id} did not meet the current commercial-fit bar.`,
+      rejectedBecause: `${displayName} did not meet the current commercial-fit bar.`,
     };
   }
 
+  const qualifiedBase = {
+    qualified: true,
+    basicFit: true,
+    signalBearing: timing.length > 0,
+    nearThreshold: false,
+    signal: primarySignal && primarySignal.type,
+  };
+
   if (!timing.length && !hasEvidence) {
     return {
+      ...qualifiedBase,
       supported: false,
-      basicFit: true,
-      signalBearing: false,
-      reason: REJECTION_REASONS.INSUFFICIENT_SOURCE_SUPPORT,
+      readinessState: READINESS_STATES.UNKNOWN,
+      evidenceKind: EVIDENCE_KINDS.INSUFFICIENT_EVIDENCE,
+      reason: null,
       nearThreshold: fitStrong,
-      rejectedBecause: `${classified.name || company.name} had basic fit but no source-backed timing or company evidence.`,
+      rejectedBecause: null,
+      readinessNote: `${displayName} is qualified but lacks source-backed evidence for readiness assessment.`,
     };
   }
 
@@ -179,46 +195,50 @@ function qualifyCandidate(classified, company, now = Date.now()) {
       .sort()[0];
     const months = monthsOld(oldest, now);
     return {
+      ...qualifiedBase,
       supported: false,
-      basicFit: true,
-      signalBearing: true,
+      readinessState: READINESS_STATES.NOT_READY,
+      evidenceKind: EVIDENCE_KINDS.NEGATIVE_EVIDENCE,
       reason: REJECTION_REASONS.STALE_EVIDENCE,
       nearThreshold: fitStrong || fit >= 0.6,
       rejectedBecause:
         months != null
           ? `${primarySignal && primarySignal.type ? primarySignal.type.replace(/_/g, ' ') : 'Expansion'} evidence is ${months} month${months === 1 ? '' : 's'} old and no recent operational signal was found.`
           : 'Timing evidence exists but is outside the current evidence window.',
-      signal: primarySignal && primarySignal.type,
     };
   }
 
   if (!timely.length) {
     return {
+      ...qualifiedBase,
       supported: false,
-      basicFit: true,
-      signalBearing: false,
-      reason: REJECTION_REASONS.NO_TIMING_SIGNAL,
+      readinessState: READINESS_STATES.UNKNOWN,
+      evidenceKind: EVIDENCE_KINDS.INSUFFICIENT_EVIDENCE,
+      reason: null,
       nearThreshold: fitStrong,
-      rejectedBecause: `${classified.name || company.name} had reasonable business fit but no current timing signal.`,
+      rejectedBecause: null,
+      readinessNote: `${displayName} is qualified; current vendor timing is unknown.`,
     };
   }
 
   if (!hasEvidence) {
     return {
+      ...qualifiedBase,
       supported: false,
-      basicFit: true,
-      signalBearing: true,
+      readinessState: READINESS_STATES.UNKNOWN,
+      evidenceKind: EVIDENCE_KINDS.INSUFFICIENT_EVIDENCE,
       reason: REJECTION_REASONS.INSUFFICIENT_SOURCE_SUPPORT,
       nearThreshold: true,
-      rejectedBecause: `A timing signal was present for ${classified.name || company.name} but lacked source-backed evidence.`,
+      rejectedBecause: `A timing signal was present for ${displayName} but lacked source-backed evidence.`,
       signal: primarySignal && primarySignal.type,
     };
   }
 
   return {
+    ...qualifiedBase,
     supported: true,
-    basicFit: true,
-    signalBearing: true,
+    readinessState: READINESS_STATES.READY,
+    evidenceKind: EVIDENCE_KINDS.POSITIVE_EVIDENCE,
     reason: null,
     nearThreshold: false,
     signal: primarySignal && primarySignal.type,
@@ -473,6 +493,16 @@ function buildInvestigation(input = {}) {
     basicFitCount: Number(input.basicFitCount || 0),
     signalBearingCount: Number(input.signalBearingCount || 0),
     supportedOpportunityCount: Number(input.supportedOpportunityCount || 0),
+    qualifiedProspectCount: Number(
+      input.qualifiedProspectCount != null
+        ? input.qualifiedProspectCount
+        : (input.supportedOpportunityCount || 0) + (input.qualifiedUnknownReadinessCount || 0)
+    ),
+    readinessReadyCount: Number(
+      input.readinessReadyCount != null
+        ? input.readinessReadyCount
+        : input.supportedOpportunityCount || 0
+    ),
     unresolvedCount: Number(input.unresolvedCount || 0),
   };
 
@@ -661,6 +691,8 @@ function classifyInspectionPresentation(structured = {}) {
 module.exports = {
   TIMING_SIGNAL_TYPES,
   SYSTEM_PROVENANCE_IDS,
+  READINESS_STATES,
+  EVIDENCE_KINDS,
   clamp01,
   coverageBand,
   parseGeographyList,

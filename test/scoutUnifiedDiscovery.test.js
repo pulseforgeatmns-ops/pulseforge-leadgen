@@ -1,6 +1,6 @@
 'use strict';
 
-const { describe, it, beforeEach } = require('node:test');
+const { describe, it, beforeEach, afterEach, mock } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   Scout,
@@ -25,6 +25,11 @@ const {
 const { createBuiltinRegistry } = require('../packages/capabilities');
 const { assessExistingSufficiency } = require('../packages/max/scoutAcquisition/CandidateUniverse');
 const { buildAcquisitionSearchDefinition } = require('../packages/max/scoutAcquisition/SearchDefinition');
+
+beforeEach(() => {
+  mock.method(require('../services/acquisitionMission'), 'attachScoutDiscovery', async () => null);
+});
+afterEach(() => mock.restoreAll());
 
 function testEngine() {
   return createMissionEngine({
@@ -82,6 +87,7 @@ describe('SPEC-123 unified Scout Discovery', () => {
       mission,
       missionEngine: engine,
       scoutPayload: {},
+      opts: { companies: [], persistMemory: false, discoveryAdapters: [] },
     });
 
     assert.ok(result.discoveryReport);
@@ -145,6 +151,7 @@ describe('SPEC-123 unified Scout Discovery', () => {
       mission,
       missionEngine: engine,
       scoutPayload: {},
+      opts: { companies: [], persistMemory: false, discoveryAdapters: [] },
     });
 
     assert.ok(result.existingIntelligence);
@@ -174,6 +181,7 @@ describe('SPEC-123 unified Scout Discovery', () => {
       mission,
       missionEngine: engine,
       scoutPayload: {},
+      opts: { companies: [], persistMemory: false, discoveryAdapters: [] },
     });
 
     assert.match(result.outcome, /^DISCOVERY_/);
@@ -196,6 +204,7 @@ describe('SPEC-123 unified Scout Discovery', () => {
       mission,
       missionEngine: engine,
       scoutPayload: {},
+      opts: { companies: [], persistMemory: false, discoveryAdapters: [] },
     });
 
     const { formatDiscoveryOperatorResponse } = require('../packages/mission-engine/discoveryExecutionReport');
@@ -220,6 +229,7 @@ describe('SPEC-123 strategy selection invariants', () => {
       mission,
       missionEngine: engine,
       scoutPayload: {},
+      opts: { companies: [], persistMemory: false, discoveryAdapters: [] },
     });
 
     assert.ok(result.strategy);

@@ -1,12 +1,21 @@
 # AUDIT-049 — Mission Identity Continuity
 
+> **Historical audit — retained 2026-10-24.** Original audit date: 2026-08-25. This document records findings from the original PR revision and is **not a current production assessment**.
+>
+> Source: [PR #439](https://github.com/pulseforgeatmns-ops/pulseforge-leadgen/pull/439), head commit `821a43344b7456d1918840bc80e5449b793e27fd`.
+>
+> Subsequent implementation / current reference: [AUDIT-049 — Mission Runtime Ownership Crossover](./AUDIT-049_Mission_Runtime_Ownership_Crossover.md) and [SPEC-170 — Mission Runtime Ownership Boundaries](../specs/SPEC-170_Mission_Runtime_Ownership_Boundaries.md).
+>
+> The existing AUDIT-049 summary preserves the root cause and documents the subsequent boundary fix. This longer historical trace is retained as supporting evidence, not a second current critical incident. Its “Proposed” status and source line numbers belong to the original audit.
+
+
 | Field | Value |
 |---|---|
 | **Date** | 2026-08-25 |
 | **Status** | Proposed |
 | **Type** | Architectural Audit (Read-Only) |
 | **Priority** | Critical |
-| **Related** | [ADR-075](../adr/ADR-075_Transactional_Persistence_Exclusivity.md), [ADR-087](../adr/ADR-087_Operator_Objective_Takes_Precedence.md), [SPEC-168](../specs/SPEC-168_Canonical_Objective_Resolution.md) (referenced), [SPEC-169](../specs/SPEC-169_Canonical_Mission_Verification.md). **ADR-077 is not present in this tree.** |
+| **Related** | [ADR-075](../adr/ADR-075_Transactional_Persistence_Exclusivity.md), [ADR-087](../adr/ADR-087_Operator_Objective_Takes_Precedence.md), SPEC-168 (historical reference: `docs/specs/SPEC-168_Canonical_Objective_Resolution.md`; file unavailable in the 2026-10-24 reviewed tree), [SPEC-169](../specs/SPEC-169_Canonical_Mission_Verification.md). **ADR-077 is not present in this tree.** |
 
 ## Finding
 

@@ -1,6 +1,7 @@
 require('dotenv').config();
 const pool = require('./db');
 const db = require('./dbClient');
+const { withSmsAuthorization } = require('./utils/callEligibility');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 
 const AGENT_NAME = 'sam';
@@ -76,6 +77,7 @@ async function sendSMS(prospectId, messageOverride = null) {
   const prospect = res.rows[0];
 
   if (!prospect) return { sent: false, reason: 'prospect_not_found' };
+  if (prospect.ao_outreach_review_required) return { sent: false, reason: 'outreach_review_required' };
   if (!prospect.phone) return { sent: false, reason: 'no_phone' };
   if (prospect.do_not_contact || prospect.is_synthetic) return { sent: false, reason: prospect.is_synthetic ? 'synthetic_prospect' : 'do_not_contact' };
 
@@ -88,7 +90,8 @@ async function sendSMS(prospectId, messageOverride = null) {
   const body = messageOverride || MESSAGES.warm_signal(prospect);
 
   try {
-    await twilioClient.messages.create({ body, from: FROM_NUMBER, to: prospect.phone });
+    await withSmsAuthorization(pool, [{ prospectId: prospect.id, clientId: CLIENT_ID }],
+      () => twilioClient.messages.create({ body, from: FROM_NUMBER, to: prospect.phone }));
 
     await db.logTouchpoint(prospectId, 'sms', 'outbound', body, 'sent', 'neutral', AGENT_NAME);
     await db.logAgentAction(AGENT_NAME, 'send_sms', prospectId, null, { phone: prospect.phone, trigger: 'direct' }, 'success');

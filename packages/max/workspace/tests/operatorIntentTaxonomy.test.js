@@ -10,7 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const {
-  maybeHandleRetrievalBeforeDelegationTurn,
+  maybeHandleRetrievalBeforeDelegationTurn: rawCieHandler,
 } = require('../RetrievalBeforeDelegationContext');
 const {
   CONTRACT_IDS,
@@ -308,3 +308,6 @@ describe('SPEC-111 spec file exists', () => {
     assert.equal(fs.existsSync(spec), true);
   });
 });
+
+const { createHermeticRetrievalHandler } = require('./workspaceTestHarness');
+const maybeHandleRetrievalBeforeDelegationTurn = createHermeticRetrievalHandler(rawCieHandler);

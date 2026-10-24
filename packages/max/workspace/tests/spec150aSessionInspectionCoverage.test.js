@@ -36,7 +36,7 @@ const {
   isSessionStateExplanationQuestion,
   inspectCurrentSession,
 } = require('../SessionInspectionOperator');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { createTestAmoRuntime } = require('./amoTestRuntime');
 
 function seedAmoMission(extra = {}) {

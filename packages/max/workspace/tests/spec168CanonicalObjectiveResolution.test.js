@@ -20,7 +20,7 @@ const {
   classifyMessageLines,
   canonicalObjectiveText,
 } = require('../ResolvedObjective');
-const { maybeHandleAcquisitionOwnershipTurn } = require('../AcquisitionOwnership');
+const { maybeHandleAcquisitionOwnershipTurn: rawCieHandler } = require('../AcquisitionOwnership');
 const { createTestAmoRuntime } = require('./amoTestRuntime');
 
 const STR_OBJECTIVE =
@@ -160,3 +160,6 @@ describe('SPEC-168 — Canonical Objective Resolution', () => {
     });
   });
 });
+
+const { createHermeticRetrievalHandler } = require('./workspaceTestHarness');
+const maybeHandleAcquisitionOwnershipTurn = createHermeticRetrievalHandler(rawCieHandler);

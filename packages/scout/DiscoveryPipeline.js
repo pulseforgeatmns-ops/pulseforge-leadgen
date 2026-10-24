@@ -1,5 +1,7 @@
 'use strict';
 
+const { rethrowResearchProviderControl } = require('../../utils/anchorResearchProviderPause');
+
 /**
  * SPEC-154 — Unified Discovery Pipeline.
  *
@@ -12,10 +14,21 @@
  */
 
 const { buildMarketDefinition, buildDelegationFromMission } = require('./intelligence/MarketUnderstanding');
-const { createInvestigationPlan } = require('./investigation/InvestigationPlanBuilder');
+const { createHypothesisInvestigationPlan } = require('./coverage/HypothesisInvestigationPlanner');
+const {
+  INVESTIGATION_MODES,
+  resolveInvestigationMode,
+  buildEntityInvestigationPlan,
+  buildInvestigationContinuationContext,
+} = require('./investigation/EntityInvestigationContinuation');
 const { loadRepository } = require('../max/scoutAcquisition/ExistingIntelligence');
 const { assessExistingSufficiency } = require('../max/scoutAcquisition/CandidateUniverse');
 const { defaultDiscoveryAdapters } = require('../max/scoutAcquisition/DiscoveryAdapters');
+const {
+  evaluateDiscoveryCapability,
+  buildCapabilityBlockedResult,
+  CAPABILITY_BLOCKER_CODE,
+} = require('./coverage/DiscoveryCapabilityGate');
 const { runScoutAcquisitionIntelligence } = require('../max/scoutAcquisition/ScoutAdapter');
 const {
   buildDiscoveryPlan,
@@ -34,6 +47,7 @@ const {
 } = require('./universe/CandidateUniverseEstimate');
 const { runInvestigativeReasoningLoop } = require('./investigation/InvestigativeReasoningLoop');
 const { mergeIntoDiscoveryReport } = require('./investigation/MissionIntelligenceReport');
+const { buildExplainabilityGraph, serializeGraph } = require('./explainability/ExplainabilityGraph');
 const {
   prepareInvestigationWithMemory,
   persistDiscoveryKnowledge,
@@ -87,12 +101,18 @@ function buildPipelineResult(partial = {}) {
     gapAnalysis: partial.gapAnalysis || null,
     existingIntelligence: partial.existingIntelligence || null,
     intelligenceResult: partial.intelligenceResult || null,
-    qualifiedCount: partial.qualifiedCount != null ? Number(partial.qualifiedCount) : 0,
+    qualifiedCount: partial.qualifiedCount === null ? null
+      : (partial.qualifiedCount != null ? Number(partial.qualifiedCount) : 0),
     blockReason: partial.blockReason || null,
+    capabilityBlocked: partial.capabilityBlocked === true,
+    capabilityEvaluation: partial.capabilityEvaluation || null,
+    blockerCode: partial.blockerCode || null,
     coverageEngineUsed: partial.coverageEngineUsed !== false,
     marketMemoryRecall: partial.marketMemoryRecall || null,
     marketMemoryPersist: partial.marketMemoryPersist || null,
     memoryLoaded: partial.memoryLoaded === true,
+    explainabilityGraph: partial.explainabilityGraph || null,
+    investigationPlan: partial.investigationPlan || null,
   };
 }
 
@@ -168,6 +188,21 @@ async function runDiscoveryPipeline(input = {}) {
     consulted: true,
     error: existingError,
   };
+
+  // Unavailable evidence is not an exhausted market. Stop before adapter or
+  // provider invocation; callers can retry retrieval without spending on discovery.
+  if (existingError) {
+    return buildPipelineResult({
+      outcome: DISCOVERY_OUTCOMES.BLOCKED,
+      stages,
+      existingIntelligence: { ...existingIntelligence, companyCount: null, prospectCount: null, consulted: false, available: false },
+      blockReason: 'existing_intelligence_unavailable',
+      qualifiedCount: null,
+      coverageEngineUsed: false,
+      emptyMarketDecision: false,
+      confidence: null,
+    });
+  }
 
   let marketDefinition = buildMarketDefinition(input);
   if (marketMemoryRecall?.loaded && marketMemoryRecall.marketUnderstanding?.dominantTerminology?.length) {
@@ -259,23 +294,95 @@ async function runDiscoveryPipeline(input = {}) {
     })
   );
 
+  // ── SPEC-175: Capability Evaluation before external discovery ──
+  const capabilityStageStarted = nowIso();
+  const capabilityEvaluation = evaluateDiscoveryCapability({
+    adapters,
+    coveragePlan,
+    requireExternalDiscovery: opts.requireExternalDiscovery !== false,
+    discover: opts.discover,
+    enablePlaces: opts.enablePlaces,
+    placesProvider: opts.placesProvider,
+    apiKey: opts.apiKey,
+    fetchImpl: opts.fetchImpl,
+  });
+  stages.push(
+    buildStage('capability_evaluation', {
+      startedAt: capabilityStageStarted,
+      output: {
+        enoughSensors: capabilityEvaluation.enoughSensors,
+        canExecute: capabilityEvaluation.canExecute,
+        registry: capabilityEvaluation.registry,
+        operationalProviders: capabilityEvaluation.operationalProviders,
+      },
+    })
+  );
+
+  if (!capabilityEvaluation.canExecute) {
+    const blocked = buildCapabilityBlockedResult(capabilityEvaluation, {
+      coveragePlan,
+      existingIntelligence,
+      gapAnalysis,
+    });
+    return buildPipelineResult({
+      outcome: blocked.outcome,
+      stages,
+      marketDefinition,
+      universeEstimate,
+      coveragePlan,
+      gapAnalysis,
+      existingIntelligence,
+      blockReason: blocked.blockReason,
+      capabilityBlocked: true,
+      capabilityEvaluation: blocked.capabilityEvaluation,
+      blockerCode: blocked.blockerCode,
+      intelligenceReport: buildDiscoveryReport({
+        coverage: {},
+        candidateUniverse: [],
+        qualifiedCount: 0,
+      }),
+      emptyMarketDecision: false,
+      confidence: 0,
+      coverageEngineUsed: true,
+    });
+  }
+
   // ── Stage 3: Build Investigation Plan ──────────────────────────
   const planStageStarted = nowIso();
-  const investigationPlan = createInvestigationPlan({
-    mission,
-    marketDefinition,
-    opts: {
-      ...opts,
-      estimatedMarket: extractExpectedValue(universeEstimate),
-      universeEstimate,
-    },
+  const investigationMode = resolveInvestigationMode({
+    priorPayload: opts.priorDiscoveryPayload || {},
+    opts,
   });
+  let investigationPlan;
+  if (investigationMode === INVESTIGATION_MODES.ENTITY_CONTINUATION) {
+    investigationPlan = buildEntityInvestigationPlan({
+      mission,
+      marketDefinition,
+      priorPayload: opts.priorDiscoveryPayload || {},
+      opts: {
+        ...opts,
+        estimatedMarket: extractExpectedValue(universeEstimate),
+        universeEstimate,
+      },
+    });
+  } else {
+    investigationPlan = createHypothesisInvestigationPlan({
+      mission,
+      marketDefinition,
+      opts: {
+        ...opts,
+        estimatedMarket: extractExpectedValue(universeEstimate),
+        universeEstimate,
+      },
+    });
+  }
   stages.push(
     buildStage(DISCOVERY_PIPELINE_STAGES.BUILD_INVESTIGATION_PLAN, {
       startedAt: planStageStarted,
       output: {
         coveragePlan,
         investigationPlan,
+        investigationMode,
       },
     })
   );
@@ -293,9 +400,15 @@ async function runDiscoveryPipeline(input = {}) {
       tenantId,
       useCoverageEngine: true,
       marketDefinition,
-      useHypothesisEngine: opts.useHypothesisEngine !== false,
+      mission,
+      investigationPlan,
+      investigationMode,
+      entityInvestigationContinuation:
+        investigationMode === INVESTIGATION_MODES.ENTITY_CONTINUATION,
+      preservedCandidates: opts.preservedCandidates || [],
     });
   } catch (err) {
+    rethrowResearchProviderControl(err);
     stages.push(
       buildStage(DISCOVERY_PIPELINE_STAGES.EXECUTE_COVERAGE_PLAN, {
         startedAt: executeStarted,
@@ -329,11 +442,17 @@ async function runDiscoveryPipeline(input = {}) {
   const qualifiedCount =
     payload.qualifiedCount != null
       ? Number(payload.qualifiedCount)
-      : Array.isArray(payload.opportunities)
-        ? payload.opportunities.length
-        : investigation.qualifiedCount != null
-          ? Number(investigation.qualifiedCount)
-          : 0;
+      : Array.isArray(payload.opportunities) && Array.isArray(payload.fitCandidates)
+        ? payload.opportunities.length +
+          payload.fitCandidates.length +
+          (Array.isArray(payload.watchCandidates)
+            ? payload.watchCandidates.filter((row) => row.qualified === true).length
+            : 0)
+        : Array.isArray(payload.opportunities)
+          ? payload.opportunities.length
+          : investigation.qualifiedCount != null
+            ? Number(investigation.qualifiedCount)
+            : 0;
 
   stages.push(
     buildStage(DISCOVERY_PIPELINE_STAGES.EXECUTE_COVERAGE_PLAN, {
@@ -405,6 +524,12 @@ async function runDiscoveryPipeline(input = {}) {
       universeEstimate: revisedUniverseEstimate,
       existingIntelligence,
       memory: opts.memory || opts.investigationMemory || {},
+      priorOutcomeLearnings: opts.priorOutcomeLearnings || [],
+      investigationState:
+        payload.investigationState ||
+        (payload.investigation && payload.investigation.investigationState) ||
+        null,
+      candidateInvestigation: payload.candidateInvestigation || null,
       coverageResult: {
         candidates: candidateUniverse,
         searchHypotheses:
@@ -421,6 +546,12 @@ async function runDiscoveryPipeline(input = {}) {
     });
     investigationState = reasoningResult.state;
     missionIntelligenceReport = reasoningResult.report;
+    if (reasoningResult.learningInfluence?.length) {
+      missionIntelligenceReport = {
+        ...missionIntelligenceReport,
+        priorLearningInfluence: reasoningResult.learningInfluence,
+      };
+    }
     if (reasoningResult.state?.marketDefinition?.revised) {
       marketDefinition = reasoningResult.state.marketDefinition;
     }
@@ -471,9 +602,20 @@ async function runDiscoveryPipeline(input = {}) {
     intelligenceReport = mergeIntoDiscoveryReport(intelligenceReport, missionIntelligenceReport);
   }
 
+  let explainabilityGraph = null;
+  if (investigationState || missionIntelligenceReport) {
+    explainabilityGraph = buildExplainabilityGraph({
+      mission,
+      investigationState,
+      plan: investigationPlan,
+      missionIntelligenceReport,
+    });
+  }
+
   stages.push(
     buildStage(DISCOVERY_PIPELINE_STAGES.PRODUCE_INTELLIGENCE_REPORT, {
       output: intelligenceReport,
+      explainabilityGraph: explainabilityGraph ? serializeGraph(explainabilityGraph) : null,
     })
   );
 
@@ -507,6 +649,11 @@ async function runDiscoveryPipeline(input = {}) {
     coverageEngineUsed: true,
     marketMemoryRecall,
     memoryLoaded: Boolean(marketMemoryRecall?.loaded),
+    explainabilityGraph: explainabilityGraph ? serializeGraph(explainabilityGraph) : null,
+    investigationPlan,
+    learningInfluence:
+      (missionIntelligenceReport && missionIntelligenceReport.priorLearningInfluence) || [],
+    priorOutcomeLearnings: opts.priorOutcomeLearnings || [],
   });
 
   let marketMemoryPersist = null;

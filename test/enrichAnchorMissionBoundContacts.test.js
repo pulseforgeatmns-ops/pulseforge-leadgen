@@ -1,0 +1,325 @@
+'use strict';
+
+const { describe, it } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+const {
+  parseArgs,
+  RAILWAY_COMMAND,
+  DEFAULT_MISSION_ID,
+  isEligibleForCapacityProjection,
+  formatContactLine,
+  printReport,
+  missingCrmResult,
+  run,
+} = require('../scripts/enrichAnchorMissionBoundContacts');
+const { persistProviderChainEmail, enrichProspectRow } = require('../scripts/lib/anchorMissionBoundEnrichment');
+
+const SCRIPT = path.join(__dirname, '..', 'scripts', 'enrichAnchorMissionBoundContacts.js');
+const LIB = path.join(__dirname, '..', 'scripts', 'lib', 'anchorMissionBoundEnrichment.js');
+const source = fs.readFileSync(SCRIPT, 'utf8');
+const libSource = fs.readFileSync(LIB, 'utf8');
+
+describe('enrichAnchorMissionBoundContacts', () => {
+  it('requires --confirm-production and defaults to the Anchor mission', () => {
+    assert.equal(parseArgs([]).confirmProduction, false);
+    assert.equal(parseArgs([]).missionId, DEFAULT_MISSION_ID);
+    assert.equal(parseArgs(['--confirm-production']).confirmProduction, true);
+    assert.equal(
+      parseArgs(['--confirm-production', '--mission-id', 'mission_other']).missionId,
+      'mission_other'
+    );
+  });
+
+  it('refuses without --confirm-production', async () => {
+    await assert.rejects(
+      () => run({ confirmProduction: false, print: false }),
+      (err) => err.code === 'confirm_production_required'
+    );
+  });
+
+  it('does not send mail, revise CAPACITY, enable autosend, or change enabled_agents', () => {
+    assert.doesNotMatch(source, /require\(['"]\.\/regenerateAnchorCapacityRevision['"]\)/);
+    assert.doesNotMatch(source, /require\(['"]\.\/auditAnchorCapacitySendability['"]\)/);
+    assert.doesNotMatch(source, /require\(['"]\.\/executeAnchorOneOutbound['"]\)/);
+    assert.doesNotMatch(source, /REVISE_PREPARED_OUTREACH/);
+    assert.doesNotMatch(source, /GENERATE_CAPACITY/);
+    assert.doesNotMatch(source, /EXECUTE_OUTBOUND/);
+    assert.doesNotMatch(source, /APPROVE_EXECUTION/);
+    assert.doesNotMatch(source, /routeExecutionRequest/);
+    assert.doesNotMatch(source, /api\.brevo\.com\/v3\/smtp/);
+    assert.doesNotMatch(source, /sendEmail\s*\(/);
+    assert.doesNotMatch(source, /UPDATE\s+clients/i);
+    assert.doesNotMatch(source, /SET\s+autosend_enabled/i);
+    assert.doesNotMatch(source, /array_append\(\s*enabled_agents/i);
+    assert.match(source, /Never regenerates CAPACITY/);
+    assert.match(source, /isProjectableCrmProspect/);
+    assert.match(source, /invalidOutreachEmailReason/);
+    assert.doesNotMatch(libSource, /require\(['"]\.\/regenerateAnchorCapacityRevision['"]\)/);
+    assert.doesNotMatch(libSource, /REVISE_PREPARED_OUTREACH/);
+    assert.doesNotMatch(libSource, /UPDATE\s+clients/i);
+  });
+
+  it('does not persist emails that fail verification or outreach gates', async () => {
+    const queries = [];
+    const db = {
+      query: async (sql) => {
+        queries.push(sql);
+        return { rows: [] };
+      },
+    };
+    const unverified = await persistProviderChainEmail(db, {
+      prospect_id: 'p-1',
+      client_id: 10,
+    }, { email: 'partner@kluglaw.com', source: ['prospeo'] }, {
+      emailVerified: false,
+      emailStatus: 'unknown',
+      doNotContact: false,
+    }, false);
+    assert.equal(unverified.persisted, false);
+    assert.equal(unverified.reason, 'failed_safety_gates');
+
+    const dnc = await persistProviderChainEmail(db, {
+      prospect_id: 'p-1',
+      client_id: 10,
+    }, { email: 'partner@kluglaw.com', source: ['prospeo'] }, {
+      emailVerified: true,
+      emailStatus: 'valid',
+      doNotContact: true,
+    }, false);
+    assert.equal(dnc.persisted, false);
+
+    const invented = await persistProviderChainEmail(db, {
+      prospect_id: 'p-1',
+      client_id: 10,
+    }, { email: 'not-an-email', source: ['guess'] }, {
+      emailVerified: true,
+      emailStatus: 'valid',
+      doNotContact: false,
+    }, false);
+    assert.equal(invented.persisted, false);
+    assert.equal(queries.length, 0);
+  });
+
+  it('rejects inferred pattern_first and contaminated social-domain emails for CAPACITY projection', () => {
+    assert.equal(isEligibleForCapacityProjection({
+      prospectId: 'p-solomon',
+      company: 'Solomon Law Firm',
+      excluded: false,
+      verified: true,
+      email: 'peter@solomonlawfirm.com',
+      emailStatus: 'valid',
+      verificationSource: 'pattern_first',
+      dnc: false,
+    }), false);
+    assert.equal(isEligibleForCapacityProjection({
+      prospectId: 'p-stlouis',
+      company: 'Law Offices of Michael R. St. Louis',
+      excluded: false,
+      verified: true,
+      email: 'michael@linkedin.com',
+      emailStatus: 'valid',
+      verificationSource: 'pattern_first',
+      dnc: false,
+    }), false);
+    assert.equal(isEligibleForCapacityProjection({
+      prospectId: 'p-backus',
+      company: 'Backus, Meyer & Branch',
+      excluded: false,
+      verified: true,
+      email: 'jmeyer@backusmeyer.com',
+      emailStatus: 'valid',
+      verificationSource: 'existing_crm',
+      dnc: false,
+    }), true);
+    assert.equal(isEligibleForCapacityProjection({
+      prospectId: 'cde8f588-6969-47c3-8219-3f539b2b23cc',
+      company: 'Solomon Law Firm',
+      excluded: false,
+      verified: true,
+      email: 'peter@solomonlawfirm.com',
+      emailStatus: 'valid',
+      verificationSource: 'existing_crm',
+      enrichment_provenance: {
+        email: { source: 'pattern_first', original_source: 'pattern_first' },
+      },
+      dnc: false,
+    }), false);
+  });
+
+  it('does not trust a pattern_first email merely because a later read labels it existing_crm', async () => {
+    const persistedRunN = {
+      prospect_id: 'cde8f588-6969-47c3-8219-3f539b2b23cc',
+      client_id: 10,
+      company_name: 'Solomon Law Firm',
+      email: 'peter@solomonlawfirm.com',
+      email_verified: true,
+      email_status: 'valid',
+      email_verification_method: 'bouncer',
+      do_not_contact: false,
+      enrichment_provenance: {
+        email: { source: 'pattern_first', verifier: 'bouncer', status: 'valid' },
+      },
+    };
+
+    const runNPlusOne = await enrichProspectRow(persistedRunN, {
+      db: {},
+      dryRun: true,
+      processProspect: async () => ({
+        selectedEmail: null,
+        resolved: false,
+        errors: [],
+      }),
+      runEnrichmentChain: async () => null,
+    });
+
+    assert.notEqual(runNPlusOne.verificationSource, 'existing_crm');
+    assert.equal(runNPlusOne.verificationSource, 'pattern_first');
+    assert.notEqual(runNPlusOne.path, 'existing_crm');
+    assert.equal(runNPlusOne.verified, false);
+    assert.equal(isEligibleForCapacityProjection({
+      ...runNPlusOne,
+      company: persistedRunN.company_name,
+      verified: runNPlusOne.verified,
+      dnc: runNPlusOne.dnc,
+    }), false);
+  });
+
+  it('invalidates persisted social-domain contamination without treating it as existing_crm', async () => {
+    const result = await enrichProspectRow({
+      prospect_id: '5418dbf1-0ed1-4dab-854b-df9a4dfcf8d3',
+      client_id: 10,
+      company_name: 'Law Offices of Michael R. St. Louis',
+      email: 'michael@linkedin.com',
+      email_verified: true,
+      email_status: 'valid',
+      email_verification_method: 'bouncer',
+      do_not_contact: false,
+      notes: null,
+      enrichment_provenance: {
+        email: { source: 'pattern_first' },
+      },
+    }, {
+      db: {},
+      dryRun: true,
+      processProspect: async () => ({ selectedEmail: null, resolved: false, errors: [] }),
+      runEnrichmentChain: async () => null,
+    });
+    assert.equal(result.path, 'provider_chain');
+    assert.equal(result.email, null);
+    assert.equal(result.remediation.action, 'invalidate_contaminated');
+    assert.equal(isEligibleForCapacityProjection({
+      ...result,
+      company: 'Law Offices of Michael R. St. Louis',
+    }), false);
+  });
+
+  it('excludes Deliverability Test from CAPACITY eligibility even with a verified email', () => {
+    assert.equal(isEligibleForCapacityProjection({
+      prospectId: 'p-test',
+      company: 'Deliverability Test',
+      excluded: true,
+      verified: true,
+      email: 'test@example.com',
+      emailStatus: 'valid',
+      dnc: false,
+    }), false);
+    assert.equal(isEligibleForCapacityProjection({
+      prospectId: 'p-klug',
+      company: 'Klug Law Offices, PLLC',
+      excluded: false,
+      verified: true,
+      email: 'partner@kluglaw.com',
+      emailStatus: 'verified',
+      dnc: false,
+    }), true);
+    assert.equal(isEligibleForCapacityProjection({
+      prospectId: 'p-klug',
+      company: 'Klug Law Offices, PLLC',
+      excluded: false,
+      verified: true,
+      email: 'partner@kluglaw.com',
+      emailStatus: 'verified',
+      dnc: true,
+    }), false);
+  });
+
+  it('prints prospect, company, email, verification, persist, DNC, and eligibility count', () => {
+    const text = printReport({
+      tenantId: '10',
+      missionId: DEFAULT_MISSION_ID,
+      dryRun: false,
+      eligibleForCapacityProjection: 1,
+      contacts: [{
+        prospectId: 'p-klug',
+        company: 'Klug Law Offices, PLLC',
+        email: 'partner@kluglaw.com',
+        emailStatus: 'verified',
+        verificationSource: 'prospeo',
+        persisted: true,
+        path: 'provider_chain',
+        verified: true,
+        excluded: false,
+        dnc: false,
+      }, {
+        prospectId: 'p-test',
+        company: 'Deliverability Test',
+        email: null,
+        emailStatus: null,
+        verificationSource: null,
+        persisted: false,
+        path: null,
+        verified: false,
+        excluded: true,
+        dnc: false,
+      }],
+    });
+    assert.match(text, /Prospect ID: p-klug/);
+    assert.match(text, /Company: Klug Law Offices, PLLC/);
+    assert.match(text, /Discovered email: partner@kluglaw\.com/);
+    assert.match(text, /Verification status\/source: verified \/ prospeo/);
+    assert.match(text, /Persisted to CRM: yes/);
+    assert.match(text, /DNC state: false/);
+    assert.match(text, /Count of mission-bound prospects now eligible for CAPACITY projection: 1/);
+    assert.match(text, /Deliverability Test/);
+    assert.match(text, /regenerateAnchorCapacityRevision\.js/);
+    assert.match(text, /enrichAnchorMissionBoundContacts\.js --confirm-production/);
+    assert.equal(RAILWAY_COMMAND.includes(DEFAULT_MISSION_ID), true);
+  });
+
+  it('does not treat existing CRM emails as newly persisted', () => {
+    const line = formatContactLine({
+      prospectId: 'p-1',
+      company: 'Solomon Law Firm',
+      email: 'a@solomon.example',
+      emailStatus: 'valid',
+      verificationSource: 'existing_crm',
+      persisted: true,
+      path: 'existing_crm',
+      verified: true,
+      excluded: false,
+      dnc: false,
+    });
+    assert.match(line, /Persisted to CRM: no/);
+    assert.match(line, /Eligible for CAPACITY projection: yes/);
+  });
+
+  it('reports mission-bound IDs missing from CRM without inventing email', () => {
+    const row = missingCrmResult('missing-1');
+    assert.equal(row.email, null);
+    assert.equal(row.persisted, false);
+    assert.equal(row.reason, 'not_found_in_crm');
+    assert.equal(row.missionBoundCompanyId, 'missing-1');
+    assert.equal(isEligibleForCapacityProjection(row), false);
+  });
+
+  it('resolves enrichment through place id, domain, and scout CRM prospect UUID', () => {
+    assert.match(libSource, /listMissionBoundCompanyIds/);
+    assert.match(libSource, /listMissionBoundCrmLookupKeys/);
+    assert.match(libSource, /listMissionBoundProspectIds/);
+    assert.match(libSource, /loadCrmProspectsForMissionBoundCompanies/);
+    assert.match(libSource, /loadCrmProspectsByIds/);
+    assert.match(libSource, /aliasCrmMapToIdentities/);
+  });
+});

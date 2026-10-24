@@ -21,6 +21,7 @@ const {
 const { matchesGeography, matchesSegment } = require('./ExistingIntelligence');
 const { qualifyCandidate } = require('./InvestigationProvenance');
 const { evaluateIcpFit, qualifyProspect } = require('../../aim');
+const { buildProspectEvaluation } = require('./ProspectEvaluation');
 
 const FACILITY_PATTERNS = [
   /\b(propert(?:y|ies)|portfolio|multifamily|managed (?:units|doors|buildings)|facilities|office park|campus)\b/i,
@@ -108,7 +109,8 @@ function evaluateBasicFit(candidate, searchDefinition = {}) {
     return evaluateAimBasicFit(candidate, searchDefinition.aim);
   }
   const reasons = [];
-  const geography = searchDefinition.geography && searchDefinition.geography.label;
+  const geographyBlock = searchDefinition.geography || null;
+  const geography = geographyBlock && geographyBlock.label;
   const segments = searchDefinition.segments || [];
   const exclusions = searchDefinition.exclusions || [];
   const text = haystack(candidate);
@@ -126,7 +128,7 @@ function evaluateBasicFit(candidate, searchDefinition = {}) {
     };
   }
 
-  if (geography && !matchesGeography(candidate.location || candidate.address, geography)) {
+  if (geographyBlock && !matchesGeography(candidate.location || candidate.address, geographyBlock)) {
     return {
       level: FIT_LEVELS.REJECTED,
       score: 0.2,
@@ -373,9 +375,22 @@ function attachFitToClassified(classified, candidate, searchDefinition, now = Da
     }
   }
   const qualification = qualifyCandidate(next, { ...candidate, icpScore: candidate.icpScore }, now);
+  const evaluation = buildProspectEvaluation({
+    candidate,
+    classified: next,
+    fit,
+    qualification,
+    searchDefinition,
+  });
   const classifiedOpp = classifyOpportunity({ fit, classified: next, qualification });
   next.classification = classifiedOpp.classification;
   next.intent = classifiedOpp.intent;
+  next.evaluation = evaluation;
+  next.qualificationStatus = evaluation.qualification.status;
+  next.prospectBucket = evaluation.bucket;
+  next.qualified = evaluation.qualified;
+  next.readinessState = evaluation.readinessState || null;
+  next.evidenceKind = qualification.evidenceKind || null;
   if (classifiedOpp.intent !== INTENT_STATES.TIMED) {
     next.timing = Math.min(Number(next.timing || 0), 0.35);
   }
@@ -392,6 +407,7 @@ function attachFitToClassified(classified, candidate, searchDefinition, now = Da
     classified: next,
     fit,
     qualification,
+    evaluation,
     evidence,
     lastEvaluatedAt: nowIso(),
     evidenceObservedAt:

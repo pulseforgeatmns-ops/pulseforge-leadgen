@@ -11,7 +11,7 @@ const amo = require('../../../acquisition-mission');
 const { STAGES } = amo;
 const { createMissionEngine } = require('../../../mission-engine');
 const { createBuiltinRegistry } = require('../../../capabilities');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const {
   resolveAcquisitionActiveMission,
   resolveActiveMissionLock,
@@ -106,7 +106,7 @@ describe('SPEC-130 — AMO workspace hydration', () => {
       acquisitionMissionRuntime: runtime,
     });
 
-    assert.equal(resolved.id, mission.id);
+    assert.equal(resolved.mission.id, mission.id);
     assert.equal(runtimeEngine.list('10').length, 1);
     assert.ok(
       listAmoHydrationAuditLog().some((row) => row.event === 'AMO_ACTIVE_RESOLVED')
@@ -176,7 +176,13 @@ describe('SPEC-130 — AMO workspace hydration', () => {
     assert.notEqual(runtimeDecision.mission.id, legacy.id);
   });
 
-  it('Workspace ask executes Discovery after hydration with empty singleton store', async () => {
+  it('Workspace ask executes Discovery after hydration with empty singleton store', async (t) => {
+    const approval = require('../AmoOperatorApproval');
+    const original = approval.advanceDiscoveryAfterApproval;
+    t.mock.method(approval, 'advanceDiscoveryAfterApproval', (input) => original({
+      ...input,
+      runScout: async () => approval.fixtureScoutDiscoveryResult(),
+    }));
     const { source, mission } = buildPersistedAmoFixture();
     const runtime = createHydratingTestRuntime(source, { persist: true, pool: null });
     const runtimeEngine = runtime.engine();
@@ -216,7 +222,7 @@ describe('SPEC-130 — AMO workspace hydration', () => {
     assert.equal(runtimeEngine.list('10').length, 1);
     assert.equal(turn.workspaceOwnership.owner, WORKSPACE_OWNERS.ACTIVE_MISSION);
     assert.equal(turn.workspaceOwnership.missionRuntime, MISSION_RUNTIMES.AMO);
-    assert.equal(turn.resolution.action, 'executed');
+    assert.equal(turn.resolution.action, 'discovery_approved');
     assert.equal(turn.resolution.reason, 'acquisition_mission_discovery_approved');
     assert.equal(turn.mission.id, mission.id);
 

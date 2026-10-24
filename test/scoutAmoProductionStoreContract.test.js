@@ -1,0 +1,233 @@
+'use strict';
+
+/**
+ * Regression: production AMO Scout execution injected the mission store
+ * into Scout.discover as the SPEC-143 intelligence memory store.
+ *
+ * Production shape (Anchor tenant 10):
+ *   APPROVE_DISCOVERY → CER → TME → runScoutForAmoMission
+ *   → buildScoutDiscoverOpts → Scout.discover → store.loadForMarket()
+ *
+ * The AMO store does not implement loadForMarket. That threw and rolled
+ * back before any DISCOVERY contribution could persist.
+ */
+
+const { describe, it } = require('node:test');
+const assert = require('node:assert/strict');
+
+const amo = require('../packages/acquisition-mission');
+const {
+  createAcquisitionMissionEngine,
+  SPECIALISTS,
+  CONTRIBUTION_KINDS,
+} = amo;
+const {
+  buildScoutDiscoverOpts,
+  runScoutDiscovery,
+} = require('../packages/max/workspace/ScoutDiscoveryExecutor');
+const {
+  advancePlanAfterApproval,
+  advanceDiscoveryAfterApproval,
+} = require('../packages/max/workspace/AmoOperatorApproval');
+const { prepareInvestigationWithMemory } = require('../packages/scout/memory');
+
+const TENANT_ID = '10';
+const OBJECTIVE =
+  'Acquire recurring commercial cleaning customers from law firms in Greater Manchester, NH.';
+
+function productionCandidates() {
+  const now = new Date().toISOString();
+  return [
+    {
+      id: 'co-harbor',
+      tenantId: TENANT_ID,
+      name: 'Harbor Law Group',
+      companyName: 'Harbor Law Group',
+      industry: 'law_firm',
+      location: 'Manchester, NH',
+      address: '100 Elm St, Manchester, NH',
+      website: 'https://harborlaw.example',
+      phone: '603-555-0100',
+      placeId: 'place-harbor',
+      icpScore: 84,
+      updatedAt: now,
+      lastEvaluatedAt: now,
+      discoveredAt: now,
+      signals: [
+        {
+          type: 'hiring',
+          label: 'Hiring operations manager',
+          source: 'job_board',
+          observedAt: now,
+        },
+      ],
+      evidence: [
+        {
+          label: 'Operations manager job posting',
+          source: 'job_board',
+          snapshot: { source: 'job_board', companyName: 'Harbor Law Group' },
+        },
+      ],
+      people: [{ name: 'Alex Morgan', jobTitle: 'Office Manager' }],
+    },
+    {
+      id: 'co-granite',
+      tenantId: TENANT_ID,
+      name: 'Granite Legal Partners',
+      companyName: 'Granite Legal Partners',
+      industry: 'law_firm',
+      location: 'Bedford, NH',
+      address: '22 Bedford Center Rd, Bedford, NH',
+      website: 'https://granitelegal.example',
+      phone: '603-555-0144',
+      placeId: 'place-granite',
+      icpScore: 78,
+      updatedAt: now,
+      lastEvaluatedAt: now,
+      discoveredAt: now,
+      signals: [
+        {
+          type: 'hiring',
+          label: 'Hiring office coordinator',
+          source: 'linkedin',
+          observedAt: now,
+        },
+      ],
+      evidence: [
+        {
+          label: 'LinkedIn hiring post',
+          source: 'linkedin',
+          snapshot: { source: 'linkedin', companyName: 'Granite Legal Partners' },
+        },
+      ],
+      people: [{ name: 'Jordan Hale', jobTitle: 'Office Manager' }],
+    },
+  ];
+}
+
+function operationalPlacesProvider(candidates) {
+  return {
+    id: 'google_places',
+    available: () => true,
+    lastExecution: {
+      providerId: 'google_places',
+      executed: true,
+      abortReason: null,
+      queries: [{ city: 'Manchester', status: 'OK' }],
+      totals: { queries: 1, results: candidates.length, retries: 0, latencyMs: 1 },
+      errors: [],
+    },
+    collectEvidence: async () => candidates,
+    search: async () => candidates,
+  };
+}
+
+function createProductionMission(engine, overrides = {}) {
+  return engine.create({
+    tenantId: TENANT_ID,
+    clientId: 10,
+    objective: OBJECTIVE,
+    targetSegment: 'Law Firms',
+    ...overrides,
+  });
+}
+
+describe('AMO Scout production store contract', () => {
+  it('AMO mission store does not implement SPEC-143 loadForMarket', () => {
+    const engine = createAcquisitionMissionEngine();
+    assert.equal(typeof engine.store.loadForMarket, 'undefined');
+    assert.equal(typeof engine.store.putMission, 'function');
+    assert.equal(typeof engine.store.listOutcomeLearnings, 'function');
+  });
+
+  it('buildScoutDiscoverOpts does not inject engine.store as Scout memory store', () => {
+    const engine = createAcquisitionMissionEngine();
+    const mission = createProductionMission(engine, { planApproved: true });
+
+    const scoutOpts = buildScoutDiscoverOpts(mission, { store: engine.store }, { engine });
+
+    assert.notStrictEqual(scoutOpts.memoryStore, engine.store);
+    assert.notStrictEqual(scoutOpts.store, engine.store);
+    const injected = scoutOpts.memoryStore || scoutOpts.store;
+    if (injected) {
+      assert.equal(typeof injected.loadForMarket, 'function');
+    }
+  });
+
+  it('production injection shape can load market memory without loadForMarket throw', async () => {
+    const engine = createAcquisitionMissionEngine();
+    const mission = createProductionMission(engine, { planApproved: true });
+    const scoutOpts = buildScoutDiscoverOpts(mission, {}, { engine });
+
+    const memory = await prepareInvestigationWithMemory({
+      tenantId: TENANT_ID,
+      mission,
+      marketDefinition: {
+        geography: 'Greater Manchester NH',
+        segment: 'law_firm',
+      },
+      opts: { store: scoutOpts.memoryStore || scoutOpts.store },
+    });
+
+    assert.equal(memory.memory.loaded, true);
+    assert.equal(memory.memory.tenantId, TENANT_ID);
+  });
+
+  it('canonical AMO Scout.discover path does not throw store.loadForMarket is not a function', async () => {
+    const engine = createAcquisitionMissionEngine();
+    const mission = createProductionMission(engine, { planApproved: true });
+    const candidates = productionCandidates();
+
+    const executionResult = await runScoutDiscovery(
+      { mission },
+      {
+        engine,
+        scoutCompanies: candidates,
+        discover: async () => candidates,
+        enablePlaces: true,
+        placesProvider: operationalPlacesProvider(candidates),
+        allowFixtureFallback: false,
+      }
+    );
+
+    assert.notEqual(executionResult.status, 'FAILED');
+    assert.ok(executionResult.contributions);
+  });
+
+  it('APPROVE_DISCOVERY persists a Scout DISCOVERY contribution on the production path', async () => {
+    const engine = createAcquisitionMissionEngine();
+    const mission = createProductionMission(engine);
+    const candidates = productionCandidates();
+
+    const planResult = await advancePlanAfterApproval({
+      engine,
+      mission,
+      tenantId: TENANT_ID,
+      question: 'Approved.',
+    });
+
+    const discoveryResult = await advanceDiscoveryAfterApproval({
+      engine,
+      mission: planResult.snapshot.mission,
+      tenantId: TENANT_ID,
+      question: 'Approved. Begin Discovery.',
+      allowFixtureFallback: false,
+      discover: async () => candidates,
+      scoutCompanies: candidates,
+      enablePlaces: true,
+      placesProvider: operationalPlacesProvider(candidates),
+    });
+
+    assert.equal(discoveryResult.executionOutcome, 'completed');
+    assert.ok(discoveryResult.discovery);
+    assert.equal(discoveryResult.discovery.specialist, SPECIALISTS.SCOUT);
+    assert.equal(discoveryResult.discovery.kind, CONTRIBUTION_KINDS.DISCOVERY);
+
+    const snapshot = engine.inspect(mission.id, { tenantId: TENANT_ID });
+    const persisted = snapshot.contributions.filter(
+      (row) => row.specialist === SPECIALISTS.SCOUT && row.kind === CONTRIBUTION_KINDS.DISCOVERY
+    );
+    assert.equal(persisted.length, 1);
+    assert.ok(persisted[0].payload);
+  });
+});

@@ -6,12 +6,10 @@
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const {
-  maybeHandleRetrievalBeforeDelegationTurn,
+  maybeHandleRetrievalBeforeDelegationTurn: rawRetrievalHandler,
   isHardRetrievalQuestion,
 } = require('../RetrievalBeforeDelegationContext');
 const {
@@ -84,6 +82,7 @@ function anchorOperatingOpts() {
   return {
     scoutLaunched: () => scoutLaunched,
     opts: {
+      capability: { available: false, reason: 'unit_fixture_not_recorded' },
       loadCampaignAo: async ({ clientId }) => {
         assert.equal(Number(clientId), ANCHOR_ID);
         return {
@@ -491,6 +490,7 @@ describe('SPEC-105 tenant isolation', () => {
     const bundle = await loadOperatingEvidence({
       context: { tenantId: '10', clientId: 10 },
       operatingEvidenceOpts: {
+        capability: { available: false, reason: 'unit_fixture_not_recorded' },
         loadCampaignAo: async ({ clientId }) => {
           seen.push(clientId);
           return {
@@ -527,6 +527,7 @@ describe('SPEC-105 tenant isolation', () => {
     const bundle = await loadOperatingEvidence({
       context: { tenantId: '10', clientId: 10 },
       operatingEvidenceOpts: {
+        capability: { available: false, reason: 'unit_fixture_not_recorded' },
         loadCampaignAo: async () => ({
           available: true,
           progress: { campaign_name: 'Other', seeded_in_ao: 9 },
@@ -554,6 +555,7 @@ describe('SPEC-105 tenant isolation', () => {
     const bundle = await loadOperatingEvidence({
       context: { tenantId: '10', clientId: 10 },
       operatingEvidenceOpts: {
+        capability: { available: false, reason: 'unit_fixture_not_recorded' },
         loadCampaignAo: async () => ({
           available: true,
           progress: { campaign_name: 'AS', seeded_in_ao: 4 },
@@ -614,19 +616,27 @@ describe('SPEC-105 regression', () => {
     assert.equal(isOperatingEvidenceQuestion('Who are our ideal customers?'), false);
   });
 
-  it('WorkspaceEngine places operating retrieval inside the existing retrieval gate', () => {
-    const engineSrc = fs.readFileSync(path.join(__dirname, '..', 'WorkspaceEngine.js'), 'utf8');
-    const retrieveAt = engineSrc.indexOf(
-      'const retrievalTurn = await maybeHandleRetrievalBeforeDelegationTurn'
-    );
-    const updateAt = engineSrc.indexOf('await maybeHandleOperatorOperatingUpdate');
-    const scoutAt = engineSrc.indexOf('await maybeHandleScoutAcquisitionTurn');
-    const cieAt = engineSrc.indexOf('await maybeHandleClientIntelligenceTurn');
-    assert.ok(retrieveAt > 0);
-    assert.ok(updateAt > retrieveAt);
-    assert.ok(scoutAt > updateAt);
-    assert.ok(cieAt > scoutAt);
-    assert.match(engineSrc, /operatingEvidenceOpts/);
+  it('retrieves tenant operating evidence without delegating new discovery or answering from Blueprint advice', async () => {
+    const loaders = anchorOperatingOpts();
+    let scoutCalls = 0;
+    const engine = createWorkspaceEngine({
+      disableLlm: true,
+      missionsEnabled: false,
+      operatingEvidenceOpts: loaders.opts,
+      scoutAcquisitionOpts: { runLoop: async () => { scoutCalls += 1; throw new Error('Unexpected Scout delegation'); } },
+    });
+    const result = await engine.ask({
+      question: 'What prospects do we already have?',
+      context: { tenantId: String(ANCHOR_ID), clientId: ANCHOR_ID },
+    });
+    assert.equal(result.workspaceOwnership.owner, 'knowledge_retrieval');
+    assert.equal(result.domainDecision.reason, 'operating_evidence_retrieval');
+    assert.match(result.prose, /18 existing prospect/i);
+    assert.equal(result.retrieval.delegated, false);
+    assert.equal(result.clientIntelligence, undefined);
+    assert.equal(result.operatingUpdate, undefined);
+    assert.equal(result.mission, null);
+    assert.equal(scoutCalls, 0);
   });
 
   it('Pilot 0 inventory prompt does not return Blueprint-only CIE advice', async () => {
@@ -659,3 +669,7 @@ describe('SPEC-105 regression', () => {
     assert.doesNotMatch(result.prose, /I'd recommend a focused first campaign/i);
   });
 });
+
+// The same explicit CIE fixture contract applies to direct retrieval entry points.
+const { createHermeticRetrievalHandler } = require('./workspaceTestHarness');
+const maybeHandleRetrievalBeforeDelegationTurn = createHermeticRetrievalHandler(rawRetrievalHandler);

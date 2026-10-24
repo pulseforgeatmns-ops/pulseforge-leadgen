@@ -14,7 +14,7 @@ const {
   clearWorkspaceOwnershipAuditLog,
   listWorkspaceOwnershipAuditLog,
 } = require('../audit/WorkspaceOwnershipAudit');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { createMemoryStore } = require('../../../../services/operatorObjectives');
 const { hasExecutionLanguage } = require('../ExecutionLanguageDetection');
 
@@ -34,6 +34,7 @@ describe('SPEC-126 — Mission Creation Takes Precedence Over Objective Persiste
 
   it('selects mission_creation for "Create a mission..." not objective_persistence', async () => {
     const ownership = await resolveWorkspaceOwner({
+      acquisitionMissionRuntime: createTestAmoRuntime(),
       question:
         'Create a mission to acquire one recurring commercial cleaning client in Greater Manchester.',
       context: { tenantId: '10' },
@@ -44,6 +45,7 @@ describe('SPEC-126 — Mission Creation Takes Precedence Over Objective Persiste
 
   it('selects mission_creation for Operate through Pulseforge phrasing', async () => {
     const ownership = await resolveWorkspaceOwner({
+      acquisitionMissionRuntime: createTestAmoRuntime(),
       question: 'Operate through Pulseforge for Anchor Cleaning outreach',
       context: { tenantId: '10' },
     });
@@ -65,6 +67,7 @@ describe('SPEC-126 — Mission Creation Takes Precedence Over Objective Persiste
 
   it('selects objective_persistence for explicit save/track requests', async () => {
     const ownership = await resolveWorkspaceOwner({
+      acquisitionMissionRuntime: createTestAmoRuntime(),
       question:
         'Save this as an active objective: build qualified attention for the public Max launch.',
       context: { tenantId: '1' },
@@ -74,6 +77,7 @@ describe('SPEC-126 — Mission Creation Takes Precedence Over Objective Persiste
 
   it('selects objective_persistence for remember my goal', async () => {
     const ownership = await resolveWorkspaceOwner({
+      acquisitionMissionRuntime: createTestAmoRuntime(),
       question: 'Remember my goal to expand into Boston next quarter.',
       context: { tenantId: '1' },
     });
@@ -82,6 +86,7 @@ describe('SPEC-126 — Mission Creation Takes Precedence Over Objective Persiste
 
   it('acquisition objectives prefer mission_creation over objective_persistence', async () => {
     const ownership = await resolveWorkspaceOwner({
+      acquisitionMissionRuntime: createTestAmoRuntime(),
       question: ACQUIRE_OBJECTIVE,
       context: { tenantId: '10' },
     });
@@ -92,6 +97,7 @@ describe('SPEC-126 — Mission Creation Takes Precedence Over Objective Persiste
   it('emits WORKSPACE_OWNER for MissionCreation never ObjectivePersistence together', async () => {
     const audit = createWorkspaceOwnershipAudit();
     const ownership = await resolveWorkspaceOwner({
+      acquisitionMissionRuntime: createTestAmoRuntime(),
       question:
         'Create a mission to acquire one recurring commercial cleaning client.',
       context: { tenantId: '10' },
@@ -112,6 +118,7 @@ describe('SPEC-126 — Mission Creation Takes Precedence Over Objective Persiste
   it('emits WORKSPACE_OWNER ObjectivePersistence for explicit persistence only', async () => {
     const audit = createWorkspaceOwnershipAudit();
     const ownership = await resolveWorkspaceOwner({
+      acquisitionMissionRuntime: createTestAmoRuntime(),
       question: 'Track this objective: evidence-gated public Max launch.',
       context: { tenantId: '1' },
     });
@@ -128,7 +135,16 @@ describe('SPEC-126 — Mission Creation Takes Precedence Over Objective Persiste
     const engine = createWorkspaceEngine({
       acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       missionsEnabled: true,
-      operatorObjectiveOpts: { store },
+      operatorObjectiveOpts: {
+        store,
+        operatorContextOpts: {
+          store: require('../../../../services/operatorContext').createMemoryStore(),
+          objectiveOpts: { store },
+          cieOpts: { store: require('../../../../services/clientIntelligenceInterview').createMemoryStore() },
+          listMissions: async () => [],
+          loadOutcomes: async () => [],
+        },
+      },
       missionEngine: {
         activeMissionResolver: {
           resolveActiveMission: async () => null,
@@ -156,7 +172,16 @@ describe('SPEC-126 — Mission Creation Takes Precedence Over Objective Persiste
     const engine = createWorkspaceEngine({
       disableLlm: true,
       missionsEnabled: false,
-      operatorObjectiveOpts: { store },
+      operatorObjectiveOpts: {
+        store,
+        operatorContextOpts: {
+          store: require('../../../../services/operatorContext').createMemoryStore(),
+          objectiveOpts: { store },
+          cieOpts: { store: require('../../../../services/clientIntelligenceInterview').createMemoryStore() },
+          listMissions: async () => [],
+          loadOutcomes: async () => [],
+        },
+      },
     });
 
     const result = await engine.ask({
@@ -174,7 +199,7 @@ describe('SPEC-126 — Mission Creation Takes Precedence Over Objective Persiste
     assert.equal(result.domainDecision.reason, 'operator_objective_established');
   });
 
-  it('WorkspaceEngine.ask creates mission for Operate through Pulseforge', async () => {
+  it('WorkspaceEngine.ask asks for the missing business objective before operating', async () => {
     const amoEngine = amo.createAcquisitionMissionEngine();
     const engine = createWorkspaceEngine({
       acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
@@ -195,7 +220,9 @@ describe('SPEC-126 — Mission Creation Takes Precedence Over Objective Persiste
     });
 
     assert.equal(result.workspaceOwnership.owner, WORKSPACE_OWNERS.MISSION_CREATION);
-    assert.match(result.prose, /Mission Created|Mission Resumed/);
-    assert.ok(result.mission);
+    assert.equal(result.domainDecision.reason, 'acquisition_objective_clarification_required');
+    assert.match(result.prose, /business objective/i);
+    assert.equal(result.mission, null);
+    assert.equal(amoEngine.list('10').length, 0);
   });
 });

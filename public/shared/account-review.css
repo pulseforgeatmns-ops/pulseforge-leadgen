@@ -1,0 +1,15 @@
+.ar-overlay { z-index: 1460; }
+.ar-sidebar input { width: 100%; box-sizing: border-box; min-height: 42px; margin-bottom: 10px; border-radius: 9px; border: 1px solid var(--pf-border-strong); color: var(--pf-text); background: var(--pf-bg); padding: 10px; font: 12px var(--pf-font-body); }
+.ar-account { min-height: 90px; }
+.ar-attention { display: block; color: var(--pf-gold); font-size: 10px; margin-top: 8px; }
+.ar-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; padding: 18px; margin: 20px 0; border: 1px solid var(--pf-border); border-radius: 14px; background: var(--pf-bg); }
+.ar-field { min-width: 0; }
+.ar-field dt { font-size: 10px; color: var(--pf-text-dim); margin-bottom: 6px; }
+.ar-field dd { font-size: 12px; margin: 0; overflow-wrap: anywhere; }
+.ar-note { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; }
+.ar-help { padding: 15px; color: var(--pf-gold); border: 1px solid var(--pf-gold); background: var(--pf-gold-glow); border-radius: 12px; }
+.ar-more h4, #arDetail > h4 { color: var(--pf-gold); font-size: 13px; margin: 25px 0 10px; }
+.ar-event { border-top: 1px solid var(--pf-border); padding: 10px 0; }
+.ar-panel .cr-sidebar, .ar-panel .cr-detail { scrollbar-width: thin; scrollbar-color: var(--pf-border-strong) transparent; }
+.ar-overlay :is(button,input,select):focus-visible { outline: 2px solid var(--pf-gold); outline-offset: 3px; }
+@media (max-width: 760px) { .ar-panel .cr-layout { grid-template-rows: 235px minmax(0, 1fr); } }

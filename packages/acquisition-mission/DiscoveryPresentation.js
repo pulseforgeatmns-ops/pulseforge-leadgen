@@ -6,6 +6,11 @@
  */
 
 const { formatSignalLabel, sourceLabel } = require('./DiscoveryPayload');
+const {
+  normalizeProviderExecution,
+  formatProviderExecutionLines,
+} = require('../scout/coverage/ProviderExecution');
+const { selectCanonicalContribution } = require('./CanonicalContributionSelection');
 
 /**
  * @param {unknown} item
@@ -106,6 +111,7 @@ function presentationFromDiscoveryPayload(payload = {}) {
       : discoveryReport && discoveryReport.candidateUniverse != null
         ? Number(discoveryReport.candidateUniverse)
         : null;
+  const providerExecution = normalizeProviderExecution(payload.providerExecution || []);
 
   let rankedProspects = Array.isArray(payload.rankedProspects)
     ? payload.rankedProspects.map((row) => ({ ...row }))
@@ -164,6 +170,7 @@ function presentationFromDiscoveryPayload(payload = {}) {
     discoveryReport,
     discoveryStatus,
     candidateUniverseCount,
+    providerExecution,
   };
 }
 
@@ -307,6 +314,11 @@ function formatDiscoveryResultsLines(presentation) {
     lines.push('');
   }
 
+  if (presentation.providerExecution && presentation.providerExecution.length) {
+    lines.push(...formatProviderExecutionLines(presentation.providerExecution));
+    lines.push('');
+  }
+
   if (presentation.coverage || presentation.discoveryReport) {
     lines.push('Coverage');
     lines.push('');
@@ -367,10 +379,13 @@ function formatDiscoveryResultsProse(payload) {
  * @param {object[]} contributions
  * @returns {object|null}
  */
-function findLatestDiscoveryContribution(contributions = []) {
-  return [...contributions]
-    .reverse()
-    .find((row) => row.specialist === 'scout' && row.kind === 'discovery') || null;
+function findLatestDiscoveryContribution(contributions = [], mission = null) {
+  return selectCanonicalContribution(contributions, {
+    missionId: mission?.id,
+    specialist: 'scout',
+    kind: 'discovery',
+    mission,
+  });
 }
 
 module.exports = {

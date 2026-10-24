@@ -5,6 +5,7 @@
  */
 
 const { DISCOVERY_STRATEGIES } = require('./types');
+const { resolveCanonicalSegmentKey } = require('./intelligence/MarketDefinition');
 
 /**
  * Select discovery strategy from gap analysis — internal optimization only.
@@ -34,6 +35,8 @@ function selectDiscoveryStrategy(gapAnalysis, existing) {
 function buildDelegationFromMission(mission, scoutPayload = {}) {
   const constraints = mission.constraints || {};
   const plan = (mission.plan && mission.plan.missionPlan) || mission.missionPlan || {};
+  const structured = mission.structuredMission || null;
+  const marketPlan = (structured && structured.market) || (plan && plan.market) || {};
   const profileGeo =
     constraints.discoveryProfile &&
     constraints.discoveryProfile.geography &&
@@ -46,33 +49,48 @@ function buildDelegationFromMission(mission, scoutPayload = {}) {
     constraints.locationHint ||
     profileGeo ||
     (plan.geography && plan.geography.label) ||
+    (structured && structured.geography && structured.geography.region) ||
     null;
+
+  const legacySegments =
+    constraints.discoveryProfile &&
+    Array.isArray(constraints.discoveryProfile.industryTargets)
+      ? constraints.discoveryProfile.industryTargets.slice(0, 1)
+      : [];
+
+  const canonical = resolveCanonicalSegmentKey({
+    mission,
+    segments: legacySegments,
+    operatorObjective: mission.objectiveText || mission.objective,
+    operatorDirection: scoutPayload.operatorMessage || null,
+    missionSegment: marketPlan.segment,
+    constraintVertical: constraints.vertical,
+  });
+  const segmentKey = canonical.segmentKey;
+  const segments = Array.isArray(marketPlan.eligibleSubsegments) && marketPlan.eligibleSubsegments.length
+    ? marketPlan.eligibleSubsegments.slice()
+    : segmentKey && segmentKey !== 'general' ? [segmentKey] : legacySegments;
+
   return {
     tenantId: String(mission.tenantId || mission.clientId || scoutPayload.tenantId || ''),
     targetContext: {
       geography,
-      segments: constraints.vertical
-        ? [constraints.vertical]
-        : constraints.discoveryProfile &&
-            Array.isArray(constraints.discoveryProfile.industryTargets)
-          ? constraints.discoveryProfile.industryTargets.slice(0, 1)
-          : [],
-      businessType: constraints.vertical || constraints.industry || null,
+      segments,
+      cities: ((structured && structured.geography && structured.geography.cities) || []).slice(),
+      businessType: segmentKey && segmentKey !== 'general' ? segmentKey : constraints.industry || null,
+      missionBound: Boolean(structured && mission.structuredMissionApproved),
+      structuredMission: Boolean(structured),
     },
     businessContext: {
       serviceGeography: geography,
-      preferredSegments: constraints.vertical
-        ? [constraints.vertical]
-        : constraints.discoveryProfile &&
-            Array.isArray(constraints.discoveryProfile.industryTargets)
-          ? constraints.discoveryProfile.industryTargets.slice(0, 1)
-          : [],
+      preferredSegments: segments,
       operatorDirection: scoutPayload.operatorMessage || null,
       commercialCapability:
         constraints.discoveryProfile &&
         /cleaning/i.test(String(constraints.discoveryProfile.name || ''))
           ? 'commercial_cleaning'
           : null,
+      missionObjectiveImmutable: Boolean(structured && mission.structuredMissionApproved),
     },
   };
 }

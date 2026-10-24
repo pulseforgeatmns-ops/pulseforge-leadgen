@@ -80,11 +80,15 @@ function normalizeSuccessMetric(input = {}) {
 }
 
 function normalizeMarket(input = {}) {
+  const eligibleSubsegments = Array.isArray(input.eligibleSubsegments)
+    ? [...new Set(input.eligibleSubsegments.map(asText).filter(Boolean))]
+    : [];
   return {
     segment: asText(input.segment) || null,
     industry: asText(input.industry) || null,
     buyer: asText(input.buyer) || null,
     label: asText(input.label) || null,
+    eligibleSubsegments,
   };
 }
 
@@ -92,10 +96,12 @@ function normalizeGeography(input = {}) {
   const cities = Array.isArray(input.cities)
     ? input.cities.map(asText).filter(Boolean)
     : [];
+  const scope = asText(input.scope).toLowerCase() || null;
   return {
     region: asText(input.region) || null,
     cities,
     mention: asText(input.mention) || null,
+    scope: scope === 'nationwide' || scope === 'regional' || scope === 'local' ? scope : null,
   };
 }
 

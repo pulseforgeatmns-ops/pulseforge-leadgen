@@ -1,9 +1,11 @@
 'use strict';
 
-const { describe, it } = require('node:test');
+const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+
+const dualWritePath = require.resolve('../utils/knowledgeDualWrite');
 
 const {
   ContentOutcomeError,
@@ -26,6 +28,32 @@ function withStore() {
 }
 
 describe('contentOutcomeIntelligence (SPEC-092)', () => {
+  /** @type {import('node:module').Module | undefined} */
+  let originalDualWrite;
+  /** @type {string | undefined} */
+  let previousDualWriteFlag;
+
+  before(() => {
+    previousDualWriteFlag = process.env.KNOWLEDGE_DUAL_WRITE;
+    process.env.KNOWLEDGE_DUAL_WRITE = '0';
+    originalDualWrite = require.cache[dualWritePath];
+    require.cache[dualWritePath] = {
+      id: dualWritePath,
+      filename: dualWritePath,
+      loaded: true,
+      exports: { safeWriteOperational() {}, OPERATIONAL_EVENTS: {} },
+    };
+  });
+
+  after(async () => {
+    if (originalDualWrite) require.cache[dualWritePath] = originalDualWrite;
+    else delete require.cache[dualWritePath];
+    if (previousDualWriteFlag === undefined) delete process.env.KNOWLEDGE_DUAL_WRITE;
+    else process.env.KNOWLEDGE_DUAL_WRITE = previousDualWriteFlag;
+    const { getKnowledgeBoot } = require('../utils/knowledgeRuntime');
+    await getKnowledgeBoot({ reset: true, inMemory: true });
+  });
+
   it('creates a publication from a content artifact with objective', async () => {
     const { opts } = withStore();
     const pub = await createContentPublication(

@@ -38,6 +38,12 @@ const {
 const STR_OBJECTIVE =
   'Acquire one recurring commercial cleaning client from a short-term rental operator in Greater Manchester.';
 
+const SUBSTRAL_OBJECTIVE =
+  'Acquire one paid Studio Substral website assessment from an established business with a live website and a real decision about what to fix, rebuild, or leave alone.';
+
+const COMPOUND_REGION_ANSWER =
+  'Decision: region = Greater Manchester, NH and southern New Hampshire. Approval: approved.';
+
 describe('SPEC-130 — Mission Planning Engine', () => {
   it('converts a fully specified objective into a structured contract with provenance', () => {
     const { draft, understanding, confirmation, executed, pipeline } = planFromObjective(STR_OBJECTIVE);
@@ -94,6 +100,22 @@ describe('SPEC-130 — Mission Planning Engine', () => {
     assert.ok(next.draft.geography.cities.includes('Hooksett'));
     assert.equal(next.draft.market.segment, 'short_term_rental');
     assert.match(next.confirmation, /Evidence Threshold/i);
+  });
+
+  it('accepts structured free-text region clarification without choice buttons', () => {
+    const first = planFromObjective(SUBSTRAL_OBJECTIVE, {
+      targetSegment: 'Established businesses with live websites — United States',
+    });
+    assert.ok(first.ambiguities.length);
+    assert.match(first.ambiguities[0].question, /Which region should this mission cover/i);
+
+    const next = applyClarification(SUBSTRAL_OBJECTIVE, COMPOUND_REGION_ANSWER, {
+      prior: first,
+      targetSegment: 'Established businesses with live websites — United States',
+    });
+    assert.equal(next.unmatchedClarification, undefined);
+    assert.equal(next.readyForConfirmation, true);
+    assert.equal(next.draft.geography.region, 'Greater Manchester');
   });
 
   it('does not treat segment language after Manchester NH as extra cities', () => {

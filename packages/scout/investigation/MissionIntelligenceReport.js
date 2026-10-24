@@ -317,6 +317,121 @@ function buildReportSummary({
   return parts.join(' ');
 }
 
+/** Keys that must never cross the specialist boundary (SPEC-173). */
+const INTERNAL_REASONING_FIELD_NAMES = Object.freeze([
+  'activeHypotheses',
+  'searchHypotheses',
+  'hypothesisHistory',
+  'investigationGraph',
+  'explorationTree',
+  'candidateBranches',
+  'coveragePlanner',
+  'investigationState',
+  'investigativeStrategy',
+  'confidenceEvolution',
+  'investigationCycles',
+  'priorUnderstanding',
+]);
+
+/** Contract-forbidden keys enforced by assertContract for Scout. */
+const SCOUT_CONTRACT_FORBIDDEN_KEYS = Object.freeze(['hypothesis', 'hypotheses']);
+
+function walkObjectKeys(value, acc = []) {
+  if (!value || typeof value !== 'object') return acc;
+  if (Array.isArray(value)) {
+    for (const item of value) walkObjectKeys(item, acc);
+    return acc;
+  }
+  for (const [key, child] of Object.entries(value)) {
+    acc.push(key);
+    walkObjectKeys(child, acc);
+  }
+  return acc;
+}
+
+function containsForbiddenReasoningKeys(value, extraForbidden = []) {
+  const forbidden = new Set([...SCOUT_CONTRACT_FORBIDDEN_KEYS, ...extraForbidden]);
+  return walkObjectKeys(value).some((key) => forbidden.has(key));
+}
+
+function projectJudgmentResultForBoundary(judgmentResult = null) {
+  if (!judgmentResult || typeof judgmentResult !== 'object') return null;
+  return {
+    activatedHeuristics: (judgmentResult.activatedHeuristics || []).map((item) => ({
+      id: item.id,
+      heuristicId: item.heuristicId,
+      name: item.name,
+      category: item.category,
+      score: item.score,
+      confidence: item.confidence,
+    })),
+    overallJudgment: judgmentResult.overallJudgment || null,
+    basedOnHeuristics: judgmentResult.basedOnHeuristics === true,
+  };
+}
+
+function projectStrategicDecisionForBoundary(strategicDecision = null) {
+  if (!strategicDecision || typeof strategicDecision !== 'object') return null;
+  return {
+    recommendationOverlay: strategicDecision.recommendationOverlay || null,
+    expectedBusinessOutcome: strategicDecision.expectedBusinessOutcome || null,
+    tradeoff: strategicDecision.tradeoff || null,
+    rationale: strategicDecision.rationale || null,
+  };
+}
+
+function projectOpportunityIntelligenceForBoundary(opportunityIntelligence = null) {
+  if (!opportunityIntelligence || typeof opportunityIntelligence !== 'object') return null;
+  return {
+    topOpportunity: opportunityIntelligence.topOpportunity || null,
+    topOpportunities: opportunityIntelligence.topOpportunities || [],
+    opportunities: Array.isArray(opportunityIntelligence.opportunities)
+      ? opportunityIntelligence.opportunities.slice(0, 10)
+      : [],
+    notScoreBased: opportunityIntelligence.notScoreBased === true,
+  };
+}
+
+/**
+ * SPEC-173 — Project internal Mission Intelligence Report to public executive-facing MIR.
+ * Explicit boundary projection: never serializes runtime investigation state.
+ * @param {object} internalMir
+ * @returns {object|null}
+ */
+function buildPublicMissionIntelligenceReport(internalMir = {}) {
+  if (!internalMir || typeof internalMir !== 'object') return null;
+
+  return {
+    kind: 'mission_intelligence_report',
+    spec: 'SPEC-173',
+    projectionOf: internalMir.spec || 'SPEC-159',
+    adr: internalMir.adr || 'ADR-079',
+    summary: internalMir.summary || null,
+    finalMarketDefinition: internalMir.finalMarketDefinition || null,
+    universeEstimate: internalMir.universeEstimate || null,
+    evidenceGraphSummary: internalMir.evidenceGraphSummary || null,
+    businessUnderstanding: internalMir.businessUnderstanding || null,
+    businessJudgment: internalMir.businessJudgment || null,
+    judgmentResult: projectJudgmentResultForBoundary(internalMir.judgmentResult),
+    remainingUnknowns: Array.isArray(internalMir.remainingUnknowns)
+      ? internalMir.remainingUnknowns.slice()
+      : [],
+    currentConfidence: internalMir.currentConfidence ?? null,
+    recommendation: internalMir.recommendation || null,
+    strategicDecision: projectStrategicDecisionForBoundary(internalMir.strategicDecision),
+    opportunityIntelligence: projectOpportunityIntelligenceForBoundary(internalMir.opportunityIntelligence),
+    topOpportunities: internalMir.topOpportunities || [],
+    suggestedNextInvestigation: internalMir.suggestedNextInvestigation || null,
+    outcomeReview: internalMir.outcomeReview || null,
+    coverage: internalMir.coverage || null,
+    understandingFirst: internalMir.understandingFirst === true,
+    judgmentFromHeuristics: internalMir.judgmentFromHeuristics === true,
+    synthesizedNotRaw: internalMir.synthesizedNotRaw === true,
+    basedOnStrategicDecision: internalMir.basedOnStrategicDecision === true,
+    boundaryProjected: true,
+  };
+}
+
 function mergeIntoDiscoveryReport(discoveryReport = {}, missionReport = {}) {
   return {
     ...discoveryReport,
@@ -344,10 +459,15 @@ function mergeIntoDiscoveryReport(discoveryReport = {}, missionReport = {}) {
 }
 
 module.exports = {
+  INTERNAL_REASONING_FIELD_NAMES,
+  SCOUT_CONTRACT_FORBIDDEN_KEYS,
   buildMissionIntelligenceReport,
+  buildPublicMissionIntelligenceReport,
   summarizeEvidenceGraph,
   buildRecommendationFromUnderstanding,
   buildSuggestedNextInvestigation,
   mergeIntoDiscoveryReport,
   buildReportSummary,
+  containsForbiddenReasoningKeys,
+  walkObjectKeys,
 };

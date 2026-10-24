@@ -1,0 +1,19 @@
+name: SPEC-245 Evidence Immutability
+# PR path: .github/workflows/pr-ci-lean.yml (domain spec245-evidence)
+on:
+  workflow_dispatch:
+jobs:
+  postgres:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: 'true'
+      - name: Enable PostgreSQL binaries
+        run: echo "$(pg_config --bindir)" >> "$GITHUB_PATH"
+      - run: node --test test/spec245EvidenceImmutability.test.js test/spec224CIECanonicalIntegration.test.js test/spec223CanonicalSemanticPersistence.test.js

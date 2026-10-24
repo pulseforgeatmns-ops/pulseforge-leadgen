@@ -1,7 +1,14 @@
 const axios = require('axios');
 const pool = require('../db');
+const { assertCallAllowed } = require('../utils/callEligibility');
 const { buildSuggestedMessage, buildDirectMailOpening, normalizeNextAction, parseContactRole, formatDecisionMakerStatus, resolveNextActionOwner } = require('../utils/aoMessageTemplates');
 const { normalizeDueDate } = require('../utils/aoQueueFormat');
+const {
+  buildAssignmentNote,
+  isJakeAssignmentBatchNote,
+  laneInitialNextAction,
+  normalizeAoBusinessKey,
+} = require('../utils/aoAssignment');
 
 function mapLead(row) {
   return {
@@ -35,6 +42,7 @@ function mapTask(row) {
   return {
     id: row.id,
     lead_id: row.lead_id,
+    crm_prospect_id: row.crm_prospect_id || null,
     contact_id: row.contact_id,
     ao_owner_id: row.ao_owner_id,
     due_date: normalizeDueDate(row.due_date),
@@ -48,7 +56,8 @@ function mapTask(row) {
     completed_at: row.completed_at,
     business_name: row.business_name,
     contact_name: row.contact_name,
-    contact_phone: row.contact_phone || null,
+    contact_phone: row.call_allowed === true ? (row.contact_phone || null) : null,
+    call_prohibited: row.call_allowed !== true,
     address: row.address || null,
     interest_level: row.interest_level,
     attribution_source: row.attribution_source || null,
@@ -58,7 +67,8 @@ function mapTask(row) {
 
 async function getAoProfile(userId) {
   const { rows } = await pool.query(`
-    SELECT id, name, email, phone, role, territory, manager_id, daily_goal, weekly_goal, client_id, active
+    SELECT id, name, email, phone, role, territory, manager_id, daily_goal, weekly_goal, client_id, active,
+      COALESCE(ao_operational_status, 'active') AS ao_operational_status
     FROM users WHERE id = $1 LIMIT 1
   `, [userId]);
   return rows[0] || null;
@@ -66,7 +76,13 @@ async function getAoProfile(userId) {
 
 async function listQueue({ aoOwnerId, clientId, filter = 'today' }) {
   const params = [aoOwnerId, clientId];
-  let where = `t.ao_owner_id = $1 AND l.client_id = $2 AND t.status = 'open'`;
+  let where = `t.ao_owner_id = $1 AND l.client_id = $2 AND t.status = 'open'
+    AND (t.next_action IS DISTINCT FROM 'phone_follow_up' OR EXISTS (
+      SELECT 1 FROM prospects p WHERE p.id = l.crm_prospect_id AND p.client_id = l.client_id
+        AND COALESCE(p.ao_call_suppressed, false) = false
+        AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
+        AND COALESCE(p.do_not_contact, false) = false AND COALESCE(p.is_synthetic, false) = false
+    ))`;
 
   const today = new Date().toISOString().slice(0, 10);
   if (filter === 'today') {
@@ -92,6 +108,11 @@ async function listQueue({ aoOwnerId, clientId, filter = 'today' }) {
 
   const { rows } = await pool.query(`
     SELECT t.*, l.business_name, l.address, l.interest_level, l.attribution_source, l.campaign_name,
+      l.crm_prospect_id,
+      EXISTS (SELECT 1 FROM prospects p WHERE p.id = l.crm_prospect_id AND p.client_id = l.client_id
+        AND COALESCE(p.ao_call_suppressed, false) = false
+        AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
+        AND COALESCE(p.do_not_contact, false) = false AND COALESCE(p.is_synthetic, false) = false) AS call_allowed,
       c.contact_name, c.phone AS contact_phone
     FROM ao_follow_up_tasks t
     JOIN ao_leads l ON l.id = t.lead_id
@@ -262,17 +283,65 @@ async function createVisitRecord({
   }
 }
 
+async function resolveTaskCrmProspectId(taskRow) {
+  return taskRow.crm_prospect_id || null;
+}
+
+async function getTaskCrmContext(taskId, aoOwnerId) {
+  const { rows } = await pool.query(`
+    SELECT t.id AS task_id, t.lead_id, t.status AS task_status,
+      l.client_id, l.business_name, l.crm_prospect_id,
+      c.contact_name, c.contact_title, c.phone AS contact_phone, c.email AS contact_email
+    FROM ao_follow_up_tasks t
+    JOIN ao_leads l ON l.id = t.lead_id
+    LEFT JOIN ao_contacts c ON c.id = t.contact_id
+    WHERE t.id = $1 AND t.ao_owner_id = $2
+    LIMIT 1
+  `, [taskId, aoOwnerId]);
+  const row = rows[0];
+  if (!row) return null;
+
+  const prospectId = await resolveTaskCrmProspectId(row);
+  return {
+    task_id: row.task_id,
+    lead_id: row.lead_id,
+    prospect_id: prospectId,
+    crm_linkage_status: prospectId ? 'linked' : 'unlinked',
+    business_name: row.business_name,
+    task_status: row.task_status,
+    contact_name: row.contact_name || null,
+    contact_role: row.contact_title || null,
+    contact_phone: row.contact_phone || null,
+    contact_email: row.contact_email || null,
+  };
+}
+
+async function completeFollowUpTask(taskId, aoOwnerId, db = pool) {
+  const { rows } = await db.query(`
+    UPDATE ao_follow_up_tasks
+    SET status = 'done', completed_at = NOW()
+    WHERE id = $1 AND ao_owner_id = $2 AND status = 'open'
+    RETURNING id
+  `, [taskId, aoOwnerId]);
+  return Boolean(rows[0]);
+}
+
 async function updateTask(taskId, aoOwnerId, updates) {
+  if (updates.status === 'done') {
+    return {
+      error: 'Log a CRM outcome before marking this task done — the account stays in My Accounts.',
+      status: 409,
+      code: 'CRM_OUTCOME_REQUIRED',
+      crm_url: '/ao/crm',
+    };
+  }
+
   const fields = [];
   const values = [];
 
   if (updates.status) {
     values.push(updates.status);
     fields.push(`status = $${values.length}`);
-    if (updates.status === 'done') {
-      values.push(new Date());
-      fields.push(`completed_at = $${values.length}`);
-    }
   }
   if (updates.due_date) {
     values.push(updates.due_date);
@@ -368,6 +437,7 @@ async function getTaskForFollowUp(taskId, aoOwnerId) {
   const { rows } = await pool.query(`
     SELECT t.*, l.business_name, l.address, l.business_type, l.status AS lead_status,
       l.attribution_source, l.campaign_name, l.original_visit_note, l.interest_level,
+      l.client_id, l.crm_prospect_id,
       c.contact_name, c.contact_title, c.phone AS contact_phone, c.email AS contact_email
     FROM ao_follow_up_tasks t
     JOIN ao_leads l ON l.id = t.lead_id
@@ -375,7 +445,16 @@ async function getTaskForFollowUp(taskId, aoOwnerId) {
     WHERE t.id = $1 AND t.ao_owner_id = $2 AND t.status = 'open'
     LIMIT 1
   `, [taskId, aoOwnerId]);
-  return rows[0] || null;
+  const task = rows[0];
+  if (task?.crm_prospect_id) {
+    try {
+      await assertCallAllowed(pool, task.crm_prospect_id, task.client_id);
+    } catch (error) {
+      if (error.code !== 'CALL_SUPPRESSED') throw error;
+      return { ...task, call_prohibited: true, contact_phone: null };
+    }
+  }
+  return task ? { ...task, call_prohibited: !task.crm_prospect_id, contact_phone: task.crm_prospect_id ? task.contact_phone : null } : null;
 }
 
 async function createDirectMailFollowUpLead({
@@ -657,17 +736,239 @@ async function completeRouteFollowUp(taskId, aoOwnerId, {
 }
 
 async function resolveAoOwnerByName(namePattern, clientId) {
+  const { sqlEligibleAoUsers } = require('../utils/aoRosterOperational');
   const { rows } = await pool.query(`
     SELECT id, name, email, client_id, role
-    FROM users
+    FROM users u
     WHERE client_id = $1
       AND role = 'ao'
-      AND active = true
+      ${sqlEligibleAoUsers('u')}
       AND name ILIKE $2
     ORDER BY id ASC
     LIMIT 1
   `, [clientId, namePattern]);
   return rows[0] || null;
+}
+
+async function listActiveAoOwners(clientId, { excludeUserId = null } = {}) {
+  const { sqlEligibleAoUsers } = require('../utils/aoRosterOperational');
+  const params = [clientId];
+  let excludeClause = '';
+  if (excludeUserId != null) {
+    params.push(excludeUserId);
+    excludeClause = 'AND id <> $2';
+  }
+  const { rows } = await pool.query(`
+    SELECT id, name, email, client_id, role
+    FROM users u
+    WHERE client_id = $1
+      AND role = 'ao'
+      ${sqlEligibleAoUsers('u')}
+      ${excludeClause}
+    ORDER BY id ASC
+  `, params);
+  return rows;
+}
+
+const JAKE_PRODUCTION_EMAIL = 'jzmaynard7@gmail.com';
+
+const JAKE_LEGACY_EMAIL_CANDIDATES = Object.freeze([
+  'jacob@gopulseforge.com',
+  'jacob@goanchorcleaning.com',
+]);
+
+const JAKE_AO_CAPABLE_ROLES = Object.freeze(['ao', 'admin', 'manager']);
+
+async function lookupActiveTenantAoUser({ email, clientId, roles = JAKE_AO_CAPABLE_ROLES }) {
+  const { rows } = await pool.query(`
+    SELECT id, name, email, client_id, role, active
+    FROM users
+    WHERE lower(email) = lower($1)
+      AND active = true
+      AND client_id = $2
+      AND role = ANY($3::text[])
+    LIMIT 1
+  `, [email, clientId, roles]);
+  return rows[0] || null;
+}
+
+async function resolveJakeAoOwner(clientId = 10) {
+  if (process.env.JAKE_EMAIL) {
+    const envMatch = await lookupActiveTenantAoUser({
+      email: process.env.JAKE_EMAIL,
+      clientId,
+    });
+    if (envMatch) return envMatch;
+  }
+
+  const productionMatch = await lookupActiveTenantAoUser({
+    email: JAKE_PRODUCTION_EMAIL,
+    clientId,
+    roles: ['ao'],
+  });
+  if (productionMatch) return productionMatch;
+
+  for (const email of JAKE_LEGACY_EMAIL_CANDIDATES) {
+    const legacyMatch = await lookupActiveTenantAoUser({ email, clientId });
+    if (legacyMatch) return legacyMatch;
+  }
+
+  const { rows } = await pool.query(`
+    SELECT id, name, email, client_id, role, active
+    FROM users
+    WHERE active = true
+      AND client_id = $1
+      AND role = ANY($2::text[])
+      AND (
+        name ILIKE '%Jacob Maynard%'
+        OR name ILIKE '%Jake Maynard%'
+        OR trim(name) ILIKE 'Jake'
+      )
+    ORDER BY CASE WHEN role = 'ao' THEN 0 ELSE 1 END, id ASC
+    LIMIT 1
+  `, [clientId, JAKE_AO_CAPABLE_ROLES]);
+  return rows[0] || null;
+}
+
+async function findAoLeadByBusinessName(clientId, businessName) {
+  const { rows } = await pool.query(`
+    SELECT l.*, u.name AS ao_owner_name, u.email AS ao_owner_email
+    FROM ao_leads l
+    LEFT JOIN users u ON u.id = l.ao_owner_id
+    WHERE l.client_id = $1
+      AND lower(regexp_replace(l.business_name, '[^a-z0-9]', '', 'g'))
+        = lower(regexp_replace($2, '[^a-z0-9]', '', 'g'))
+    LIMIT 1
+  `, [clientId, businessName]);
+  return rows[0] || null;
+}
+
+async function findCrmLinkForBusiness(clientId, businessName) {
+  const { rows } = await pool.query(`
+    SELECT
+      p.id AS crm_prospect_id,
+      c.id AS crm_company_id,
+      c.name AS company_name,
+      p.email,
+      p.phone,
+      p.status AS prospect_status
+    FROM companies c
+    LEFT JOIN prospects p ON p.company_id = c.id AND p.client_id = c.client_id
+    WHERE c.client_id = $1
+      AND lower(regexp_replace(c.name, '[^a-z0-9]', '', 'g'))
+        = lower(regexp_replace($2, '[^a-z0-9]', '', 'g'))
+    ORDER BY p.created_at DESC NULLS LAST
+    LIMIT 1
+  `, [clientId, businessName]);
+  return rows[0] || null;
+}
+
+async function findJakeAssignmentLead(clientId, businessName, batchSlug) {
+  const existing = await findAoLeadByBusinessName(clientId, businessName);
+  if (!existing) return null;
+  const note = existing.original_visit_note || '';
+  if (isJakeAssignmentBatchNote(note, batchSlug)) return existing;
+  return null;
+}
+
+async function createAoAssignmentLead({
+  clientId,
+  aoOwnerId,
+  aoOwnerName,
+  businessName,
+  address = null,
+  businessType = null,
+  lane,
+  priority = 'high',
+  pipelineStage = 'research',
+  initialNextAction = null,
+  dueDate,
+  batchSlug,
+  crmProspectId = null,
+  crmCompanyId = null,
+}) {
+  const existingBatchLead = await findJakeAssignmentLead(clientId, businessName, batchSlug);
+  if (existingBatchLead) {
+    return {
+      skipped: true,
+      reason: 'already_assigned_in_batch',
+      lead: mapLead(existingBatchLead),
+    };
+  }
+
+  const actionText = initialNextAction || laneInitialNextAction(lane);
+  const assignmentNote = buildAssignmentNote({
+    batchSlug,
+    company: businessName,
+    ownerName: aoOwnerName,
+    lane,
+    priority: priority === 'high' ? 'High' : 'Normal',
+    pipelineStage,
+    initialNextAction: actionText,
+    dueDate,
+    aoOwnerId,
+    crmProspectId,
+    crmCompanyId,
+  });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { rows: leadRows } = await client.query(`
+      INSERT INTO ao_leads (
+        client_id, business_name, address, business_type, status, interest_level,
+        ao_owner_id, attribution_source, original_visit_note,
+        next_follow_up_date, next_follow_up_owner_id, crm_prospect_id
+      ) VALUES ($1,$2,$3,$4,'needs_follow_up',NULL,$5,'ao_field_visit',$6,$7,$5,$8)
+      RETURNING *
+    `, [
+      clientId,
+      businessName,
+      address,
+      businessType || lane,
+      aoOwnerId,
+      assignmentNote,
+      dueDate,
+      crmProspectId,
+    ]);
+    const lead = leadRows[0];
+
+    const { rows: taskRows } = await client.query(`
+      INSERT INTO ao_follow_up_tasks (
+        lead_id, ao_owner_id, due_date, priority, next_action,
+        last_interaction_summary
+      ) VALUES ($1,$2,$3,$4,'research',$5)
+      RETURNING *
+    `, [lead.id, aoOwnerId, dueDate, priority, actionText]);
+
+    await client.query('COMMIT');
+    return {
+      skipped: false,
+      lead: mapLead(lead),
+      task: mapTask({
+        ...taskRows[0],
+        business_name: businessName,
+        attribution_source: 'ao_field_visit',
+      }),
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function countAoLeadsByOwnerIds(ownerIds, clientId = 10) {
+  if (!ownerIds.length) return {};
+  const { rows } = await pool.query(`
+    SELECT ao_owner_id, COUNT(*)::int AS lead_count
+    FROM ao_leads
+    WHERE client_id = $1 AND ao_owner_id = ANY($2::int[])
+    GROUP BY ao_owner_id
+  `, [clientId, ownerIds]);
+  return Object.fromEntries(rows.map(r => [r.ao_owner_id, r.lead_count]));
 }
 
 function mapAdminVisit(row) {
@@ -852,6 +1153,11 @@ async function getNextPhoneFollowUp({ aoOwnerId, clientId }) {
     LEFT JOIN ao_contacts c ON c.id = t.contact_id
     WHERE t.ao_owner_id = $1 AND l.client_id = $2
       AND t.status = 'open' AND t.next_action = 'phone_follow_up'
+      AND EXISTS (SELECT 1 FROM prospects p
+        WHERE p.id = l.crm_prospect_id AND p.client_id = l.client_id
+          AND COALESCE(p.ao_call_suppressed, false) = false
+        AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
+          AND COALESCE(p.do_not_contact, false) = false AND COALESCE(p.is_synthetic, false) = false)
     ORDER BY t.priority DESC, t.due_date ASC, t.created_at ASC
     LIMIT 1
   `, [aoOwnerId, clientId]);
@@ -867,6 +1173,7 @@ async function convertToPhoneFollowUp(taskId, aoOwnerId, { phone = null } = {}) 
   const taskRow = await getTaskForFollowUp(taskId, aoOwnerId);
   if (!taskRow) return null;
 
+  await assertCallAllowed(pool, taskRow.crm_prospect_id, taskRow.client_id);
   const alreadyPhone = taskRow.next_action === 'phone_follow_up';
   const conversionNote = alreadyPhone ? null : formatPhoneConversionNote();
   const client = await pool.connect();
@@ -1147,6 +1454,16 @@ module.exports = {
   getTaskForFollowUp,
   findDirectMailLead,
   resolveAoOwnerByName,
+  listActiveAoOwners,
+  resolveJakeAoOwner,
+  findAoLeadByBusinessName,
+  findCrmLinkForBusiness,
+  getTaskCrmContext,
+  completeFollowUpTask,
+  findJakeAssignmentLead,
+  createAoAssignmentLead,
+  countAoLeadsByOwnerIds,
+  normalizeAoBusinessKey,
   endOfBusinessWeekISO,
   updateTask,
   escalateTask,

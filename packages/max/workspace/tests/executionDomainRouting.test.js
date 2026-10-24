@@ -4,12 +4,15 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { createMissionEngine } = require('../../../mission-engine');
 const { createBuiltinRegistry } = require('../../../capabilities');
-const {
-  createWorkspaceEngine,
-  selectExecutionDomain,
+const { selectExecutionDomain,
   EXECUTION_DOMAINS,
-  isMissionDomain,
-} = require('../../index');
+  isMissionDomain } = require('../../index');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
+
+function unavailableMarketFixture() {
+  const unavailable = async () => { throw new Error('unit_fixture_market_unavailable'); };
+  return { listMarketCompanies: unavailable, crossMarketPatterns: unavailable, crossMarketSequenceStats: unavailable };
+}
 
 function testMissionEngine() {
   return createMissionEngine({
@@ -138,6 +141,7 @@ describe('SPEC-057 Cross-domain routing', () => {
 
   it('Mission → Market Intelligence: does not continue Mission path', async () => {
     const workspace = createWorkspaceEngine({
+      marketIntelligenceService: unavailableMarketFixture(),
       missionEngine: testMissionEngine(),
       missionsEnabled: true,
       disableLlm: true,
@@ -171,6 +175,7 @@ describe('SPEC-057 Cross-domain routing', () => {
 
   it('Market Intelligence → Briefing: briefing owns the answer', async () => {
     const workspace = createWorkspaceEngine({
+      marketIntelligenceService: unavailableMarketFixture(),
       missionEngine: testMissionEngine(),
       missionsEnabled: true,
       disableLlm: true,
