@@ -68,6 +68,8 @@ All notable changes to this project are documented here. Format inspired by [Kee
   preserve old candidate/attempt history and enforce cumulative page ceilings.
   Production release, exact manifest and additional spend remain approval-gated.
 
+- Preserve [AUDIT-060’s pre-remediation trace](docs/architecture/AUDIT-060_Provider_Execution_Persistence_Pre_Remediation.md) from PR #460 beside its unchanged remediated summary (2026-10-24), linked to the existing [SPEC-184](docs/specs/SPEC-184_Provider_Execution_Continuity.md) implementation. No inherited runtime restored.
+
 - Default-off tenant 10/13 durable Scout candidate tickets and exact immutable
   query membership, independent backlog draining, fenced queue completion,
   bounded continuation and explicit dependency holds. Successful no-evidence

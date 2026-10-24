@@ -29,3 +29,7 @@ commitDiscoveryStage()
 Operator response
   ↓  DiscoveryPresentation Provider Execution section
 ```
+
+## Historical source trace
+
+The [pre-remediation AUDIT-060](AUDIT-060_Provider_Execution_Persistence_Pre_Remediation.md) preserves the detailed 2026-08-26 trace from [PR #460](https://github.com/pulseforgeatmns-ops/pulseforge-leadgen/pull/460). Its failure statements describe the branch before [merged PR #461](https://github.com/pulseforgeatmns-ops/pulseforge-leadgen/pull/461); they do not replace the remediated summary above. Archived on 2026-10-24 without restoring inherited runtime code.
