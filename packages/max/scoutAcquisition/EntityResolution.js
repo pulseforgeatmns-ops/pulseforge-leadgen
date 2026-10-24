@@ -43,15 +43,36 @@ function recordsMatch(a, b) {
   return false;
 }
 
+// Keep each observation's business labels paired with its own query provenance.
+// Flattening duplicate hits can hide contrary descriptions or turn one hit's
+// query label into another hit's apparent observed industry.
+function classificationObservations(record = {}) {
+  if (Array.isArray(record.classificationObservations) && record.classificationObservations.length) {
+    return clone(record.classificationObservations);
+  }
+  const fields = ['name', 'company', 'description', 'businessType', 'snippet',
+    'industry', 'vertical', 'segment', 'category', 'placeTypes', 'signals',
+    'discoveryQuery', 'discoveryConcept', 'discoveryCity', 'discoverySource',
+    'source', 'location', 'website'];
+  return [clone(Object.fromEntries(fields.filter(key => record[key] != null)
+    .map(key => [key, record[key]])))];
+}
+
 function mergeResolved(existing, incoming) {
   const out = { ...existing };
   for (const key of Object.keys(incoming || {})) {
     if (out[key] == null && incoming[key] != null) out[key] = incoming[key];
   }
+  Object.assign(out, require('../../../utils/scoutTicketMembership').ticketFields(existing, incoming));
+  const observations = [...classificationObservations(existing), ...classificationObservations(incoming)];
+  out.classificationObservations = [...new Map(observations.map(row => [JSON.stringify(row), row])).values()];
   if (!out.aliases) out.aliases = [];
   const alias = incoming.name || incoming.companyName;
   if (alias && alias !== out.name && !out.aliases.includes(alias)) {
     out.aliases.push(alias);
+  }
+  if (Array.isArray(incoming.placeTypes) && incoming.placeTypes.length) {
+    out.placeTypes = Array.from(new Set([...(out.placeTypes || []), ...incoming.placeTypes]));
   }
   if (Array.isArray(incoming.signals) && incoming.signals.length) {
     out.signals = [...(out.signals || []), ...incoming.signals];
@@ -88,6 +109,7 @@ function resolveCandidate(candidate, existingCompanies = []) {
     `disc-${normalizeName(name).replace(/\s+/g, '-') || 'company'}`;
   return {
     company: {
+      ...require('../../../utils/scoutTicketMembership').ticketFields(candidate),
       id,
       tenantId: candidate.tenantId || null,
       name,
@@ -95,6 +117,19 @@ function resolveCandidate(candidate, existingCompanies = []) {
       location: asText(candidate.location || candidate.address || candidate.geography),
       website: asText(candidate.website || candidate.url),
       address: asText(candidate.address),
+      // Preserve observed business facts across identity resolution. Admission
+      // must see the same evidence as discovery, including contrary evidence.
+      classificationObservations: classificationObservations(candidate),
+      placeTypes: Array.isArray(candidate.placeTypes) ? candidate.placeTypes.slice() : [],
+      businessType: asText(candidate.businessType),
+      description: asText(candidate.description),
+      snippet: asText(candidate.snippet),
+      // Keep search provenance separate so query-derived industry labels cannot
+      // become business evidence merely because the candidate was resolved.
+      discoveryQuery: asText(candidate.discoveryQuery),
+      discoveryConcept: asText(candidate.discoveryConcept),
+      discoveryCity: asText(candidate.discoveryCity),
+      discoverySource: asText(candidate.discoverySource),
       icpScore: candidate.icpScore != null ? Number(candidate.icpScore) : candidate.icp_score,
       people: Array.isArray(candidate.people) ? candidate.people : [],
       signals: Array.isArray(candidate.signals) ? candidate.signals : [],

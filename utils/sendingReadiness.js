@@ -219,20 +219,13 @@ async function getCurrentProspect(pool, client, prospect) {
   }
 }
 
-async function evaluateSendingReadiness({
+async function evaluateSenderIdentityReadiness({
   client,
-  prospect,
-  sequenceCatalog,
-  pool,
   brevoState,
   brevoApiKey,
   http,
-  clientSequenceMap,
-  assignedSequenceName,
 } = {}) {
   const checks = [];
-  const current = await getCurrentProspect(pool, client, prospect);
-  const evaluatedProspect = current.prospect;
   const senderEmail = clean(client?.sender_email);
   const senderName = clean(client?.sender_name);
   const sendingDomain = normalized(client?.sending_domain);
@@ -282,6 +275,36 @@ async function evaluateSendingReadiness({
     }
   ));
 
+  const failures = checks.filter(item => !item.passed);
+  return {
+    sendable: failures.length === 0,
+    client_id: client?.id ?? null,
+    checks,
+    failures,
+  };
+}
+
+async function evaluateSendingReadiness({
+  client,
+  prospect,
+  sequenceCatalog,
+  pool,
+  brevoState,
+  brevoApiKey,
+  http,
+  clientSequenceMap,
+  assignedSequenceName,
+} = {}) {
+  const senderReadiness = await evaluateSenderIdentityReadiness({
+    client,
+    brevoState,
+    brevoApiKey,
+    http,
+  });
+  const checks = [...senderReadiness.checks];
+  const current = await getCurrentProspect(pool, client, prospect);
+  const evaluatedProspect = current.prospect;
+
   const sequenceName = exactSequenceName(client, evaluatedProspect, sequenceCatalog, clientSequenceMap);
   checks.push(condition(
     'exact_vertical_sequence_exists',
@@ -314,6 +337,12 @@ async function evaluateSendingReadiness({
     !current.error && evaluatedProspect?.is_synthetic !== true,
     'Synthetic prospects can never enter an outbound sequence.',
     { is_synthetic: evaluatedProspect?.is_synthetic ?? null, error: current.error }
+  ));
+  checks.push(condition(
+    'prospect_outreach_review_complete',
+    !current.error && evaluatedProspect?.ao_outreach_review_required !== true,
+    'Imported or changed contact details require separate outreach review before sending.',
+    { ao_outreach_review_required: evaluatedProspect?.ao_outreach_review_required ?? null, error: current.error }
   ));
   const templateSequenceName = assignedSequenceName || sequenceName;
   const templateInspection = templateSequenceName
@@ -378,6 +407,7 @@ async function evaluateSendingReadiness({
 module.exports = {
   CLIENT_SEQUENCE_MAP,
   evaluateSendingReadiness,
+  evaluateSenderIdentityReadiness,
   exactSequenceName,
   getBrevoState,
 };

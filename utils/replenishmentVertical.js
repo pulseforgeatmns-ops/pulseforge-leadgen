@@ -1,0 +1,556 @@
+'use strict';
+
+const { normalizeVertical } = require('./normalize');
+const OBSERVATION_CONTEXT = Symbol('observationContext');
+const { configuredServiceAreas } = require('./serviceArea');
+const {
+  isLocationInMissionGeography,
+  resolveMissionAllowedCities,
+} = require('./missionGeography');
+const {
+  FOUNDER_LED_SMALL_BUSINESS_VERTICALS,
+  SERVICE_TRADE_TAXONOMY,
+  SERVICE_TRADE_VERTICALS,
+  serviceTradeVerticals,
+  isSmallBusinessOwnerSegment,
+} = require('./canonicalBusinessTaxonomy');
+
+const ENRICHABLE_SCOUT_VERTICALS = Object.freeze([
+  'property_manager',
+  'str_manager',
+  'commercial_office',
+  'realtor',
+  ...FOUNDER_LED_SMALL_BUSINESS_VERTICALS,
+]);
+
+// Facilities are canonical business classifications, not permission to widen a
+// legacy tenant's enrichment queue. They require an explicit mission selection.
+const MISSION_SCOPED_FACILITIES_VERTICALS = Object.freeze([
+  'dealership', 'school', 'campus', 'manufacturer', 'warehouse',
+]);
+
+// Classification support is broader than legacy enrichment defaults. New trades
+// and facilities require an explicit mission-scoped enrichment selection.
+const CANONICAL_ENRICHABLE_SCOUT_VERTICALS = Object.freeze([...new Set([
+  ...ENRICHABLE_SCOUT_VERTICALS, ...SERVICE_TRADE_VERTICALS, ...MISSION_SCOPED_FACILITIES_VERTICALS,
+])]);
+
+const STR_EVIDENCE = [
+  /\bshort[\s-]?term rental\b/i,
+  /\bshort[\s-]?term propert/i,
+  /\bvacation rental\b/i,
+  /\bvacation homes?\b/i,
+  /\bholiday rental\b/i,
+  /\bairbnb\b/i,
+  /\bvrbo\b/i,
+  /\bstr portfolio\b/i,
+  /\bstr operator\b/i,
+  /\bstr manager\b/i,
+  /\bstr_manager\b/i,
+  /\bvacation propert(?:y|ies) management\b/i,
+  /\brental management\b/i,
+  /\bguest stay\b/i,
+  /\bco-?host(?:ing)?\b/i,
+];
+
+const PROPERTY_MANAGER_EVIDENCE = [
+  /\bproperty management\b/i,
+  /\bproperty manager\b/i,
+  /\bproperty_manager\b/i,
+  /\bproperty mgmt\b/i,
+  /\bprop(?:erty)?\.?\s*mgmt\b/i,
+  /\bresidential property management\b/i,
+  /\bcommercial property management\b/i,
+  /\brental property management\b/i,
+  /\bmultifamily management\b/i,
+  /\bapartment management\b/i,
+  /\bassoc(?:iation)? management\b/i,
+  /\bhoa management\b/i,
+  /\bcondo(?:minium)? management\b/i,
+  /\bleasing (?:office|agent|management)\b/i,
+  /\btenant management\b/i,
+  /\breal estate management\b/i,
+];
+
+const COMMERCIAL_OFFICE_EVIDENCE = [
+  /\bcommercial office\b/i,
+  /\bcommercial_office\b/i,
+  /\boffice park\b/i,
+  /\bbusiness center\b/i,
+  /\boffice building management\b/i,
+];
+
+const MANAGED_FACILITIES_EVIDENCE = Object.freeze({
+  dealership: [/\b(?:auto|car|vehicle) dealership\b/i, /\bdealer group\b/i, /\bautomotive dealership\b/i],
+  school: [/\bprivate school\b/i, /\bacademy\b/i, /\bpreparatory school\b/i, /\bindependent school\b/i],
+  campus: [/\bcollege\b/i, /\buniversity\b/i, /\bcampus\b/i, /\btraining center\b/i],
+  manufacturer: [/\bmanufacturer\b/i, /\bmanufacturing (?:company|facility|plant)\b/i, /\bproduction facility\b/i],
+  warehouse: [/\bwarehouse\b/i, /\bdistribution (?:center|facility)\b/i, /\blogistics facility\b/i],
+});
+
+const FOUNDER_LED_VERTICAL_EVIDENCE = Object.freeze({
+  cleaning: [/\bcleaning (?:company|service|business)\b/i, /\bjanitorial (?:company|service)\b/i],
+  landscaping: [/\blandscap(?:e|ing|er)\b/i, /\blawn care\b/i, /\bgrounds maintenance\b/i],
+  painting: [/\bpainting (?:company|contractor|service)\b/i, /\bhouse painter\b/i],
+  // More specific HVAC evidence precedes heating; membership in a mission is
+  // never evidence that a business performs another trade.
+  hvac: SERVICE_TRADE_TAXONOMY.hvac.evidence,
+  plumbing: SERVICE_TRADE_TAXONOMY.plumbing.evidence,
+  heating: SERVICE_TRADE_TAXONOMY.heating.evidence,
+  electrician: [/\belectrical contractor\b/i, /\belectrician\b/i],
+  home_services: [/\bhandyman\b/i, /\bhome repair\b/i, /\bhome services?\b/i],
+  restaurant: [/\brestaurant\b/i, /\bfood service\b/i, /\bcatering\b/i],
+  salon: [/\bhair salon\b/i, /\bbeauty salon\b/i, /\bbarber shop\b/i, /\bday spa\b/i],
+  fitness: [/\bfitness (?:studio|center)\b/i, /\bindependent gym\b/i, /\bpersonal training\b/i],
+  auto: [/\bauto(?:motive)? repair\b/i, /\bauto service\b/i, /\bmechanic shop\b/i],
+});
+
+const STR_PLACE_TYPES = new Set(['lodging', 'extended stay', 'vacation rental']);
+const PM_PLACE_TYPES = new Set(['real estate agency']);
+
+const CONTRADICTORY_BUSINESS_TYPES = [
+  { pattern: /\bequipment rental\b/i, label: 'equipment rental' },
+  { pattern: /\bwaste haul(?:ing|er)?\b/i, label: 'waste hauling' },
+  { pattern: /\bjunk removal\b/i, label: 'junk removal' },
+  { pattern: /\btrash haul(?:ing|er)?\b/i, label: 'waste hauling' },
+  { pattern: /\bconstruction equipment\b/i, label: 'equipment rental' },
+  { pattern: /\bdumpster rental\b/i, label: 'waste hauling' },
+  { pattern: /\brestoration company\b/i, label: 'restoration/remediation' },
+  { pattern: /\bwater damage restoration\b/i, label: 'restoration/remediation' },
+  { pattern: /\bhvac\b/i, label: 'HVAC contractor', vertical: 'hvac' },
+  { pattern: /\broofing\b/i, label: 'roofing contractor' },
+  { pattern: /\blandscap(?:e|ing)\b/i, label: 'landscaping contractor' },
+  { pattern: /\bplumb(?:er|ing)\b/i, label: 'plumbing contractor', vertical: 'plumbing' },
+  { pattern: /\belectric(?:al|ian)\b/i, label: 'electrical contractor' },
+];
+
+const MISSION_VERTICALS = Object.freeze({
+  short_term_rental: ['str_manager', 'property_manager'],
+  short_term_rental_operators: ['str_manager', 'property_manager'],
+  property_management: ['property_manager', 'str_manager'],
+  property_manager: ['property_manager', 'str_manager'],
+  commercial_office: ['commercial_office'],
+  managed_facilities: ['property_manager', 'commercial_office', ...MISSION_SCOPED_FACILITIES_VERTICALS],
+  dealership: ['dealership'],
+  school: ['school'],
+  campus: ['campus'],
+  manufacturer: ['manufacturer'],
+  warehouse: ['warehouse'],
+  realtor: ['realtor'],
+  real_estate: ['realtor'],
+  restaurant_foh: ['restaurant'],
+  small_business_owner: FOUNDER_LED_SMALL_BUSINESS_VERTICALS,
+  small_business_owners: FOUNDER_LED_SMALL_BUSINESS_VERTICALS,
+  founder_led_smb: FOUNDER_LED_SMALL_BUSINESS_VERTICALS,
+  founder_led_small_business: FOUNDER_LED_SMALL_BUSINESS_VERTICALS,
+});
+
+function asText(value) {
+  return value == null ? '' : String(value).trim();
+}
+
+function asClassifyText(value) {
+  return asText(value).replace(/[_-]+/g, ' ');
+}
+
+function signalText(candidate = {}) {
+  return (Array.isArray(candidate.signals) ? candidate.signals : [])
+    .map(item => asText(item?.label || item?.text || item?.type))
+    .filter(Boolean)
+    .join(' ');
+}
+
+function placeTypeText(candidate = {}) {
+  const types = candidate.placeTypes || candidate.types || candidate.place_types || [];
+  return (Array.isArray(types) ? types : [])
+    .map(item => asText(item).replace(/_/g, ' '))
+    .filter(Boolean)
+    .join(' ');
+}
+
+function isSearchDerivedField(value, context = {}) {
+  const normalized = normalizeVertical(value);
+  if (!normalized) return false;
+
+  const concept = normalizeVertical(context.discoveryConcept || context.discoveryQuery || '');
+  if (concept && normalized === concept) return true;
+
+  const discoveryCity = normalizeVertical(context.discoveryCity || '');
+  if (discoveryCity && normalized.includes(discoveryCity)) return true;
+
+  if (/_nh$/.test(normalized) || /_(manchester|bedford|hooksett|goffstown|londonderry|auburn)_nh/.test(normalized)) {
+    return true;
+  }
+
+  const tokens = normalized.split('_').filter(Boolean);
+  const geoTokens = new Set(['manchester', 'bedford', 'hooksett', 'goffstown', 'londonderry', 'auburn', 'nh']);
+  const geoHits = tokens.filter(token => geoTokens.has(token));
+  return geoHits.length >= 2 || (geoHits.length === 1 && tokens.length >= 4);
+}
+
+function classificationRecords(candidate = {}, context = {}) {
+  if (!Array.isArray(candidate.classificationObservations) || !candidate.classificationObservations.length) {
+    return [{ candidate, context }];
+  }
+  // The caller's search context is valid fallback provenance. Flattened
+  // candidate provenance from a different duplicate is not.
+  const baseContext = context[OBSERVATION_CONTEXT] || context;
+  return candidate.classificationObservations.filter(row => row && typeof row === 'object').map(row => ({
+    candidate: row,
+    context: { ...baseContext, ...buildDiscoveryProvenance(row, baseContext) },
+  }));
+}
+
+function declaredCanonicalVertical(candidate = {}, context = {}) {
+  for (const observation of classificationRecords(candidate, context)) {
+    const declared = declaredObservationVertical(observation.candidate, observation.context);
+    if (declared) return declared;
+  }
+  return null;
+}
+
+function declaredObservationVertical(candidate = {}, context = {}) {
+  for (const field of ['vertical', 'industry', 'segment']) {
+    const raw = candidate[field];
+    if (!raw || isSearchDerivedField(raw, context)) continue;
+    const trades = serviceTradeVerticals(raw);
+    if (trades.length) {
+      const allowed = missionCompatibleVerticals(context);
+      return trades.find(vertical => allowed.includes(vertical)) || trades[0];
+    }
+    const normalized = normalizeVertical(raw);
+    if (CANONICAL_ENRICHABLE_SCOUT_VERTICALS.includes(normalized)) return normalized;
+  }
+  return null;
+}
+
+function classificationHaystack(candidate = {}, context = {}) {
+  const records = classificationRecords(candidate, context);
+  const text = records.map(row => observationHaystack(row.candidate, row.context));
+  if (records[0]?.candidate !== candidate) {
+    // Later first-party investigation may add descriptive facts. Keep those,
+    // but never trust flattened labels whose query association has been lost.
+    const { industry, vertical, segment, category, ...descriptive } = candidate;
+    text.push(observationHaystack(descriptive, context));
+  }
+  return text.filter(Boolean).join(' ');
+}
+
+function observationHaystack(candidate = {}, context = {}) {
+  const parts = [
+    asClassifyText(candidate.name),
+    asClassifyText(candidate.company),
+    asClassifyText(candidate.description),
+    asClassifyText(candidate.businessType),
+    asClassifyText(candidate.snippet),
+    asClassifyText(signalText(candidate)),
+    asClassifyText(placeTypeText(candidate)),
+  ];
+
+  for (const field of ['industry', 'vertical', 'segment', 'category']) {
+    const value = candidate[field];
+    if (!value || isSearchDerivedField(value, context)) continue;
+    parts.push(asClassifyText(value));
+  }
+
+  return parts.filter(Boolean).join(' ');
+}
+
+function hasEvidence(text, patterns) {
+  return patterns.some(pattern => pattern.test(text));
+}
+
+function detectContradictoryBusinessType(text, allowedTrades = []) {
+  for (const entry of CONTRADICTORY_BUSINESS_TYPES) {
+    if (entry.pattern.test(text) && !allowedTrades.includes(entry.vertical)) return entry.label;
+  }
+  return null;
+}
+
+function resolveReplenishmentVertical(candidate = {}, context = {}) {
+  const declared = declaredCanonicalVertical(candidate, context);
+  if (declared) return declared;
+
+  const text = classificationHaystack(candidate, context);
+  if (!text) return null;
+
+  const placeTypes = asClassifyText(placeTypeText(candidate)).toLowerCase();
+  const lodgingSignal = [...STR_PLACE_TYPES].some(type => placeTypes.includes(type));
+  const realtySignal = [...PM_PLACE_TYPES].some(type => placeTypes.includes(type));
+
+  if (hasEvidence(text, STR_EVIDENCE) || (lodgingSignal && /\b(rental|vacation|property|host|str)\b/i.test(text))) {
+    return 'str_manager';
+  }
+  if (
+    hasEvidence(text, PROPERTY_MANAGER_EVIDENCE)
+    || (realtySignal && /\b(property|management|mgmt|leasing|multifamily|apartment)\b/i.test(text))
+  ) {
+    return 'property_manager';
+  }
+  if (hasEvidence(text, COMMERCIAL_OFFICE_EVIDENCE)) return 'commercial_office';
+  for (const [vertical, patterns] of Object.entries(MANAGED_FACILITIES_EVIDENCE)) {
+    if (hasEvidence(text, patterns)) return vertical;
+  }
+  if (realtySignal || /\b(?:real estate (?:agency|brokerage)|realtor)\b/i.test(text)) return 'realtor';
+  for (const [vertical, patterns] of Object.entries(FOUNDER_LED_VERTICAL_EVIDENCE)) {
+    if (hasEvidence(text, patterns)) return vertical;
+  }
+  return null;
+}
+
+function missionCompatibleVerticals(context = {}) {
+  const segments = Array.isArray(context.missionSegments) && context.missionSegments.length
+    ? context.missionSegments
+    : [context.missionSegment || context.segment || context.mission?.segment || ''];
+  // Retain the legacy unscoped default, without adding the new explicit trades.
+  if (segments.length === 1 && !normalizeVertical(segments[0])) {
+    return ['property_manager', 'str_manager', 'commercial_office', ...FOUNDER_LED_SMALL_BUSINESS_VERTICALS];
+  }
+  const mapped = segments.map(segment => {
+    const trades = serviceTradeVerticals(segment);
+    const key = normalizeVertical(segment);
+    return trades.length ? trades : (MISSION_VERTICALS[key] || (ENRICHABLE_SCOUT_VERTICALS.includes(key) ? [key] : []));
+  });
+  // A supplied but unsupported segment never falls back to the full audience.
+  return mapped.every(values => values.length) ? [...new Set(mapped.flat())] : [];
+}
+
+function isFounderLedSmallBusinessMission(context = {}) {
+  const segments = Array.isArray(context.missionSegments) && context.missionSegments.length
+    ? context.missionSegments
+    : [context.missionSegment || context.segment || context.mission?.segment];
+  return segments.some(isSmallBusinessOwnerSegment);
+}
+
+function isMissionCompatible(vertical, context = {}) {
+  const allowed = missionCompatibleVerticals(context);
+  return allowed.includes(vertical);
+}
+
+function buildDiscoveryProvenance(candidate = {}, context = {}) {
+  const discoveryQuery = asText(
+    candidate.discoveryQuery ||
+    context.discoveryQuery ||
+    candidate._coverageWorkload?.query ||
+    candidate.discoveryConcept ||
+    context.discoveryConcept
+  ) || null;
+  const discoveryConcept = asText(
+    candidate.discoveryConcept ||
+    context.discoveryConcept ||
+    candidate._coverageWorkload?.concept
+  ) || null;
+  const discoveryCity = asText(
+    candidate.discoveryCity ||
+    context.discoveryCity ||
+    candidate._coverageWorkload?.city ||
+    candidate.location
+  ) || null;
+  const discoverySource = asText(
+    candidate.discoverySource ||
+    context.discoverySource ||
+    candidate.source ||
+    candidate._coverageWorkload?.source
+  ) || null;
+
+  return {
+    discoveryQuery,
+    discoveryConcept,
+    discoveryCity,
+    discoverySource,
+  };
+}
+
+function formatProvenanceNotes(baseNote, provenance = {}) {
+  const payload = Object.fromEntries(
+    Object.entries(provenance).filter(([, value]) => value)
+  );
+  if (!Object.keys(payload).length) return baseNote;
+  return `${baseNote} | discovery: ${JSON.stringify(payload)}`;
+}
+
+// Restaurant missions identify businesses, not the cleaning scope to promise.
+// Kitchen/FOH requirements are assessed later. Industrial food production is
+// a distinct business type; a stale restaurant tag must not override it.
+function restaurantBusinessScopeReason(candidate = {}, context = {}) {
+  const segments = context.missionSegments?.length ? context.missionSegments : [context.missionSegment];
+  if (!segments.map(normalizeVertical).some(x => ['restaurant', 'restaurant_foh'].includes(x))) return null;
+  const text = classificationHaystack(candidate, context);
+  return /\bfood (?:manufacturer|manufacturing|processor|processing|production facility)\b/i.test(text)
+    ? 'contradictory_business_type' : null;
+}
+
+function evaluateReplenishmentAdmission(candidate = {}, context = {}) {
+  const name = asText(candidate.name || candidate.company);
+  const website = asText(candidate.website || candidate.website_url || candidate.url);
+  const domain = asText(candidate.domain);
+  if (!name || (!domain && !website)) {
+    return { admitted: false, reason: 'insufficient_business_fit' };
+  }
+
+  const allowedCities = resolveMissionAllowedCities({
+    allowedCities: context.allowedCities,
+    missionCities: context.missionCities,
+    cities: context.cities,
+    geography: context.geography,
+    service_area: context.service_area,
+    clientConfig: context.clientConfig,
+    region: context.region || context.missionRegion,
+  });
+  if (allowedCities.length) {
+    const location = asText(candidate.location || candidate.address);
+    const inScope = isLocationInMissionGeography({
+      location,
+      city: candidate.city,
+      allowedCities,
+    });
+    if (!inScope) {
+      return { admitted: false, reason: 'outside_geography' };
+    }
+  }
+
+  const provenance = buildDiscoveryProvenance(candidate, context);
+  const admissionContext = { ...context, ...provenance, [OBSERVATION_CONTEXT]: context };
+  const text = classificationHaystack(candidate, admissionContext);
+
+  const restaurantReason = restaurantBusinessScopeReason(candidate, admissionContext);
+  if (restaurantReason) return { admitted: false, reason: restaurantReason };
+
+  const vertical = resolveReplenishmentVertical(candidate, admissionContext);
+  // A verified heating/plumbing operator can perform both trades. Additional
+  // trade evidence is not contradictory once an evidenced trade intersects the
+  // mission; unrelated contractor types still reject below.
+  const allowedTrades = SERVICE_TRADE_VERTICALS.includes(vertical) && isMissionCompatible(vertical, context)
+    ? SERVICE_TRADE_VERTICALS : [];
+  if (allowedTrades.length && SERVICE_TRADE_VERTICALS.includes(vertical)
+    && /\b(?:suppliers?|supplies|distributors?|manufacturers?|hardware store|software|insurance|marketing agency)\b/i.test(text)) {
+    return { admitted: false, reason: 'contradictory_business_type', detail: 'non-operator trade business' };
+  }
+  const contradictory = detectContradictoryBusinessType(text, allowedTrades);
+  if (contradictory && !(isFounderLedSmallBusinessMission(context) && vertical
+    && isMissionCompatible(vertical, context))) {
+    return { admitted: false, reason: 'contradictory_business_type', detail: contradictory };
+  }
+  if (!vertical) {
+    return { admitted: false, reason: 'unclassifiable_vertical' };
+  }
+
+  if (!CANONICAL_ENRICHABLE_SCOUT_VERTICALS.includes(vertical)) {
+    return { admitted: false, reason: 'unclassifiable_vertical' };
+  }
+
+  if (!isMissionCompatible(vertical, context)) {
+    return { admitted: false, reason: 'segment_mismatch', vertical };
+  }
+
+
+  return {
+    admitted: true,
+    vertical,
+    provenance,
+  };
+}
+
+function createReplenishmentAdmissionCounters() {
+  return {
+    discovered: 0,
+    evaluated: 0,
+    fit: 0,
+    admittedToEnrichment: 0,
+    rejected: {
+      outside_geography: 0,
+      segment_mismatch: 0,
+      contradictory_business_type: 0,
+      unclassifiable_vertical: 0,
+      suppressed: 0,
+      owned_elsewhere: 0,
+      valid_ownership_collision: 0,
+      stale_ownership: 0,
+      same_company_different_contact: 0,
+      insufficient_business_fit: 0,
+      restaurant_boh_only: 0,
+    },
+    recovered: 0,
+    recoveredExisting: 0,
+    alreadyQueued: 0,
+    sameCompanyCandidatesAttempted: 0,
+    alternateContactsResolved: 0,
+    alternateContactsVerified: 0,
+    alternateContactsRejected: 0,
+    alternateContactsAddedToCleanInventory: 0,
+    alternateContactLossReasons: {},
+  };
+}
+
+function recordReplenishmentRejection(counters, reason) {
+  if (!counters || !reason) return;
+  counters.rejected[reason] = (counters.rejected[reason] || 0) + 1;
+}
+
+function isCanonicalEnrichableVertical(vertical) {
+  const normalized = normalizeVertical(vertical);
+  return Boolean(normalized && CANONICAL_ENRICHABLE_SCOUT_VERTICALS.includes(normalized));
+}
+
+/** Pre-#711 replenishment rows with query-slug verticals must not block fresh canonical admission. */
+function isLegacyMalformedReplenishmentOwnership(row = {}) {
+  if (String(row.source || '') !== 'max_buffer_replenishment') return false;
+  if (Number(row.enrichment_attempts || 0) !== 0) return false;
+  return !isCanonicalEnrichableVertical(row.vertical);
+}
+
+const LEGACY_RECONCILIATION_REMOVE_REASONS = Object.freeze([
+  'outside_geography',
+  'contradictory_business_type',
+]);
+
+function isLegacyReconciliationRemoveReason(reason) {
+  return LEGACY_RECONCILIATION_REMOVE_REASONS.includes(reason);
+}
+
+function resolveLegacyReconciliationOutcome(admission = {}) {
+  if (admission.admitted) {
+    return {
+      outcome: 'canonicalize',
+      vertical: admission.vertical,
+    };
+  }
+  const reason = admission.reason || 'unclassifiable_vertical';
+  if (isLegacyReconciliationRemoveReason(reason)) {
+    return {
+      outcome: 'remove',
+      reason,
+      detail: admission.detail || null,
+    };
+  }
+  return {
+    outcome: 'hold',
+    reason,
+    detail: admission.detail || null,
+  };
+}
+
+module.exports = {
+  ENRICHABLE_SCOUT_VERTICALS,
+  MISSION_SCOPED_FACILITIES_VERTICALS,
+  CANONICAL_ENRICHABLE_SCOUT_VERTICALS,
+  resolveReplenishmentVertical,
+  evaluateReplenishmentAdmission,
+  restaurantBusinessScopeReason,
+  missionCompatibleVerticals,
+  isFounderLedSmallBusinessMission,
+  buildDiscoveryProvenance,
+  formatProvenanceNotes,
+  createReplenishmentAdmissionCounters,
+  recordReplenishmentRejection,
+  isCanonicalEnrichableVertical,
+  isLegacyMalformedReplenishmentOwnership,
+  LEGACY_RECONCILIATION_REMOVE_REASONS,
+  isLegacyReconciliationRemoveReason,
+  resolveLegacyReconciliationOutcome,
+  _test: {
+    classificationHaystack,
+    isSearchDerivedField,
+    detectContradictoryBusinessType,
+  },
+};

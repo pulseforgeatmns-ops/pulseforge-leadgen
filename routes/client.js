@@ -1,17 +1,6 @@
 const express = require('express');
 const path = require('path');
 const pool = require('../db');
-const {
-  publishBlogPost,
-} = require('../utils/blogPublisher');
-const {
-  publishToGoogleBusiness,
-  publishToFacebookPage,
-  publishFayeComment,
-  publishToLinkedInPage,
-  publishToLinkedInPersonal,
-  publishLinkComment,
-} = require('../utils/publishPipeline');
 const { getProspectCounts } = require('../utils/prospectCounts');
 
 const router = express.Router();
@@ -37,7 +26,7 @@ const AGENT_META = {
   paige:  { name: 'Paige',  label: 'PAIGE',  role: 'Content Agent',       icon: '✍️', color: '#00c896', ringOffset: 230 },
   faye:   { name: 'Faye',   label: 'FAYE',   role: 'Facebook Agent',      icon: 'f', color: '#5ba3f5', ringOffset: 180 },
   vera:   { name: 'Vera',   label: 'VERA',   role: 'Review Agent',        icon: '⭐', color: '#f4b942', ringOffset: 230 },
-  max:    { name: 'Max',    label: 'MAX',    role: 'Manager Agent',       icon: '🧠', color: '#8b5cf6', ringOffset: 12 },
+  max:    { name: 'Max',    label: 'MAX',    role: 'Business Operating System', icon: '🧠', color: '#8b5cf6', ringOffset: 12 },
   rex:    { name: 'Rex',    label: 'REX',    role: 'Reporting Agent',     icon: '▣', color: '#00e676', ringOffset: 95 },
   cal:    { name: 'Cal',    label: 'CAL',    role: 'Calendar Agent',      icon: '◷', color: '#22d3ee', ringOffset: 140 },
   link:   { name: 'Link',   label: 'LINK',   role: 'LinkedIn Agent',      icon: 'in', color: '#5b9fd4', ringOffset: 170 },
@@ -794,6 +783,16 @@ router.get('/:clientId/api/approvals', requireClient, async (req, res) => {
   }
 });
 
+// Client PIN sessions may review and approve their own exact canonical artifact.
+router.get('/:clientId/api/approvals/:id/preview', requireClient, async (req, res) => {
+  try {
+    const approval = require('../services/paigeSocialContentApproval').getApprovalService();
+    res.set('Cache-Control', 'no-store');
+    res.json(await approval.preview({ tenantId: String(req.client.id), clientId: req.client.id,
+      pendingCommentId: req.params.id, accountId: req.query.account_id }));
+  } catch (err) { res.status(409).json({ error: err.message }); }
+});
+
 router.post('/:clientId/api/approvals/:id', requireClient, async (req, res) => {
   const { action } = req.body;
   if (!['approved', 'rejected'].includes(action)) {
@@ -801,31 +800,29 @@ router.post('/:clientId/api/approvals/:id', requireClient, async (req, res) => {
   }
 
   try {
-    const { rows } = await pool.query(`
-      SELECT pc.*
-      FROM pending_comments pc
-      WHERE pc.id = $2 AND pc.status = 'pending' AND pc.client_id = $1
-      LIMIT 1
-    `, [req.client.id, req.params.id]);
-    const item = rows[0];
-    if (!item) return res.status(404).json({ error: 'Approval not found' });
-
-    await pool.query('UPDATE pending_comments SET status = $1 WHERE id = $2 AND client_id = $3', [action, item.id, req.client.id]);
-    res.json({ success: true, id: item.id, action });
-
-    if (action === 'approved') {
-      const publishers = {
-        blog: () => publishBlogPost(item),
-        google_business: () => publishToGoogleBusiness(item),
-        facebook_page: () => publishToFacebookPage(item),
-        facebook: () => publishFayeComment(item),
-        linkedin_page: () => publishToLinkedInPage(item),
-        linkedin_personal: () => publishToLinkedInPersonal(item),
-        linkedin: () => publishLinkComment(item),
-      };
-      const publish = publishers[item.channel];
-      if (publish) publish().catch(err => console.error(`[ClientPublisher:${item.channel}]`, err.message));
+    const { applyPendingCommentApprovalAction } = require('../services/paigeSocialContentApprovalFlow');
+    const result = await applyPendingCommentApprovalAction({
+      clientId: req.client.id,
+      pendingCommentId: req.params.id,
+      action,
+      source: 'client_portal',
+      accountId: req.body.accountId, expectedApprovalHash: req.body.expectedApprovalHash, approvedBy: `client_pin:${req.client.id}`,
+    });
+    if (!result.ok) {
+      return res.status(result.statusCode || 500).json({
+        error: result.error || 'Unable to update approval',
+        message: result.message || null,
+        mode: result.mode || null,
+      });
     }
+    res.json({
+      success: true,
+      id: result.id,
+      action,
+      mode: result.mode,
+      artifact_id: result.artifact?.id || null,
+      publication: result.publication || null,
+    });
   } catch (err) {
     console.error('[client] approval update error:', err.message);
     res.status(500).json({ error: 'Unable to update approval' });

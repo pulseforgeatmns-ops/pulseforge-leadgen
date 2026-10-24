@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signal · Distribution watch</title>
+<style>
+:root{color-scheme:dark;--bg:#10151d;--panel:#19212c;--line:#334152;--ink:#edf3f9;--muted:#aebdcb;--accent:#8bd9c7}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,sans-serif}main{max-width:1000px;margin:auto;padding:24px 18px 60px}h1{font-size:clamp(1.6rem,5vw,2.3rem);margin:0}h2{font-size:1.25rem}h3{font-size:1rem}header{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;align-items:center}p{margin:8px 0 16px}.muted{color:var(--muted)}.notice{border-left:3px solid #eab96e;padding:12px 15px;background:#25251e}.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;margin:14px 0;overflow-wrap:anywhere}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}button,input,select{font:inherit;padding:11px 12px;border-radius:7px;border:1px solid var(--line);min-height:44px}button{background:var(--accent);color:#102923;cursor:pointer;font-weight:650}button.secondary{background:transparent;color:var(--ink)}button:disabled{opacity:.5;cursor:default}input,select{background:var(--bg);color:var(--ink);width:100%}label{display:block;margin:12px 0}dl{margin:0}dt{color:var(--muted);font-size:.86rem}dd{margin:2px 0 12px;overflow-wrap:anywhere}ul{padding-left:22px}.badge{display:inline-block;border:1px solid var(--line);border-radius:100px;padding:3px 10px;font-weight:700}.danger{color:#ffb4ad}.actions{display:flex;gap:10px;flex-wrap:wrap}.hidden{display:none}a{color:var(--accent)}:focus-visible{outline:3px solid #eab96e;outline-offset:3px}small{color:var(--muted)}
+</style>
+</head>
+<body><main>
+<header><div><p class="muted">SIGNAL / OPERATIONAL OBSERVATIONS</p><h1>Distribution watch</h1></div><button id="refresh" type="button">Refresh observations</button></header>
+<p class="notice">Experimental, manual-decision support. Quotes are sampled observations with UNKNOWN source freshness. Reserve changes do not prove liquidity withdrawal. Wallet distribution and developer identity remain UNKNOWN. No trades are executed here.</p>
+<p id="status" role="status" aria-live="polite">Loading saved observations…</p>
+<label for="namespace">Evidence view<select id="namespace"><option value="operational">Operational</option><option value="test">TEST ONLY</option></select></label>
+<section aria-labelledby="monitors-heading"><h2 id="monitors-heading">Monitors</h2><div id="monitors"></div></section>
+<section id="detail" class="hidden" aria-labelledby="detail-heading"><h2 id="detail-heading">Monitor details</h2><div id="detail-content"></div></section>
+<section aria-labelledby="admissions-heading"><h2 id="admissions-heading">Admission decisions</h2><p class="muted">Capacity limits do not replace an existing monitored token. Rejected or deferred requests appear here.</p><div id="admissions"></div></section>
+</main>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+let namespace='operational',selected=null,requestVersion=0,detailVersion=0;
+const text=value=>value===null||value===undefined||value===''?'UNKNOWN':String(value);
+function node(tag,value,cls){const n=document.createElement(tag);if(value!==undefined)n.textContent=text(value);if(cls)n.className=cls;return n;}
+function stamp(value){const d=new Date(value);return value&&Number.isFinite(+d)?d.toISOString():'UNKNOWN';}
+function age(value){const n=Date.parse(value);return Number.isFinite(n)?Math.max(0,Math.floor((Date.now()-n)/1000))+'s ago':'UNKNOWN';}
+function field(list,label,value){list.append(node('dt',label),node('dd',value));}
+function card(parent,title){const c=node('article',undefined,'card');if(title)c.append(node('h3',title));parent.append(c);return c;}
+async function api(path,options={}){const response=await fetch(path,{credentials:'same-origin',cache:'no-store',...options});if(response.redirected)throw Error('Sign in again to view this workspace.');let data;try{data=await response.json();}catch{throw Error('Unable to load the authenticated view. Sign in and refresh.');}if(!response.ok){const errors={distribution_disabled:'Distribution monitoring is disabled.',reference_missing_monitor_or_already_set:'This reference is already saved, or the monitor is unavailable.',invalid_manual_reference:'The reference must use a positive price and a valid, non-future time.',reference_scope_or_origin_denied:'This change requires the authenticated app origin and workspace.',distribution_scope_denied:'This workspace requires an authorized admin or manager session.'};throw Error(errors[data.error]||'Request blocked or unavailable. Refresh to check the current saved state.');}return data;}
+function query(){return '?namespace='+encodeURIComponent(namespace);}
+async function refresh(){const v=++requestVersion;++detailVersion;$('refresh').disabled=true;$('status').textContent='Loading saved observations…';
+try{const data=await api('/api/v1/signal/distribution'+query());if(v!==requestVersion)return;
+$('monitors').replaceChildren();$('admissions').replaceChildren();
+for(const m of data.monitors||[]){const s=m.state||{},c=card($('monitors'),m.token_address),expired=m.monitoring_status==='EXPIRED'||Date.parse(m.expires_at)<=Date.now();c.append(node('span',text(s.riskState),'badge'),node('p',expired?'EXPIRED · no current monitoring':'Expires: '+stamp(m.expires_at),expired?'danger':'muted'));
+if(!s.lastObservedAt||Date.now()-Date.parse(s.lastObservedAt)>180000)c.append(node('p','STALE / UNAVAILABLE sample; last risk state retained.','danger'));
+c.append(node('p','Monitoring status: '+text(m.monitoring_status)+' · activation '+text(m.activation_id),'muted'));
+c.append(node('p','Last sample: '+stamp(s.lastObservedAt)+' · '+age(s.lastObservedAt)),node('p','Source freshness: '+text(s.coverage?.sourceFreshness)));
+if(s.lastPollError)c.append(node('p','LATEST POLL FAILED: '+text(s.lastPollError)+' at '+stamp(s.lastPollErrorAt),'danger'));
+const b=node('button','View saved evidence','secondary');b.type='button';b.addEventListener('click',()=>showDetail(m.id));c.append(b);}
+if(!(data.monitors||[]).length)$('monitors').append(node('p','No monitors in this workspace and evidence view.','muted'));
+for(const a of data.admissions||[]){const c=card($('admissions'),a.token_address);c.append(node('p',text(a.reason)),node('p',stamp(a.created_at)+' · message '+text(a.external_message_id),'muted'));}
+if(!(data.admissions||[]).length)$('admissions').append(node('p','No saved admission decisions.','muted'));
+$('status').textContent=(namespace==='test'?'TEST ONLY. ':'')+'Saved data refreshed '+new Date().toISOString()+'. Refresh does not request new provider data.';
+if(selected)await showDetail(selected);
+}catch(e){if(v===requestVersion)$('status').textContent=e.message;}finally{if(v===requestVersion)$('refresh').disabled=false;}}
+async function showDetail(id){selected=id;const v=++detailVersion;const target=$('detail-content');$('detail').classList.remove('hidden');target.replaceChildren(node('p','Loading details…'));
+try{const data=await api('/api/v1/signal/distribution/'+encodeURIComponent(id)+query());if(v!==detailVersion)return;target.replaceChildren();const m=data.monitor,s=m.state||{},metrics=s.metrics||{},coverage=s.coverage||{};
+const c=card(target,m.token_address);c.append(node('span',text(s.riskState),'badge'));
+const stale=Date.now()-Date.parse(s.lastObservedAt)>180000;
+if(stale||!s.lastObservedAt||(m.monitoring_status==='EXPIRED'||Date.parse(m.expires_at)<=Date.now()))c.append(node('p','STALE / EXPIRED / UNAVAILABLE: do not treat this as a current market assessment.','danger'));
+if(s.lastPollError)c.append(node('p','Polling error: '+text(s.lastPollError)+' at '+stamp(s.lastPollErrorAt),'danger'));
+const grid=node('dl',undefined,'grid');for(const [label,value]of [['Pair',s.pairId],['Observed at',stamp(s.lastObservedAt)],['Provider timestamp',stamp(s.latestSnapshot?.providerTimestamp)],['Monitoring status',m.monitoring_status],['Activation ID',m.activation_id],['Bounded monitoring window ends',stamp(m.expires_at)],['Price USD',metrics.priceUsd],['Market cap USD',metrics.marketCapUsd],['Pool reserves USD',metrics.liquidityUsd],['Volume, rolling 5m USD',metrics.volume5mUsd],['Buys / sells, rolling 5m',text(metrics.buys5m)+' / '+text(metrics.sells5m)],['Buy / sell volume, rolling 5m USD',text(metrics.buyVolume5mUsd)+' / '+text(metrics.sellVolume5mUsd)],['Reference multiple',metrics.referenceMultiple],['Observed MFE multiple',metrics.observedMfeMultiple],['Drawdown from observed peak (fraction)',metrics.drawdownFromObservedPeak]]){const item=node('div');field(item,label,value);grid.append(item);}c.append(grid);
+c.append(node('h3','Reasons'));const reasons=node('ul');for(const r of s.reasons||[])reasons.append(node('li',r));if(!reasons.children.length)reasons.append(node('li','UNKNOWN'));c.append(reasons,node('h3','Coverage'));
+const cover=node('dl');for(const name of ['price','marketCap','liquidity','volume5m','buySellActivity','walletDistribution','developerIdentity','sourceFreshness','observationFreshness','pair'])field(cover,name,coverage[name]);c.append(cover);
+renderReference(target,m);
+const samples=card(target,'Recent saved samples');for(const o of data.observations||[]){const p=o.payload||{};samples.append(node('p',stamp(o.observed_at||p.observedAt)+' · price USD '+text(p.priceUsd)+' · reserves USD '+text(p.liquidityUsd)+' · source time '+stamp(p.providerTimestamp)));}if(!(data.observations||[]).length)samples.append(node('p','No saved sample history.'));
+const transitions=card(target,'State changes');for(const t of data.transitions||[]){const p=t.payload||{};transitions.append(node('p',stamp(p.observedAt)+' · '+text(p.kind)+' · '+text(p.previousState)+' → '+text(p.state)),node('p',(p.reasons||[]).join(', '),'muted'));}if(!(data.transitions||[]).length)transitions.append(node('p','No saved state changes.'));
+const deliveries=card(target,'Delivery attempts');deliveries.append(node('p','ACCEPTED means the provider accepted the request. Receipt and display on your device are unverified.','muted'));for(const d of data.deliveries||[])deliveries.append(node('p',text(d.channel)+' · '+text(d.status)+' · '+stamp(d.created_at)+' · attempts '+text(d.attempts)+(d.suppression_reason?' · '+d.suppression_reason:'')));if(!(data.deliveries||[]).length)deliveries.append(node('p','No saved delivery attempts.'));
+}catch(e){if(v===detailVersion)target.replaceChildren(node('p',e.message,'danger'));}}
+function renderReference(target,m){const c=card(target,'Optional manual price reference'),reference=m.state?.reference;
+c.append(node('p','A price reference only. This is not a purchase, position, execution record, or trade instruction. MFE and milestone detection use samples collected after this reference was saved; earlier samples are not recomputed.','muted'));
+if(reference){c.append(node('p','Saved once: USD '+text(reference.priceUsd)),node('p','Entered reference time: '+stamp(reference.recordedAt)),node('p','Saved at / forward observation boundary: '+stamp(reference.savedAt)),node('p','Source: '+text(reference.provenance)));return;}
+if(namespace!=='operational'||m.monitoring_status==='EXPIRED'||Date.parse(m.expires_at)<=Date.now()){c.append(node('p','Reference entry is unavailable for TEST ONLY or expired monitors.'));return;}
+const form=node('form'),price=node('input'),time=node('input');price.type='number';price.min='0';price.step='any';price.required=true;time.type='datetime-local';time.required=true;time.step='1';
+const lp=node('label','Reference price (USD)');lp.append(price);const lt=node('label','Reference time (your device’s local time)');lt.append(time);form.append(lp,lt);
+const preview=node('button','Preview reference');preview.type='submit';const message=node('p');message.setAttribute('role','status');form.append(preview,message);c.append(form);
+let saving=false;const formNamespace=namespace;
+form.addEventListener('submit',async e=>{e.preventDefault();if(saving)return;const p=Number(price.value),date=new Date(time.value);if(!Number.isFinite(p)||p<=0||!Number.isFinite(+date)||+date>Date.now()){message.textContent='Enter a positive price and a valid reference time that is not in the future.';return;}
+const recordedAt=date.toISOString();message.textContent='Preview: USD '+p+' at '+recordedAt+'; source EXPLICIT_MANUAL_OPERATOR. This can be saved only once.';
+if(!window.confirm('Save this manual reference once?\nToken: '+m.token_address+'\nPrice: USD '+p+'\nTime: '+recordedAt+'\nSource: EXPLICIT_MANUAL_OPERATOR\nNo trade will be executed.'))return;
+saving=true;preview.disabled=true;try{await api('/api/v1/signal/distribution/'+encodeURIComponent(m.id)+'/reference',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({priceUsd:p,recordedAt,source:'EXPLICIT_MANUAL_OPERATOR',confirm:true})});message.textContent='Reference saved. No trade executed.';if(namespace===formNamespace&&selected===m.id)await showDetail(m.id);}catch(error){message.textContent=error.message;preview.disabled=false;saving=false;}});}
+$('refresh').addEventListener('click',refresh);$('namespace').addEventListener('change',()=>{namespace=$('namespace').value;selected=null;$('detail').classList.add('hidden');refresh();});refresh();
+</script></body></html>

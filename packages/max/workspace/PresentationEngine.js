@@ -7,9 +7,9 @@
  */
 
 const DEFAULT_MODEL = process.env.MAX_WORKSPACE_MODEL || process.env.MAX_CHAT_MODEL || 'claude-sonnet-4-6';
+const { PRESENTATION_IDENTITY } = require('../identity/MaxIdentity');
 
-const MISSION_PRESENTATION_SYSTEM = `You are Max, the Pulseforge intelligence advisor.
-You are a PRESENTATION ENGINE only (ADR-005).
+const MISSION_PRESENTATION_SYSTEM = `${PRESENTATION_IDENTITY}
 You receive a verified Structured Response Object with mission-oriented communication (SPEC-121).
 
 Rules:
@@ -20,8 +20,7 @@ Rules:
 - If metadata.showReasoningDisclosure is true, end with "▼ Show reasoning" — do not expand reasoning inline.
 - Keep a calm, operational tone. No fluff.`;
 
-const DEFAULT_PRESENTATION_SYSTEM = `You are Max, the Pulseforge intelligence advisor.
-You are a PRESENTATION ENGINE only (ADR-005).
+const DEFAULT_PRESENTATION_SYSTEM = `${PRESENTATION_IDENTITY}
 You receive a verified Structured Response Object.
 Rules:
 - Communicate only what is in the object.
@@ -30,7 +29,7 @@ Rules:
 - If metadata.unavailable lists gaps, say so plainly.
 - Preserve meaning exactly.
 - Structure the reply as: direct answer, then brief reasoning, then invite next investigation.
-- Keep a calm, advisor tone. No fluff.`;
+- Keep a calm, operational tone. No fluff.`;
 
 class PresentationEngine {
   /**
@@ -55,6 +54,33 @@ class PresentationEngine {
     }
 
     const metadata = structured.metadata || {};
+    const conversationContract = metadata.conversationContract || null;
+    const executionBlocked =
+      conversationContract && conversationContract.executionAllowed === false;
+
+    // SPEC-155 — read-only conversation contract blocks mission presentation.
+    if (executionBlocked && metadata.missionCommunication === true) {
+      const readOnlyStructured = {
+        ...structured,
+        metadata: {
+          ...metadata,
+          missionCommunication: false,
+          readOnlyConversation: true,
+          conversationContract,
+        },
+      };
+      const prose = formatDeterministicProse(readOnlyStructured);
+      return {
+        prose,
+        structured: readOnlyStructured,
+        metadata: {
+          ...readOnlyStructured.metadata,
+          presentation: 'conversation_contract_read_only',
+        },
+        presentation: 'conversation_contract_read_only',
+      };
+    }
+
     let prose;
     let presentation = 'fallback';
 
@@ -69,6 +95,62 @@ class PresentationEngine {
           presentation: 'mission_communication',
         },
         presentation: 'mission_communication',
+      };
+    }
+
+    // SPEC-149A — identity responses are canonical organizational prose; do not rephrase.
+    if (metadata.identityConversation === true) {
+      prose = structured.answer ? String(structured.answer).trim() : '';
+      return {
+        prose,
+        structured,
+        metadata: {
+          ...metadata,
+          presentation: 'identity_conversation',
+        },
+        presentation: 'identity_conversation',
+      };
+    }
+
+    // SPEC-150 — session inspection is a stored-state snapshot; do not rephrase.
+    if (metadata.sessionInspection === true) {
+      prose = structured.answer ? String(structured.answer).trim() : '';
+      return {
+        prose,
+        structured,
+        metadata: {
+          ...metadata,
+          presentation: 'session_inspection',
+        },
+        presentation: 'session_inspection',
+      };
+    }
+
+    // SPEC-149 — session configuration acknowledgement is already the operator artifact.
+    if (metadata.sessionConfiguration === true) {
+      prose = structured.answer ? String(structured.answer).trim() : '';
+      return {
+        prose,
+        structured,
+        metadata: {
+          ...metadata,
+          presentation: 'session_configuration',
+        },
+        presentation: 'session_configuration',
+      };
+    }
+
+    // SPEC-147 — conversational intelligence responses are already natural-language prose.
+    if (metadata.conversationalIntelligence === true) {
+      prose = formatDeterministicProse(structured);
+      return {
+        prose,
+        structured,
+        metadata: {
+          ...metadata,
+          presentation: 'conversational_intelligence',
+        },
+        presentation: 'conversational_intelligence',
       };
     }
 

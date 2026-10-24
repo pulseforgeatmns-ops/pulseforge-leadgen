@@ -1,4 +1,5 @@
 'use strict';
+const { createTestAmoRuntime, runtimeProviderFromEngine, createHydratingTestRuntime } = require('./amoTestRuntime');
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
@@ -7,7 +8,7 @@ const {
   resolveWorkspaceOwner,
   WORKSPACE_OWNERS,
 } = require('../WorkspaceOwnershipResolver');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { createMissionEngine } = require('../../../mission-engine');
 const { createBuiltinRegistry } = require('../../../capabilities');
 const { clearWorkspaceOwnershipAuditLog } = require('../audit/WorkspaceOwnershipAudit');
@@ -41,6 +42,7 @@ describe('SPEC-132 — Acquisition Objective Overrides Legacy Continuation', () 
 
   it('clean session: acquisition objective selects mission_creation', async () => {
     const ownership = await resolveWorkspaceOwner({
+      acquisitionMissionRuntime: createTestAmoRuntime(),
       question: ACQUIRE_OBJECTIVE,
       context: { tenantId: '10' },
       session: { id: 'sess-clean', context: { tenantId: '10' } },
@@ -55,6 +57,7 @@ describe('SPEC-132 — Acquisition Objective Overrides Legacy Continuation', () 
 
   it('session with bound SPEC-022 mission: acquisition objective beats legacy continuation', async () => {
     const ownership = await resolveWorkspaceOwner({
+      acquisitionMissionRuntime: createTestAmoRuntime(),
       question: ACQUIRE_OBJECTIVE,
       context: { tenantId: '10' },
       session: { id: 'sess-legacy', context: { tenantId: '10' } },
@@ -70,6 +73,7 @@ describe('SPEC-132 — Acquisition Objective Overrides Legacy Continuation', () 
 
   it('non-acquisition continuation still selects active_mission for legacy session', async () => {
     const ownership = await resolveWorkspaceOwner({
+      acquisitionMissionRuntime: createTestAmoRuntime(),
       question: 'continue yesterday\'s mission',
       context: { tenantId: '10' },
       session: { id: 'sess-legacy-resume', context: { tenantId: '10' } },
@@ -84,6 +88,7 @@ describe('SPEC-132 — Acquisition Objective Overrides Legacy Continuation', () 
 
   it('resume outreach still selects active_mission for legacy session', async () => {
     const ownership = await resolveWorkspaceOwner({
+      acquisitionMissionRuntime: createTestAmoRuntime(),
       question: 'resume outreach',
       context: { tenantId: '10' },
       session: { id: 'sess-legacy-outreach', context: { tenantId: '10' } },
@@ -104,7 +109,7 @@ describe('SPEC-132 — Acquisition Objective Overrides Legacy Continuation', () 
     });
 
     const workspace = createWorkspaceEngine({
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       missionEngine,
       missionsEnabled: true,
       resolverEnabled: true,

@@ -93,6 +93,7 @@ function isOperatorDeskWorkflowQuestion(question) {
 }
 
 function isHardRetrievalQuestion(question, mode) {
+  if (isExecutionInspectionTurn(question)) return false;
   if (isOperatorDeskWorkflowQuestion(question)) return false;
   if (SERVICE_AREA_RE.test(question)) return true;
   if (ENTITY_KNOW_RE.test(question)) return true;
@@ -568,9 +569,19 @@ function itemsByUnavailable(items) {
     .filter(Boolean);
 }
 
+function isExecutionInspectionTurn(question) {
+  try {
+    const { isExecutionInspectionQuestion } = require('./ExecutionInspectionRegistry');
+    return isExecutionInspectionQuestion(question);
+  } catch (_) {
+    return false;
+  }
+}
+
 async function maybeHandleRetrievalBeforeDelegationTurn(input = {}) {
   const question = String(input.question || '').trim();
   if (!question) return null;
+  if (isExecutionInspectionTurn(question)) return null;
 
   const mode =
     input.cognitive ||

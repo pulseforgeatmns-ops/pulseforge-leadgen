@@ -4,7 +4,7 @@
  * SPEC-124 — Acquisition Ownership Convergence audit events.
  */
 
-const OWNER = 'MissionEngine';
+const OWNER = 'AMO';
 
 /** @type {object[]} */
 const _auditLog = [];

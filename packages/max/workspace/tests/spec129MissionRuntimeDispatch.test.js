@@ -1,9 +1,10 @@
 'use strict';
+const { createTestAmoRuntime, runtimeProviderFromEngine, createHydratingTestRuntime } = require('./amoTestRuntime');
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const amo = require('../../../acquisition-mission');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { createMissionEngine } = require('../../../mission-engine');
 const { createBuiltinRegistry } = require('../../../capabilities');
 const { WORKSPACE_OWNERS } = require('../WorkspaceOwnershipResolver');
@@ -36,6 +37,7 @@ function stubLegacyMissionEngine() {
 
 function realLegacyEngine() {
   return createMissionEngine({
+    scoutDiscoveryOpts: { companies: [], people: [], acquisitionMissionRuntime: createTestAmoRuntime() },
     registry: createBuiltinRegistry({ discovery: { useFixture: true } }),
     resolverEnabled: true,
   });
@@ -57,7 +59,7 @@ describe('SPEC-129 — Mission Runtime Dispatch', () => {
     const selected = await resolveMissionRuntime({
       question: 'approved',
       context: { tenantId: '10' },
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       missionEngine: stubLegacyMissionEngine(),
       session: { id: 's-amo', context: { tenantId: '10', missionId: mission.id } },
       missionsEnabled: true,
@@ -83,6 +85,7 @@ describe('SPEC-129 — Mission Runtime Dispatch', () => {
     await missionEngine.store.update({ id: created.id, status: 'planning' });
 
     const selected = await resolveMissionRuntime({
+      acquisitionMissionRuntime: createTestAmoRuntime(),
       question: 'approved',
       context: { tenantId: '10' },
       missionEngine,
@@ -119,7 +122,7 @@ describe('SPEC-129 — Mission Runtime Dispatch', () => {
     const selected = await resolveMissionRuntime({
       question: 'approved',
       context: { tenantId: '10', missionId: legacy.id },
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       missionEngine,
       session: {
         id: 's-both',
@@ -148,7 +151,13 @@ describe('SPEC-129 — Mission Runtime Dispatch', () => {
     assert.equal(events[2].runtime, MISSION_RUNTIMES.SPEC_022);
   });
 
-  it('WorkspaceEngine.ask routes approved to AMO even when a SPEC-022 mission is bound', async () => {
+  it('WorkspaceEngine.ask routes approved to AMO even when a SPEC-022 mission is bound', async (t) => {
+    const approval = require('../AmoOperatorApproval');
+    const original = approval.advanceDiscoveryAfterApproval;
+    t.mock.method(approval, 'advanceDiscoveryAfterApproval', (input) => original({
+      ...input,
+      runScout: async () => approval.fixtureScoutDiscoveryResult(),
+    }));
     const amoEngine = amo.createAcquisitionMissionEngine();
     const amoMission = amoEngine.create({
       tenantId: '10',
@@ -166,7 +175,7 @@ describe('SPEC-129 — Mission Runtime Dispatch', () => {
     await missionEngine.store.update({ id: legacy.id, status: 'planning' });
 
     const workspace = createWorkspaceEngine({
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       missionsEnabled: true,
       missionEngine,
       resolverEnabled: true,
@@ -210,7 +219,7 @@ describe('SPEC-129 — Mission Runtime Dispatch', () => {
     assert.ok(approvalEvents.includes('MISSION_STAGE_EXECUTION_COMPLETED'));
 
     const after = amoEngine.get(amoMission.id, '10');
-    assert.equal(after.pendingOperatorDecision, null);
+    assert.equal(after.pendingOperatorDecision.kind, amo.OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL);
   });
 
   it('WorkspaceEngine.ask still resumes a legacy mission when no AMO is active', async () => {

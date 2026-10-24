@@ -1,0 +1,43 @@
+name: SPEC-254-256 Production Acceptance
+
+on:
+  workflow_dispatch:
+
+jobs:
+  accept:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Resolve deployed production SHA
+        id: sha
+        run: |
+          SHA=$(gh api repos/${{ github.repository }}/deployments --jq '.[0].sha' 2>/dev/null || true)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: SPEC-254/255/256 production acceptance (read-only)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          APP_URL: https://pulseforge-leadgen-production.up.railway.app
+          EXPECTED_PRODUCTION_SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "::warning::DATABASE_URL is not configured — skipping SPEC-254/255/256 production acceptance."
+            echo '{"verdict":"SKIPPED","reason":"DATABASE_URL not configured"}' > acceptance-report.json
+            exit 0
+          fi
+          node scripts/spec254255256ProductionAcceptance.js | tee acceptance-report.json
+      - name: Upload acceptance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spec254-256-acceptance-report
+          path: acceptance-report.json
+          if-no-files-found: warn

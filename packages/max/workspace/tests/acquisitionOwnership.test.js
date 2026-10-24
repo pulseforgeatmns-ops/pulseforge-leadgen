@@ -1,4 +1,5 @@
 'use strict';
+const { createTestAmoRuntime, runtimeProviderFromEngine, createHydratingTestRuntime } = require('./amoTestRuntime');
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
@@ -82,7 +83,8 @@ describe('SPEC-124 — Acquisition Ownership Convergence', () => {
     const turn = await maybeHandleAcquisitionOwnershipTurn({
       question: ANCHOR_OBJECTIVE,
       context: { tenantId: '10' },
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
+      persist: false,
       audit,
       cieService: {
         getApprovedClientBlueprint: async () => ({
@@ -102,7 +104,13 @@ describe('SPEC-124 — Acquisition Ownership Convergence', () => {
     assert.ok(turn);
     assert.equal(turn.reason, 'acquisition_mission_created');
     assert.match(turn.prose, /Mission Created/);
-    assert.match(turn.prose, /Approve discovery/);
+    assert.match(turn.prose, /Approve discovery|Approve mission plan|Operator Decision/i);
+    assert.deepEqual(
+      turn.structured.metadata.missionCommunicationPayload.sources,
+      ['acquisition_mission', 'scout']
+    );
+    assert.doesNotMatch(turn.prose, /Mission Engine/);
+    assert.doesNotMatch(turn.prose, /Blueprint attached/);
     assert.doesNotMatch(turn.prose, /advisory guidance/i);
     assert.doesNotMatch(turn.prose, /I'd start with a qualified group/i);
     assert.equal(turn.mission.objective, ANCHOR_OBJECTIVE);
@@ -110,7 +118,7 @@ describe('SPEC-124 — Acquisition Ownership Convergence', () => {
 
     const ownerEvent = audit.log.find((row) => row.event === 'ACQUISITION_OWNER');
     assert.ok(ownerEvent);
-    assert.equal(ownerEvent.owner, 'MissionEngine');
+    assert.equal(ownerEvent.owner, 'AMO');
     assert.equal(ownerEvent.action, 'created');
 
     const ciEvent = audit.log.find(
@@ -132,12 +140,19 @@ describe('SPEC-124 — Acquisition Ownership Convergence', () => {
     const turn = await maybeHandleAcquisitionOwnershipTurn({
       question: 'Acquire one recurring commercial cleaning client',
       context: { tenantId: '10' },
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
+      persist: false,
+      cieService: { getApprovedClientBlueprint: async () => null },
     });
 
     assert.ok(turn);
     assert.equal(turn.reason, 'acquisition_mission_resumed');
     assert.match(turn.prose, /Mission Resumed/);
+    assert.deepEqual(
+      turn.structured.metadata.missionCommunicationPayload.sources,
+      ['acquisition_mission', 'scout']
+    );
+    assert.doesNotMatch(turn.prose, /Continue in mission workspace\?/);
     assert.equal(turn.mission.id, existing.id);
     assert.equal(amoEngine.list('10').length, 1);
   });
@@ -185,7 +200,9 @@ describe('SPEC-124 — Acquisition Ownership Convergence', () => {
     await maybeHandleAcquisitionOwnershipTurn({
       question: ANCHOR_OBJECTIVE,
       context: { tenantId: '10' },
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
+      persist: false,
+      cieService: { getApprovedClientBlueprint: async () => null },
     });
 
     const events = listAcquisitionOwnershipAuditLog();

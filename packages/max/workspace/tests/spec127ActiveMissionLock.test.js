@@ -1,4 +1,5 @@
 'use strict';
+const { createTestAmoRuntime, runtimeProviderFromEngine, createHydratingTestRuntime } = require('./amoTestRuntime');
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
@@ -21,7 +22,7 @@ const {
   createWorkspaceOwnershipAudit,
   clearWorkspaceOwnershipAuditLog,
 } = require('../audit/WorkspaceOwnershipAudit');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { createMissionEngine } = require('../../../mission-engine');
 const { createBuiltinRegistry } = require('../../../capabilities');
 
@@ -68,7 +69,7 @@ describe('SPEC-127 — Active Mission Lock', () => {
     const ownership = await resolveWorkspaceOwner({
       question: 'Approved. Begin Discovery.',
       context: { tenantId: '10' },
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       missionEngine: stubLegacyMissionEngine(),
       missionsEnabled: true,
       resolverEnabled: true,
@@ -133,7 +134,13 @@ describe('SPEC-127 — Active Mission Lock', () => {
     assert.equal(blocked.decision.reason, 'mission_execution_command');
   });
 
-  it('WorkspaceEngine advances AMO on Approved. Begin Discovery.', async () => {
+  it('WorkspaceEngine advances AMO on Approved. Begin Discovery.', async (t) => {
+    const approval = require('../AmoOperatorApproval');
+    const original = approval.advanceDiscoveryAfterApproval;
+    t.mock.method(approval, 'advanceDiscoveryAfterApproval', (input) => original({
+      ...input,
+      runScout: async () => approval.fixtureScoutDiscoveryResult(),
+    }));
     const amoEngine = amo.createAcquisitionMissionEngine();
     amoEngine.create({
       tenantId: '10',
@@ -143,7 +150,7 @@ describe('SPEC-127 — Active Mission Lock', () => {
     });
 
     const engine = createWorkspaceEngine({
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       missionsEnabled: true,
       missionEngine: stubLegacyMissionEngine(),
       disableLlm: true,
@@ -166,10 +173,32 @@ describe('SPEC-127 — Active Mission Lock', () => {
     assert.match(result.prose, /Mission Updated/i);
     assert.match(result.prose, /Discover/i);
     assert.ok(result.mission);
+    assert.equal(result.resolution.action, 'discovery_approved');
+    const committed = amoEngine.inspect(result.mission.id, { tenantId: '10' });
+    const consumed = approval.findDiscoveryApproval(committed.contributions);
+    assert.equal(consumed.payload.consumed, true);
+    assert.ok(consumed.payload.transactionId);
+    assert.ok(committed.contributions.some((row) => row.specialist === amo.SPECIALISTS.SCOUT));
+    assert.ok(committed.timeline.some((row) => row.kind === amo.EVENT_KINDS.EXECUTION_COMMITTED));
+    assert.equal(result.mission.pendingOperatorDecision.kind, amo.OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL);
   });
 
   it('legacy Approved. Begin Scout discovery executes Discovery stage', async () => {
+    const repositoryTenants = [];
     const missionEngine = createMissionEngine({
+      scoutDiscoveryOpts: {
+        // These are deliberately hostile non-dependency fields. The stage must
+        // derive its authority from the mission, not this constructor option bag.
+        delegation: { tenantId: '17' },
+        tenantId: '17',
+        missionId: 'forged-mission',
+        amoMissionId: 'forged-mission',
+        executionContext: { forged: true },
+        attachScoutDiscovery: false,
+        loadCompanies: async ({ tenantId }) => { repositoryTenants.push(tenantId); return []; },
+        people: [],
+        acquisitionMissionRuntime: createTestAmoRuntime(),
+      },
       registry: createBuiltinRegistry({ discovery: { useFixture: true } }),
       resolverEnabled: true,
     });
@@ -198,21 +227,25 @@ describe('SPEC-127 — Active Mission Lock', () => {
 
     assert.equal(second.workspaceOwnership.owner, WORKSPACE_OWNERS.ACTIVE_MISSION);
     assert.equal(second.resolution.action, 'executed');
+    // Pipeline preflight and Scout intelligence both consult the same tenant repository.
+    assert.deepEqual(repositoryTenants, ['10', '10']);
+    assert.equal(second.mission.id, first.mission.id);
+    assert.equal(String(second.mission.tenantId), '10');
     assert.doesNotMatch(second.prose, /Switching from .* to General Conversation/i);
     assert.doesNotMatch(second.prose, /Today's Briefing/i);
   });
 
-  it('emits ACTIVE_MISSION_GUARD and MISSION_OWNER_SELECTED audit events', async () => {
+  it('emits tenant-bound mission ownership audit through objective-first routing', async () => {
     clearWorkspaceOwnershipAuditLog();
     const amoEngine = amo.createAcquisitionMissionEngine();
-    amoEngine.create({
+    const mission = amoEngine.create({
       tenantId: '10',
       objective: ANCHOR_OBJECTIVE,
       targetSegment: 'Law Firms',
     });
 
     const engine = createWorkspaceEngine({
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       missionsEnabled: true,
       missionEngine: stubLegacyMissionEngine(),
       disableLlm: true,
@@ -225,7 +258,11 @@ describe('SPEC-127 — Active Mission Lock', () => {
     });
 
     const auditLog = require('../audit/WorkspaceOwnershipAudit').listWorkspaceOwnershipAuditLog();
-    assert.ok(auditLog.some((row) => row.event === 'MISSION_OWNER_SELECTED'));
+    const selected = auditLog.filter((row) => row.event === 'MISSION_OWNER_SELECTED');
+    assert.equal(selected.length, 1);
+    assert.equal(selected[0].missionId, mission.id);
+    assert.equal(selected[0].source, 'amo');
+    assert.equal(selected[0].owner, WORKSPACE_OWNERS.ACTIVE_MISSION);
     assert.ok(
       auditLog.some(
         (row) =>
@@ -244,7 +281,7 @@ describe('SPEC-127 — Active Mission Lock', () => {
     const lock = await resolveActiveMissionLock({
       question: 'continue',
       context: { tenantId: '10' },
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       missionEngine: stubLegacyMissionEngine(),
       session: { id: 's1', context: { tenantId: '10' } },
     });

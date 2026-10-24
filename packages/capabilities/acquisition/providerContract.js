@@ -1,5 +1,7 @@
 'use strict';
 
+const { withResearchProviderScope, assertResearchProviderAllowed } = require('../../../utils/anchorResearchProviderPause');
+
 /**
  * Acquisition provider contract (SPEC-060).
  *
@@ -56,6 +58,7 @@ function adaptSearchProvider(legacy, meta = {}) {
         : true;
     },
     async acquire(request = {}) {
+      const researchTenants = Object.freeze([request.tenantId, request.clientId, request.client_id].filter(value => value != null));
       const query = {
         industry: request.industry || request.query || '',
         location: request.location || request.geography || '',
@@ -64,7 +67,13 @@ function adaptSearchProvider(legacy, meta = {}) {
           ? request.query
           : {}),
       };
-      const hits = await legacy.search(query, request.profile || null);
+      const hits = await withResearchProviderScope(researchTenants[0], () => {
+        // Nested query fields cannot replace the request's authoritative tenant.
+        for (const tenant of [...researchTenants, query.tenantId, query.clientId, query.client_id].filter(value => value != null)) {
+          assertResearchProviderAllowed('acquisition', tenant);
+        }
+        return legacy.search(query, request.profile || null);
+      });
       return {
         candidates: Array.isArray(hits) ? hits : [],
         evidence: [

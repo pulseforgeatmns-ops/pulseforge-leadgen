@@ -211,6 +211,232 @@ function splitPhrases(text) {
     .filter((p) => p.split(/\s+/).length <= 12);
 }
 
+/** Split list-like text without breaking prose on coordinating "and". */
+function splitListPhrases(text) {
+  if (!text) return [];
+  return String(text)
+    .split(/[,;\n]|•|\u2022/)
+    .map((p) => p.trim().replace(/^[–—*•]\s*/, '').replace(/[.]+$/, ''))
+    .filter(Boolean);
+}
+
+function isServiceCatalogSummary(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  const commas = (s.match(/,/g) || []).length;
+  return (
+    commas >= 2 &&
+    /\b(?:delivers|offers|provides)\b/i.test(s) &&
+    /\b(?:redesign|design|messaging|optimization|copywriting|cleaning)\b/i.test(s)
+  );
+}
+
+function isPremiumWebsiteGrowthBusiness(sections, facts) {
+  const blob = [
+    sectionSummary(sections, 'campaignGoals'),
+    sectionSummary(sections, 'services'),
+    facts && facts.ninety_day_outcomes,
+    facts && facts.business_description,
+    ...(facts && Array.isArray(facts.services) ? facts.services : []),
+  ]
+    .filter(Boolean)
+    .join(' ');
+  return /\b(?:premium\s+)?website redesign\b/i.test(blob);
+}
+
+function resolveMarketGeographyPhrase(primaryArea, towns, facts, sections) {
+  const geoBits = [];
+  if (facts && Array.isArray(facts.geography)) geoBits.push(...facts.geography);
+  if (primaryArea) geoBits.push(primaryArea);
+  if (sections) {
+    geoBits.push(sectionSummary(sections, 'targetMarkets'));
+    geoBits.push(sectionSummary(sections, 'campaignGoals'));
+  }
+  const blob = geoBits.join(' ; ');
+  const hasGreater = /\bGreater Manchester\b/i.test(blob) || primaryArea === 'Greater Manchester';
+  const hasSouthern = /southern New Hampshire/i.test(blob);
+  if (hasGreater && hasSouthern) return 'Greater Manchester and southern New Hampshire';
+  if (primaryArea && towns.length) {
+    return `${primaryArea}, especially ${naturalList(towns)}`;
+  }
+  if (primaryArea) return primaryArea;
+  if (towns.length) return naturalList(towns);
+  return '';
+}
+
+function extractWebsiteIcpPainQualifier(sections) {
+  const ideal = sectionSummary(sections, 'idealCustomers');
+  if (
+    /outdated|generic|confusing|visually weak|\bslow\b|undersell|weak website|credibility gap|feel outdated/i.test(
+      ideal
+    )
+  ) {
+    return ' whose current websites undersell the quality of the business';
+  }
+  return '';
+}
+
+function extractVerticalSegmentsFromMarkets(sections, facts) {
+  const markets = sectionSummary(sections, 'targetMarkets');
+  let focusMatch = markets.match(/initial focus on (.+?)(?:\.|$)/i);
+  if (!focusMatch) {
+    const dashMatch = markets.match(/[—–-]\s*(.+?)(?:\.|$)/);
+    if (dashMatch) focusMatch = dashMatch;
+  }
+  if (focusMatch) {
+    const raw = focusMatch[1]
+      .replace(/\band owner-led local brands?\b/i, ', owner-led local brands')
+      .replace(/\bmedical or wellness practices\b/i, 'medical and wellness practices')
+      .replace(/\bcontractors,\s*trades\b/i, 'contractors and trades');
+    const fromFocus = splitListPhrases(raw)
+      .map((item) =>
+        item
+          .replace(/\bmedical,\s*wellness practices\b/i, 'medical and wellness practices')
+          .replace(/\bcontractors,\s*trades\b/i, 'contractors and trades')
+          .trim()
+      )
+      .filter(Boolean);
+    if (fromFocus.length) return uniqueStrings(fromFocus).slice(0, 10);
+  }
+
+  if (facts && facts.vertical_focus) {
+    const fromFacts = splitListPhrases(String(facts.vertical_focus).replace(/;/g, ','))
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (fromFacts.length) return uniqueStrings(fromFacts).slice(0, 10);
+  }
+
+  if (facts && Array.isArray(facts.geography)) {
+    const fromGeo = facts.geography
+      .map((item) => String(item || '').trim())
+      .filter(
+        (item) =>
+          item &&
+          !/^(?:Greater Manchester|Manchester|southern New Hampshire)$/i.test(item) &&
+          (/,/.test(item) ||
+            /\b(?:contractors|professional services|local service|hospitality|wellness|property service)/i.test(
+              item
+            ))
+      );
+    if (fromGeo.length) {
+      return uniqueStrings(splitListPhrases(fromGeo.join(', '))).slice(0, 10);
+    }
+  }
+
+  return [];
+}
+
+function shortenDisqualifierForGrowthDirection(text) {
+  let s = String(text || '')
+    .trim()
+    .replace(/^customers?\s+who\s+(?:are\s+)?(?:mainly\s+)?(?:looking\s+for\s+)?/i, '')
+    .replace(/[.!?]+$/, '')
+    .trim();
+  if (!s) return '';
+  if (/cheapest possible website|lowest price|price[- ]first/i.test(s)) return 'price-first buyers';
+  if (/quick cosmetic|cosmetic patch|one-off task|one-off cosmetic/i.test(s)) {
+    return 'one-off cosmetic work with little commercial value';
+  }
+  if (/hobby project/i.test(s)) return 'hobby projects';
+  if (/brand-new business|no operating history|no real business yet/i.test(s)) {
+    return 'brand-new businesses with no operating history';
+  }
+  if (/^the cheapest possible website$/i.test(s)) return 'price-first buyers';
+  return s.charAt(0).toLowerCase() + s.slice(1);
+}
+
+function resolveDisqualifierPhrases(sections, facts) {
+  const fromFacts = facts && Array.isArray(facts.disqualified_customers) ? facts.disqualified_customers : [];
+  const cleanedFacts = uniqueStrings(
+    fromFacts
+      .map((item) => shortenDisqualifierForGrowthDirection(stripAvoidWrappers(String(item || ''))))
+      .filter(Boolean)
+  );
+
+  const avoid = sectionSummary(sections, 'avoidCustomers');
+  let fromSection = [];
+  if (avoid) {
+    const substance = stripAvoidWrappers(
+      avoid
+        .replace(/^the business prefers to avoid\s+/i, '')
+        .replace(/These constraints protect targeting quality.*$/i, '')
+        .trim()
+    );
+    if (substance) {
+      fromSection = uniqueStrings(
+        splitListPhrases(substance.replace(/\s+or\s+/gi, ', '))
+          .map((item) => shortenDisqualifierForGrowthDirection(item))
+          .filter(Boolean)
+      );
+      if (!fromSection.length) {
+        fromSection = [shortenDisqualifierForGrowthDirection(substance)].filter(Boolean);
+      }
+    }
+  }
+
+  const merged = uniqueStrings([...cleanedFacts, ...fromSection]);
+  return merged;
+}
+
+function composeConciseAvoidParagraph(sections, facts, displayName) {
+  const phrases = resolveDisqualifierPhrases(sections, facts);
+  if (!phrases.length) {
+    const avoid = sectionSummary(sections, 'avoidCustomers');
+    return avoid ? composeAvoidSentence(displayName, avoid) : '';
+  }
+  return `Avoid ${naturalList(phrases)}.`;
+}
+
+function composeNearTermSuccessParagraph(sections, facts) {
+  const goals = sectionSummary(sections, 'campaignGoals');
+  const raw = [facts && facts.ninety_day_outcomes, goals].filter(Boolean).join(' ');
+  if (!raw) return '';
+
+  const hasRedesignWin =
+    /\$2,?000\+/i.test(raw) ||
+    /profitable website redesign client/i.test(raw) ||
+    /at least one profitable.*redesign/i.test(raw);
+  if (!hasRedesignWin) return '';
+
+  let sentence =
+    'Near-term success means acquiring at least one profitable redesign client at $2,000+';
+  const metricsBlob = [
+    sectionSummary(sections, 'successMetrics'),
+    ...(facts && Array.isArray(facts.success_metrics) ? facts.success_metrics : []),
+  ].join(' ');
+  if (
+    metricsBlob &&
+    /qualified prospects|discovery calls|positive repl|messages|segments|pain signal|website/i.test(
+      metricsBlob
+    )
+  ) {
+    sentence +=
+      ' while learning which segments, messages, and website pain signals produce the strongest response';
+  }
+  return `${sentence}.`;
+}
+
+function composeWebsiteFirstFocusParagraph(displayName, sections, facts, primaryArea, towns) {
+  const geo = resolveMarketGeographyPhrase(primaryArea, towns, facts, sections);
+  const painQualifier = extractWebsiteIcpPainQualifier(sections);
+  const geoClause = geo ? ` in ${geo}` : '';
+  return `${displayName} should focus first on acquiring premium website redesign clients among owner-led businesses${geoClause}${painQualifier}.`;
+}
+
+function composeWebsiteSegmentsParagraph(segments) {
+  if (!segments.length) {
+    return (
+      'The strongest initial segments come from the Blueprint’s target-market focus — ' +
+      'compare a short list before any outreach is built.'
+    );
+  }
+  return `The strongest initial segments are ${naturalList(segments)}, and other established owner-led local brands where a stronger website could materially improve trust, lead flow, bookings, or sales.`;
+}
+
+function resolveWebsiteFirstFocusShort() {
+  return 'acquiring premium website redesign clients among owner-led businesses';
+}
+
 function uniqueStrings(items) {
   const out = [];
   for (const item of items || []) {
@@ -304,8 +530,11 @@ function extractSegments(text) {
     if (re.test(raw) && !found.includes(canon)) found.push(canon);
   }
   if (found.length) return found;
-  return splitPhrases(raw)
-    .filter((p) => p.split(/\s+/).length <= 6)
+  if (raw.split(/\s+/).length > 14 || /owner-led|decision-maker|trust, lead flow/i.test(raw)) {
+    return [];
+  }
+  return splitListPhrases(raw)
+    .filter((p) => p.split(/\s+/).length <= 8)
     .slice(0, 7);
 }
 
@@ -381,6 +610,9 @@ function resolveBusinessName(sections, facts) {
 }
 
 function resolveFirstFocus(sections, facts) {
+  if (isPremiumWebsiteGrowthBusiness(sections, facts)) {
+    return resolveWebsiteFirstFocusShort();
+  }
   if (facts && facts.growth_focus) {
     const fromFacts = String(facts.growth_focus).split(';')[0].trim();
     if (fromFacts && !/^customers?\s+who\b/i.test(fromFacts)) return fromFacts;
@@ -395,16 +627,17 @@ function resolveFirstFocus(sections, facts) {
     return 'commercial growth opportunities';
   }
   const goalLead = firstSentence(goals);
-  if (goalLead && goalLead.length < 120) {
+  if (goalLead && goalLead.length < 120 && !isServiceCatalogSummary(goalLead)) {
     return goalLead
       .replace(/^near-term growth goals focus on\s+/i, '')
       .replace(/^over the next 90 days[, ]*(?:this growth work should\s+)?/i, '')
       .replace(/\.$/, '');
   }
   const serviceLead = firstSentence(services);
-  if (serviceLead) {
+  if (serviceLead && !isServiceCatalogSummary(serviceLead)) {
     return serviceLead
       .replace(/^today the business delivers\s+/i, '')
+      .replace(/^[A-Z][a-zA-Z0-9&'.-]+(?:\s+[A-Z][a-zA-Z0-9&'.-]+)*\s+delivers\s+/i, '')
       .replace(/\.$/, '')
       .slice(0, 100);
   }
@@ -412,8 +645,18 @@ function resolveFirstFocus(sections, facts) {
 }
 
 function resolveSegments(sections, facts) {
+  if (isPremiumWebsiteGrowthBusiness(sections, facts)) {
+    const verticals = extractVerticalSegmentsFromMarkets(sections, facts);
+    if (verticals.length) return verticals;
+  }
   if (facts && Array.isArray(facts.ideal_customers) && facts.ideal_customers.length) {
-    return uniqueStrings(facts.ideal_customers).slice(0, 7);
+    const fromFacts = uniqueStrings(facts.ideal_customers).filter(
+      (item) =>
+        !/owner-led businesses where|decision-maker who already|trust, lead flow/i.test(
+          String(item || '')
+        )
+    );
+    if (fromFacts.length) return fromFacts.slice(0, 7);
   }
   return extractSegments(sectionSummary(sections, 'idealCustomers')).slice(0, 7);
 }
@@ -664,21 +907,35 @@ function buildInitialGrowthDirection(blueprint, opts = {}) {
     "The business's"
   );
 
-  const paragraphs = [
-    composeFocusSentence(displayName, firstFocus, primaryArea, focusQualifier),
-    composeWhySentence(displayName),
-    composeSegmentsSentence(segments, primaryArea, towns),
-  ];
-
-  const avoidPara = composeAvoidSentence(displayName, avoid);
-  if (avoidPara) paragraphs.push(avoidPara);
-
-  paragraphs.push(
-    'The next conversation should turn this directional read into a focused growth plan: which segment to prioritize first, how tightly to bound the market, and what early signals will show whether the approach is working.'
-  );
+  const useWebsiteComposition = isPremiumWebsiteGrowthBusiness(sections, facts);
+  let paragraphs;
+  if (useWebsiteComposition) {
+    paragraphs = [
+      composeWebsiteFirstFocusParagraph(displayName, sections, facts, primaryArea, towns),
+      composeWebsiteSegmentsParagraph(segments),
+    ];
+    const avoidPara = composeConciseAvoidParagraph(sections, facts, displayName);
+    if (avoidPara) paragraphs.push(avoidPara);
+    const successPara = composeNearTermSuccessParagraph(sections, facts);
+    if (successPara) paragraphs.push(successPara);
+    paragraphs.push(
+      'The next conversation should turn this directional read into a focused growth plan: which segment to prioritize first, how tightly to bound the market, and what early signals will show whether the approach is working.'
+    );
+  } else {
+    paragraphs = [
+      composeFocusSentence(displayName, firstFocus, primaryArea, focusQualifier),
+      composeWhySentence(displayName),
+      composeSegmentsSentence(segments, primaryArea, towns),
+    ];
+    const avoidPara = composeAvoidSentence(displayName, avoid);
+    if (avoidPara) paragraphs.push(avoidPara);
+    paragraphs.push(
+      'The next conversation should turn this directional read into a focused growth plan: which segment to prioritize first, how tightly to bound the market, and what early signals will show whether the approach is working.'
+    );
+  }
 
   // Keep 3–5 body paragraphs; heading is separate.
-  const body = paragraphs.slice(0, 5);
+  const body = paragraphs.filter(Boolean).slice(0, 5);
 
   const synthesis = buildArtifactSynthesisContext({
     context: {

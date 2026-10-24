@@ -31,6 +31,13 @@ const {
   classifyError,
   formatRollbackProse,
 } = require('./ExecutionErrors');
+const {
+  beginTmeTransaction,
+  endTmeTransaction,
+  acquireMissionDurableLock,
+  releaseMissionDurableLock,
+} = require('./TransactionalPersistence');
+const { attachProviderDiagnostics } = require('../scout/coverage/ProviderExecution');
 
 const RUNTIME_STATES = Object.freeze({
   PLANNED: 'planned',
@@ -152,7 +159,7 @@ function bumpMissionVersion(mission, transactionId) {
  * @param {Function} input.execute  async (ctx) => output — must not rely on durable mission writes
  * @param {Function} [input.validateOutput]
  * @param {Function} input.commit   async (ctx) => commitResult — mutates store; rolled back on throw
- * @param {Function} [input.persistDurable] async (ctx) => void — durable persist after in-memory commit
+ * @param {Function} [input.persistDurable] async (ctx) => void — durable persist + verify after in-memory commit (SPEC-139)
  * @param {Function} [input.present] async (ctx) => presentation — failures do not rollback
  * @returns {Promise<object>}
  */
@@ -170,6 +177,23 @@ async function executeMissionStage(input = {}) {
   const transactionId = asText(input.transactionId) || newId('tme');
   const startedAt = Date.now();
   const store = engine.store;
+
+  beginTmeTransaction(missionId, transactionId);
+
+  const lockPool = input.pool || input.lockPool || null;
+  let globalLockHeld = false;
+  if (lockPool) {
+    try {
+      const lockResult = await acquireMissionDurableLock(missionId, lockPool, {
+        tryOnly: true,
+        transactionId,
+      });
+      globalLockHeld = lockResult.acquired === true && lockResult.reentrant !== true;
+    } catch (err) {
+      endTmeTransaction(missionId, transactionId);
+      throw wrapAs(TME_CLASSES.PERSISTENCE, err, err.code || 'tme_transaction_overlap', err.message);
+    }
+  }
 
   let snapshot;
   try {
@@ -263,6 +287,7 @@ async function executeMissionStage(input = {}) {
           transactionId,
         });
       } catch (err) {
+        attachProviderDiagnostics(err, output);
         throw wrapAs(TME_CLASSES.VALIDATION, err, 'tme_validation', err.message || 'Output validation failed.');
       }
     }
@@ -380,6 +405,11 @@ async function executeMissionStage(input = {}) {
     wrapped.rollback = true;
     wrapped.audit = audit;
     throw wrapped;
+  } finally {
+    if (globalLockHeld && lockPool) {
+      await releaseMissionDurableLock(missionId, lockPool);
+    }
+    endTmeTransaction(missionId, transactionId);
   }
 }
 

@@ -7,6 +7,18 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
+// Synthetic accounting alongside the existing intercepted HTTP transport.
+// Diagnostics must not reach the process DB merely to record this unit fixture.
+const spend = require('../utils/apiSpendControl');
+const attribution = require('../utils/placesCostAttribution');
+const originalAccounting = [spend.reserveApiCall, spend.settleApiCall, attribution.recordPlacesRequest];
+spend.reserveApiCall = async () => 'synthetic-diagnostic-reservation';
+spend.settleApiCall = async () => {};
+attribution.recordPlacesRequest = async () => {};
+require('node:test').after(() => {
+  [spend.reserveApiCall, spend.settleApiCall, attribution.recordPlacesRequest] = originalAccounting;
+});
+
 const {
   SCOUT_PLACES_ENDPOINT_FAMILY,
   SCOUT_PLACES_AUTH_STYLE,

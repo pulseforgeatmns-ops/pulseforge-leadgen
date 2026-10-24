@@ -13,6 +13,8 @@ const {
   newId,
   clone,
 } = require('./types');
+const { isStructuredMissionApproved } = require('./StructuredMission');
+const { EXTERNAL_DISCOVERY_CAPABILITY_UNAVAILABLE } = require('../scout/coverage/ExternalDiscoveryProviderRegistry');
 
 function createBlocker(input = {}) {
   const kind = asText(input.kind);
@@ -40,7 +42,19 @@ function inferBlockers(mission, ctx) {
       specialist: 'emmett',
     }));
   }
-  if ((mission.stage === STAGES.DISCOVER || mission.stage === STAGES.UNDERSTAND) && !ctx.scoutComplete) {
+  if (mission.stage === STAGES.DISCOVER && !isStructuredMissionApproved(mission)) {
+    blockers.push(createBlocker({
+      kind: BLOCKER_KINDS.WAITING_FOR_OPERATOR,
+      specialist: 'operator',
+      reason: 'Mission plan must be approved before discovery.',
+    }));
+  } else if (ctx.externalDiscoveryCapabilityBlocked) {
+    blockers.push(createBlocker({
+      kind: BLOCKER_KINDS.EXTERNAL_DISCOVERY_CAPABILITY,
+      specialist: 'scout',
+      reason: ctx.externalDiscoveryBlockReason || EXTERNAL_DISCOVERY_CAPABILITY_UNAVAILABLE,
+    }));
+  } else if ((mission.stage === STAGES.DISCOVER || mission.stage === STAGES.UNDERSTAND) && !ctx.scoutComplete) {
     if (ctx.prospectCount > 0 && ctx.prospectCount < (ctx.prospectThreshold || 15)) {
       blockers.push(createBlocker({ kind: BLOCKER_KINDS.WAITING_FOR_MORE_PROSPECTS, specialist: 'scout' }));
     } else {
@@ -50,15 +64,35 @@ function inferBlockers(mission, ctx) {
   if (mission.stage === STAGES.PLAN && !ctx.maxComplete && !ctx.maxHasObjectives) {
     blockers.push(createBlocker({ kind: BLOCKER_KINDS.WAITING_FOR_MAX, specialist: 'max' }));
   }
+  if (mission.stage === STAGES.PLAN && ctx.maxComplete && !ctx.acquisitionApproachComplete) {
+    blockers.push(createBlocker({
+      kind: BLOCKER_KINDS.WAITING_FOR_ACQUISITION_APPROACH,
+      specialist: 'max',
+      reason: 'Max acquisition approach decision is required before channel-specific preparation.',
+    }));
+  }
+  if (
+    (mission.stage === STAGES.PLAN || mission.stage === STAGES.PREPARE || mission.stage === STAGES.READY) &&
+    ctx.acquisitionApproachBlocker
+  ) {
+    blockers.push(createBlocker(ctx.acquisitionApproachBlocker));
+  }
   if (mission.stage === STAGES.PREPARE && !ctx.paigeComplete) {
     blockers.push(createBlocker({ kind: BLOCKER_KINDS.WAITING_FOR_PAIGE, specialist: 'paige' }));
   }
   if (mission.stage === STAGES.PREPARE && ctx.paigeComplete && !ctx.emmettComplete) {
     blockers.push(createBlocker({ kind: BLOCKER_KINDS.WAITING_FOR_EMMETT, specialist: 'emmett' }));
   }
-  if ((mission.stage === STAGES.READY || (mission.stage === STAGES.PREPARE && ctx.paigeComplete && ctx.emmettComplete))
-    && !ctx.operatorApproved) {
-    blockers.push(createBlocker({ kind: BLOCKER_KINDS.WAITING_FOR_OPERATOR, specialist: 'operator' }));
+  if (
+    mission.stage === STAGES.READY &&
+    !ctx.executionApproved &&
+    (!ctx.acquisitionApproachComplete || ctx.acquisitionApproachPermitsOutbound)
+  ) {
+    blockers.push(createBlocker({
+      kind: BLOCKER_KINDS.WAITING_FOR_OPERATOR,
+      specialist: 'operator',
+      reason: 'Execution authorization required before send.',
+    }));
   }
   return blockers;
 }

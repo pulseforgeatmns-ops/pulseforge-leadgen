@@ -29,4 +29,5 @@ module.exports = {
   round,
   recommendationId,
   evidenceRef,
+  ConceptGraph: require('./ConceptGraph'),
 };

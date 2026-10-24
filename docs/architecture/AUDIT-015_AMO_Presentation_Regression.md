@@ -1,10 +1,19 @@
 # AUDIT-015 — AMO Presentation Regression (First Failure)
 
+> **Historical audit — retained 2026-10-24.** Original audit date: 2026-08-21. This document records findings from the original PR revision and is **not a current production assessment**.
+>
+> Source: [PR #369](https://github.com/pulseforgeatmns-ops/pulseforge-leadgen/pull/369), head commit `c82e2cefa17abbf933675e5b3bb283a95f451f80`.
+>
+> Subsequent implementation / current reference: [SPEC-134 — Preserve AMO Presentation Contract](../specs/SPEC-134_Preserve_AMO_Presentation_Contract.md).
+>
+> The original presentation regression and source line numbers describe the audited revision. SPEC-134 documents the subsequent AMO presentation-contract implementation.
+
+
 | Field | Value |
 |---|---|
 | **Status** | Completed — first presentation regression identified |
 | **Date** | 2026-08-21 |
-| **Related** | [SPEC-118](../specs/SPEC-118_Acquisition_Mission_Orchestration.md), [SPEC-121](../specs/SPEC-121_Mission_Oriented_Communication.md) (mission communication), SPEC-124 (Acquisition Ownership), SPEC-128 / SPEC-133 (AMO execution / discovery presentation) |
+| **Related** | [SPEC-118](../specs/SPEC-118_Acquisition_Mission_Orchestration.md), SPEC-121 (historical reference: `docs/specs/SPEC-121_Mission_Oriented_Communication.md`; file unavailable in the 2026-10-24 reviewed tree) (mission communication), SPEC-124 (Acquisition Ownership), SPEC-128 / SPEC-133 (AMO execution / discovery presentation) |
 | **Scope** | Response generation after the AMO mission has been selected. Creation, persistence, hydration, Scout execution, and discovery artifact attach are treated as already verified. |
 | **Stop rule** | Stop at the first point where the response leaves the AMO presentation contract. No downstream tracing. No fix proposal. |
 

@@ -1,18 +1,26 @@
 'use strict';
 
 /**
- * SPEC-128 / SPEC-131 — Operator approval consumes pending decisions only when the stage commits.
+ * SPEC-128 / SPEC-131 / SPEC-136 — Operator approval consumes pending decisions
+ * only when the stage commits. pendingOperatorDecision must match execution predicates.
  */
 
 const amo = require('../../acquisition-mission');
-const { specialistContext } = require('../../acquisition-mission/Lifecycle');
-const { runScoutAcquisitionIntelligence } = require('../scoutAcquisition/ScoutAdapter');
+const { Scout } = require('../../scout');
+const { defaultDiscoveryAdapters } = require('../scoutAcquisition/DiscoveryAdapters');
+const { evaluateDiscoveryCapability } = require('../../scout/coverage/DiscoveryCapabilityGate');
+const { EXTERNAL_DISCOVERY_CAPABILITY_UNAVAILABLE } = require('../../scout/coverage/ExternalDiscoveryProviderRegistry');
+const {
+  buildInvestigationContinuationContext,
+  extractPayloadFromDiscoveryContribution,
+} = require('../../scout/investigation/EntityInvestigationContinuation');
 
 const {
   STAGES,
   SPECIALISTS,
   CONTRIBUTION_KINDS,
   EVENT_KINDS,
+  STAGE_LABELS,
 } = amo;
 const {
   executeMissionStage,
@@ -24,7 +32,41 @@ const {
   bumpMissionVersion,
   planningError,
   validationError,
+  persistenceError,
+  buildMissionExecutionContext,
+  executeSpecialist,
+  buildExecutionInput,
+  EXECUTION_STATUSES,
 } = amo;
+const {
+  runMaxForAmoMission,
+  prioritizationPayloadFromMaxResult,
+  buildPrioritizationPayload,
+} = require('./MaxPrioritizationExecutor');
+const {
+  runMaxApproachForAmoMission,
+  acquisitionApproachPayloadFromMaxResult,
+  buildAcquisitionApproachPayload,
+  findLatestAcquisitionApproach,
+} = require('./MaxAcquisitionApproachExecutor');
+const {
+  buildPaigeVariantsPayload,
+  runPaigeVariants,
+  runPaigeForAmoMission,
+  fixturePaigeVariantsResult,
+} = require('./PaigeVariantsExecutor');
+const {
+  validatePaigeVariantsPayload,
+  BLOCKER: PAIGE_COPY_SAFETY_BLOCKER,
+} = require('./PaigeCopySafety');
+const {
+  runPennyPaidAcquisition,
+  runPennyForAmoMission,
+} = require('./PennyPaidAcquisitionExecutor');
+const {
+  runScoutForAmoMission: runScoutForAmoMissionSec,
+  mapScoutIntelligenceToDiscoveryPayload: mapScoutPayloadFromExecutor,
+} = require('./ScoutDiscoveryExecutor');
 const { createEvent } = require('../../acquisition-mission/Timeline');
 const {
   createMissionApprovalAudit,
@@ -46,6 +88,10 @@ const {
   hasSufficientEvidenceForPrioritization,
 } = require('../../acquisition-mission/DiscoveryPayload');
 const {
+  buildScoutDiscoveryArtifact,
+  assertScoutEvidenceHandoff,
+} = require('../../scout/adapters/ScoutDiscoveryArtifact');
+const {
   freezeStructuredMission,
   isStructuredMissionApproved,
   isReadyForLock,
@@ -56,14 +102,72 @@ const {
   scoutDelegationFromMission,
 } = require('../../acquisition-mission/SpecialistInputs');
 const { applyClarification, applyEdits } = require('../../acquisition-mission/MissionPlanner');
+const { bindStagePersistDurable } = require('../../../services/acquisitionMissionPersistence');
+const { specialistContext, canEnter, applyStageTransition } = require('../../acquisition-mission/Lifecycle');
+const {
+  findEmmettCapacity,
+  runEmmettForAmoMission,
+  validateEmmettPreconditions,
+  validateEmmettCapacityOutput,
+  commitEmmettCapacityStage,
+  buildEmmettExecutionResult,
+} = require('./EmmettCapacityExecution');
 const { isMissionPlanningTurn } = require('./MissionPlanningTurn');
+const { responseTypeForAmbiguity } = require('../../acquisition-mission/PendingDecisionResponseType');
 const { OPERATOR_DECISION_KINDS } = amo;
+const {
+  hasPendingPlanClarification,
+  hasPendingPlanApproval,
+  hasPendingDiscoveryApproval,
+  hasPendingDiscoveryInvestigation,
+  hasPendingPrioritizationApproval,
+  hasPendingExecutionApproval,
+  hasConsumablePendingDecision,
+  presentableOperatorDecision,
+  assertMissionStateConsistent,
+} = require('../../acquisition-mission/PendingOperatorDecision');
+const {
+  buildPostDiscoveryPendingDecision,
+  discoveryNeedsInvestigation,
+} = require('../../acquisition-mission/DecisionReadiness');
+const {
+  buildExecutionApprovalPayload,
+  findValidExecutionApproval,
+  EXECUTION_APPROVAL_ACTION,
+} = require('../../acquisition-mission/ExecutionApproval');
+const {
+  buildExecutionReview,
+  buildPendingExecutionDecision,
+  computePreparedArtifactRevision,
+} = require('../../acquisition-mission/ExecutionApproval');
 
 const DISCOVERY_APPROVAL_ACTION = 'discovery_approved';
+const DISCOVERY_INVESTIGATION_ACTION = 'discovery_investigation_continued';
+const PRIORITIZATION_APPROVAL_ACTION = 'prioritization_approved';
 const PLAN_APPROVAL_ACTION = 'plan_approved';
 const PLAN_CLARIFICATION_ACTION = 'plan_clarified';
 const PLAN_CANCEL_ACTION = 'plan_cancelled';
 const PLAN_EDIT_ACTION = 'plan_edited';
+
+function invalidatePreparedOutreachApproval(engine, mission, tenantId) {
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  const approvals = (snapshot.contributions || []).filter((row) =>
+    row.specialist === SPECIALISTS.OPERATOR
+      && row.kind === CONTRIBUTION_KINDS.APPROVAL
+      && row.payload?.decisionKind === OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL
+  );
+  approvals.forEach((approval) => {
+    engine.store.updateContribution(approval.id, (current) => ({
+      ...current,
+      payload: {
+        ...(current.payload || {}),
+        invalidated: true,
+        invalidatedAt: new Date().toISOString(),
+        invalidatedReason: 'prepared_outreach_revision_requested',
+      },
+    }));
+  });
+}
 
 /** SPEC-128 — operator approval lifecycle phases (audit + response). */
 const APPROVAL_PHASES = Object.freeze({
@@ -79,43 +183,7 @@ function buildDelegationFromAmoMission(mission) {
 }
 
 function bindPersistDurable(input, engine, tenantId) {
-  if (typeof input.persistStage === 'function') {
-    return (ctx) => input.persistStage(ctx);
-  }
-  if (input.persist !== true) return null;
-  return async (ctx) => {
-    const { persistStageCommit } = require('../../services/acquisitionMissionPersistence');
-    const missionId = ctx.missionId;
-    await persistStageCommit({
-      mission: engine.get(missionId, tenantId),
-      events: engine.store.listEvents(missionId),
-      contributions: engine.store.listContributions(missionId),
-      observations: engine.store.listObservations(missionId),
-      outcomes: engine.store.listOutcomes(missionId),
-      audit: ctx.audit,
-    }, input.pool);
-  };
-}
-
-function hasPendingPlanClarification(snapshot) {
-  const mission = snapshot.mission || snapshot;
-  if (isStructuredMissionApproved(mission)) return false;
-  if (mission.pendingOperatorDecision) {
-    return mission.pendingOperatorDecision.kind === OPERATOR_DECISION_KINDS.PLAN_CLARIFICATION;
-  }
-  return Array.isArray(mission.planAmbiguities) && mission.planAmbiguities.length > 0;
-}
-
-function hasPendingPlanApproval(snapshot) {
-  const mission = snapshot.mission || {};
-  if (isStructuredMissionApproved(mission)) return false;
-  if (hasPendingPlanClarification(snapshot)) return false;
-  if (mission.planCancelled) return false;
-  if (mission.pendingOperatorDecision) {
-    return mission.pendingOperatorDecision.kind === OPERATOR_DECISION_KINDS.PLAN_APPROVAL
-      || mission.pendingOperatorDecision.kind === OPERATOR_DECISION_KINDS.PLAN_EDIT;
-  }
-  return Boolean(mission.missionPlanDraft && !mission.structuredMission);
+  return bindStagePersistDurable(input, engine, tenantId);
 }
 
 function findPlanApproval(contributions = []) {
@@ -155,6 +223,7 @@ async function advancePlanAfterApproval(input = {}) {
     engine,
     missionId: mission.id,
     tenantId,
+    pool: input.pool,
     specialist: SPECIALISTS.MAX,
     stage: 'plan_lock',
     operatorId,
@@ -242,6 +311,9 @@ async function advancePlanAfterApproval(input = {}) {
       }));
 
       const nextSnapshot = amoEngine.inspect(mission.id, { tenantId: tid });
+      assertMissionStateConsistent(nextSnapshot.mission, {
+        contributions: nextSnapshot.contributions,
+      });
       return {
         approval: approvalResult.contribution,
         snapshot: nextSnapshot,
@@ -277,6 +349,7 @@ function putPlannedMission(engine, mission, planned, extra = {}) {
       question: first.question,
       choices: first.choices || [],
       field: first.field,
+      responseType: responseTypeForAmbiguity(first),
       clarificationPrompt: formatAmbiguityPrompt(first),
     };
   } else {
@@ -395,6 +468,78 @@ function applyPlanEdits(input = {}) {
   return { snapshot: engine.inspect(mission.id, tenantId), planned };
 }
 
+function findPrioritizationApproval(contributions = []) {
+  return [...contributions]
+    .reverse()
+    .find(
+      (row) =>
+        row.specialist === SPECIALISTS.OPERATOR &&
+        row.kind === CONTRIBUTION_KINDS.APPROVAL &&
+        (row.payload.action === PRIORITIZATION_APPROVAL_ACTION ||
+          row.payload.kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL)
+    );
+}
+
+function findLatestScoutDiscovery(contributions = []) {
+  return [...contributions]
+    .reverse()
+    .find(
+      (row) => row.specialist === SPECIALISTS.SCOUT && row.kind === CONTRIBUTION_KINDS.DISCOVERY
+    );
+}
+
+function discoveryHasCandidates(contribution) {
+  if (!contribution) return false;
+  const outer = contribution.payload || contribution;
+  const nested = outer && typeof outer === 'object' ? outer.payload : null;
+  const body = nested && typeof nested === 'object'
+    && (
+      nested.opportunities
+      || nested.qualifiedCount != null
+      || nested.rankedProspects
+      || nested.candidateUniverse
+      || nested.candidateUniverseCount != null
+    )
+    ? nested
+    : outer;
+  if (!body || typeof body !== 'object') return false;
+  if ([body.qualifiedCount, body.candidateUniverseCount, body.rankedProspectCount]
+    .some((n) => Number(n) > 0)) {
+    return true;
+  }
+  if (Array.isArray(body.opportunities) && body.opportunities.length) return true;
+  if (Array.isArray(body.rankedProspects) && body.rankedProspects.length) return true;
+  if (Array.isArray(body.candidateUniverse) && body.candidateUniverse.length) return true;
+  if (Array.isArray(body.discoveryArtifact?.rankedProspects)
+    && body.discoveryArtifact.rankedProspects.length) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Production can reach UNDERSTAND with an already-approved empty Scout contribution
+ * and no pending investigation (stage advanced, pending cleared). CONTINUE_INVESTIGATION
+ * must still be able to re-run Scout. Healthy non-zero candidate sets are not repaired
+ * so they cannot be continued destructively.
+ */
+function repairEmptyDiscoveryInvestigationGate(engine, mission, tenantId, snapshot) {
+  if (hasPendingDiscoveryInvestigation(snapshot)) return snapshot;
+  const discovery = findLatestScoutDiscovery(snapshot.contributions || []);
+  if (!discovery || discoveryHasCandidates(discovery)) return snapshot;
+
+  const current = engine.get(mission.id, tenantId);
+  if (!current) return snapshot;
+  current.stage = STAGES.DISCOVER;
+  current.status = STAGE_LABELS[STAGES.DISCOVER] || 'Discovering';
+  current.pendingOperatorDecision = buildPostDiscoveryPendingDecision(discovery.payload || {});
+  engine.store.putMission(current);
+
+  const next = engine.inspect(mission.id, { tenantId });
+  assertMissionStateConsistent(next.mission, { contributions: next.contributions });
+  return next;
+}
+
 function findDiscoveryApproval(contributions = []) {
   return [...contributions]
     .reverse()
@@ -404,6 +549,14 @@ function findDiscoveryApproval(contributions = []) {
         row.kind === CONTRIBUTION_KINDS.APPROVAL &&
         (row.payload.action === DISCOVERY_APPROVAL_ACTION ||
           row.payload.stage === STAGES.DISCOVER)
+    );
+}
+
+function findLatestMaxPrioritization(contributions = []) {
+  return [...contributions]
+    .reverse()
+    .find(
+      (row) => row.specialist === SPECIALISTS.MAX && row.kind === CONTRIBUTION_KINDS.PRIORITIZATION
     );
 }
 
@@ -420,27 +573,9 @@ function findScoutDiscoveryAfterApproval(contributions = [], approval) {
     );
 }
 
-function hasPendingDiscoveryApproval(snapshot) {
-  const mission = snapshot.mission || {};
-  if (hasPendingPlanClarification(snapshot)) return false;
-  if (hasPendingPlanApproval(snapshot)) return false;
-  if (!isStructuredMissionApproved(mission) && mission.missionPlanDraft) return false;
-  if (mission.pendingOperatorDecision) {
-    return mission.pendingOperatorDecision.kind === OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL ||
-      (!mission.pendingOperatorDecision.kind &&
-        mission.pendingOperatorDecision.stage === STAGES.DISCOVER);
-  }
-  const contributions = snapshot.contributions || [];
-  const ctx = specialistContext(contributions, {});
-  if (mission.stage !== STAGES.DISCOVER || ctx.scoutComplete) return false;
-  return !findDiscoveryApproval(contributions);
-}
 
 function mapScoutIntelligenceToDiscoveryPayload(result = {}, opts = {}) {
-  return normalizeScoutDiscoveryPayload(result, {
-    missionObjective: opts.missionObjective,
-    approvalConsumed: true,
-  });
+  return mapScoutPayloadFromExecutor(result, opts);
 }
 
 function fixtureScoutDiscoveryResult() {
@@ -513,41 +648,17 @@ function fixtureScoutDiscoveryResult() {
 }
 
 async function runScoutForAmoMission(mission, opts = {}) {
-  if (typeof opts.runScout === 'function') {
-    return opts.runScout(mission, opts);
-  }
-
-  const delegation = buildDelegationFromAmoMission(mission);
-  try {
-    const result = await runScoutAcquisitionIntelligence(delegation, {
-      mode: opts.scoutMode || 'completed',
-      missionId: mission.id,
-      tenantId: delegation.tenantId,
-      companies: opts.scoutCompanies,
-      people: opts.scoutPeople,
-      discover: opts.discover,
-      enablePlaces: opts.enablePlaces,
-    });
-    const mapped = mapScoutIntelligenceToDiscoveryPayload(result, {
-      missionObjective: mission.objective,
-    });
-    if (
-      opts.allowFixtureFallback === true &&
-      (mapped.blocked || mapped.qualifiedCount <= 0)
-    ) {
-      return fixtureScoutDiscoveryResult();
-    }
-    return result;
-  } catch (err) {
-    if (opts.allowFixtureFallback === true) return fixtureScoutDiscoveryResult();
-    throw err;
-  }
+  return runScoutForAmoMissionSec(mission, {
+    ...opts,
+    fixtureScoutDiscoveryResult,
+  });
 }
 
 function discoveryPayloadFromScoutResult(scoutResult, mission) {
-  if (scoutResult && scoutResult.discoveryReport) {
+  let payload;
+  if (scoutResult && scoutResult.discoveryReport && !scoutResult.intelligenceResult && !scoutResult.payload) {
     const report = scoutResult.discoveryReport;
-    return normalizeScoutDiscoveryPayload(
+    payload = normalizeScoutDiscoveryPayload(
       {
         status: /blocked/i.test(String(report.outcome || '')) ? 'blocked' : 'completed',
         summary: report.blockReason || null,
@@ -563,10 +674,12 @@ function discoveryPayloadFromScoutResult(scoutResult, mission) {
       },
       { missionObjective: mission && mission.objective, approvalConsumed: true }
     );
+  } else {
+    payload = mapScoutIntelligenceToDiscoveryPayload(scoutResult, {
+      missionObjective: mission && mission.objective,
+    });
   }
-  return mapScoutIntelligenceToDiscoveryPayload(scoutResult, {
-    missionObjective: mission && mission.objective,
-  });
+  return payload;
 }
 
 function clearPendingOperatorDecision(engine, mission) {
@@ -575,7 +688,15 @@ function clearPendingOperatorDecision(engine, mission) {
   return engine.store.putMission(mission);
 }
 
-function validateDiscoveryPreconditions({ mission, engine, tenantId }) {
+function validateDiscoveryPreconditions({
+  mission,
+  engine,
+  tenantId,
+  discover,
+  enablePlaces,
+  placesProvider,
+  runScout,
+}) {
   if (!mission) throw planningError('tme_mission_missing', 'Mission does not exist.');
   if (mission.planCancelled === true || /cancelled/i.test(String(mission.status || ''))) {
     throw planningError('tme_mission_inactive', 'Mission is not active.');
@@ -590,6 +711,39 @@ function validateDiscoveryPreconditions({ mission, engine, tenantId }) {
   if (mission.stage && mission.stage !== STAGES.DISCOVER) {
     throw planningError('tme_wrong_stage', `Discovery cannot execute while the mission is at ${mission.stage}.`);
   }
+
+  if (typeof runScout === 'function') {
+    return {
+      missionExists: true,
+      missionActive: true,
+      missionLocked: true,
+      structuredPlanApproved: true,
+      specialistAvailable: true,
+      requiredEvidencePresent: true,
+      externalDiscoveryCapability: { skipped: true, reason: 'runScout override' },
+    };
+  }
+
+  const adapters = defaultDiscoveryAdapters({
+    discover,
+    enablePlaces,
+    placesProvider,
+  });
+  const capability = evaluateDiscoveryCapability({
+    adapters,
+    requireExternalDiscovery: true,
+    coveragePlan: { totals: { searches: 1 }, sources: ['public_business_data'] },
+    discover,
+    enablePlaces,
+    placesProvider,
+  });
+  if (!capability.canExecute) {
+    throw planningError(
+      'external_discovery_capability_unavailable',
+      capability.blockReason || EXTERNAL_DISCOVERY_CAPABILITY_UNAVAILABLE
+    );
+  }
+
   return {
     missionExists: true,
     missionActive: true,
@@ -597,6 +751,7 @@ function validateDiscoveryPreconditions({ mission, engine, tenantId }) {
     structuredPlanApproved: true,
     specialistAvailable: true,
     requiredEvidencePresent: true,
+    externalDiscoveryCapability: capability,
   };
 }
 
@@ -630,11 +785,32 @@ function commitDiscoveryStage({
   transactionId,
   missionVersion,
   existingApproval,
+  investigationContinuation = false,
+  investigationCommand = null,
 }) {
   const missionId = (mission && mission.id) || output.missionId;
   const { question, discoveryPayload } = output;
   let approval = existingApproval;
-  if (!approval) {
+  if (investigationContinuation) {
+    const investigationResult = engine.contribute(
+      missionId,
+      {
+        specialist: SPECIALISTS.OPERATOR,
+        kind: CONTRIBUTION_KINDS.APPROVAL,
+        payload: {
+          approved: true,
+          consumed: true,
+          command: investigationCommand || question,
+          action: DISCOVERY_INVESTIGATION_ACTION,
+          kind: OPERATOR_DECISION_KINDS.DISCOVERY_INVESTIGATION,
+          stage: STAGES.DISCOVER,
+          transactionId,
+        },
+      },
+      { tenantId }
+    );
+    approval = approval || investigationResult.contribution;
+  } else if (!approval) {
     const approvalResult = engine.contribute(
       missionId,
       {
@@ -653,9 +829,6 @@ function commitDiscoveryStage({
     );
     approval = approvalResult.contribution;
     clearPendingOperatorDecision(engine, approvalResult.mission);
-  } else {
-    const current = engine.get(missionId, tenantId);
-    clearPendingOperatorDecision(engine, current);
   }
 
   const payload = { ...discoveryPayload, approvalId: approval.id, transactionId };
@@ -669,23 +842,11 @@ function commitDiscoveryStage({
     { tenantId }
   );
 
-  let snapshot = engine.inspect(missionId, { tenantId });
-  const ctx = specialistContext(snapshot.contributions || [], {});
-  if (ctx.scoutComplete && snapshot.mission.stage === STAGES.DISCOVER) {
-    try {
-      engine.progress(missionId, SPECIALISTS.OPERATOR, {
-        tenantId,
-        stage: STAGES.UNDERSTAND,
-      });
-    } catch (_) {
-      /* stage may already have advanced */
-    }
-    snapshot = engine.inspect(missionId, { tenantId });
-  }
-
   const updated = engine.get(missionId, tenantId);
+  updated.pendingOperatorDecision = buildPostDiscoveryPendingDecision(payload);
   bumpMissionVersion(updated, transactionId);
   engine.store.putMission(updated);
+
   engine.store.addEvent(createEvent({
     missionId,
     kind: EVENT_KINDS.EXECUTION_COMMITTED,
@@ -700,7 +861,10 @@ function commitDiscoveryStage({
     },
   }));
 
-  snapshot = engine.inspect(missionId, { tenantId });
+  const snapshot = engine.inspect(missionId, { tenantId });
+  assertMissionStateConsistent(snapshot.mission, {
+    contributions: snapshot.contributions,
+  });
   return {
     approval,
     discovery: discoveryContribution.contribution,
@@ -723,14 +887,24 @@ async function advanceDiscoveryAfterApproval(input = {}) {
     tenantId,
     question,
     operatorId,
-    missionEngine,
     persist,
     runScout,
     scoutCompanies,
     scoutPeople,
     allowFixtureFallback,
     audit: inputAudit,
+    discover: inputDiscover,
+    enablePlaces: inputEnablePlaces,
+    placesProvider: inputPlacesProvider,
   } = input;
+
+  const effectiveDiscover =
+    inputDiscover ||
+    (typeof runScout === 'function'
+      ? undefined
+      : allowFixtureFallback === true
+        ? async () => []
+        : undefined);
 
   if (!engine || !mission) {
     throw new Error('engine and mission are required');
@@ -767,16 +941,20 @@ async function advanceDiscoveryAfterApproval(input = {}) {
   const existingDiscovery = findScoutDiscoveryAfterApproval(contributions, existingApproval);
 
   if (existingApproval && existingDiscovery) {
-    askPathTrace.traceEarlyReturn('advanceDiscoveryAfterApproval', 'already_executed');
-    return {
-      alreadyExecuted: true,
-      approval: existingApproval,
-      discovery: existingDiscovery,
-      snapshot: engine.inspect(mission.id, { tenantId }),
-      executionOutcome: existingDiscovery.payload.outcome || 'completed',
-      approvalPhase: APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION,
-      audit,
-    };
+    const needsInvestigation = discoveryNeedsInvestigation(existingDiscovery.payload || {});
+    const investigationPending = hasPendingDiscoveryInvestigation(snapshot);
+    if (!needsInvestigation || !investigationPending) {
+      askPathTrace.traceEarlyReturn('advanceDiscoveryAfterApproval', 'already_executed');
+      return {
+        alreadyExecuted: true,
+        approval: existingApproval,
+        discovery: existingDiscovery,
+        snapshot: engine.inspect(mission.id, { tenantId }),
+        executionOutcome: existingDiscovery.payload.outcome || 'completed',
+        approvalPhase: APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION,
+        audit,
+      };
+    }
   }
 
   emitStarted({
@@ -794,26 +972,45 @@ async function advanceDiscoveryAfterApproval(input = {}) {
       engine,
       missionId: mission.id,
       tenantId,
+      pool: input.pool,
       specialist: SPECIALISTS.SCOUT,
       stage: STAGES.DISCOVER,
       operatorId,
-      validatePreconditions: (ctx) => validateDiscoveryPreconditions(ctx),
+      validatePreconditions: (ctx) =>
+        validateDiscoveryPreconditions({
+          ...ctx,
+          discover: effectiveDiscover,
+          enablePlaces: inputEnablePlaces,
+          placesProvider: inputPlacesProvider,
+          runScout,
+        }),
       execute: async ({ mission: current, transactionId }) => {
         const scoutResult = await runScoutForAmoMission(current, {
           question,
           operatorId,
-          missionEngine,
+          engine,
+          transactionId,
+          pool: input.pool,
           persist,
           runScout,
           scoutCompanies,
           scoutPeople,
           allowFixtureFallback,
+          executionRequest: input.executionRequest || null,
+          discover: effectiveDiscover,
+          enablePlaces: inputEnablePlaces,
+          placesProvider: inputPlacesProvider,
         });
-        const discoveryPayload = discoveryPayloadFromScoutResult(scoutResult, current);
-        const executionResult = executionResultFromStageOutput(
-          { scoutResult, discoveryPayload },
-          { specialist: SPECIALISTS.SCOUT, transactionId }
-        );
+        const executionResult =
+          scoutResult.executionResult ||
+          executionResultFromStageOutput(
+            { scoutResult, discoveryPayload: discoveryPayloadFromScoutResult(scoutResult, current) },
+            { specialist: SPECIALISTS.SCOUT, transactionId }
+          );
+        const discoveryPayload =
+          executionResult.contributions && Object.keys(executionResult.contributions).length
+            ? executionResult.contributions
+            : discoveryPayloadFromScoutResult(scoutResult, current);
         return {
           scoutResult,
           discoveryPayload,
@@ -887,6 +1084,2046 @@ async function advanceDiscoveryAfterApproval(input = {}) {
   };
 }
 
+/**
+ * Continue Scout investigation when post-discovery readiness is insufficient.
+ * SPEC-193 — investigation continuation must not be short-circuited by prior Discovery commits.
+ * @param {object} input
+ * @returns {Promise<object>}
+ */
+async function advanceDiscoveryInvestigationAfterApproval(input = {}) {
+  askPathTrace.traceEnter('advanceDiscoveryInvestigationAfterApproval');
+  const {
+    engine,
+    mission,
+    tenantId,
+    question,
+    operatorId,
+    persist,
+    runScout,
+    scoutCompanies,
+    scoutPeople,
+    allowFixtureFallback,
+    audit: inputAudit,
+    discover: inputDiscover,
+    enablePlaces: inputEnablePlaces,
+    placesProvider: inputPlacesProvider,
+  } = input;
+
+  const effectiveDiscover =
+    inputDiscover ||
+    (typeof runScout === 'function'
+      ? undefined
+      : allowFixtureFallback === true
+        ? async () => []
+        : undefined);
+
+  if (!engine || !mission) {
+    throw new Error('engine and mission are required');
+  }
+
+  let snapshot = engine.inspect(mission.id, { tenantId });
+  snapshot = repairEmptyDiscoveryInvestigationGate(engine, mission, tenantId, snapshot);
+  if (!hasPendingDiscoveryInvestigation(snapshot)) {
+    throw planningError(
+      'tme_no_pending_investigation',
+      'No discovery investigation decision is pending.'
+    );
+  }
+
+  const audit = inputAudit || createMissionApprovalAudit();
+  const useGlobalAudit = !inputAudit;
+  const emitReceived = useGlobalAudit
+    ? logMissionApprovalReceived
+    : audit.logApprovalReceived.bind(audit);
+  const emitConsumed = useGlobalAudit
+    ? logMissionApprovalConsumed
+    : audit.logApprovalConsumed.bind(audit);
+  const emitStarted = useGlobalAudit
+    ? logMissionStageExecutionStarted
+    : audit.logStageExecutionStarted.bind(audit);
+  const emitCompleted = useGlobalAudit
+    ? logMissionStageExecutionCompleted
+    : audit.logStageExecutionCompleted.bind(audit);
+
+  emitReceived({
+    missionId: mission.id,
+    tenantId,
+    stage: STAGES.DISCOVER,
+    action: DISCOVERY_INVESTIGATION_ACTION,
+    phase: APPROVAL_PHASES.APPROVAL_RECEIVED,
+    command: question,
+    operatorId,
+  });
+
+  const contributions = snapshot.contributions || [];
+  const existingApproval = findDiscoveryApproval(contributions);
+
+  emitStarted({
+    missionId: mission.id,
+    tenantId,
+    stage: STAGES.DISCOVER,
+    executor: SPECIALISTS.SCOUT,
+    phase: APPROVAL_PHASES.EXECUTING_STAGE,
+    approvalId: existingApproval && existingApproval.id,
+    investigationContinuation: true,
+  });
+
+  let staged;
+  try {
+    staged = await executeMissionStage({
+      engine,
+      missionId: mission.id,
+      tenantId,
+      pool: input.pool,
+      specialist: SPECIALISTS.SCOUT,
+      stage: STAGES.DISCOVER,
+      operatorId,
+      validatePreconditions: (ctx) =>
+        validateDiscoveryPreconditions({
+          ...ctx,
+          discover: effectiveDiscover,
+          enablePlaces: inputEnablePlaces,
+          placesProvider: inputPlacesProvider,
+          runScout,
+        }),
+      execute: async ({ mission: current, transactionId }) => {
+        const scoutResult = await runScoutForAmoMission(current, {
+          question,
+          operatorId,
+          engine,
+          transactionId,
+          pool: input.pool,
+          persist,
+          runScout,
+          scoutCompanies,
+          scoutPeople,
+          allowFixtureFallback,
+          executionRequest: input.executionRequest || null,
+          discover: effectiveDiscover,
+          enablePlaces: inputEnablePlaces,
+          placesProvider: inputPlacesProvider,
+          investigationContinuation: true,
+        });
+        const executionResult =
+          scoutResult.executionResult ||
+          executionResultFromStageOutput(
+            { scoutResult, discoveryPayload: discoveryPayloadFromScoutResult(scoutResult, current) },
+            { specialist: SPECIALISTS.SCOUT, transactionId }
+          );
+        const discoveryPayload =
+          executionResult.contributions && Object.keys(executionResult.contributions).length
+            ? executionResult.contributions
+            : discoveryPayloadFromScoutResult(scoutResult, current);
+        return {
+          scoutResult,
+          discoveryPayload,
+          executionResult,
+          question,
+          missionId: current.id,
+        };
+      },
+      validateOutput: validateDiscoveryOutput,
+      commit: (ctx) => commitDiscoveryStage({
+        ...ctx,
+        existingApproval,
+        investigationContinuation: true,
+        investigationCommand: question,
+      }),
+      persistDurable: bindPersistDurable(input, engine, tenantId),
+    });
+  } catch (err) {
+    askPathTrace.traceEarlyReturn('advanceDiscoveryInvestigationAfterApproval', 'rolled_back');
+    throw err;
+  }
+
+  const approval = staged.commitResult.approval;
+  const discovery = staged.commitResult.discovery;
+  snapshot = staged.commitResult.snapshot;
+  const discoveryPayload = staged.output.discoveryPayload;
+  const executionOutcome = discoveryPayload.blocked ? 'blocked' : 'completed';
+
+  emitConsumed({
+    missionId: mission.id,
+    tenantId,
+    stage: STAGES.DISCOVER,
+    action: DISCOVERY_INVESTIGATION_ACTION,
+    phase: APPROVAL_PHASES.EXECUTING_STAGE,
+    approvalId: approval.id,
+    operatorId,
+    reusedApproval: Boolean(existingApproval),
+    transactionId: staged.transactionId,
+    investigationContinuation: true,
+  });
+
+  emitCompleted({
+    missionId: mission.id,
+    tenantId,
+    stage: STAGES.DISCOVER,
+    executor: SPECIALISTS.SCOUT,
+    outcome: executionOutcome,
+    phase:
+      executionOutcome === 'blocked'
+        ? APPROVAL_PHASES.WAITING_FOR_OPERATOR
+        : APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION,
+    nextStage: snapshot.mission.stage,
+    approvalId: approval.id,
+    discoveryId: discovery.id,
+    qualifiedCount: discoveryPayload.qualifiedCount || 0,
+    transactionId: staged.transactionId,
+    investigationContinuation: true,
+  });
+
+  askPathTrace.traceEarlyReturn('advanceDiscoveryInvestigationAfterApproval', executionOutcome);
+  return {
+    alreadyExecuted: false,
+    approval,
+    discovery,
+    scoutResult: staged.output.scoutResult,
+    snapshot,
+    executionOutcome,
+    approvalPhase:
+      executionOutcome === 'blocked'
+        ? APPROVAL_PHASES.WAITING_FOR_OPERATOR
+        : APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION,
+    audit,
+    transactionId: staged.transactionId,
+    missionVersion: staged.missionVersion,
+    investigationContinuation: true,
+  };
+}
+
+function validatePrioritizationPreconditions({ mission, engine, tenantId }) {
+  if (!mission) throw planningError('tme_mission_missing', 'Mission does not exist.');
+  if (mission.planCancelled === true || /cancelled/i.test(String(mission.status || ''))) {
+    throw planningError('tme_mission_inactive', 'Mission is not active.');
+  }
+  if (!isStructuredMissionApproved(mission)) {
+    throw planningError('tme_plan_missing', 'Mission Plan missing.');
+  }
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  if (!hasPendingPrioritizationApproval(snapshot)) {
+    throw planningError('tme_no_pending_prioritization', 'No prioritization approval is pending.');
+  }
+  if (mission.stage && mission.stage !== STAGES.DISCOVER) {
+    throw planningError('tme_wrong_stage', `Prioritization cannot execute while the mission is at ${mission.stage}.`);
+  }
+  const discovery = findLatestScoutDiscovery(snapshot.contributions || []);
+  if (!discovery) {
+    throw planningError('tme_discovery_missing', 'Discovery artifact is required before prioritization approval.');
+  }
+  const presentation = presentationFromDiscoveryPayload(discovery.payload || {});
+  if (!hasSufficientEvidenceForPrioritization(presentation)) {
+    throw validationError('tme_evidence_insufficient', 'Insufficient evidence for prioritization approval.');
+  }
+  return {
+    missionExists: true,
+    missionActive: true,
+    missionLocked: true,
+    structuredPlanApproved: true,
+    specialistAvailable: true,
+    requiredEvidencePresent: true,
+  };
+}
+
+function validatePrioritizationOutput(output, ctx = {}) {
+  const executionResult = output.executionResult || executionResultFromStageOutput(output, {
+    specialist: SPECIALISTS.MAX,
+    transactionId: ctx.transactionId,
+  });
+
+  if (
+    executionResult.status === EXECUTION_STATUSES.BLOCKED
+    || executionResult.status === EXECUTION_STATUSES.FAILED
+  ) {
+    const reason =
+      (executionResult.blocked && executionResult.blocked.reason)
+      || executionResult.reason
+      || 'Max prioritization did not complete.';
+    throw validationError('tme_max_blocked', reason);
+  }
+
+  if (!output || !output.prioritizationPayload) {
+    throw validationError('tme_contribution_missing', 'Prioritization contribution is missing.');
+  }
+  const payload = output.prioritizationPayload;
+
+  assertContributionContract(SPECIALISTS.MAX, payload);
+  assertExecutionResult(executionResult, {
+    specialist: SPECIALISTS.MAX,
+    requireContributions: true,
+    requireEvidence: true,
+  });
+  output.executionResult = executionResult;
+}
+
+function commitPrioritizationStage({
+  engine,
+  mission,
+  tenantId,
+  output,
+  transactionId,
+  missionVersion,
+  existingApproval,
+}) {
+  const missionId = (mission && mission.id) || output.missionId;
+  const { question, prioritizationPayload } = output;
+  let approval = existingApproval;
+  if (!approval) {
+    const approvalResult = engine.contribute(
+      missionId,
+      {
+        specialist: SPECIALISTS.OPERATOR,
+        kind: CONTRIBUTION_KINDS.APPROVAL,
+        payload: {
+          approved: true,
+          consumed: true,
+          command: question,
+          action: PRIORITIZATION_APPROVAL_ACTION,
+          kind: OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL,
+          stage: STAGES.DISCOVER,
+          transactionId,
+        },
+      },
+      { tenantId }
+    );
+    approval = approvalResult.contribution;
+  }
+
+  const current = engine.get(missionId, tenantId);
+  current.pendingOperatorDecision = null;
+  engine.store.putMission(current);
+
+  const payload = { ...prioritizationPayload, approvalId: approval.id, transactionId };
+  const prioritizationContribution = engine.contribute(
+    missionId,
+    {
+      specialist: SPECIALISTS.MAX,
+      kind: CONTRIBUTION_KINDS.PRIORITIZATION,
+      payload,
+    },
+    { tenantId }
+  );
+
+  engine.progress(missionId, SPECIALISTS.MAX, {
+    tenantId,
+    stage: STAGES.UNDERSTAND,
+  });
+
+  const updated = engine.get(missionId, tenantId);
+  bumpMissionVersion(updated, transactionId);
+  engine.store.putMission(updated);
+  engine.store.addEvent(createEvent({
+    missionId,
+    kind: EVENT_KINDS.EXECUTION_COMMITTED,
+    specialist: SPECIALISTS.MAX,
+    label: 'Max prioritization committed',
+    payload: {
+      transactionId,
+      missionVersion: updated.version,
+      priorVersion: missionVersion,
+      approvalId: approval.id,
+      prioritizationId: prioritizationContribution.contribution.id,
+    },
+  }));
+
+  const snapshot = engine.inspect(missionId, { tenantId });
+  assertMissionStateConsistent(snapshot.mission, {
+    contributions: snapshot.contributions,
+  });
+  return {
+    approval,
+    prioritization: prioritizationContribution.contribution,
+    snapshot,
+  };
+}
+
+/**
+ * Consume prioritization approval, execute Max at UNDERSTAND, attach prioritization, and advance.
+ * SPEC-141 — the only path that transitions to Understanding after Discovery.
+ * @param {object} input
+ * @returns {Promise<object>}
+ */
+async function advancePrioritizationAfterApproval(input = {}) {
+  askPathTrace.traceEnter('advancePrioritizationAfterApproval');
+  const {
+    engine,
+    mission,
+    tenantId,
+    question,
+    operatorId,
+    runMax,
+  } = input;
+
+  if (!engine || !mission) {
+    throw new Error('engine and mission are required');
+  }
+
+  let snapshot = engine.inspect(mission.id, { tenantId });
+  const contributions = snapshot.contributions || [];
+  const existingApproval = findPrioritizationApproval(contributions);
+  const existingPrioritization = findLatestMaxPrioritization(contributions);
+
+  if (existingApproval && existingPrioritization && snapshot.mission.stage === STAGES.UNDERSTAND) {
+    askPathTrace.traceEarlyReturn('advancePrioritizationAfterApproval', 'already_executed');
+    return {
+      alreadyExecuted: true,
+      approval: existingApproval,
+      prioritization: existingPrioritization,
+      snapshot: engine.inspect(mission.id, { tenantId }),
+      approvalPhase: APPROVAL_PHASES.STAGE_COMPLETED,
+    };
+  }
+
+  let staged;
+  try {
+    staged = await executeMissionStage({
+      engine,
+      missionId: mission.id,
+      tenantId,
+      pool: input.pool,
+      specialist: SPECIALISTS.MAX,
+      stage: STAGES.UNDERSTAND,
+      operatorId,
+      validatePreconditions: (ctx) => validatePrioritizationPreconditions(ctx),
+      execute: async ({ mission: current, transactionId }) => {
+        const maxResult = await runMaxForAmoMission(current, {
+          question,
+          operatorId,
+          engine,
+          transactionId,
+          pool: input.pool,
+          runMax,
+          executionRequest: input.executionRequest || null,
+        });
+        const executionResult = maxResult && maxResult.spec === 'SPEC-132'
+          ? maxResult
+          : executionResultFromStageOutput(
+            { maxResult, prioritizationPayload: maxResult && maxResult.contributions },
+            { specialist: SPECIALISTS.MAX, transactionId }
+          );
+        const prioritizationPayload =
+          maxResult
+          && maxResult.status === EXECUTION_STATUSES.SUCCESS
+          && maxResult.contributions
+          && Object.keys(maxResult.contributions).length
+            ? prioritizationPayloadFromMaxResult(maxResult)
+            : null;
+        return {
+          maxResult,
+          prioritizationPayload,
+          executionResult,
+          question,
+          missionId: current.id,
+        };
+      },
+      validateOutput: validatePrioritizationOutput,
+      commit: (ctx) => commitPrioritizationStage({
+        ...ctx,
+        existingApproval,
+      }),
+      persistDurable: bindPersistDurable(input, engine, tenantId),
+    });
+  } catch (err) {
+    askPathTrace.traceEarlyReturn('advancePrioritizationAfterApproval', 'rolled_back');
+    throw err;
+  }
+
+  snapshot = staged.commitResult.snapshot;
+  askPathTrace.traceEarlyReturn('advancePrioritizationAfterApproval', 'completed');
+  return {
+    alreadyExecuted: false,
+    approval: staged.commitResult.approval,
+    prioritization: staged.commitResult.prioritization,
+    maxResult: staged.output.maxResult,
+    snapshot,
+    approvalPhase: APPROVAL_PHASES.STAGE_COMPLETED,
+    transactionId: staged.transactionId,
+    missionVersion: staged.missionVersion,
+  };
+}
+
+function findMaxPrioritization(contributions = []) {
+  return findLatestMaxPrioritization(contributions);
+}
+
+function findPaigeVariants(contributions = [], mission = null) {
+  const { selectCanonicalContribution } = require('../../acquisition-mission/CanonicalContributionSelection');
+  return selectCanonicalContribution(contributions, {
+    missionId: mission?.id,
+    specialist: SPECIALISTS.PAIGE,
+    kind: CONTRIBUTION_KINDS.VARIANTS,
+    mission,
+  });
+}
+
+function findPennyPaidAcquisitionRecommendation(contributions = []) {
+  return [...contributions]
+    .reverse()
+    .find(
+      (row) =>
+        row.specialist === SPECIALISTS.PENNY &&
+        row.kind === CONTRIBUTION_KINDS.PAID_ACQUISITION_RECOMMENDATION
+    );
+}
+
+function buildMaxPrioritizationPayload(mission, contributions = []) {
+  const scout = findLatestScoutDiscovery(contributions);
+  const scoutPayload = scout?.payload || {};
+  const plan = mission.structuredMission || {};
+  return buildPrioritizationPayload(mission, scoutPayload, plan);
+}
+
+function fixtureMaxPrioritizationResult(mission, contributions = []) {
+  return buildMaxPrioritizationPayload(mission, contributions);
+}
+
+async function runMaxPrioritizationForAmoMission(mission, opts = {}) {
+  if (typeof opts.runMax === 'function') {
+    const custom = await opts.runMax(mission, opts);
+    if (custom && custom.contributions) return custom.contributions;
+    return custom;
+  }
+  const maxResult = await runMaxForAmoMission(mission, opts);
+  if (maxResult.status === EXECUTION_STATUSES.BLOCKED || maxResult.status === EXECUTION_STATUSES.FAILED) {
+    const reason =
+      (maxResult.blocked && maxResult.blocked.reason)
+      || maxResult.reason
+      || 'Max prioritization did not complete.';
+    throw validationError('tme_max_blocked', reason);
+  }
+  return prioritizationPayloadFromMaxResult(maxResult);
+}
+
+function validateMaxPrioritizationOutput(output, ctx = {}) {
+  if (!output || !output.prioritizationPayload) {
+    throw validationError('tme_contribution_missing', 'Max prioritization contribution is missing.');
+  }
+  const payload = output.prioritizationPayload;
+  assertContributionContract(SPECIALISTS.MAX, payload);
+  assertConfidenceValid(payload.confidence, { required: false });
+  const executionResult = output.executionResult || executionResultFromStageOutput(output, {
+    specialist: SPECIALISTS.MAX,
+    transactionId: ctx.transactionId,
+  });
+  assertExecutionResult(executionResult, {
+    specialist: SPECIALISTS.MAX,
+    requireContributions: true,
+    requireEvidence: false,
+  });
+  output.executionResult = executionResult;
+}
+
+function validateAcquisitionApproachPreconditions({ mission, engine, tenantId }) {
+  if (!mission) throw planningError('tme_mission_missing', 'Mission does not exist.');
+  if (mission.planCancelled === true || /cancelled/i.test(String(mission.status || ''))) {
+    throw planningError('tme_mission_inactive', 'Mission is not active.');
+  }
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  const ctx = specialistContext(snapshot.contributions || []);
+  if (!ctx.maxComplete) {
+    throw planningError('tme_max_incomplete', 'Max prioritization is required before acquisition approach selection.');
+  }
+  if (findLatestAcquisitionApproach(snapshot.contributions || [])) {
+    throw planningError('tme_already_executed', 'Acquisition approach already committed.');
+  }
+  if (mission.stage !== STAGES.PLAN) {
+    throw planningError('tme_wrong_stage', `Acquisition approach selection requires stage ${STAGES.PLAN}.`);
+  }
+  return {
+    missionExists: true,
+    missionActive: true,
+    missionLocked: true,
+    specialistAvailable: true,
+    requiredEvidencePresent: true,
+  };
+}
+
+function stageDownstreamOfPlan(stage) {
+  return [
+    STAGES.PREPARE,
+    STAGES.READY,
+    STAGES.EXECUTE,
+    STAGES.OBSERVE,
+    STAGES.LEARN,
+    STAGES.IMPROVE,
+  ].includes(stage);
+}
+
+function canonicalWorkForLegacyReconciliation(contributions = [], stage) {
+  const rows = contributions || [];
+  const ctx = specialistContext(rows);
+  const hasScout = ctx.scoutComplete;
+  const hasMax = ctx.maxComplete;
+  const hasPaige = ctx.paigeComplete;
+  const hasEmmett = ctx.emmettComplete;
+  const hasApproval = rows.some(
+    (row) => row.specialist === SPECIALISTS.OPERATOR && row.kind === CONTRIBUTION_KINDS.APPROVAL
+  );
+
+  if (!hasScout || !hasMax) return null;
+  if (stage === STAGES.PREPARE) {
+    return {
+      scoutComplete: hasScout,
+      maxComplete: hasMax,
+      paigeComplete: hasPaige,
+      emmettComplete: hasEmmett,
+      operatorApprovalPresent: hasApproval,
+    };
+  }
+  if (stage === STAGES.READY) {
+    if (!hasPaige || !hasEmmett) return null;
+    return {
+      scoutComplete: hasScout,
+      maxComplete: hasMax,
+      paigeComplete: hasPaige,
+      emmettComplete: hasEmmett,
+      operatorApprovalPresent: hasApproval,
+    };
+  }
+  if (stageDownstreamOfPlan(stage)) {
+    if (!hasPaige || !hasEmmett || !hasApproval) return null;
+    return {
+      scoutComplete: hasScout,
+      maxComplete: hasMax,
+      paigeComplete: hasPaige,
+      emmettComplete: hasEmmett,
+      operatorApprovalPresent: hasApproval,
+    };
+  }
+  return null;
+}
+
+function validateLegacyAcquisitionApproachReconciliationPreconditions({
+  mission,
+  engine,
+  tenantId,
+  executionRequest,
+}) {
+  if (!mission) throw planningError('tme_mission_missing', 'Mission does not exist.');
+  if (mission.planCancelled === true || /cancelled/i.test(String(mission.status || ''))) {
+    throw planningError('tme_mission_inactive', 'Mission is not active.');
+  }
+  const explicit =
+    executionRequest?.intent === amo.EXECUTION_INTENTS.RECONCILE_ACQUISITION_APPROACH ||
+    executionRequest?.payload?.reconciliation === true ||
+    executionRequest?.payload?.backfill === true;
+  if (!explicit) {
+    throw planningError(
+      'tme_reconciliation_not_explicit',
+      'Legacy acquisition approach reconciliation must be explicit.'
+    );
+  }
+
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  const contributions = snapshot.contributions || [];
+  if (findLatestAcquisitionApproach(contributions)) {
+    throw planningError('tme_already_executed', 'Acquisition approach already committed.');
+  }
+  if (!stageDownstreamOfPlan(mission.stage)) {
+    throw planningError(
+      'tme_not_legacy_downstream',
+      'Legacy acquisition approach reconciliation requires a mission downstream of Plan.'
+    );
+  }
+  const historicalWork = canonicalWorkForLegacyReconciliation(contributions, mission.stage);
+  if (!historicalWork) {
+    throw planningError(
+      'tme_legacy_evidence_missing',
+      'Legacy acquisition approach reconciliation requires canonical downstream mission work.'
+    );
+  }
+  return {
+    missionExists: true,
+    missionActive: true,
+    missionLocked: true,
+    specialistAvailable: true,
+    requiredEvidencePresent: true,
+    legacyReconciliationEligible: true,
+    originalStage: mission.stage,
+    historicalWork,
+  };
+}
+
+function validateAcquisitionApproachOutput(output, ctx = {}) {
+  if (!output || !output.approachPayload) {
+    throw validationError('tme_contribution_missing', 'Acquisition approach contribution is missing.');
+  }
+  const payload = output.approachPayload;
+  assertContributionContract(SPECIALISTS.MAX, payload);
+  assertConfidenceValid(payload.confidence, { required: false });
+  if (!payload.acquisitionApproach || !payload.acquisitionApproach.selectedApproach) {
+    throw validationError('tme_approach_invalid', 'Acquisition approach decision must include selectedApproach.');
+  }
+  const executionResult = output.executionResult || executionResultFromStageOutput(output, {
+    specialist: SPECIALISTS.MAX,
+    transactionId: ctx.transactionId,
+  });
+  assertExecutionResult(executionResult, {
+    specialist: SPECIALISTS.MAX,
+    requireContributions: true,
+    requireEvidence: false,
+  });
+  output.executionResult = executionResult;
+}
+
+function validatePaigeOutput(output, ctx = {}) {
+  if (!output || !output.variantsPayload) {
+    throw validationError('tme_contribution_missing', 'Paige variants contribution is missing.');
+  }
+  const payload = output.variantsPayload;
+  assertContributionContract(SPECIALISTS.PAIGE, payload);
+  const copySafety = validatePaigeVariantsPayload(payload);
+  if (!copySafety.safe) {
+    throw validationError(
+      PAIGE_COPY_SAFETY_BLOCKER,
+      'Paige variants contain internal mission or scoring language in customer-facing copy.',
+      { details: { violations: copySafety.violations } }
+    );
+  }
+  const executionResult = output.executionResult || executionResultFromStageOutput(output, {
+    specialist: SPECIALISTS.PAIGE,
+    transactionId: ctx.transactionId,
+  });
+  assertExecutionResult(executionResult, {
+    specialist: SPECIALISTS.PAIGE,
+    requireContributions: true,
+    requireEvidence: false,
+  });
+  output.executionResult = executionResult;
+}
+
+function buildPaigeRevisionFailureDetails(paigeExecution = {}, mission = {}) {
+  const executionResult = paigeExecution && typeof paigeExecution === 'object'
+    ? paigeExecution
+    : null;
+  const variantsPayload = executionResult?.contributions
+    && typeof executionResult.contributions === 'object'
+    ? executionResult.contributions
+    : null;
+  const variants = Array.isArray(variantsPayload?.variants) ? variantsPayload.variants : [];
+  const copySafety = variantsPayload ? validatePaigeVariantsPayload(variantsPayload) : null;
+
+  return {
+    status: executionResult?.status || null,
+    blocker: executionResult?.blocker
+      || executionResult?.blocked?.requiredPrecondition
+      || null,
+    reason: executionResult?.reason
+      || executionResult?.blocked?.reason
+      || null,
+    error: executionResult?.error || null,
+    errors: Array.isArray(executionResult?.errors) ? executionResult.errors : null,
+    validation: executionResult?.validation
+      || (!copySafety || copySafety.safe ? null : { copySafety }),
+    executionResult,
+    copySafetyViolations: copySafety?.safe === false ? copySafety.violations : [],
+    candidateCount: variants.filter(
+      (variant) => variant && (variant.candidateId || variant.companyId || variant.placeId)
+    ).length,
+    variantCount: variants.length,
+    missionStage: mission?.stage || null,
+    missionState: mission?.revisionState?.status || mission?.status || null,
+  };
+}
+
+function throwPaigeRevisionFailed(paigeExecution, mission) {
+  const details = buildPaigeRevisionFailureDetails(paigeExecution, mission);
+  throw validationError(
+    'tme_paige_revision_failed',
+    details.reason || 'Paige revision did not complete.',
+    { details }
+  );
+}
+
+function validatePennyPreconditions({ mission, engine, tenantId }) {
+  if (!mission) throw planningError('tme_mission_missing', 'Mission does not exist.');
+  if (mission.planCancelled === true || /cancelled/i.test(String(mission.status || ''))) {
+    throw planningError('tme_mission_inactive', 'Mission is not active.');
+  }
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  const ctx = specialistContext(snapshot.contributions || []);
+  if (!ctx.maxComplete) {
+    throw planningError('tme_max_incomplete', 'Max prioritization is required before Penny paid assessment.');
+  }
+  if (!ctx.acquisitionApproachComplete) {
+    throw planningError('tme_approach_missing', 'Acquisition approach decision is required before Penny paid assessment.');
+  }
+  if (!['paid', 'both'].includes(ctx.acquisitionApproach)) {
+    throw planningError('tme_paid_not_selected', 'Penny paid assessment requires a paid or both acquisition approach.');
+  }
+  if (ctx.paidAcquisitionComplete) {
+    throw planningError('tme_already_executed', 'Penny paid acquisition recommendation already committed.');
+  }
+  if (mission.stage !== STAGES.PLAN) {
+    throw planningError('tme_wrong_stage', `Penny paid assessment requires stage ${STAGES.PLAN}.`);
+  }
+  return {
+    missionExists: true,
+    missionActive: true,
+    missionLocked: true,
+    structuredPlanApproved: true,
+    specialistAvailable: true,
+    requiredEvidencePresent: true,
+  };
+}
+
+function validatePennyOutput(output, ctx = {}) {
+  if (!output || !output.paidAcquisitionPayload) {
+    throw validationError('tme_contribution_missing', 'Penny paid acquisition contribution is missing.');
+  }
+  const payload = output.paidAcquisitionPayload;
+  assertContributionContract(SPECIALISTS.PENNY, payload);
+  const recommendation = payload.paidAcquisitionRecommendation;
+  if (!recommendation || !recommendation.viability) {
+    throw validationError('tme_penny_recommendation_invalid', 'Penny recommendation must include viability.');
+  }
+  if (recommendation.noExternalMutation !== true) {
+    throw validationError('tme_penny_mutation_boundary', 'Penny V1 must not authorize external mutation.');
+  }
+  const executionResult = output.executionResult || executionResultFromStageOutput(output, {
+    specialist: SPECIALISTS.PENNY,
+    transactionId: ctx.transactionId,
+  });
+  assertExecutionResult(executionResult, {
+    specialist: SPECIALISTS.PENNY,
+    requireContributions: true,
+    requireEvidence: false,
+  });
+  output.executionResult = executionResult;
+}
+
+function commitMaxPrioritizationStage({
+  engine,
+  mission,
+  tenantId,
+  output,
+  transactionId,
+  missionVersion,
+}) {
+  const missionId = (mission && mission.id) || output.missionId;
+  const { prioritizationPayload } = output;
+  const payload = { ...prioritizationPayload, transactionId };
+
+  const contribution = engine.contribute(
+    missionId,
+    {
+      specialist: SPECIALISTS.MAX,
+      kind: CONTRIBUTION_KINDS.PRIORITIZATION,
+      payload,
+    },
+    { tenantId }
+  );
+
+  const updated = engine.get(missionId, tenantId);
+  bumpMissionVersion(updated, transactionId);
+  engine.store.putMission(updated);
+  engine.store.addEvent(createEvent({
+    missionId,
+    kind: EVENT_KINDS.EXECUTION_COMMITTED,
+    specialist: SPECIALISTS.MAX,
+    label: 'Max prioritization committed',
+    payload: {
+      transactionId,
+      missionVersion: updated.version,
+      priorVersion: missionVersion,
+      contributionId: contribution.contribution.id,
+    },
+  }));
+
+  const snapshot = engine.inspect(missionId, { tenantId });
+  assertMissionStateConsistent(snapshot.mission, {
+    contributions: snapshot.contributions,
+  });
+  return {
+    prioritization: contribution.contribution,
+    snapshot,
+  };
+}
+
+function commitAcquisitionApproachStage({
+  engine,
+  mission,
+  tenantId,
+  output,
+  transactionId,
+  missionVersion,
+}) {
+  const missionId = (mission && mission.id) || output.missionId;
+  const { approachPayload } = output;
+  const payload = { ...approachPayload, transactionId };
+
+  const contribution = engine.contribute(
+    missionId,
+    {
+      specialist: SPECIALISTS.MAX,
+      kind: CONTRIBUTION_KINDS.ACQUISITION_APPROACH,
+      payload,
+    },
+    { tenantId }
+  );
+
+  const updated = engine.get(missionId, tenantId);
+  bumpMissionVersion(updated, transactionId);
+  engine.store.putMission(updated);
+  engine.store.addEvent(createEvent({
+    missionId,
+    kind: EVENT_KINDS.EXECUTION_COMMITTED,
+    specialist: SPECIALISTS.MAX,
+    label: 'Max acquisition approach committed',
+    payload: {
+      transactionId,
+      missionVersion: updated.version,
+      priorVersion: missionVersion,
+      contributionId: contribution.contribution.id,
+      selectedApproach: payload.acquisitionApproach?.selectedApproach || payload.selectedApproach,
+    },
+  }));
+
+  const snapshot = engine.inspect(missionId, { tenantId });
+  assertMissionStateConsistent(snapshot.mission, {
+    contributions: snapshot.contributions,
+  });
+  return {
+    approach: contribution.contribution,
+    snapshot,
+  };
+}
+
+function commitPennyPaidAcquisitionStage({
+  engine,
+  mission,
+  tenantId,
+  output,
+  transactionId,
+  missionVersion,
+}) {
+  const missionId = (mission && mission.id) || output.missionId;
+  const { paidAcquisitionPayload } = output;
+  const payload = { ...paidAcquisitionPayload, transactionId };
+
+  const contribution = engine.contribute(
+    missionId,
+    {
+      specialist: SPECIALISTS.PENNY,
+      kind: CONTRIBUTION_KINDS.PAID_ACQUISITION_RECOMMENDATION,
+      payload,
+    },
+    { tenantId }
+  );
+
+  const updated = engine.get(missionId, tenantId);
+  bumpMissionVersion(updated, transactionId);
+  engine.store.putMission(updated);
+  engine.store.addEvent(createEvent({
+    missionId,
+    kind: EVENT_KINDS.EXECUTION_COMMITTED,
+    specialist: SPECIALISTS.PENNY,
+    label: 'Penny paid acquisition recommendation committed',
+    payload: {
+      transactionId,
+      missionVersion: updated.version,
+      priorVersion: missionVersion,
+      contributionId: contribution.contribution.id,
+      viability: payload.paidAcquisitionRecommendation?.viability || payload.viability,
+      preferredChannel: payload.paidAcquisitionRecommendation?.preferredChannel || null,
+    },
+  }));
+
+  const snapshot = engine.inspect(missionId, { tenantId });
+  assertMissionStateConsistent(snapshot.mission, {
+    contributions: snapshot.contributions,
+  });
+  return {
+    paidAcquisition: contribution.contribution,
+    snapshot,
+  };
+}
+
+function commitPaigeVariantsStage({
+  engine,
+  mission,
+  tenantId,
+  output,
+  transactionId,
+  missionVersion,
+}) {
+  const missionId = (mission && mission.id) || output.missionId;
+  const { variantsPayload } = output;
+  const payload = { ...variantsPayload, transactionId };
+
+  const contribution = engine.contribute(
+    missionId,
+    {
+      specialist: SPECIALISTS.PAIGE,
+      kind: CONTRIBUTION_KINDS.VARIANTS,
+      payload,
+    },
+    { tenantId }
+  );
+
+  const updated = engine.get(missionId, tenantId);
+  bumpMissionVersion(updated, transactionId);
+  engine.store.putMission(updated);
+  engine.store.addEvent(createEvent({
+    missionId,
+    kind: EVENT_KINDS.EXECUTION_COMMITTED,
+    specialist: SPECIALISTS.PAIGE,
+    label: 'Paige variants committed',
+    payload: {
+      transactionId,
+      missionVersion: updated.version,
+      priorVersion: missionVersion,
+      contributionId: contribution.contribution.id,
+    },
+  }));
+
+  const snapshot = engine.inspect(missionId, { tenantId });
+  assertMissionStateConsistent(snapshot.mission, {
+    contributions: snapshot.contributions,
+  });
+  return {
+    variants: contribution.contribution,
+    snapshot,
+  };
+}
+
+function validateMaxPrioritizationPreconditions({ mission, engine, tenantId }) {
+  if (!mission) throw planningError('tme_mission_missing', 'Mission does not exist.');
+  if (mission.planCancelled === true || /cancelled/i.test(String(mission.status || ''))) {
+    throw planningError('tme_mission_inactive', 'Mission is not active.');
+  }
+  if (!isStructuredMissionApproved(mission)) {
+    throw planningError('tme_plan_missing', 'Mission Plan missing.');
+  }
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  if (mission.stage !== STAGES.UNDERSTAND) {
+    throw planningError('tme_wrong_stage', `Max prioritization requires stage ${STAGES.UNDERSTAND}.`);
+  }
+  if (!findPrioritizationApproval(snapshot.contributions || [])) {
+    throw planningError('tme_prioritization_not_approved', 'Operator prioritization approval is required.');
+  }
+  if (!findLatestScoutDiscovery(snapshot.contributions || [])) {
+    throw planningError('tme_discovery_missing', 'Scout discovery is required before Max prioritization.');
+  }
+  if (findMaxPrioritization(snapshot.contributions || [])) {
+    throw planningError('tme_already_executed', 'Max prioritization already committed.');
+  }
+  return {
+    missionExists: true,
+    missionActive: true,
+    missionLocked: true,
+    structuredPlanApproved: true,
+    specialistAvailable: true,
+    requiredEvidencePresent: true,
+  };
+}
+
+function validatePaigePreconditions({ mission, engine, tenantId }) {
+  if (!mission) throw planningError('tme_mission_missing', 'Mission does not exist.');
+  if (mission.planCancelled === true || /cancelled/i.test(String(mission.status || ''))) {
+    throw planningError('tme_mission_inactive', 'Mission is not active.');
+  }
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  const ctx = specialistContext(snapshot.contributions || []);
+  if (!ctx.maxComplete) {
+    throw planningError('tme_max_incomplete', 'Max prioritization is required before Paige execution.');
+  }
+  if (ctx.paigeComplete) {
+    throw planningError('tme_already_executed', 'Paige variants already committed.');
+  }
+  if (mission.stage !== STAGES.PREPARE) {
+    throw planningError('tme_wrong_stage', `Paige execution requires stage ${STAGES.PREPARE}.`);
+  }
+  return {
+    missionExists: true,
+    missionActive: true,
+    missionLocked: true,
+    structuredPlanApproved: true,
+    specialistAvailable: true,
+    requiredEvidencePresent: true,
+  };
+}
+
+function ensureStagesForPaige(engine, missionId, tenantId) {
+  let mission = engine.get(missionId, tenantId);
+  const snapshot = engine.inspect(missionId, { tenantId });
+  const ctx = specialistContext(snapshot.contributions || []);
+
+  if (mission.stage === STAGES.UNDERSTAND && ctx.maxComplete) {
+    const planGate = canEnter(STAGES.PLAN, ctx);
+    if (!planGate.ok) throw planningError('tme_stage_blocked', planGate.reason);
+    engine.progress(missionId, { role: 'max' }, { tenantId, stage: STAGES.PLAN });
+    mission = engine.get(missionId, tenantId);
+  }
+
+  const afterPlan = engine.inspect(missionId, { tenantId });
+  const ctxAfterPlan = specialistContext(afterPlan.contributions || []);
+  if (mission.stage === STAGES.PLAN && ctxAfterPlan.maxComplete && ctxAfterPlan.acquisitionApproachComplete) {
+    const prepareGate = canEnter(STAGES.PREPARE, ctxAfterPlan);
+    if (!prepareGate.ok) throw planningError('tme_stage_blocked', prepareGate.reason);
+    engine.progress(missionId, { role: 'max' }, { tenantId, stage: STAGES.PREPARE });
+    mission = engine.get(missionId, tenantId);
+  }
+
+  return mission;
+}
+
+function ensureStageForAcquisitionApproach(engine, missionId, tenantId) {
+  let mission = engine.get(missionId, tenantId);
+  if (mission.stage === STAGES.UNDERSTAND) {
+    const snapshot = engine.inspect(missionId, { tenantId });
+    const ctx = specialistContext(snapshot.contributions || []);
+    const planGate = canEnter(STAGES.PLAN, ctx);
+    if (!planGate.ok) throw planningError('tme_stage_blocked', planGate.reason);
+    engine.progress(missionId, { role: 'max' }, { tenantId, stage: STAGES.PLAN });
+    mission = engine.get(missionId, tenantId);
+  }
+  return mission;
+}
+
+/**
+ * Execute Max prioritization at UNDERSTAND and commit PRIORITIZATION contribution.
+ * @param {object} input
+ * @returns {Promise<object>}
+ */
+async function advanceMaxPrioritization(input = {}) {
+  const { engine, mission, tenantId, operatorId } = input;
+  if (!engine || !mission) throw new Error('engine and mission are required');
+
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  const existing = findMaxPrioritization(snapshot.contributions || []);
+  if (existing) {
+    return {
+      alreadyExecuted: true,
+      prioritization: existing,
+      snapshot: engine.inspect(mission.id, { tenantId }),
+    };
+  }
+
+  const staged = await executeMissionStage({
+    engine,
+    missionId: mission.id,
+    tenantId,
+    pool: input.pool,
+    specialist: SPECIALISTS.MAX,
+    stage: STAGES.UNDERSTAND,
+    operatorId,
+    validatePreconditions: (ctx) => validateMaxPrioritizationPreconditions(ctx),
+    execute: async ({ mission: current, transactionId }) => {
+      const maxResult = await runMaxForAmoMission(current, {
+        ...input,
+        transactionId,
+      });
+      const executionResult = maxResult && maxResult.spec === 'SPEC-132'
+        ? maxResult
+        : executionResultFromStageOutput(
+          { maxResult, prioritizationPayload: maxResult && maxResult.contributions },
+          { specialist: SPECIALISTS.MAX, transactionId }
+        );
+      const prioritizationPayload =
+        maxResult
+        && maxResult.status === EXECUTION_STATUSES.SUCCESS
+        && maxResult.contributions
+        && Object.keys(maxResult.contributions).length
+          ? prioritizationPayloadFromMaxResult(maxResult)
+          : null;
+      return {
+        maxResult,
+        prioritizationPayload,
+        executionResult,
+        missionId: current.id,
+      };
+    },
+    validateOutput: validatePrioritizationOutput,
+    commit: (ctx) => commitMaxPrioritizationStage(ctx),
+    persistDurable: bindPersistDurable(input, engine, tenantId),
+  });
+
+  return {
+    alreadyExecuted: false,
+    prioritization: staged.commitResult.prioritization,
+    snapshot: staged.commitResult.snapshot,
+    transactionId: staged.transactionId,
+    missionVersion: staged.missionVersion,
+  };
+}
+
+async function advanceAcquisitionApproach(input = {}) {
+  const { engine, mission, tenantId, operatorId } = input;
+  if (!engine || !mission) throw new Error('engine and mission are required');
+
+  const currentMission = ensureStageForAcquisitionApproach(engine, mission.id, tenantId);
+  const snapshot = engine.inspect(currentMission.id, { tenantId });
+  const existing = findLatestAcquisitionApproach(snapshot.contributions || []);
+  if (existing) {
+    return {
+      alreadyExecuted: true,
+      approach: existing,
+      snapshot: engine.inspect(currentMission.id, { tenantId }),
+    };
+  }
+
+  const staged = await executeMissionStage({
+    engine,
+    missionId: currentMission.id,
+    tenantId,
+    pool: input.pool,
+    specialist: SPECIALISTS.MAX,
+    stage: STAGES.PLAN,
+    operatorId,
+    validatePreconditions: (ctx) => validateAcquisitionApproachPreconditions(ctx),
+    execute: async ({ mission: current, transactionId }) => {
+      const maxResult = await runMaxApproachForAmoMission(current, {
+        ...input,
+        transactionId,
+        approach:
+          input.approach ||
+          input.selectedApproach ||
+          input.executionRequest?.payload?.approach ||
+          input.executionRequest?.payload?.selectedApproach ||
+          null,
+      });
+      const executionResult = maxResult && maxResult.spec === 'SPEC-132'
+        ? maxResult
+        : executionResultFromStageOutput(
+          { maxResult, approachPayload: maxResult && maxResult.contributions },
+          { specialist: SPECIALISTS.MAX, transactionId }
+        );
+      const approachPayload =
+        maxResult
+        && maxResult.contributions
+        && Object.keys(maxResult.contributions).length
+          ? acquisitionApproachPayloadFromMaxResult(maxResult)
+          : null;
+      return {
+        maxResult,
+        approachPayload,
+        executionResult,
+        missionId: current.id,
+      };
+    },
+    validateOutput: validateAcquisitionApproachOutput,
+    commit: (ctx) => commitAcquisitionApproachStage(ctx),
+    persistDurable: bindPersistDurable(input, engine, tenantId),
+  });
+
+  return {
+    alreadyExecuted: false,
+    approach: staged.commitResult.approach,
+    snapshot: staged.commitResult.snapshot,
+    transactionId: staged.transactionId,
+    missionVersion: staged.missionVersion,
+    maxResult: staged.output.maxResult,
+  };
+}
+
+async function reconcileLegacyAcquisitionApproach(input = {}) {
+  const { engine, mission, tenantId, operatorId } = input;
+  if (!engine || !mission) throw new Error('engine and mission are required');
+
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  const existing = findLatestAcquisitionApproach(snapshot.contributions || []);
+  if (existing) {
+    return {
+      alreadyExecuted: true,
+      approach: existing,
+      snapshot,
+      reconciliation: {
+        alreadyReconciled: true,
+        originalStage: mission.stage,
+      },
+    };
+  }
+
+  const originalStage = mission.stage;
+  const staged = await executeMissionStage({
+    engine,
+    missionId: mission.id,
+    tenantId,
+    pool: input.pool,
+    specialist: SPECIALISTS.MAX,
+    stage: 'legacy_reconciliation',
+    operatorId,
+    validatePreconditions: (ctx) => validateLegacyAcquisitionApproachReconciliationPreconditions({
+      ...ctx,
+      executionRequest: input.executionRequest,
+    }),
+    execute: async ({ mission: current, transactionId }) => {
+      const maxResult = await runMaxApproachForAmoMission(current, {
+        ...input,
+        transactionId,
+        approach:
+          input.approach ||
+          input.selectedApproach ||
+          input.executionRequest?.payload?.approach ||
+          input.executionRequest?.payload?.selectedApproach ||
+          null,
+      });
+      const executionResult = maxResult && maxResult.spec === 'SPEC-132'
+        ? maxResult
+        : executionResultFromStageOutput(
+          { maxResult, approachPayload: maxResult && maxResult.contributions },
+          { specialist: SPECIALISTS.MAX, transactionId }
+        );
+      const approachPayload =
+        maxResult
+        && maxResult.contributions
+        && Object.keys(maxResult.contributions).length
+          ? acquisitionApproachPayloadFromMaxResult(maxResult)
+          : null;
+      return {
+        maxResult,
+        approachPayload: approachPayload
+          ? {
+            ...approachPayload,
+            legacyReconciliation: {
+              spec: 'SPEC-250',
+              mode: 'legacy_acquisition_approach_reconciliation',
+              originalStage,
+              reconciledAt: new Date().toISOString(),
+              historicalPreparationPreserved: true,
+              lifecycleRewound: false,
+              externalAction: false,
+            },
+          }
+          : null,
+        executionResult,
+        missionId: current.id,
+      };
+    },
+    validateOutput: validateAcquisitionApproachOutput,
+    commit: (ctx) => commitAcquisitionApproachStage(ctx),
+    persistDurable: bindPersistDurable(input, engine, tenantId),
+  });
+
+  return {
+    alreadyExecuted: false,
+    approach: staged.commitResult.approach,
+    snapshot: staged.commitResult.snapshot,
+    transactionId: staged.transactionId,
+    missionVersion: staged.missionVersion,
+    maxResult: staged.output.maxResult,
+    reconciliation: {
+      spec: 'SPEC-250',
+      originalStage,
+      stageAfter: staged.commitResult.snapshot.mission.stage,
+      lifecycleRewound: staged.commitResult.snapshot.mission.stage !== originalStage,
+    },
+  };
+}
+
+/**
+ * Execute Penny at PLAN via SEC and commit PAID_ACQUISITION_RECOMMENDATION.
+ * Canonical path: CER → router → executeMissionStage → executeSpecialist('penny') → PAID_ACQUISITION_RECOMMENDATION.
+ * @param {object} input
+ * @returns {Promise<object>}
+ */
+async function advancePennyPaidAcquisition(input = {}) {
+  const { engine, mission, tenantId, operatorId } = input;
+  if (!engine || !mission) throw new Error('engine and mission are required');
+
+  const currentMission = ensureStageForAcquisitionApproach(engine, mission.id, tenantId);
+  const snapshot = engine.inspect(currentMission.id, { tenantId });
+  const existing = findPennyPaidAcquisitionRecommendation(snapshot.contributions || []);
+  if (existing) {
+    return {
+      alreadyExecuted: true,
+      paidAcquisition: existing,
+      snapshot: engine.inspect(currentMission.id, { tenantId }),
+      executionOutcome: 'completed',
+    };
+  }
+
+  const staged = await executeMissionStage({
+    engine,
+    missionId: currentMission.id,
+    tenantId,
+    pool: input.pool,
+    specialist: SPECIALISTS.PENNY,
+    stage: STAGES.PLAN,
+    operatorId,
+    validatePreconditions: (ctx) => validatePennyPreconditions(ctx),
+    execute: async ({ mission: current, transactionId }) => {
+      const contributions = engine.inspect(current.id, { tenantId }).contributions || [];
+      const pennyResult = await runPennyForAmoMission(current, {
+        ...input,
+        contributions,
+        transactionId,
+        executionContext: {
+          stage: STAGES.PLAN,
+          missionId: current.id,
+          tenantId,
+          executionRequestId: input.executionRequest?.id || null,
+        },
+      });
+      const executionResult = pennyResult && pennyResult.spec === 'SPEC-132'
+        ? pennyResult
+        : await executeSpecialist({
+          mission: current,
+          contributions,
+          specialist: SPECIALISTS.PENNY,
+          transactionId,
+          store: engine?.store,
+          run: () => runPennyPaidAcquisition(pennyResult),
+        });
+
+      return {
+        paidAcquisitionPayload: executionResult.contributions,
+        executionResult,
+        missionId: current.id,
+      };
+    },
+    validateOutput: validatePennyOutput,
+    commit: (ctx) => commitPennyPaidAcquisitionStage(ctx),
+    persistDurable: bindPersistDurable(input, engine, tenantId),
+  });
+
+  return {
+    alreadyExecuted: false,
+    paidAcquisition: staged.commitResult.paidAcquisition,
+    snapshot: staged.commitResult.snapshot,
+    executionOutcome: 'completed',
+    transactionId: staged.transactionId,
+    missionVersion: staged.missionVersion,
+    executionResult: staged.output.executionResult,
+  };
+}
+
+/**
+ * Execute Paige at PREPARE via SEC and commit VARIANTS contribution.
+ * Canonical path: CER → router → executeMissionStage → executeSpecialist('paige') → VARIANTS.
+ * @param {object} input
+ * @returns {Promise<object>}
+ */
+async function advancePaigeVariants(input = {}) {
+  const { engine, mission, tenantId, operatorId, question } = input;
+  if (!engine || !mission) throw new Error('engine and mission are required');
+
+  let currentMission = ensureStagesForPaige(engine, mission.id, tenantId);
+  const snapshot = engine.inspect(currentMission.id, { tenantId });
+  const existing = findPaigeVariants(snapshot.contributions || []);
+  if (existing) {
+    return {
+      alreadyExecuted: true,
+      variants: existing,
+      snapshot: engine.inspect(currentMission.id, { tenantId }),
+      executionOutcome: 'completed',
+    };
+  }
+
+  const staged = await executeMissionStage({
+    engine,
+    missionId: currentMission.id,
+    tenantId,
+    pool: input.pool,
+    specialist: SPECIALISTS.PAIGE,
+    stage: STAGES.PREPARE,
+    operatorId,
+    validatePreconditions: (ctx) => validatePaigePreconditions(ctx),
+    execute: async ({ mission: current, transactionId }) => {
+      const contributions = engine.inspect(current.id, { tenantId }).contributions || [];
+      const executionInput = buildExecutionInput({
+        mission: current,
+        contributions,
+        specialist: SPECIALISTS.PAIGE,
+        transactionId,
+        executionContext: {
+          stage: STAGES.PREPARE,
+          missionId: current.id,
+          tenantId,
+          executionRequestId: input.executionRequest?.id || null,
+        },
+        store: engine?.store,
+      });
+
+      let executionResult;
+      if (typeof input.runPaige === 'function') {
+        const variantsPayload = await input.runPaige(current, {
+          ...input,
+          contributions,
+          transactionId,
+          executionContext: executionInput.executionContext,
+        });
+        executionResult = await executeSpecialist({
+          mission: current,
+          contributions,
+          specialist: SPECIALISTS.PAIGE,
+          transactionId,
+          store: engine?.store,
+          run: async () => ({
+            spec: 'SPEC-132',
+            status: EXECUTION_STATUSES.SUCCESS,
+            confidence: { overall: 0.75, evidence: 0.7, fit: 0.8, completeness: 0.75 },
+            evidence: [{
+              id: 'ev_paige_0',
+              label: 'Max prioritization consumed for messaging',
+              source: 'max_prioritization',
+              timestamp: new Date().toISOString(),
+              provenance: { kind: 'upstream_intelligence', source: 'max' },
+            }],
+            contributions: variantsPayload,
+            recommendations: [{ tier: 'suggested', text: 'Review variants before operator approval.' }],
+            unknowns: [],
+            nextActions: [{ kind: 'operator_review', label: 'Operator review variants' }],
+          }),
+        });
+      } else {
+        executionResult = await executeSpecialist({
+          mission: current,
+          contributions,
+          specialist: SPECIALISTS.PAIGE,
+          transactionId,
+          store: engine?.store,
+          run: (secInput) => runPaigeVariants({
+            ...secInput,
+            ...executionInput,
+            mission: current,
+          }, { pool: input.pool }),
+        });
+      }
+      const variantsPayload = executionResult.contributions;
+
+      if (executionResult.status === EXECUTION_STATUSES.BLOCKED
+        || executionResult.status === EXECUTION_STATUSES.FAILED) {
+        return {
+          variantsPayload: null,
+          executionResult,
+          missionId: current.id,
+          blocked: true,
+        };
+      }
+
+      return {
+        variantsPayload,
+        executionResult,
+        missionId: current.id,
+        question,
+      };
+    },
+    validateOutput: (output, ctx) => {
+      if (output.blocked) {
+        throw validationError(
+          'tme_paige_blocked',
+          output.executionResult?.blocked?.reason || 'Paige execution blocked.'
+        );
+      }
+      validatePaigeOutput(output, ctx);
+    },
+    commit: (ctx) => commitPaigeVariantsStage(ctx),
+    persistDurable: bindPersistDurable(input, engine, tenantId),
+  });
+
+  const finalSnapshot = staged.commitResult.snapshot;
+  const executionOutcome = staged.output.blocked ? 'blocked' : 'completed';
+  return {
+    alreadyExecuted: false,
+    variants: staged.commitResult.variants,
+    snapshot: finalSnapshot,
+    executionOutcome,
+    transactionId: staged.transactionId,
+    missionVersion: staged.missionVersion,
+    executionResult: staged.output.executionResult,
+  };
+}
+
+/**
+ * Execute Emmett at PREPARE via SEC and commit CAPACITY contribution.
+ * Canonical path: CER → router → executeMissionStage → executeSpecialist('emmett') → CAPACITY.
+ * @param {object} input
+ * @returns {Promise<object>}
+ */
+async function advanceEmmettCapacity(input = {}) {
+  const { engine, mission, tenantId, operatorId, question } = input;
+  if (!engine || !mission) throw new Error('engine and mission are required');
+
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  const existing = findEmmettCapacity(snapshot.contributions || []);
+  if (existing) {
+    return {
+      alreadyExecuted: true,
+      capacity: existing,
+      snapshot: engine.inspect(mission.id, { tenantId }),
+      executionOutcome: 'completed',
+    };
+  }
+
+  const staged = await executeMissionStage({
+    engine,
+    missionId: mission.id,
+    tenantId,
+    pool: input.pool,
+    specialist: SPECIALISTS.EMMETT,
+    stage: STAGES.PREPARE,
+    operatorId,
+    validatePreconditions: (ctx) => validateEmmettPreconditions(ctx),
+    execute: async ({ mission: current, transactionId }) => {
+      const contributions = engine.inspect(current.id, { tenantId }).contributions || [];
+      const emmettRun = await runEmmettForAmoMission(current, {
+        ...input,
+        contributions,
+        transactionId,
+        executionContext: {
+          stage: STAGES.PREPARE,
+          missionId: current.id,
+          tenantId,
+          executionRequestId: input.executionRequest?.id || null,
+        },
+      });
+      const { capacityPayload, assessed, executionInput } = emmettRun;
+      const executionResult = await executeSpecialist({
+        mission: current,
+        contributions,
+        specialist: SPECIALISTS.EMMETT,
+        transactionId,
+        store: engine?.store,
+        run: async () => buildEmmettExecutionResult(capacityPayload, executionInput, { assessed }),
+      });
+
+      if (executionResult.status === EXECUTION_STATUSES.BLOCKED
+        || executionResult.status === EXECUTION_STATUSES.FAILED) {
+        return {
+          capacityPayload: null,
+          executionResult,
+          executionInput,
+          missionId: current.id,
+          blocked: true,
+        };
+      }
+
+      return {
+        capacityPayload,
+        executionResult,
+        executionInput,
+        assessed,
+        missionId: current.id,
+        question,
+      };
+    },
+    validateOutput: (output, ctx) => {
+      if (output.blocked) {
+        throw validationError(
+          'tme_emmett_blocked',
+          output.executionResult?.blocked?.reason || 'Emmett execution blocked.'
+        );
+      }
+      validateEmmettCapacityOutput(output, ctx);
+    },
+    commit: (ctx) => commitEmmettCapacityStage(ctx),
+    persistDurable: bindPersistDurable(input, engine, tenantId),
+  });
+
+  const finalSnapshot = staged.commitResult.snapshot;
+  const executionOutcome = staged.output.blocked ? 'blocked' : 'completed';
+  return {
+    alreadyExecuted: false,
+    capacity: staged.commitResult.capacity,
+    snapshot: finalSnapshot,
+    executionOutcome,
+    transactionId: staged.transactionId,
+    missionVersion: staged.missionVersion,
+    executionResult: staged.output.executionResult,
+  };
+}
+
+/**
+ * Reprepare the exact READY bundle without dispatching any provider send.
+ * Both replacement contributions are staged and committed by one TME transaction.
+ */
+async function advancePreparedOutreachRevision(input = {}) {
+  const { engine, mission, tenantId, operatorId, question } = input;
+  if (!engine || !mission) throw new Error('engine and mission are required');
+
+  const current = engine.get(mission.id, tenantId);
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  const returnToStage = input.returnToStage === STAGES.EXECUTE ? STAGES.EXECUTE : STAGES.READY;
+  const allowedStartStages = returnToStage === STAGES.EXECUTE
+    ? [STAGES.READY, STAGES.EXECUTE]
+    : [STAGES.READY];
+  if (!current || !allowedStartStages.includes(current.stage)) {
+    throw planningError(
+      'tme_revision_wrong_stage',
+      returnToStage === STAGES.EXECUTE
+        ? 'Prepared outreach revision requires READY or EXECUTE when returnToStage is EXECUTE.'
+        : 'Prepared outreach revision requires READY.'
+    );
+  }
+  const paigePrepared = findPaigeVariants(snapshot.contributions || [], current);
+  const emmettPrepared = findEmmettCapacity(snapshot.contributions || [], current);
+  const canRevise = Boolean(paigePrepared && emmettPrepared)
+    && (
+      findValidExecutionApproval(snapshot.contributions || [], current.id)
+      || hasPendingExecutionApproval(snapshot)
+      || (current.stage === STAGES.EXECUTE && returnToStage === STAGES.EXECUTE)
+    );
+  if (!canRevise) {
+    throw planningError(
+      'tme_revision_no_prepared_artifacts',
+      'Prepared outreach revision requires READY with active Paige and Emmett artifacts and a pending or valid execution approval boundary.'
+    );
+  }
+
+  const persistDurable = bindPersistDurable(input, engine, tenantId);
+  if (input.persist === true && typeof persistDurable !== 'function') {
+    throw persistenceError(
+      'tme_persistence',
+      'Prepared outreach revision with persist=true requires persistStageCommit (pool or persistStage).'
+    );
+  }
+
+  const preparing = engine.get(current.id, tenantId);
+  const contributions = snapshot.contributions || [];
+  applyStageTransition(preparing, STAGES.PREPARE, { contributions });
+  preparing.revisionState = {
+    status: 'running',
+    requestedAt: new Date().toISOString(),
+    requestedBy: operatorId || 'operator',
+    supersedesRevision: computePreparedArtifactRevision(current.id, contributions),
+  };
+  engine.store.putMission(preparing);
+  invalidatePreparedOutreachApproval(engine, preparing, tenantId);
+
+  try {
+    const staged = await executeMissionStage({
+      engine,
+      missionId: current.id,
+      tenantId,
+      pool: input.pool,
+      specialist: SPECIALISTS.MAX,
+      stage: STAGES.PREPARE,
+      operatorId,
+      validatePreconditions: ({ mission: preparedMission }) => {
+        if (preparedMission.stage !== STAGES.PREPARE) {
+          throw planningError('tme_revision_wrong_stage', 'Revision preparation requires PREPARE.');
+        }
+        const prepared = engine.inspect(preparedMission.id, { tenantId }).contributions || [];
+        if (!specialistContext(prepared).maxComplete) {
+          throw planningError('tme_max_incomplete', 'Max prioritization is required before revision.');
+        }
+        return { missionActive: true, specialistAvailable: true, revision: true };
+      },
+      execute: async ({ mission: preparedMission, transactionId }) => {
+        const preparedContributions = engine.inspect(preparedMission.id, { tenantId }).contributions || [];
+        const paigeInput = buildExecutionInput({
+          mission: preparedMission,
+          contributions: preparedContributions,
+          specialist: SPECIALISTS.PAIGE,
+          transactionId,
+          executionContext: {
+            stage: STAGES.PREPARE,
+            missionId: preparedMission.id,
+            tenantId,
+            executionRequestId: input.executionRequest?.id || null,
+          },
+          store: engine.store,
+        });
+        let paigeExecution;
+        if (typeof input.runPaige === 'function') {
+          const variantsPayload = await input.runPaige(preparedMission, {
+            ...input,
+            contributions: preparedContributions,
+            transactionId,
+            executionContext: paigeInput.executionContext,
+          });
+          paigeExecution = await executeSpecialist({
+            mission: preparedMission,
+            contributions: preparedContributions,
+            specialist: SPECIALISTS.PAIGE,
+            transactionId,
+            store: engine.store,
+            run: async () => ({
+              spec: 'SPEC-132',
+              status: EXECUTION_STATUSES.SUCCESS,
+              confidence: { overall: 0.75, evidence: 0.7, fit: 0.8, completeness: 0.75 },
+              evidence: [],
+              contributions: variantsPayload,
+              recommendations: [],
+              unknowns: [],
+              nextActions: [{ kind: 'operator_review', label: 'Review revised variants' }],
+            }),
+          });
+        } else {
+          paigeExecution = await executeSpecialist({
+            mission: preparedMission,
+            contributions: preparedContributions,
+            specialist: SPECIALISTS.PAIGE,
+            transactionId,
+            store: engine.store,
+            run: (secInput) => runPaigeVariants({
+              ...secInput,
+              ...paigeInput,
+              mission: preparedMission,
+            }, { pool: input.pool }),
+          });
+        }
+        if (paigeExecution.status !== EXECUTION_STATUSES.SUCCESS) {
+          throwPaigeRevisionFailed(paigeExecution, preparedMission);
+        }
+        const variantsPayload = paigeExecution.contributions;
+        validatePaigeOutput({ variantsPayload, executionResult: paigeExecution }, { transactionId });
+
+        const emmettRun = await runEmmettForAmoMission(preparedMission, {
+          ...input,
+          // The staged Paige result belongs to this mission and replaces all
+          // predecessor variants for this transaction's Emmett cognition.
+          contributions: preparedContributions.filter(row => !(row.specialist === SPECIALISTS.PAIGE
+            && row.kind === CONTRIBUTION_KINDS.VARIANTS)).concat([{
+            id: `${transactionId}:staged-paige`, missionId: preparedMission.id, at: new Date().toISOString(),
+            specialist: SPECIALISTS.PAIGE,
+            kind: CONTRIBUTION_KINDS.VARIANTS,
+            payload: variantsPayload,
+          }]),
+          transactionId,
+          executionContext: {
+            stage: STAGES.PREPARE,
+            missionId: preparedMission.id,
+            tenantId,
+            executionRequestId: input.executionRequest?.id || null,
+          },
+        });
+        const emmettExecution = await executeSpecialist({
+          mission: preparedMission,
+          contributions: preparedContributions,
+          specialist: SPECIALISTS.EMMETT,
+          transactionId,
+          store: engine.store,
+          run: async () => buildEmmettExecutionResult(
+            emmettRun.capacityPayload,
+            emmettRun.executionInput,
+            { assessed: emmettRun.assessed }
+          ),
+        });
+        if (emmettExecution.status !== EXECUTION_STATUSES.SUCCESS) {
+          throw validationError('tme_emmett_revision_failed', 'Emmett revision did not complete.');
+        }
+        const capacityPayload = emmettRun.capacityPayload;
+        validateEmmettCapacityOutput({
+          capacityPayload,
+          executionResult: emmettExecution,
+          executionInput: emmettRun.executionInput,
+        }, { transactionId });
+        return {
+          variantsPayload,
+          capacityPayload,
+          paigeExecution,
+          emmettExecution,
+          missionId: preparedMission.id,
+          question,
+        };
+      },
+      validateOutput: (output) => {
+        if (!output.variantsPayload || !output.capacityPayload) {
+          throw validationError('tme_revision_incomplete', 'Revision must prepare Paige and Emmett together.');
+        }
+      },
+      commit: ({ engine: commitEngine, mission: commitMission, tenantId: commitTenantId, output, transactionId }) => {
+        const missionId = commitMission.id;
+        const before = commitEngine.inspect(missionId, { tenantId: commitTenantId }).contributions || [];
+        const paige = commitEngine.contribute(missionId, {
+          specialist: SPECIALISTS.PAIGE,
+          kind: CONTRIBUTION_KINDS.VARIANTS,
+          payload: { ...output.variantsPayload, transactionId, revision: 'replacement' },
+        }, { tenantId: commitTenantId }).contribution;
+        const emmett = commitEngine.contribute(missionId, {
+          specialist: SPECIALISTS.EMMETT,
+          kind: CONTRIBUTION_KINDS.CAPACITY,
+          payload: { ...output.capacityPayload, transactionId, revision: 'replacement' },
+        }, { tenantId: commitTenantId }).contribution;
+        amo.supersedeAllActiveContributions(
+          commitEngine.store,
+          before,
+          SPECIALISTS.PAIGE,
+          CONTRIBUTION_KINDS.VARIANTS,
+          paige.id
+        );
+        amo.supersedeAllActiveContributions(
+          commitEngine.store,
+          before,
+          SPECIALISTS.EMMETT,
+          CONTRIBUTION_KINDS.CAPACITY,
+          emmett.id
+        );
+        const updated = commitEngine.get(missionId, commitTenantId);
+        const all = commitEngine.inspect(missionId, { tenantId: commitTenantId }).contributions || [];
+        applyStageTransition(updated, returnToStage, { contributions: all });
+        updated.revisionState = {
+          ...(updated.revisionState || {}),
+          status: 'completed',
+          completedAt: new Date().toISOString(),
+          paigeContributionId: paige.id,
+          emmettContributionId: emmett.id,
+          preparedArtifactRevision: computePreparedArtifactRevision(missionId, all),
+        };
+        commitEngine.store.putMission(updated);
+        return {
+          paige,
+          emmett,
+          snapshot: commitEngine.inspect(missionId, { tenantId: commitTenantId }),
+        };
+      },
+      persistDurable,
+    });
+    return {
+      alreadyExecuted: false,
+      revision: staged.commitResult,
+      snapshot: staged.commitResult.snapshot,
+      executionReview: buildExecutionReview(
+        staged.commitResult.snapshot.mission,
+        staged.commitResult.snapshot.contributions
+      ),
+      executionOutcome: 'completed',
+      transactionId: staged.transactionId,
+      missionVersion: staged.missionVersion,
+    };
+  } catch (err) {
+    const failed = engine.get(current.id, tenantId);
+    failed.revisionState = {
+      ...(failed.revisionState || {}),
+      status: 'failed',
+      failedAt: new Date().toISOString(),
+      error: err.message,
+      retryable: true,
+    };
+    engine.store.putMission(failed);
+    throw err;
+  }
+}
+
+function validateExecutionPreconditions({ mission, engine, tenantId }) {
+  if (!mission) throw planningError('tme_mission_missing', 'Mission does not exist.');
+  if (mission.planCancelled === true || /cancelled/i.test(String(mission.status || ''))) {
+    throw planningError('tme_mission_inactive', 'Mission is not active.');
+  }
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  if (!hasPendingExecutionApproval(snapshot)) {
+    throw planningError('tme_no_pending_execution', 'No execution approval is pending.');
+  }
+  if (mission.stage && mission.stage !== STAGES.READY) {
+    throw planningError('tme_wrong_stage', `Execution approval cannot execute while the mission is at ${mission.stage}.`);
+  }
+  const ctx = specialistContext(snapshot.contributions || [], { missionId: mission.id, ...snapshot });
+  if (ctx.deliverabilityPaused) {
+    throw planningError('tme_deliverability_paused', 'Deliverability risk blocks execution approval.');
+  }
+  const readyGate = canEnter(STAGES.READY, ctx);
+  if (!readyGate.ok) {
+    throw planningError('tme_execution_not_ready', readyGate.reason);
+  }
+  return {
+    missionExists: true,
+    missionActive: true,
+    specialistAvailable: true,
+  };
+}
+
+function commitExecutionApprovalStage({
+  engine,
+  mission,
+  tenantId,
+  output,
+  transactionId,
+  existingApproval,
+  executionRequest,
+}) {
+  const missionId = (mission && mission.id) || output.missionId;
+  const contributions = engine.inspect(missionId, { tenantId }).contributions || [];
+  let approval = existingApproval;
+  if (!approval) {
+    const approvalResult = engine.contribute(
+      missionId,
+      {
+        specialist: SPECIALISTS.OPERATOR,
+        kind: CONTRIBUTION_KINDS.APPROVAL,
+        payload: buildExecutionApprovalPayload(mission, contributions, {
+          command: output.question,
+          operatorId: output.operatorId,
+          executionRequestId: executionRequest?.id || null,
+          transactionId,
+          dailyEnvelope: output.dailyEnvelope,
+        }),
+      },
+      { tenantId }
+    );
+    approval = approvalResult.contribution;
+  }
+
+  const current = engine.get(missionId, tenantId);
+  current.pendingOperatorDecision = null;
+  engine.store.putMission(current);
+
+  const snapshot = engine.inspect(missionId, { tenantId });
+  assertMissionStateConsistent(snapshot.mission, { contributions: snapshot.contributions });
+  return { approval, snapshot };
+}
+
+/**
+ * Consume execution approval at READY. Does not dispatch provider sending.
+ * @param {object} input
+ * @returns {Promise<object>}
+ */
+async function advanceExecutionAfterApproval(input = {}) {
+  askPathTrace.traceEnter('advanceExecutionAfterApproval');
+  const {
+    engine,
+    mission,
+    tenantId,
+    question,
+    operatorId,
+    executionRequest,
+  } = input;
+
+  if (!engine || !mission) {
+    throw new Error('engine and mission are required');
+  }
+
+  let snapshot = engine.inspect(mission.id, { tenantId });
+  const contributions = snapshot.contributions || [];
+  const existingApproval = findValidExecutionApproval(contributions, mission.id);
+
+  if (existingApproval && snapshot.mission.stage === STAGES.READY) {
+    askPathTrace.traceEarlyReturn('advanceExecutionAfterApproval', 'already_executed');
+    return {
+      alreadyExecuted: true,
+      approval: existingApproval,
+      snapshot: engine.inspect(mission.id, { tenantId }),
+      approvalPhase: APPROVAL_PHASES.STAGE_COMPLETED,
+    };
+  }
+
+  const staged = await executeMissionStage({
+    engine,
+    missionId: mission.id,
+    tenantId,
+    pool: input.pool,
+    specialist: SPECIALISTS.OPERATOR,
+    stage: 'execution_approval',
+    operatorId,
+    validatePreconditions: (ctx) => validateExecutionPreconditions(ctx),
+    execute: async ({ mission: current }) => ({
+      question,
+      missionId: current.id,
+      operatorId,
+      dailyEnvelope: input.governedApproval || null,
+    }),
+    commit: (ctx) => commitExecutionApprovalStage({
+      ...ctx,
+      existingApproval,
+      executionRequest,
+    }),
+    persistDurable: bindPersistDurable(input, engine, tenantId),
+  });
+
+  snapshot = staged.commitResult.snapshot;
+  askPathTrace.traceEarlyReturn('advanceExecutionAfterApproval', 'completed');
+  return {
+    alreadyExecuted: false,
+    approval: staged.commitResult.approval,
+    snapshot,
+    approvalPhase: APPROVAL_PHASES.STAGE_COMPLETED,
+    transactionId: staged.transactionId,
+    missionVersion: staged.missionVersion,
+  };
+}
+
 function buildDiscoveryApprovalProse(result) {
   askPathTrace.traceEnter('buildDiscoveryApprovalProse');
   const scoutPayload = (result.discovery && result.discovery.payload) || {};
@@ -931,25 +3168,64 @@ function buildDiscoveryApprovalProse(result) {
 module.exports = {
   APPROVAL_PHASES,
   DISCOVERY_APPROVAL_ACTION,
+  DISCOVERY_INVESTIGATION_ACTION,
+  PRIORITIZATION_APPROVAL_ACTION,
+  EXECUTION_APPROVAL_ACTION,
   PLAN_APPROVAL_ACTION,
   PLAN_CLARIFICATION_ACTION,
   PLAN_CANCEL_ACTION,
   PLAN_EDIT_ACTION,
   buildDelegationFromAmoMission,
   findDiscoveryApproval,
+  findPrioritizationApproval,
+  findLatestMaxPrioritization,
   findPlanApproval,
   findScoutDiscoveryAfterApproval,
   hasPendingPlanApproval,
   hasPendingPlanClarification,
+  hasConsumablePendingDecision,
+  presentableOperatorDecision,
   isMissionPlanningTurn,
   hasPendingDiscoveryApproval,
+  hasPendingDiscoveryInvestigation,
+  hasPendingPrioritizationApproval,
   advancePlanAfterApproval,
   advancePlanClarification,
   cancelMissionPlan,
   beginPlanEdit,
   applyPlanEdits,
   advanceDiscoveryAfterApproval,
+  advanceDiscoveryInvestigationAfterApproval,
+  advancePrioritizationAfterApproval,
+  advanceMaxPrioritization,
+  advanceAcquisitionApproach,
+  reconcileLegacyAcquisitionApproach,
+  advancePennyPaidAcquisition,
+  advancePaigeVariants,
+  advanceEmmettCapacity,
+  advancePreparedOutreachRevision,
+  advanceExecutionAfterApproval,
+  advanceExecuteOutbound: require('./EmmettOutboundExecution').advanceExecuteOutbound,
+  validateDiscoveryPreconditions,
   buildDiscoveryApprovalProse,
   mapScoutIntelligenceToDiscoveryPayload,
   fixtureScoutDiscoveryResult,
+  fixtureMaxPrioritizationResult,
+  fixturePaigeVariantsResult,
+  findMaxPrioritization,
+  findPaigeVariants,
+  findPennyPaidAcquisitionRecommendation,
+  runMaxPrioritizationForAmoMission,
+  runMaxApproachForAmoMission,
+  runPennyForAmoMission,
+  runPaigeForAmoMission,
+  buildMaxPrioritizationPayload,
+  buildAcquisitionApproachPayload,
+  runPennyPaidAcquisition,
+  buildPaigeVariantsPayload,
+  buildPaigeRevisionFailureDetails,
+  ensureStagesForPaige,
+  ensureStageForAcquisitionApproach,
+  validateLegacyAcquisitionApproachReconciliationPreconditions,
+  canonicalWorkForLegacyReconciliation,
 };

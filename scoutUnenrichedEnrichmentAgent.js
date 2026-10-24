@@ -1,15 +1,24 @@
 const pool = require('./db');
+const { withResearchProviderScope, isResearchProviderControlError } = require('./utils/anchorResearchProviderPause');
 const { ensureScoutUnenrichedTable } = require('./utils/scoutUnenrichedSchema');
 const { ensureEmailVerificationColumns } = require('./utils/emailVerificationSchema');
 const { promoteRecord } = require('./scripts/promoteUnenriched');
+const { ENRICHABLE_SCOUT_VERTICALS } = require('./utils/replenishmentVertical');
+
+const { buildEnrichmentEligibilitySql, LONG_HOLD_AFTER_ATTEMPT } = require('./utils/scoutEnrichmentEligibility');
 
 const AGENT_NAME = 'scout_unenriched_enrichment';
 const ANCHOR_CLIENT_ID = 10;
 const DEFAULT_LIMIT = 5;
 const DEFAULT_RETRY_HOURS = 7 * 24;
-const DEFAULT_MAX_ATTEMPTS = 3;
+const DEFAULT_MAX_ATTEMPTS = LONG_HOLD_AFTER_ATTEMPT;
 const SCHEDULED_HOUR_ET = 17;
-const ANCHOR_PRIORITY_VERTICALS = ['property_manager', 'str_manager', 'commercial_office'];
+const ANCHOR_PRIORITY_VERTICALS = ENRICHABLE_SCOUT_VERTICALS;
+
+const ENRICHMENT_ELIGIBILITY_SQL = buildEnrichmentEligibilitySql({
+  unrestrictedVerticals: true,
+  maxAttempts: '$2', retryInterval: "($3::numeric * INTERVAL '1 hour')",
+});
 
 function easternParts(now = new Date()) {
   const values = new Intl.DateTimeFormat('en-CA', {
@@ -42,6 +51,13 @@ async function logRun(clientId, payload, status = 'success', error = null, db = 
 }
 
 async function run(params = {}) {
+  const tenantId = params.client_id ?? params.clientId ?? ANCHOR_CLIENT_ID;
+  return withResearchProviderScope(tenantId, () => params.client_id != null && params.clientId != null
+    ? withResearchProviderScope(params.clientId, () => runScoped(params))
+    : runScoped(params));
+}
+
+async function runScoped(params = {}) {
   const clientId = Number(params.client_id || params.clientId || ANCHOR_CLIENT_ID);
   const limit = Math.max(1, Math.min(Number(params.limit || DEFAULT_LIMIT), DEFAULT_LIMIT));
   const retryHours = Math.max(1, Number(params.retryHours || DEFAULT_RETRY_HOURS));
@@ -59,20 +75,45 @@ async function run(params = {}) {
     SELECT *
     FROM scout_unenriched
     WHERE client_id = $1
-      AND COALESCE(enrichment_attempts, 0) < $2
-      AND COALESCE(last_attempt_at, NOW() - INTERVAL '100 years') <= NOW() - ($3::numeric * INTERVAL '1 hour')
-      AND ($5::text[] IS NULL OR vertical = ANY($5::text[]))
+      AND (${ENRICHMENT_ELIGIBILITY_SQL}) = 'eligible_now'
     ORDER BY last_attempt_at ASC, id ASC
     LIMIT $4
   `, [clientId, maxAttempts, retryHours, limit, verticals]);
 
-  const summary = { client_id: clientId, considered: rows.rows.length, promoted: 0, unresolved: 0, failed: 0, limit, retry_hours: retryHours, verticals };
+  const summary = {
+    client_id: clientId,
+    considered: rows.rows.length,
+    promoted: 0,
+    recovered: 0,
+    unresolved: 0,
+    failed: 0,
+    emailResolved: 0,
+    emailVerified: 0,
+    outcomes: [],
+    limit,
+    retry_hours: retryHours,
+    verticals,
+  };
+  const promotionIds = [];
+  require('./services/scoutPromotionCohort').retainPromotionIds(summary, promotionIds);
   for (const record of rows.rows) {
+    let controlRejected = false;
     try {
-      const promoted = await promote(record, { db });
+      const result = await withResearchProviderScope(record.client_id, () => promote(record, { db }));
+      summary.outcomes.push({ company: record.company, domain: record.domain,
+        emailResolved: result?.emailResolved === true, emailVerified: result?.emailVerified === true,
+        promoted: result?.promoted === true, recovered: result?.recovered === true, reason: result?.reason || null });
+      const promoted = result === true || result?.promoted === true;
+      const recovered = result?.recovered === true;
+      if (result?.emailResolved) summary.emailResolved++;
+      if (result?.emailVerified) summary.emailVerified++;
+      if (promoted || recovered) promotionIds.push(result?.prospectId ?? null);
       if (promoted) summary.promoted++;
+      else if (recovered) summary.recovered++;
       else summary.unresolved++;
     } catch (error) {
+      controlRejected = isResearchProviderControlError(error);
+      if (controlRejected) throw error;
       summary.failed++;
       await db.query(`
         UPDATE scout_unenriched
@@ -82,6 +123,15 @@ async function run(params = {}) {
         WHERE id = $1 AND client_id = $2
       `, [record.id, clientId]);
       console.error(`[${AGENT_NAME}] ${record.domain || record.company || record.id}: ${error.message}`);
+    } finally {
+      // Verification and binding rejections also consume an attempt. Otherwise
+      // the next batch immediately selects the same permanently invalid row.
+      // A pause is not a failed candidate or a consumed enrichment attempt.
+      if (!controlRejected) {
+        await db.query(`UPDATE scout_unenriched SET enrichment_attempts = GREATEST(COALESCE(enrichment_attempts, 0), $3),
+          last_attempt_at = NOW() WHERE id = $1 AND client_id = $2`,
+        [record.id, clientId, Number(record.enrichment_attempts || 0) + 1]);
+      }
     }
   }
 
@@ -92,13 +142,18 @@ async function run(params = {}) {
 
 function startAnchorUnenrichedEnrichmentScheduler() {
   let lastRunDate = null;
+  let running = false;
   const tick = () => {
     const local = easternParts();
-    if (!scheduledWindowOpen() || lastRunDate === local.date) return;
+    if (!scheduledWindowOpen() || running || lastRunDate === local.date) return;
+    running = true;
     lastRunDate = local.date;
-    run({ client_id: ANCHOR_CLIENT_ID }).catch(error =>
-      console.error(`[${AGENT_NAME}] scheduled run failed: ${error.message}`)
-    );
+    return run({ client_id: ANCHOR_CLIENT_ID }).catch(error => {
+      // A control rejection may retry after unpausing in the same daily window.
+      // Ordinary failures retain the existing once-per-day scheduling behavior.
+      if (isResearchProviderControlError(error)) lastRunDate = null;
+      console.error(`[${AGENT_NAME}] scheduled run failed: ${error.message}`);
+    }).finally(() => { running = false; });
   };
   setTimeout(tick, 30_000).unref();
   setInterval(tick, 60 * 60 * 1000).unref();
@@ -107,7 +162,8 @@ function startAnchorUnenrichedEnrichmentScheduler() {
 module.exports = {
   run,
   startAnchorUnenrichedEnrichmentScheduler,
-  _test: { easternParts, scheduledWindowOpen, ANCHOR_PRIORITY_VERTICALS },
+  _test: { ENRICHMENT_ELIGIBILITY_SQL, easternParts, scheduledWindowOpen, ANCHOR_PRIORITY_VERTICALS,
+    DEFAULT_MAX_ATTEMPTS },
 };
 
 if (require.main === module) {

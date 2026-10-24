@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Signal V1 — Paper Research</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0f1115; --panel:#171a21; --text:#e8eaed; --muted:#9aa0a6; --accent:#7cb9ff; --risk:#ff8a80; --pass:#81c995; --fail:#ff8a80; }
+    body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--text); }
+    header { padding:16px 20px; border-bottom:1px solid #2a2f3a; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+    main { display:grid; grid-template-columns: 300px 1fr 1fr; gap:16px; padding:16px; }
+    @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+    .panel { background:var(--panel); border:1px solid #2a2f3a; border-radius:10px; padding:12px; }
+    h1,h2,h3 { margin:0 0 8px; font-size:16px; }
+    h3 { font-size:14px; }
+    select, button { width:100%; padding:8px; border-radius:8px; border:1px solid #3a4254; background:#10131a; color:var(--text); }
+    button { cursor:pointer; margin-top:8px; }
+    button.secondary { opacity: 0.85; }
+    .muted { color:var(--muted); }
+    ul { margin:8px 0; padding-left:18px; }
+    .risk { color:var(--risk); }
+    .timeline-item { border-top:1px solid #2a2f3a; padding:8px 0; font-size:13px; }
+    .badge { display:inline-block; padding:2px 8px; border-radius:999px; background:#243047; color:var(--accent); font-size:12px; }
+    table { width:100%; border-collapse:collapse; font-size:12px; }
+    th, td { border-bottom:1px solid #2a2f3a; padding:6px 4px; text-align:right; }
+    th:first-child, td:first-child { text-align:left; }
+    .obs-row { border-left:3px solid var(--accent); padding-left:8px; margin:8px 0; }
+    .cohort-label { font-weight:700; letter-spacing:0.04em; }
+    .synthetic { color:#ffb74d; }
+    .empirical { color:#81c995; }
+    #empiricalPanel { margin-top:12px; font-size:12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Signal V1</h1>
+    <span class="muted">Paper-only · research layers (SIGNAL-V1-003) · Shadow mode (SIGNAL-V1-006)</span>
+  </header>
+  <main>
+    <section class="panel" id="shadowPanel" style="grid-column: 1 / -1;">
+      <h2>Shadow Mode — PROSPECTIVE-001 <span class="badge" id="shadowBlindedBadge">BLINDED</span></h2>
+      <div class="muted">EMPIRICAL · live caller observation · RESEARCH / PAPER ONLY</div>
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap:12px; margin-top:12px;">
+        <div><div class="muted">Progress</div><strong id="shadowProgress">—</strong></div>
+        <div><div class="muted">Collectors</div><strong id="shadowCollectors">—</strong></div>
+        <div><div class="muted">Calls today</div><strong id="shadowCalls">—</strong></div>
+        <div><div class="muted">Unique tokens</div><strong id="shadowTokens">—</strong></div>
+        <div><div class="muted">Pending 24h outcomes</div><strong id="shadowPending">—</strong></div>
+        <div><div class="muted">Median ingest latency</div><strong id="shadowLatency">—</strong></div>
+        <div><div class="muted">Market capture</div><strong id="shadowMarket">—</strong></div>
+        <div><div class="muted">Provenance contamination</div><strong id="shadowContam">0 required</strong></div>
+      </div>
+      <p class="muted" id="shadowPrecisionNote" style="margin-top:10px">Aggregate primary hypothesis precision hidden until unblinding (N=50).</p>
+    </section>
+    <section class="panel">
+      <h2>Token</h2>
+      <select id="tokenSelect"></select>
+      <button id="evaluateBtn">Evaluate now</button>
+      <button id="replayBtn">Run fixture replay</button>
+      <div id="tokenMeta" class="muted" style="margin-top:12px"></div>
+      <h2 style="margin-top:16px">Cohort</h2>
+      <select id="cohortSelect"></select>
+      <label class="muted" for="delaySelect">Execution delay</label>
+      <select id="delaySelect">
+        <option value="15">15s</option>
+        <option value="30">30s</option>
+        <option value="60" selected>1 min</option>
+        <option value="180">3 min</option>
+        <option value="300">5 min</option>
+      </select>
+      <button id="cohortEvalBtn">Refresh cohort table</button>
+      <div id="empiricalPanel" class="muted"></div>
+    </section>
+    <section class="panel">
+      <h2>Strategy <span id="stateBadge" class="badge">—</span></h2>
+      <div>Score: <strong id="score">—</strong></div>
+      <h3>Positive evidence</h3>
+      <ul id="reasons"></ul>
+      <h3 class="risk">Risks</h3>
+      <ul id="risks" class="risk"></ul>
+      <h2>Event timeline</h2>
+      <div id="timeline"></div>
+      <h2>Paper position</h2>
+      <pre id="paper" class="muted">None</pre>
+    </section>
+    <section class="panel">
+      <h2>Research observations</h2>
+      <div id="researchTimeline" class="muted">Run replay to materialize observations.</div>
+      <h2 style="margin-top:16px">Layer comparison</h2>
+      <div style="overflow-x:auto">
+        <table id="cohortTable">
+          <thead>
+            <tr>
+              <th>Observation layer</th><th>N</th><th>PASS</th><th>FAIL</th><th>Precision</th><th>Wilson 95%</th><th>Median MFE</th><th>Median MAE</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <script>
+    const tokenSelect = document.getElementById('tokenSelect');
+    const cohortSelect = document.getElementById('cohortSelect');
+    const delaySelect = document.getElementById('delaySelect');
+    const casesWithAddress = [];
+
+    const pricePathsByToken = {
+      '2fRDA5f353VXLs2PeLJNqqHqTMhrjJunAXmWWpLkpump': [
+        { occurredAt: '2026-09-29T18:00:00Z', price: 0.00012 },
+        { occurredAt: '2026-09-29T18:10:00Z', price: 0.00016 },
+        { occurredAt: '2026-09-29T18:30:00Z', price: 0.00024 },
+        { occurredAt: '2026-09-29T19:00:00Z', price: 0.0003 },
+        { occurredAt: '2026-09-29T20:00:00Z', price: 0.00007 },
+      ],
+      'Gymbmn9wwMKe4NnmVceyyfpncp9arbwPfSdBsyY9pump': [
+        { occurredAt: '2026-09-28T14:00:00Z', price: 0.00009 },
+        { occurredAt: '2026-09-28T14:05:00Z', price: 0.0001 },
+        { occurredAt: '2026-09-28T14:30:00Z', price: 0.00015 },
+      ],
+      '6iAj2oywQMiD9NeyTcW1S7UtG7e3jSK7Ud5ZJDqJpump': [
+        { occurredAt: '2026-09-27T20:00:00Z', price: 0.00004 },
+        { occurredAt: '2026-09-27T20:10:00Z', price: 0.000045 },
+        { occurredAt: '2026-09-27T21:00:00Z', price: 0.00003 },
+      ],
+    };
+
+    function fmtPct(v) {
+      if (v == null || Number.isNaN(v)) return '—';
+      return `${(v * 100).toFixed(1)}%`;
+    }
+
+    function fmtNum(v) {
+      if (v == null || Number.isNaN(v)) return '—';
+      return Number(v).toFixed(3);
+    }
+
+    async function loadShadowDashboard() {
+      try {
+        const res = await fetch('/api/v1/signal/shadow/dashboard');
+        const data = await res.json();
+        const p = data.progress || {};
+        document.getElementById('shadowProgress').textContent =
+          `${p.evaluableFirstCallerCount ?? 0} / ${p.targetSampleSize ?? 50} evaluable cases`;
+        document.getElementById('shadowBlindedBadge').textContent = data.blinded ? 'BLINDED' : 'UNBLINDED';
+        const collectors = Object.values(data.collectors || {});
+        const healthy = collectors.filter(c => c.available !== false).length;
+        document.getElementById('shadowCollectors').textContent =
+          collectors.length ? `${healthy}/${collectors.length} healthy` : '—';
+        const q = data.dataQuality || {};
+        document.getElementById('shadowCalls').textContent = q.callsIngested ?? '—';
+        document.getElementById('shadowTokens').textContent = q.uniqueTokens ?? '—';
+        document.getElementById('shadowPending').textContent = q.pendingOutcomes24h ?? '—';
+        document.getElementById('shadowLatency').textContent =
+          q.medianIngestionLatencyMs != null ? `${Math.round(q.medianIngestionLatencyMs)} ms` : '—';
+        document.getElementById('shadowMarket').textContent =
+          q.marketCaptureSuccessRate != null ? fmtPct(q.marketCaptureSuccessRate) : '—';
+        document.getElementById('shadowContam').textContent = String(q.provenanceContamination ?? 0);
+        document.getElementById('shadowPrecisionNote').style.display = data.blinded ? 'block' : 'none';
+      } catch {
+        /* shadow panel optional until cohort started */
+      }
+    }
+
+    async function loadCases() {
+      const res = await fetch('/api/v1/signal/research-cases');
+      const data = await res.json();
+      casesWithAddress.push(...data.cases.filter(c => c.tokenAddress));
+      tokenSelect.innerHTML = casesWithAddress
+        .map(c => `<option value="${c.tokenAddress}">${c.ticker} (${c.addressProvenance})</option>`)
+        .join('');
+
+      const cohortRes = await fetch('/api/v1/signal/research/cohorts');
+      const cohortData = await cohortRes.json();
+      const dataClassLabel = c => {
+        const dc = c.dataClass || c.metadata?.dataClass || (c.id?.includes('003') ? 'EMPIRICAL' : 'SYNTHETIC');
+        return `${c.name} [${dc}]`;
+      };
+      cohortSelect.innerHTML = (cohortData.cohorts || [])
+        .map(c => `<option value="${c.id}">${dataClassLabel(c)}</option>`)
+        .join('');
+
+      if (casesWithAddress[0]) await refresh(casesWithAddress[0].tokenAddress);
+      await refreshCohortTable();
+    }
+
+    function renderList(el, items) {
+      el.innerHTML = (items && items.length)
+        ? items.map(i => `<li>${i}</li>`).join('')
+        : '<li class="muted">None</li>';
+    }
+
+    function renderResearchObservations(observations, delaySeconds) {
+      const el = document.getElementById('researchTimeline');
+      if (!observations?.length) {
+        el.innerHTML = '<div class="muted">No research observations yet.</div>';
+        return;
+      }
+      el.innerHTML = observations.map(obs => {
+        const mc = obs.metadata?.marketState?.marketCapUsd;
+        const outcome = (obs.outcomes || []).find(o => o.executionDelaySeconds === delaySeconds);
+        const extra = obs.observationType === 'INDEPENDENT_CONVERGENCE' && obs.metadata?.convergenceDurationMinutes != null
+          ? `${obs.metadata.convergenceDurationMinutes.toFixed(1)}m convergence`
+          : obs.metadata?.structureGate || '';
+        return `<div class="obs-row">
+          <div><strong>${obs.observationType}</strong> <span class="muted">${new Date(obs.occurredAt).toLocaleTimeString()}</span></div>
+          <div class="muted">${mc ? `$${Math.round(mc / 1000)}K MC` : 'MC n/a'} ${extra ? '· ' + extra : ''}</div>
+          <div class="muted">Outcome @ ${delaySeconds}s: ${outcome?.label || 'n/a'} (${outcome?.dataAvailability || '—'})</div>
+        </div>`;
+      }).join('');
+    }
+
+    async function refreshCohortTable() {
+      const cohortId = cohortSelect.value;
+      if (!cohortId) return;
+      const delay = Number(delaySelect.value || 60);
+      const res = await fetch(`/api/v1/signal/research/cohorts/${encodeURIComponent(cohortId)}/evaluation?executionDelaySeconds=${delay}`);
+      const data = await res.json();
+      const tbody = document.querySelector('#cohortTable tbody');
+      const hidePrecision =
+        cohortId === 'cohort-signal-v1-prospective-001' && data.blinded === true;
+      tbody.innerHTML = (data.layers || []).map(row => {
+        const blindLayer =
+          hidePrecision &&
+          (row.observationType === 'FIRST_CALLER' || row.observationType === 'INDEPENDENT_CONVERGENCE');
+        const precisionCell = blindLayer
+          ? 'BLINDED'
+          : row.precision != null
+            ? fmtPct(row.precision)
+            : '—';
+        return `<tr>
+        <td>${row.observationLayer}</td>
+        <td>${row.N ?? 0}</td>
+        <td>${row.PASS ?? 0}</td>
+        <td>${row.FAIL ?? 0}</td>
+        <td>${precisionCell}</td>
+        <td>${fmtPct(row.medianMfe)}</td>
+        <td>${fmtPct(row.medianMae)}</td>
+      </tr>`;
+      }).join('');
+    }
+
+    async function refresh(tokenAddress) {
+      const delay = Number(delaySelect.value || 60);
+      const [detail, timeline, research] = await Promise.all([
+        fetch(`/api/v1/signal/tokens/${tokenAddress}`).then(r => r.json()),
+        fetch(`/api/v1/signal/tokens/${tokenAddress}/timeline`).then(r => r.json()),
+        fetch(`/api/v1/signal/tokens/${tokenAddress}/research-observations`).then(r => r.json()),
+      ]);
+      const c = casesWithAddress.find(x => x.tokenAddress === tokenAddress);
+      document.getElementById('tokenMeta').textContent =
+        `${c?.ticker || ''} · ${tokenAddress} · ${c?.slug || ''} · claim: ${c?.telegramClaim?.provenance || 'n/a'}`;
+
+      const rw = c?.researchWindow;
+      document.getElementById('windowMeta').innerHTML = rw
+        ? `<div><strong>Requested event window</strong></div>
+           <div>${fmtRange(rw.requestedStart, rw.requestedEnd)}</div>
+           <div class="muted">Anchor: ${rw.anchor || '—'}</div>`
+        : '<div class="muted">No research window configured</div>';
+
+      const ing = market.ingestion;
+      const obs = market.observations || [];
+      const cov = market.coverage;
+      const histStatus = market.historicalDataStatus || ing?.metadata?.historicalDataStatus || cov?.status || '—';
+      const providerRange =
+        cov?.providerEarliestObservation && cov?.providerLatestObservation
+          ? fmtRange(cov.providerEarliestObservation, cov.providerLatestObservation)
+          : obs[0]
+            ? fmtRange(obs[0].occurredAt, obs[obs.length - 1].occurredAt)
+            : 'Unavailable';
+
+      document.getElementById('marketMeta').innerHTML =
+        `<div>Historical data status: <strong>${histStatus}</strong></div>
+         <div>GeckoTerminal coverage: ${providerRange}</div>
+         <div>Provider: <strong>${ing?.provider || '—'}</strong></div>
+         <div>Resolution: ${ing?.effectiveResolutionSeconds || ing?.metadata?.effectiveResolutionSeconds || '—'}s</div>
+         <div>Observations in window: ${obs.length}</div>
+         <div>Missing intervals: ${ing?.missingIntervalCount ?? ing?.metadata?.missingIntervals ?? '—'}</div>`;
+      document.getElementById('replayStatusMeta').textContent = '';
+
+      const decision = detail.decision;
+      document.getElementById('stateBadge').textContent = decision?.state || '—';
+      document.getElementById('score').textContent = decision?.score ?? '—';
+      renderList(document.getElementById('reasons'), decision?.explanation?.reasons);
+      renderList(document.getElementById('risks'), decision?.explanation?.risks);
+
+      document.getElementById('timeline').innerHTML = (timeline.events || []).map(e => `
+        <div class="timeline-item">
+          <div><strong>${e.eventType}</strong> <span class="muted">${new Date(e.occurredAt).toISOString()}</span></div>
+          <div class="muted">${e.sourceId || e.sourceType}${e.walletAddress ? ' · ' + e.walletAddress.slice(0,8) : ''}</div>
+        </div>`).join('');
+      document.getElementById('paper').textContent = detail.paperPosition
+        ? JSON.stringify(detail.paperPosition, null, 2)
+        : 'None';
+      renderResearchObservations(research.observations, delay);
+    }
+
+    document.getElementById('ingestBtn').onclick = async () => {
+      const tokenAddress = tokenSelect.value;
+      const btn = document.getElementById('ingestBtn');
+      btn.disabled = true;
+      btn.textContent = 'Ingesting…';
+      try {
+        const res = await fetch(`/api/v1/signal/tokens/${tokenAddress}/ingest-history`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          document.getElementById('marketMeta').innerHTML +=
+            `<div class="risk" style="margin-top:8px">${data.error || 'ingest_failed'}: ${data.reason || data.message || ''}</div>`;
+        }
+        await refresh(tokenAddress);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Ingest market history';
+      }
+    };
+
+    document.getElementById('replayBtn').onclick = async () => {
+      const tokenAddress = tokenSelect.value;
+      const btn = document.getElementById('replayBtn');
+      btn.disabled = true;
+      btn.textContent = 'Replaying…';
+      try {
+        const res = await fetch(`/api/v1/signal/tokens/${tokenAddress}/replay`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          document.getElementById('replayStatusMeta').innerHTML =
+            `<div class="risk"><strong>Replay:</strong> Not run · ${data.error || 'unavailable'}</div>
+             <div class="muted">${data.reason || ''}</div>`;
+          document.getElementById('replayTimeline').innerHTML =
+            '<div class="muted">Replay blocked — historical data unavailable for requested window</div>';
+          await refresh(tokenAddress);
+          return;
+        }
+        document.getElementById('replayStatusMeta').innerHTML =
+          `<div><strong>Replay status:</strong> ${data.replayStatus || '—'}</div>`;
+        document.getElementById('replayTimeline').innerHTML = (data.timeline || []).map(step => `
+          <div class="timeline-item">
+            <div><strong>${step.state}</strong> · score ${step.score?.toFixed?.(1) ?? step.score}
+              <span class="muted">${new Date(step.decidedAt).toISOString()}</span></div>
+            <div class="muted">price ${fmtPrice(step.priceUsd)} · mc ${step.marketCapUsd ?? '—'} · liq ${step.liquidityUsd ?? '—'}</div>
+            <div>${(step.reasons || []).slice(0,2).join(' · ') || ''}</div>
+          </div>`).join('') || '<div class="muted">Empty replay</div>';
+        renderOutcomes(data.executionDelayOutcomes || []);
+        await refresh(tokenAddress);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Run replay';
+      }
+    };
+
+    document.getElementById('evaluateBtn').onclick = async () => {
+      const tokenAddress = tokenSelect.value;
+      await fetch(`/api/v1/signal/tokens/${tokenAddress}/evaluate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pricePath: pricePathsByToken[tokenAddress] || [] }),
+      });
+      await refresh(tokenAddress);
+      await refreshCohortTable();
+    };
+
+    document.getElementById('cohortEvalBtn').onclick = refreshCohortTable;
+    delaySelect.onchange = async () => {
+      await refresh(tokenSelect.value);
+      await refreshCohortTable();
+    };
+    tokenSelect.onchange = () => refresh(tokenSelect.value);
+    cohortSelect.onchange = refreshCohortTable;
+
+    loadShadowDashboard();
+    setInterval(loadShadowDashboard, 60000);
+    loadCases().catch(err => {
+      document.body.insertAdjacentHTML('beforeend', `<pre class="risk">${err}</pre>`);
+    });
+  </script>
+</body>
+</html>

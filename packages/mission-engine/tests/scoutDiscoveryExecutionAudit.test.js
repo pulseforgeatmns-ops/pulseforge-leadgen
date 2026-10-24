@@ -147,6 +147,46 @@ describe('AUDIT-006 scout discovery instrumentation', () => {
 });
 
 describe('AUDIT-006 discovery execution report', () => {
+  it('uses canonical qualifiedCount from scoutDiscoveryMeta when mission steps are empty', () => {
+    const { resolveDiscoveryProspectCount, buildDiscoveryExecutionReport, DISCOVERY_OUTCOMES } = require('..');
+
+    const count = resolveDiscoveryProspectCount({}, {
+      intelligenceResult: {
+        payload: {
+          qualifiedCount: 27,
+          opportunities: [{ companyId: 'co-1', name: 'Harbor Law Group' }],
+        },
+      },
+    });
+    assert.equal(count, 27);
+
+    const report = buildDiscoveryExecutionReport(
+      {
+        id: 'mission_amo',
+        objectiveText: 'Acquire law firm cleaning clients in Manchester NH.',
+        status: 'Discovering',
+      },
+      {},
+      {
+        strategy: 'External Heavy',
+        existingIntelligence: { consulted: true, companyCount: 0, prospectCount: 0 },
+        intelligenceResult: {
+          payload: {
+            qualifiedCount: 27,
+            opportunities: [{ companyId: 'co-1', name: 'Harbor Law Group' }],
+            discoveryStatus: 'complete',
+          },
+        },
+        capabilityPath: 'scout.discover',
+        scoutAcquisitionPathInvoked: true,
+      }
+    );
+
+    assert.equal(report.prospectCount, 27);
+    assert.equal(report.outcome, DISCOVERY_OUTCOMES.COMPLETED);
+    assert.equal(report.blockReason, null);
+  });
+
   it('maps blocked zero-prospect missions to DISCOVERY_BLOCKED with reason', () => {
     const report = buildDiscoveryExecutionReport({
       id: 'msn_blocked',

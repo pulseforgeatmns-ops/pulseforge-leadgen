@@ -11,6 +11,20 @@ const { retrieveExistingIntelligence } = require('./ExistingIntelligence');
 const { discoverCandidates, defaultDiscoveryAdapters } = require('./DiscoveryAdapters');
 const { resolveCandidateUniverse } = require('./EntityResolution');
 const { searchDefinitionFingerprint } = require('./SearchDefinition');
+const {
+  buildDiscoveryPlan,
+  executeCoveragePlan,
+  buildCandidateUniverseRecords,
+  buildDiscoveryReport,
+  computeDiscoveryConfidence,
+  discoveryStatusFromCoverage,
+} = require('../../scout/coverage/DiscoveryCoverageEngine');
+const {
+  evaluateDiscoveryCapability,
+  buildCapabilityBlockedResult,
+} = require('../../scout/coverage/DiscoveryCapabilityGate');
+const { runHypothesisDrivenDiscovery } = require('../../scout/coverage/HypothesisDrivenDiscoveryEngine');
+const { partitionDiscoveredCandidates } = require('../../scout/investigation/CandidateBeliefState');
 
 function createMemoryDiscoveryStore(snapshot = null) {
   /** @type {Map<string, object[]>} */
@@ -137,6 +151,18 @@ async function constructCandidateUniverse(input = {}) {
       (row) => !(existing.companies || []).some((c) => String(c.id) === String(row.id))
     ),
   ];
+  const preservedCandidates = Array.isArray(input.preservedCandidates) ? input.preservedCandidates : [];
+  for (const row of preservedCandidates) {
+    if (!row || !row.id) continue;
+    if (existingCompanies.some((c) => String(c.id) === String(row.id))) continue;
+    existingCompanies.push({
+      ...row,
+      tenantId: row.tenantId || tenantId,
+      discoveredAt: row.discoveredAt || nowIso(),
+      origin: row.origin || 'prior_discovery',
+      _preservedFromContinuation: true,
+    });
+  }
   const rejectedFromRetrieve = [
     ...(existing.rejectedCandidates || []),
     ...(persistedScoped.rejectedCandidates || []),
@@ -160,6 +186,8 @@ async function constructCandidateUniverse(input = {}) {
   let discoveredRaw = [];
   let discoveryRan = false;
   let discoveryFailedCompletely = false;
+  let capabilityBlocked = false;
+  let capabilityEvaluation = null;
 
   const adapters = Array.isArray(input.adapters)
     ? input.adapters
@@ -169,9 +197,137 @@ async function constructCandidateUniverse(input = {}) {
     (a) => typeof a.available !== 'function' || a.available()
   );
 
-  if (hasUsableMarketAdapter && (input.forceDiscover === true || sufficiency.shouldDiscoverGap)) {
+  let discoveryPlan = null;
+  let coverageMetrics = null;
+  let candidateUniverseRecords = buildCandidateUniverseRecords([], {
+    seeded: existingCompanies.map((row) => ({ ...row, origin: 'existing_intelligence' })),
+  });
+  let discoveryReport = null;
+  let investigationReport = null;
+  let investigationState = null;
+  let investigationPlan = null;
+  let revisedMarketDefinition = input.marketDefinition || null;
+  let providerReports = [];
+  let providerReceipts = null;
+
+  const useCoverageEngine = input.useCoverageEngine !== false;
+  if (input.useCoverageEngine === false) {
+    throw new Error(
+      'CoverageEngine bypass is not permitted (SPEC-154). All discovery must execute DiscoveryPipeline.'
+    );
+  }
+
+  if (input.forceDiscover === true || sufficiency.shouldDiscoverGap || input.entityInvestigationContinuation === true) {
+    discoveryPlan = buildDiscoveryPlan(searchDefinition, {
+      adapters: marketAdapters,
+      marketDefinition: input.marketDefinition,
+    });
+
+    capabilityEvaluation = evaluateDiscoveryCapability({
+      adapters: marketAdapters,
+      coveragePlan: discoveryPlan,
+      requireExternalDiscovery: true,
+      discover: input.adapterOpts && input.adapterOpts.discover,
+      enablePlaces: input.adapterOpts && input.adapterOpts.enablePlaces,
+      placesProvider: input.adapterOpts && input.adapterOpts.placesProvider,
+    });
+
+    if (!capabilityEvaluation.canExecute) {
+      const blocked = buildCapabilityBlockedResult(capabilityEvaluation);
+      capabilityBlocked = true;
+      sourceTypesUnavailable.push(SOURCE_TYPES.PUBLIC_BUSINESS_DATA);
+      actionsTaken.push({
+        text: blocked.blockReason,
+      });
+      actionsTaken.push({
+        text: blocked.explanation,
+      });
+      return {
+        searchDefinition,
+        companies: existingCompanies.map((c) => ({
+          ...c,
+          tenantId: c.tenantId || tenantId,
+          discoveredAt: c.discoveredAt || nowIso(),
+        })),
+        people: existing.people || input.people || [],
+        rejectedFromRetrieve,
+        sufficiency,
+        discoveryRan: false,
+        discoveryFailedCompletely: false,
+        capabilityBlocked: true,
+        capabilityEvaluation: blocked.capabilityEvaluation,
+        blockReason: blocked.blockReason,
+        blockerCode: blocked.blockerCode,
+        candidatesDiscovered: retrievedCount,
+        candidatesResolved: 0,
+        duplicatesRemoved: 0,
+        resolvedToExisting: 0,
+        sourceTypesChecked,
+        sourceTypesUnavailable,
+        discoveryErrors: [],
+        actionsTaken,
+        retrievedBeforeDiscover: true,
+        broadened: false,
+        discoveryPlan,
+        coverage: null,
+        candidateUniverse: candidateUniverseRecords,
+        discoveryReport: buildDiscoveryReport({
+          coverage: {},
+          candidateUniverse: candidateUniverseRecords,
+          qualifiedCount: 0,
+        }),
+        discoveryStatus: 'blocked',
+        investigationReport,
+        revisedMarketDefinition,
+      };
+    }
+
     discoveryRan = true;
-    const result = await discoverCandidates(searchDefinition, marketAdapters);
+    let result;
+    if (useCoverageEngine) {
+      if (input.marketDefinition) {
+        const engineResult = await runHypothesisDrivenDiscovery({
+          mission: input.mission || {},
+          marketDefinition: input.marketDefinition,
+          searchDefinition,
+          adapters: marketAdapters,
+          investigationPlan: input.investigationPlan || null,
+          opts: {
+            ...(input.hypothesisOpts || {}),
+            preservedCandidates,
+            investigationMode: input.investigationMode || null,
+          },
+        });
+        result = engineResult;
+        discoveryPlan = engineResult.discoveryPlan;
+        coverageMetrics = engineResult.coverage;
+        investigationReport = engineResult.investigationPlan;
+        investigationState = engineResult.investigationState;
+        investigationPlan = engineResult.investigationPlan;
+        revisedMarketDefinition = input.marketDefinition;
+        providerReports = engineResult.providerReports || [];
+        actionsTaken.push({
+          text:
+            input.entityInvestigationContinuation === true
+              ? `Entity investigation continuation (ADR-102): ${(engineResult.executedTasks || []).length} entity tasks executed; ${preservedCandidates.length} identities preserved.`
+              : `Canonical hypothesis-driven discovery (SPEC-180): ${(engineResult.executedTasks || []).length} investigation tasks executed; identity ${engineResult.identityComplete ? 'complete' : 'pending'}.`,
+        });
+      } else {
+        result = await executeCoveragePlan(discoveryPlan, searchDefinition, marketAdapters, {
+          marketDefinition: input.marketDefinition,
+        });
+        coverageMetrics = result.coverage;
+        actionsTaken.push({
+          text: `Executed coverage plan: ${coverageMetrics.searches.addressed}/${coverageMetrics.searches.planned} searches across ${coverageMetrics.cities.planned} cities and ${coverageMetrics.concepts.planned} concepts.`,
+        });
+      }
+    } else {
+      result = await discoverCandidates(searchDefinition, marketAdapters);
+    }
+    // Operational receipts are separate from evidence reports: existing artifact
+    // and qualification consumers must not gain new inputs from diagnostics.
+    providerReceipts = Array.isArray(result.providerReceipts) ? result.providerReceipts
+      : Array.isArray(result.providerReports) ? result.providerReports : null;
     discoveredRaw = (result.candidates || []).filter((row) => {
       if (row.tenantId && tenantId && String(row.tenantId) !== String(tenantId)) return false;
       return true;
@@ -183,15 +339,46 @@ async function constructCandidateUniverse(input = {}) {
     for (const src of result.sourceTypesUnavailable || []) {
       if (!sourceTypesUnavailable.includes(src)) sourceTypesUnavailable.push(src);
     }
-    const newOnly = discoveredRaw.filter((row) => !alreadyKnown(existingCompanies, row));
-    discoveredRaw = newOnly;
+    const partitioned = partitionDiscoveredCandidates(existingCompanies, discoveredRaw);
+    existingCompanies.length = 0;
+    existingCompanies.push(...partitioned.existingCompanies);
+    discoveredRaw = partitioned.discoveredRaw;
+    candidateUniverseRecords = buildCandidateUniverseRecords(discoveredRaw, {
+      seeded: existingCompanies.map((row) => ({ ...row, origin: 'existing_intelligence' })),
+    });
+    const discoveryConfidence = computeDiscoveryConfidence({
+      coverage: coverageMetrics,
+      candidateUniverse: candidateUniverseRecords,
+      searchSuccess:
+        coverageMetrics && coverageMetrics.searches && coverageMetrics.searches.planned
+          ? coverageMetrics.searches.executed / coverageMetrics.searches.planned
+          : discoveredRaw.length > 0
+            ? 0.6
+            : 0.3,
+      evidenceQuality: existingCompanies.length ? 0.65 : 0.35,
+    });
+    discoveryReport = buildDiscoveryReport({
+      coverage: coverageMetrics,
+      candidateUniverse: candidateUniverseRecords,
+      qualifiedCount: 0,
+      discoveryConfidence,
+      marketDefinition: revisedMarketDefinition,
+      investigationReport,
+      revisedMarketDefinition,
+    });
     if (discoveredRaw.length) {
       actionsTaken.push({
         text: `Discovered ${discoveredRaw.length} additional candidate${discoveredRaw.length === 1 ? '' : 's'} for remaining coverage gaps.`,
       });
+    } else if (candidateUniverseRecords.length) {
+      actionsTaken.push({
+        text: `Candidate universe seeded from existing intelligence (${candidateUniverseRecords.length} record${candidateUniverseRecords.length === 1 ? '' : 's'}) before external discovery.`,
+      });
     } else {
       actionsTaken.push({
-        text: 'Ran bounded discovery for remaining coverage gaps; no new unique companies were added.',
+        text: coverageMetrics && !coverageMetrics.complete
+          ? 'Discovery incomplete — coverage plan not fully executed.'
+          : 'Ran bounded discovery for remaining coverage gaps; no new unique companies were added.',
       });
     }
     const marketChecked = (result.sourceTypesChecked || []).filter(
@@ -217,9 +404,15 @@ async function constructCandidateUniverse(input = {}) {
   if (store && typeof store.upsert === 'function' && companies.length) {
     await store.upsert(tenantId, companies);
   }
-  if (typeof input.persistCompanies === 'function' && companies.length) {
+  if (typeof input.persistCompanies === 'function' && (companies.length || typeof input.acknowledgeDiscovery === 'function')) {
     try {
-      await input.persistCompanies({ tenantId, companies, searchDefinition });
+      const persistenceResult = await input.persistCompanies({ tenantId, companies, searchDefinition });
+      // Durable handling must explicitly confirm completion, including empty results.
+      // Any discovery error conservatively leaves every fetched unit replayable.
+      if (persistenceResult?.checkpointComplete === true && !discoveryErrors.length
+        && typeof input.acknowledgeDiscovery === 'function') {
+        await input.acknowledgeDiscovery();
+      }
     } catch {
       discoveryErrors.push({
         code: 'persist_failed',
@@ -229,6 +422,20 @@ async function constructCandidateUniverse(input = {}) {
   }
 
   const candidatesDiscovered = retrievedCount + discoveredRaw.length;
+  if (!candidateUniverseRecords.length) {
+    candidateUniverseRecords = buildCandidateUniverseRecords(discoveredRaw, {
+      seeded: existingCompanies.map((row) => ({ ...row, origin: 'existing_intelligence' })),
+    });
+  }
+  const discoveryStatus = coverageMetrics
+    ? discoveryStatusFromCoverage(coverageMetrics)
+    : existingCompanies.length && !hasUsableMarketAdapter
+      ? 'complete'
+      : discoveryRan
+        ? discoveryStatusFromCoverage(coverageMetrics || { complete: true })
+        : existingCompanies.length
+          ? 'complete'
+          : 'incomplete';
   return {
     searchDefinition,
     companies,
@@ -247,6 +454,20 @@ async function constructCandidateUniverse(input = {}) {
     actionsTaken,
     retrievedBeforeDiscover: true,
     broadened: false,
+    discoveryPlan,
+    coverage: coverageMetrics,
+    candidateUniverse: candidateUniverseRecords,
+    discoveryReport,
+    discoveryStatus,
+    capabilityBlocked,
+    capabilityEvaluation,
+    blockReason: capabilityBlocked ? capabilityEvaluation && capabilityEvaluation.blockReason : null,
+    investigationReport,
+    investigationState,
+    investigationPlan,
+    revisedMarketDefinition,
+    providerReports,
+    providerReceipts,
   };
 }
 
