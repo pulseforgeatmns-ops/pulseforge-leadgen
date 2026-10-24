@@ -1,5 +1,7 @@
 'use strict';
 
+const { rethrowResearchProviderControl } = require('../../../utils/anchorResearchProviderPause');
+
 /**
  * SPEC-100A — candidate discovery adapters.
  * Business reasoning is not hard-coded to one vendor. Social specialists
@@ -7,7 +9,14 @@
  */
 
 const { asText, nowIso, SOURCE_TYPES } = require('./Types');
-const { createPlacesProvider } = require('../../capabilities/discovery/providers/PlacesProvider');
+const { buildDiscoveryProviderReport } = require('../../scout/coverage/ProviderExecution');
+const { createPlacesProvider, createProviderExecution } = require('../../capabilities/discovery/providers/PlacesProvider');
+const {
+  PLACES_FEATURES,
+  TRIGGER_MODES,
+  withPlacesContext,
+  buildPlacesContextFromDiscovery,
+} = require('../../../utils/placesCostAttribution');
 
 function adapterResult({
   source,
@@ -33,15 +42,20 @@ function toDiscoveredCompany(raw, searchDefinition, source) {
   const name = asText(raw.name || raw.companyName || raw.company);
   if (!name) return null;
   return {
+    ...require('../../../utils/scoutTicketMembership').ticketFields(raw),
     id: asText(raw.id || raw.companyId || raw.placeId) || null,
     tenantId: asText(raw.tenantId || raw.client_id || raw.clientId) || searchDefinition.tenantId,
     name,
     industry: asText(raw.industry || raw.vertical || raw.segment) ||
-      ((searchDefinition.segments || [])[0] || null),
+      null,
     location: asText(raw.location || raw.address || raw.geography) ||
-      (searchDefinition.geography && searchDefinition.geography.label) ||
       null,
     address: asText(raw.address),
+    placeTypes: Array.isArray(raw.placeTypes || raw.types) ? (raw.placeTypes || raw.types) : [],
+    businessType: asText(raw.businessType),
+    description: asText(raw.description),
+    discoveryQuery: asText(raw.discoveryQuery),
+    discoveryConcept: asText(raw.discoveryConcept),
     website: asText(raw.website || raw.url),
     phone: asText(raw.phone),
     people: Array.isArray(raw.people) ? raw.people : [],
@@ -158,85 +172,132 @@ function createPlacesDiscoveryAdapter(opts = {}) {
         });
       }
 
-      const evidenceRequest = searchDefinition.evidenceRequest || null;
-      const candidates = [];
-      const errors = [];
+      return withPlacesContext(
+        buildPlacesContextFromDiscovery({
+          searchDefinition,
+          caller: 'DiscoveryAdapters',
+        }),
+        async () => {
+          const evidenceRequest = searchDefinition.evidenceRequest || null;
+          const candidates = [];
+          const errors = [];
 
-      if (evidenceRequest) {
-        try {
-          const hits = await provider.collectEvidence(evidenceRequest);
-          const execution = provider.lastExecution || null;
-          for (const hit of hits || []) {
-            const mapped = toDiscoveredCompany(hit, searchDefinition, 'public_business_places');
-            if (mapped) candidates.push(mapped);
+          if (evidenceRequest) {
+            try {
+              const hits = await provider.collectEvidence(evidenceRequest);
+              const execution = provider.lastExecution || null;
+              for (const hit of hits || []) {
+                const mapped = toDiscoveredCompany(hit, searchDefinition, 'public_business_places');
+                if (mapped) candidates.push(mapped);
+              }
+              if (execution && Array.isArray(execution.errors) && execution.errors.length) {
+                errors.push(...execution.errors);
+              }
+              return adapterResult({
+                source: 'public_business_places',
+                sourceType: SOURCE_TYPES.PUBLIC_BUSINESS_DATA,
+                candidates,
+                coverage: {
+                  evidenceType: evidenceRequest.evidenceType,
+                  segment: evidenceRequest.segment,
+                  cities: (evidenceRequest.geography && evidenceRequest.geography.cities) || [],
+                  execution,
+                },
+                errors,
+                execution,
+                available: !(execution && execution.abortReason === 'provider_unavailable'),
+              });
+            } catch (err) {
+              rethrowResearchProviderControl(err);
+              errors.push({
+                code: 'provider_error',
+                message: err.message || String(err),
+                evidenceRequest,
+              });
+              return adapterResult({
+                source: 'public_business_places',
+                sourceType: SOURCE_TYPES.PUBLIC_BUSINESS_DATA,
+                candidates,
+                coverage: { evidenceType: evidenceRequest.evidenceType },
+                errors,
+                execution: provider.lastExecution || null,
+              });
+            }
           }
-          if (execution && Array.isArray(execution.errors) && execution.errors.length) {
-            errors.push(...execution.errors);
-          }
-          return adapterResult({
-            source: 'public_business_places',
-            sourceType: SOURCE_TYPES.PUBLIC_BUSINESS_DATA,
-            candidates,
-            coverage: {
-              evidenceType: evidenceRequest.evidenceType,
-              segment: evidenceRequest.segment,
-              cities: (evidenceRequest.geography && evidenceRequest.geography.cities) || [],
-              execution,
-            },
-            errors,
-            execution,
-            available: !(execution && execution.abortReason === 'provider_unavailable'),
-          });
-        } catch (err) {
-          errors.push({
-            code: 'provider_error',
-            message: err.message || String(err),
-            evidenceRequest,
-          });
-          return adapterResult({
-            source: 'public_business_places',
-            sourceType: SOURCE_TYPES.PUBLIC_BUSINESS_DATA,
-            candidates,
-            coverage: { evidenceType: evidenceRequest.evidenceType },
-            errors,
-            execution: provider.lastExecution || null,
+
+          return discoverPlacesLegacySegment({
+            provider,
+            searchDefinition,
+            toDiscoveredCompany,
+            adapterResult,
           });
         }
-      }
-
-      // Legacy segment path — retained until cron migration (SPEC-181 Phase 3).
-      const geo = searchDefinition.geography && searchDefinition.geography.label;
-      const segments = searchDefinition.segments || [];
-      const queries = (segments.length ? segments : [searchDefinition.businessNeed || 'commercial'])
-        .map((segment) => ({
-          industry: String(segment).replace(/_/g, ' '),
-          location: geo,
-          limit: 20,
-        }));
-      for (const query of queries) {
-        try {
-          const hits = await provider.search(query);
-          for (const hit of hits || []) {
-            const mapped = toDiscoveredCompany(hit, searchDefinition, 'public_business_places');
-            if (mapped) candidates.push(mapped);
-          }
-        } catch (err) {
-          errors.push({
-            code: 'provider_error',
-            message: err.message || String(err),
-            query,
-          });
-        }
-      }
-      return adapterResult({
-        source: 'public_business_places',
-        sourceType: SOURCE_TYPES.PUBLIC_BUSINESS_DATA,
-        candidates,
-        coverage: { queries: queries.length, legacy: true },
-        errors,
-      });
+      );
     },
   };
+}
+
+async function discoverPlacesLegacySegment({
+  provider,
+  searchDefinition,
+  toDiscoveredCompany,
+  adapterResult,
+}) {
+  const geo = searchDefinition.geography && searchDefinition.geography.label;
+  const segments = searchDefinition.segments || [];
+  const queries = (segments.length ? segments : [searchDefinition.businessNeed || 'commercial'])
+    .map((segment) => ({
+      industry: String(segment).replace(/_/g, ' '),
+      location: geo,
+      limit: 20,
+    }));
+  const candidates = [];
+  const errors = [];
+  const execution = createProviderExecution();
+  let attemptedQueries = 0;
+  let hasExecution = false;
+  for (const query of queries) {
+    attemptedQueries++;
+    try {
+      const hits = await provider.search(query);
+      for (const hit of hits || []) {
+        const mapped = toDiscoveredCompany(hit, searchDefinition, 'public_business_places');
+        if (mapped) candidates.push(mapped);
+      }
+      // Capture each segment before the provider overwrites lastExecution.
+      // Provider errors already contain only sanitized status/endpoint metadata.
+      const segmentExecution = provider.lastExecution;
+      if (segmentExecution) {
+        hasExecution = true;
+        execution.executed ||= segmentExecution.executed === true;
+        execution.abortReason = segmentExecution.abortReason || execution.abortReason;
+        execution.queries.push(...(segmentExecution.queries || []));
+        for (const key of ['queries', 'results', 'retries', 'latencyMs']) {
+          execution.totals[key] += Number(segmentExecution.totals?.[key]) || 0;
+        }
+        execution.quota = segmentExecution.quota || execution.quota;
+        const providerErrors = Array.isArray(segmentExecution.errors) ? segmentExecution.errors : [];
+        errors.push(...providerErrors);
+        execution.errors.push(...providerErrors);
+        if (providerErrors.some(error => error.googleStatus === 'REQUEST_DENIED')) break;
+      }
+    } catch (err) {
+      rethrowResearchProviderControl(err);
+      errors.push({
+        code: 'provider_error',
+        message: err.message || String(err),
+        query,
+      });
+    }
+  }
+  return adapterResult({
+    source: 'public_business_places',
+    sourceType: SOURCE_TYPES.PUBLIC_BUSINESS_DATA,
+    candidates,
+    coverage: { queries: attemptedQueries, legacy: true },
+    errors,
+    execution: hasExecution ? execution : null,
+  });
 }
 
 function createSocialStubAdapter(channel, sourceType) {
@@ -263,6 +324,87 @@ function createSocialStubAdapter(channel, sourceType) {
   };
 }
 
+function createWebsiteInvestigationAdapter(opts = {}) {
+  const fetchImpl =
+    opts.fetchImpl ||
+    (typeof fetch === 'function'
+      ? fetch.bind(globalThis)
+      : null);
+
+  return {
+    id: 'company_websites',
+    sourceType: SOURCE_TYPES.COMPANY_WEBSITES,
+    required: false,
+    available() {
+      return typeof fetchImpl === 'function' || typeof opts.inspectWebsite === 'function';
+    },
+    async discover(searchDefinition) {
+      const evidenceRequest = searchDefinition.evidenceRequest || null;
+      const website =
+        (evidenceRequest && (evidenceRequest.website || evidenceRequest.entity?.website)) ||
+        (searchDefinition.targetEntity && searchDefinition.targetEntity.website) ||
+        null;
+
+      if (!website) {
+        return adapterResult({
+          source: 'company_websites',
+          sourceType: SOURCE_TYPES.COMPANY_WEBSITES,
+          candidates: [],
+          coverage: { skipped: true, reason: 'no_target_website' },
+          errors: [],
+          available: true,
+        });
+      }
+
+      if (typeof opts.inspectWebsite === 'function') {
+        const inspected = await opts.inspectWebsite({ website, evidenceRequest, searchDefinition });
+        return adapterResult({
+          source: 'company_websites',
+          sourceType: SOURCE_TYPES.COMPANY_WEBSITES,
+          candidates: (inspected.candidates || []).map((row) =>
+            toDiscoveredCompany(row, searchDefinition, 'company_websites')
+          ).filter(Boolean),
+          coverage: inspected.coverage || { website },
+          errors: inspected.errors || [],
+        });
+      }
+
+      const entityName =
+        (evidenceRequest && (evidenceRequest.businessName || evidenceRequest.entity?.name)) ||
+        null;
+      const signals = [];
+      if (/str|vacation rental|short-term rental|airbnb|vrbo/i.test(String(website))) {
+        signals.push({ type: 'portfolio_growth', label: 'Website URL suggests STR/vacation rental focus.' });
+      }
+
+      return adapterResult({
+        source: 'company_websites',
+        sourceType: SOURCE_TYPES.COMPANY_WEBSITES,
+        candidates: [
+          toDiscoveredCompany(
+            {
+              id: evidenceRequest?.candidateId || evidenceRequest?.entity?.id || `web-${website}`,
+              name: entityName || 'Website target',
+              website,
+              signals,
+              evidence: [
+                {
+                  kind: evidenceRequest?.evidenceType || 'website',
+                  label: `Investigated ${website}`,
+                  source: 'company_website',
+                },
+              ],
+            },
+            searchDefinition,
+            'company_websites'
+          ),
+        ].filter(Boolean),
+        coverage: { website, evidenceType: evidenceRequest?.evidenceType || null },
+      });
+    },
+  };
+}
+
 function defaultDiscoveryAdapters(opts = {}) {
   const adapters = [];
   if (Array.isArray(opts.discoveryAdapters)) {
@@ -277,6 +419,7 @@ function defaultDiscoveryAdapters(opts = {}) {
   if (allowPlaces) {
     adapters.push(createPlacesDiscoveryAdapter(opts));
   }
+  adapters.push(createWebsiteInvestigationAdapter(opts));
   adapters.push(createSocialStubAdapter('linkedin', SOURCE_TYPES.LINKEDIN));
   adapters.push(createSocialStubAdapter('facebook', SOURCE_TYPES.FACEBOOK));
   adapters.push(createSocialStubAdapter('instagram', SOURCE_TYPES.INSTAGRAM));
@@ -293,6 +436,7 @@ async function discoverCandidates(searchDefinition, adapters = []) {
   const candidates = [];
   const errors = [];
   const sourceReports = [];
+  const providerReceipts = [];
   const sourceTypesChecked = [];
   const sourceTypesUnavailable = [];
 
@@ -306,6 +450,7 @@ async function discoverCandidates(searchDefinition, adapters = []) {
     ].includes(sourceType);
     if (typeof adapter.available === 'function' && !adapter.available()) {
       sourceTypesUnavailable.push(sourceType);
+      providerReceipts.push(buildDiscoveryProviderReport({ errors: [{ code: 'adapter_unavailable' }] }, adapter, { status: 'skipped' }));
       sourceReports.push(
         adapterResult({
           source: adapter.id || sourceType,
@@ -318,10 +463,16 @@ async function discoverCandidates(searchDefinition, adapters = []) {
       );
       continue;
     }
+    let receiptRecorded = false;
     try {
       const report = await adapter.discover(searchDefinition);
       sourceReports.push(report);
-      if (report.available === false) {
+      const unavailable = report.available === false;
+      providerReceipts.push(buildDiscoveryProviderReport(report, adapter, {
+        evidenceType: searchDefinition.evidenceRequest?.evidenceType,
+      }));
+      receiptRecorded = true;
+      if (unavailable) {
         sourceTypesUnavailable.push(sourceType);
         errors.push(...(report.errors || []));
         continue;
@@ -334,6 +485,7 @@ async function discoverCandidates(searchDefinition, adapters = []) {
         errors.push(...report.errors);
       }
     } catch (err) {
+      rethrowResearchProviderControl(err);
       sourceTypesUnavailable.push(sourceType);
       const failure = {
         code: 'provider_error',
@@ -341,6 +493,9 @@ async function discoverCandidates(searchDefinition, adapters = []) {
         source: adapter.id || sourceType,
       };
       errors.push(failure);
+      if (!receiptRecorded) {
+        providerReceipts.push(buildDiscoveryProviderReport({ errors: [failure] }, adapter, { status: 'failed' }));
+      }
       sourceReports.push(
         adapterResult({
           source: adapter.id || sourceType,
@@ -362,6 +517,7 @@ async function discoverCandidates(searchDefinition, adapters = []) {
     },
     errors,
     sourceReports,
+    providerReceipts,
     sourceTypesChecked: [...new Set(sourceTypesChecked)],
     sourceTypesUnavailable: [...new Set(sourceTypesUnavailable)],
   };
@@ -373,6 +529,7 @@ module.exports = {
   createExistingIntelligenceAdapter,
   createInjectedDiscoverAdapter,
   createPlacesDiscoveryAdapter,
+  createWebsiteInvestigationAdapter,
   createSocialStubAdapter,
   defaultDiscoveryAdapters,
   discoverCandidates,

@@ -323,6 +323,95 @@ describe('SPEC-117 learning loop and tenancy', () => {
   });
 });
 
+describe('SPEC-117 assess without snapshot persistence', () => {
+  it('returns identical cognition from live snapshot with no snapshot store writes', () => {
+    const engine = createOutboundEngine();
+    const input = {
+      tenantId: '21',
+      clientId: 21,
+      snapshot: specExampleSnapshot({ tenantId: '21' }),
+      prospects: [paigeCandidate()],
+    };
+    const first = engine.assess(input);
+    const second = engine.assess(input);
+
+    assert.deepEqual(
+      {
+        health: first.health,
+        capacity: first.capacity,
+        governor: first.governor,
+        queue: first.queue,
+        recommendations: first.recommendations,
+      },
+      {
+        health: second.health,
+        capacity: second.capacity,
+        governor: second.governor,
+        queue: second.queue,
+        recommendations: second.recommendations,
+      }
+    );
+    assert.ok(first.snapshot);
+    assert.equal(typeof engine.store.putSnapshot, 'undefined');
+    assert.equal(typeof engine.store.getSnapshot, 'undefined');
+  });
+
+  it('reconstructs assess output on a fresh engine without snapshot hydration', () => {
+    const baseline = createOutboundEngine().assess({
+      tenantId: '21',
+      snapshot: specExampleSnapshot({ tenantId: '21' }),
+      prospects: [paigeCandidate()],
+    });
+    const restarted = createOutboundEngine().assess({
+      tenantId: '21',
+      snapshot: specExampleSnapshot({ tenantId: '21' }),
+      prospects: [paigeCandidate()],
+    });
+
+    assert.deepEqual(
+      {
+        health: baseline.health,
+        capacity: baseline.capacity,
+        governor: baseline.governor,
+        recommendations: baseline.recommendations,
+      },
+      {
+        health: restarted.health,
+        capacity: restarted.capacity,
+        governor: restarted.governor,
+        recommendations: restarted.recommendations,
+      }
+    );
+  });
+
+  it('does not expose snapshot persistence in runtime modules', () => {
+    const storeSrc = fs.readFileSync(path.join(__dirname, '../Store.js'), 'utf8');
+    const engineSrc = fs.readFileSync(path.join(__dirname, '../Engine.js'), 'utf8');
+    const persistenceSrc = fs.readFileSync(
+      path.join(__dirname, '../../../services/emmettOutboundPersistence.js'),
+      'utf8'
+    );
+    assert.doesNotMatch(storeSrc, /putSnapshot|getSnapshot|snapshots\s*=\s*new Map/);
+    assert.doesNotMatch(engineSrc, /putSnapshot|getSnapshot/);
+    assert.doesNotMatch(persistenceSrc, /emmett_inbox_snapshots/);
+  });
+
+  it('persists plans, outcomes, and learning without snapshot storage', () => {
+    const engine = createOutboundEngine();
+    const day = engine.planDay({
+      tenantId: '21',
+      snapshot: specExampleSnapshot({ tenantId: '21' }),
+      prospects: [paigeCandidate()],
+    });
+    engine.approvePlan(day.plan.id, { role: 'operator', id: 'jacob' });
+    engine.ingestOutcome({ tenantId: '21', eventType: 'replied', prospectId: 1 });
+
+    assert.equal(engine.store.getPlan(day.plan.id).status, PLAN_STATUS.APPROVED);
+    assert.ok(engine.store.listOutcomes('21').length >= 1);
+    assert.ok(engine.store.listLearning('21').length >= 1);
+  });
+});
+
 describe('SPEC-117 specialist boundaries', () => {
   it('does not generate copy, pick ICP, or sell', () => {
     const source = fs.readFileSync(path.join(__dirname, '../index.js'), 'utf8');

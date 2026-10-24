@@ -1,0 +1,111 @@
+{
+  "providerId": "pulseforge-historical-caller-catalog-v1",
+  "providerVersion": "1.0.0",
+  "coverage": {
+    "historicalStart": "2026-08-01T00:00:00.000Z",
+    "historicalEnd": "2026-10-15T00:00:00.000Z",
+    "note": "Earliest verified public call timestamps in this catalog snapshot."
+  },
+  "investigatedProviders": [
+    {
+      "name": "SWARM / caller-aggregation ecosystem",
+      "legitimateAccessAvailable": false,
+      "reason": "Requires authenticated session; scraping around auth/paywalls is prohibited for empirical validation.",
+      "historicalFieldsIfAvailable": ["tokenAddress", "callerId", "channelId", "callTimestamp", "externalReference"]
+    },
+    {
+      "name": "Front Runners public research fixtures",
+      "legitimateAccessAvailable": true,
+      "reason": "Phase A verified Solana CAs with timestamped public call anchors persisted as HISTORICAL_FIXTURE.",
+      "historicalFieldsIfAvailable": ["tokenAddress", "telegramAnchor", "verifiedCa"]
+    }
+  ],
+  "tokens": [
+    {
+      "tokenAddress": "Gymbmn9wwMKe4NnmVceyyfpncp9arbwPfSdBsyY9pump",
+      "ticker": "DOOM",
+      "earliestCallAt": "2026-08-04T05:27:00.000Z",
+      "calls": [
+        {
+          "occurredAt": "2026-08-04T05:27:00.000Z",
+          "sourceId": "src-front-runners",
+          "sourceClusterId": "cluster-front-runners-research",
+          "sourceType": "telegram",
+          "provenance": {
+            "evidenceClass": "HISTORICAL_FIXTURE",
+            "provider": "front-runners-public-research",
+            "externalId": "doom-2026-08-04-anchor",
+            "referenceUrl": "https://t.me/s/front_runners_sol",
+            "note": "Faithful persisted copy of Phase A verified anchor"
+          }
+        }
+      ],
+      "clusterRelationships": []
+    },
+    {
+      "tokenAddress": "2fRDA5f353VXLs2PeLJNqqHqTMhrjJunAXmWWpLkpump",
+      "ticker": "DUPLICATE",
+      "earliestCallAt": "2026-09-29T18:04:00.000Z",
+      "calls": [
+        {
+          "occurredAt": "2026-09-29T18:04:00.000Z",
+          "sourceId": "src-front-runners",
+          "sourceClusterId": "cluster-front-runners-research",
+          "sourceType": "telegram",
+          "provenance": {
+            "evidenceClass": "HISTORICAL_FIXTURE",
+            "provider": "front-runners-public-research",
+            "externalId": "duplicate-call-t0+4m",
+            "referenceUrl": "https://t.me/s/front_runners_sol"
+          }
+        },
+        {
+          "occurredAt": "2026-09-29T18:09:00.000Z",
+          "sourceId": "src-independent-alpha",
+          "sourceClusterId": "cluster-independent-alpha",
+          "sourceType": "x",
+          "eventType": "TOKEN_MENTION",
+          "provenance": {
+            "evidenceClass": "HISTORICAL_FIXTURE",
+            "provider": "independent-alpha-fixture",
+            "externalId": "duplicate-independent-mention",
+            "referenceUrl": "https://x.com/"
+          }
+        }
+      ],
+      "clusterRelationships": [
+        {
+          "clusterA": "cluster-front-runners-research",
+          "clusterB": "cluster-independent-alpha",
+          "relationship": "INDEPENDENT",
+          "confidence": 0.65,
+          "basis": "Distinct provider communities; no forwarding evidence between clusters in fixture timeline",
+          "provenance": {
+            "evidenceClass": "HISTORICAL_FIXTURE",
+            "provider": "pulseforge-historical-caller-catalog-v1"
+          }
+        }
+      ]
+    },
+    {
+      "tokenAddress": "6iAj2oywQMiD9NeyTcW1S7UtG7e3jSK7Ud5ZJDqJpump",
+      "ticker": "Hallow Inu",
+      "earliestCallAt": "2026-09-29T22:43:00.000Z",
+      "calls": [
+        {
+          "occurredAt": "2026-09-29T22:43:00.000Z",
+          "sourceId": "src-front-runners",
+          "sourceClusterId": "cluster-front-runners-research",
+          "sourceType": "telegram",
+          "provenance": {
+            "evidenceClass": "HISTORICAL_FIXTURE",
+            "provider": "front-runners-public-research",
+            "externalId": "hallow-anchor",
+            "referenceUrl": "https://t.me/s/front_runners_sol"
+          }
+        }
+      ],
+      "clusterRelationships": []
+    }
+  ]
+}

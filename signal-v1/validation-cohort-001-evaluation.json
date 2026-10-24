@@ -1,0 +1,1434 @@
+{
+  "cohortId": "cohort-signal-v1-validation-001",
+  "cohortVersion": "B",
+  "selectionVersion": "validation-001-selection-v1",
+  "featureVersion": "signal-features-v1",
+  "researchDefinitionVersion": "signal-research-v1",
+  "strategyVersion": "signal-strategy-v1",
+  "sourcePerformanceVersion": "source-performance-v1",
+  "providerVersions": {
+    "market": "fixture-acquisition",
+    "candidateAcquisition": "procedural-public-research-catalog-v1"
+  },
+  "generatedAt": "2026-10-04T21:47:02.481Z",
+  "frozenAt": "2026-10-04T21:47:02.474Z",
+  "primaryExecutionDelaySeconds": 60,
+  "evaluation": {
+    "cohortId": "cohort-signal-v1-validation-001",
+    "cohortN": 40,
+    "executionDelaySeconds": 60,
+    "layers": [
+      {
+        "observationLayer": "First caller",
+        "observationType": "FIRST_CALLER",
+        "N": 38,
+        "PASS": 18,
+        "FAIL": 20,
+        "UNRESOLVED": 0,
+        "precision": 0.47368421052631576,
+        "falsePositiveRate": 0.5263157894736842,
+        "medianMfe": 0,
+        "medianMae": -0.30000000000000004,
+        "medianTimeTo2x": 3000,
+        "medianTimeToMinus30": 1800,
+        "medianReturn15m": -0.1916666666666667,
+        "medianReturn1h": -0.45833333333333337,
+        "medianReturn6h": null,
+        "medianReturn24h": null,
+        "dataAvailability": {
+          "AVAILABLE": 1,
+          "PARTIAL": 37,
+          "UNAVAILABLE": 0,
+          "INSUFFICIENT_MARKET_DATA": 0
+        },
+        "dataUnavailableN": 0,
+        "denominators": {
+          "cohortN": 40,
+          "observationTriggeredN": 38,
+          "marketEvaluableN": 38,
+          "resolvedN": 38,
+          "labeledN": 38
+        }
+      },
+      {
+        "observationLayer": "Independent convergence",
+        "observationType": "INDEPENDENT_CONVERGENCE",
+        "N": 18,
+        "PASS": 18,
+        "FAIL": 0,
+        "UNRESOLVED": 0,
+        "precision": 1,
+        "falsePositiveRate": 0,
+        "medianMfe": 1.5,
+        "medianMae": 0,
+        "medianTimeTo2x": 3000,
+        "medianTimeToMinus30": null,
+        "medianReturn15m": 0.5714285714285716,
+        "medianReturn1h": 1,
+        "medianReturn6h": null,
+        "medianReturn24h": null,
+        "dataAvailability": {
+          "AVAILABLE": 0,
+          "PARTIAL": 18,
+          "UNAVAILABLE": 0,
+          "INSUFFICIENT_MARKET_DATA": 0
+        },
+        "dataUnavailableN": 0,
+        "denominators": {
+          "cohortN": 40,
+          "observationTriggeredN": 18,
+          "marketEvaluableN": 18,
+          "resolvedN": 18,
+          "labeledN": 18
+        }
+      },
+      {
+        "observationLayer": "Quality convergence",
+        "observationType": "QUALITY_CONVERGENCE",
+        "N": 0,
+        "PASS": 0,
+        "FAIL": 0,
+        "UNRESOLVED": 0,
+        "precision": null,
+        "falsePositiveRate": null,
+        "medianMfe": null,
+        "medianMae": null,
+        "medianTimeTo2x": null,
+        "medianTimeToMinus30": null,
+        "medianReturn15m": null,
+        "medianReturn1h": null,
+        "medianReturn6h": null,
+        "medianReturn24h": null,
+        "dataAvailability": {
+          "AVAILABLE": 0,
+          "PARTIAL": 0,
+          "UNAVAILABLE": 0,
+          "INSUFFICIENT_MARKET_DATA": 0
+        },
+        "dataUnavailableN": 0,
+        "denominators": {
+          "cohortN": 40,
+          "observationTriggeredN": 0,
+          "marketEvaluableN": 0,
+          "resolvedN": 0,
+          "labeledN": 0
+        }
+      },
+      {
+        "observationLayer": "+ wallet confirmation",
+        "observationType": "WALLET_CONFIRMATION",
+        "N": 0,
+        "PASS": 0,
+        "FAIL": 0,
+        "UNRESOLVED": 0,
+        "precision": null,
+        "falsePositiveRate": null,
+        "medianMfe": null,
+        "medianMae": null,
+        "medianTimeTo2x": null,
+        "medianTimeToMinus30": null,
+        "medianReturn15m": null,
+        "medianReturn1h": null,
+        "medianReturn6h": null,
+        "medianReturn24h": null,
+        "dataAvailability": {
+          "AVAILABLE": 0,
+          "PARTIAL": 0,
+          "UNAVAILABLE": 0,
+          "INSUFFICIENT_MARKET_DATA": 0
+        },
+        "dataUnavailableN": 0,
+        "denominators": {
+          "cohortN": 40,
+          "observationTriggeredN": 0,
+          "marketEvaluableN": 0,
+          "resolvedN": 0,
+          "labeledN": 0
+        }
+      },
+      {
+        "observationLayer": "+ structure gate",
+        "observationType": "STRUCTURE_GATE",
+        "N": 0,
+        "PASS": 0,
+        "FAIL": 0,
+        "UNRESOLVED": 0,
+        "precision": null,
+        "falsePositiveRate": null,
+        "medianMfe": null,
+        "medianMae": null,
+        "medianTimeTo2x": null,
+        "medianTimeToMinus30": null,
+        "medianReturn15m": null,
+        "medianReturn1h": null,
+        "medianReturn6h": null,
+        "medianReturn24h": null,
+        "dataAvailability": {
+          "AVAILABLE": 0,
+          "PARTIAL": 0,
+          "UNAVAILABLE": 0,
+          "INSUFFICIENT_MARKET_DATA": 0
+        },
+        "dataUnavailableN": 0,
+        "denominators": {
+          "cohortN": 40,
+          "observationTriggeredN": 0,
+          "marketEvaluableN": 0,
+          "resolvedN": 0,
+          "labeledN": 0
+        }
+      },
+      {
+        "observationLayer": "Amplifier arrival",
+        "observationType": "AMPLIFIER_ARRIVAL",
+        "N": 0,
+        "PASS": 0,
+        "FAIL": 0,
+        "UNRESOLVED": 0,
+        "precision": null,
+        "falsePositiveRate": null,
+        "medianMfe": null,
+        "medianMae": null,
+        "medianTimeTo2x": null,
+        "medianTimeToMinus30": null,
+        "medianReturn15m": null,
+        "medianReturn1h": null,
+        "medianReturn6h": null,
+        "medianReturn24h": null,
+        "dataAvailability": {
+          "AVAILABLE": 0,
+          "PARTIAL": 0,
+          "UNAVAILABLE": 0,
+          "INSUFFICIENT_MARKET_DATA": 0
+        },
+        "dataUnavailableN": 0,
+        "denominators": {
+          "cohortN": 40,
+          "observationTriggeredN": 0,
+          "marketEvaluableN": 0,
+          "resolvedN": 0,
+          "labeledN": 0
+        }
+      },
+      {
+        "observationLayer": "Signal ENTRY",
+        "observationType": "SIGNAL_ENTRY",
+        "N": 0,
+        "PASS": 0,
+        "FAIL": 0,
+        "UNRESOLVED": 0,
+        "precision": null,
+        "falsePositiveRate": null,
+        "medianMfe": null,
+        "medianMae": null,
+        "medianTimeTo2x": null,
+        "medianTimeToMinus30": null,
+        "medianReturn15m": null,
+        "medianReturn1h": null,
+        "medianReturn6h": null,
+        "medianReturn24h": null,
+        "dataAvailability": {
+          "AVAILABLE": 0,
+          "PARTIAL": 0,
+          "UNAVAILABLE": 0,
+          "INSUFFICIENT_MARKET_DATA": 0
+        },
+        "dataUnavailableN": 0,
+        "denominators": {
+          "cohortN": 40,
+          "observationTriggeredN": 0,
+          "marketEvaluableN": 0,
+          "resolvedN": 0,
+          "labeledN": 0
+        }
+      }
+    ],
+    "dataCoverage": {
+      "cohortN": 40,
+      "replayWithObservationsN": 38,
+      "marketHistoryAttemptedN": 40,
+      "walletEvidenceN": 1,
+      "structureEvidenceN": 0
+    },
+    "convergenceVelocity": [
+      {
+        "bucket": "<= 5m",
+        "N": 0,
+        "precision": null,
+        "medianMfe": null,
+        "medianMae": null
+      },
+      {
+        "bucket": "<= 15m",
+        "N": 18,
+        "precision": 1,
+        "medianMfe": 1.5,
+        "medianMae": 0
+      },
+      {
+        "bucket": "<= 30m",
+        "N": 18,
+        "precision": 1,
+        "medianMfe": 1.5,
+        "medianMae": 0
+      },
+      {
+        "bucket": "<= 60m",
+        "N": 18,
+        "precision": 1,
+        "medianMfe": 1.5,
+        "medianMae": 0
+      }
+    ],
+    "independentClusterAnalysis": [
+      {
+        "bucket": "1 cluster",
+        "N": 0,
+        "precision": null,
+        "medianMfe": null,
+        "medianMae": null
+      },
+      {
+        "bucket": "2 clusters",
+        "N": 18,
+        "precision": 1,
+        "medianMfe": 1.5,
+        "medianMae": 0
+      },
+      {
+        "bucket": "3 clusters",
+        "N": 0,
+        "precision": null,
+        "medianMfe": null,
+        "medianMae": null
+      },
+      {
+        "bucket": "4+ clusters",
+        "N": 0,
+        "precision": null,
+        "medianMfe": null,
+        "medianMae": null
+      }
+    ],
+    "lowNSwarnings": [
+      "QUALITY_CONVERGENCE: resolved N=0",
+      "WALLET_CONFIRMATION: resolved N=0",
+      "STRUCTURE_GATE: resolved N=0",
+      "AMPLIFIER_ARRIVAL: resolved N=0",
+      "SIGNAL_ENTRY: resolved N=0"
+    ]
+  },
+  "executionDelaySensitivity": [
+    {
+      "executionDelaySeconds": 15,
+      "layers": [
+        {
+          "observationType": "FIRST_CALLER",
+          "N": 38,
+          "PASS": 18,
+          "FAIL": 20,
+          "UNRESOLVED": 0,
+          "precision": 0.47368421052631576,
+          "falsePositiveRate": 0.5263157894736842,
+          "medianMfe": 0,
+          "medianMae": -0.30000000000000004,
+          "medianTimeTo2x": 3000,
+          "medianTimeToMinus30": 1800,
+          "medianReturn15m": -0.1916666666666667,
+          "medianReturn1h": -0.45833333333333337,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 1,
+            "PARTIAL": 37,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 38,
+            "marketEvaluableN": 38,
+            "resolvedN": 38,
+            "labeledN": 38
+          }
+        },
+        {
+          "observationType": "INDEPENDENT_CONVERGENCE",
+          "N": 18,
+          "PASS": 18,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": 1,
+          "falsePositiveRate": 0,
+          "medianMfe": 1.5,
+          "medianMae": 0,
+          "medianTimeTo2x": 3000,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": 0.5714285714285716,
+          "medianReturn1h": 1,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 18,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 18,
+            "marketEvaluableN": 18,
+            "resolvedN": 18,
+            "labeledN": 18
+          }
+        },
+        {
+          "observationType": "QUALITY_CONVERGENCE",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        },
+        {
+          "observationType": "WALLET_CONFIRMATION",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        },
+        {
+          "observationType": "STRUCTURE_GATE",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        },
+        {
+          "observationType": "AMPLIFIER_ARRIVAL",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        },
+        {
+          "observationType": "SIGNAL_ENTRY",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        }
+      ]
+    },
+    {
+      "executionDelaySeconds": 30,
+      "layers": [
+        {
+          "observationType": "FIRST_CALLER",
+          "N": 38,
+          "PASS": 18,
+          "FAIL": 20,
+          "UNRESOLVED": 0,
+          "precision": 0.47368421052631576,
+          "falsePositiveRate": 0.5263157894736842,
+          "medianMfe": 0,
+          "medianMae": -0.30000000000000004,
+          "medianTimeTo2x": 3000,
+          "medianTimeToMinus30": 1800,
+          "medianReturn15m": -0.1916666666666667,
+          "medianReturn1h": -0.45833333333333337,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 1,
+            "PARTIAL": 37,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 38,
+            "marketEvaluableN": 38,
+            "resolvedN": 38,
+            "labeledN": 38
+          }
+        },
+        {
+          "observationType": "INDEPENDENT_CONVERGENCE",
+          "N": 18,
+          "PASS": 18,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": 1,
+          "falsePositiveRate": 0,
+          "medianMfe": 1.5,
+          "medianMae": 0,
+          "medianTimeTo2x": 3000,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": 0.5714285714285716,
+          "medianReturn1h": 1,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 18,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 18,
+            "marketEvaluableN": 18,
+            "resolvedN": 18,
+            "labeledN": 18
+          }
+        },
+        {
+          "observationType": "QUALITY_CONVERGENCE",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        },
+        {
+          "observationType": "WALLET_CONFIRMATION",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        },
+        {
+          "observationType": "STRUCTURE_GATE",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        },
+        {
+          "observationType": "AMPLIFIER_ARRIVAL",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        },
+        {
+          "observationType": "SIGNAL_ENTRY",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        }
+      ]
+    },
+    {
+      "executionDelaySeconds": 60,
+      "layers": [
+        {
+          "observationType": "FIRST_CALLER",
+          "N": 38,
+          "PASS": 18,
+          "FAIL": 20,
+          "UNRESOLVED": 0,
+          "precision": 0.47368421052631576,
+          "falsePositiveRate": 0.5263157894736842,
+          "medianMfe": 0,
+          "medianMae": -0.30000000000000004,
+          "medianTimeTo2x": 3000,
+          "medianTimeToMinus30": 1800,
+          "medianReturn15m": -0.1916666666666667,
+          "medianReturn1h": -0.45833333333333337,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 1,
+            "PARTIAL": 37,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 38,
+            "marketEvaluableN": 38,
+            "resolvedN": 38,
+            "labeledN": 38
+          }
+        },
+        {
+          "observationType": "INDEPENDENT_CONVERGENCE",
+          "N": 18,
+          "PASS": 18,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": 1,
+          "falsePositiveRate": 0,
+          "medianMfe": 1.5,
+          "medianMae": 0,
+          "medianTimeTo2x": 3000,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": 0.5714285714285716,
+          "medianReturn1h": 1,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 18,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 18,
+            "marketEvaluableN": 18,
+            "resolvedN": 18,
+            "labeledN": 18
+          }
+        },
+        {
+          "observationType": "QUALITY_CONVERGENCE",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        },
+        {
+          "observationType": "WALLET_CONFIRMATION",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        },
+        {
+          "observationType": "STRUCTURE_GATE",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        },
+        {
+          "observationType": "AMPLIFIER_ARRIVAL",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        },
+        {
+          "observationType": "SIGNAL_ENTRY",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        }
+      ]
+    },
+    {
+      "executionDelaySeconds": 180,
+      "layers": [
+        {
+          "observationType": "FIRST_CALLER",
+          "N": 38,
+          "PASS": 18,
+          "FAIL": 20,
+          "UNRESOLVED": 0,
+          "precision": 0.47368421052631576,
+          "falsePositiveRate": 0.5263157894736842,
+          "medianMfe": 0,
+          "medianMae": -0.30000000000000004,
+          "medianTimeTo2x": 3000,
+          "medianTimeToMinus30": 1800,
+          "medianReturn15m": -0.1916666666666667,
+          "medianReturn1h": -0.45833333333333337,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 1,
+            "PARTIAL": 37,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 38,
+            "marketEvaluableN": 38,
+            "resolvedN": 38,
+            "labeledN": 38
+          }
+        },
+        {
+          "observationType": "INDEPENDENT_CONVERGENCE",
+          "N": 18,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 18,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": 0.8181818181818181,
+          "medianMae": 0,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": 0.5909090909090908,
+          "medianReturn1h": 0.2727272727272725,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 18,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 18,
+            "marketEvaluableN": 18,
+            "resolvedN": 0,
+            "labeledN": 18
+          }
+        },
+        {
+          "observationType": "QUALITY_CONVERGENCE",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        },
+        {
+          "observationType": "WALLET_CONFIRMATION",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        },
+        {
+          "observationType": "STRUCTURE_GATE",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        },
+        {
+          "observationType": "AMPLIFIER_ARRIVAL",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        },
+        {
+          "observationType": "SIGNAL_ENTRY",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        }
+      ]
+    },
+    {
+      "executionDelaySeconds": 300,
+      "layers": [
+        {
+          "observationType": "FIRST_CALLER",
+          "N": 38,
+          "PASS": 18,
+          "FAIL": 20,
+          "UNRESOLVED": 0,
+          "precision": 0.47368421052631576,
+          "falsePositiveRate": 0.5263157894736842,
+          "medianMfe": 0,
+          "medianMae": -0.30000000000000004,
+          "medianTimeTo2x": 3000,
+          "medianTimeToMinus30": 1800,
+          "medianReturn15m": -0.1916666666666667,
+          "medianReturn1h": -0.45833333333333337,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 1,
+            "PARTIAL": 37,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 38,
+            "marketEvaluableN": 38,
+            "resolvedN": 38,
+            "labeledN": 38
+          }
+        },
+        {
+          "observationType": "INDEPENDENT_CONVERGENCE",
+          "N": 18,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 18,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": 0.8181818181818181,
+          "medianMae": 0,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": 0.5909090909090908,
+          "medianReturn1h": 0.2727272727272725,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 18,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 18,
+            "marketEvaluableN": 18,
+            "resolvedN": 0,
+            "labeledN": 18
+          }
+        },
+        {
+          "observationType": "QUALITY_CONVERGENCE",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        },
+        {
+          "observationType": "WALLET_CONFIRMATION",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        },
+        {
+          "observationType": "STRUCTURE_GATE",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        },
+        {
+          "observationType": "AMPLIFIER_ARRIVAL",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        },
+        {
+          "observationType": "SIGNAL_ENTRY",
+          "N": 0,
+          "PASS": 0,
+          "FAIL": 0,
+          "UNRESOLVED": 0,
+          "precision": null,
+          "falsePositiveRate": null,
+          "medianMfe": null,
+          "medianMae": null,
+          "medianTimeTo2x": null,
+          "medianTimeToMinus30": null,
+          "medianReturn15m": null,
+          "medianReturn1h": null,
+          "medianReturn6h": null,
+          "medianReturn24h": null,
+          "dataAvailability": {
+            "AVAILABLE": 0,
+            "PARTIAL": 0,
+            "UNAVAILABLE": 0,
+            "INSUFFICIENT_MARKET_DATA": 0
+          },
+          "dataUnavailableN": 0,
+          "denominators": {
+            "cohortN": 40,
+            "observationTriggeredN": 0,
+            "marketEvaluableN": 0,
+            "resolvedN": 0,
+            "labeledN": 0
+          }
+        }
+      ]
+    }
+  ],
+  "selectionVersionDefault": "validation-001-selection-v1"
+}

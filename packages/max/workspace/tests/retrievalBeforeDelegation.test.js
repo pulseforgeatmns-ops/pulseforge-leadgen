@@ -2,11 +2,9 @@
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 
 const {
-  maybeHandleRetrievalBeforeDelegationTurn,
+  maybeHandleRetrievalBeforeDelegationTurn: rawCieHandler,
 } = require('../RetrievalBeforeDelegationContext');
 const {
   maybeHandleScoutAcquisitionTurn,
@@ -17,6 +15,30 @@ const {
   createSpecialistDelegationService,
 } = require('../../../../services/specialistDelegation');
 const { createMemoryAcquisitionState } = require('../../../../services/scoutAcquisitionIntelligence');
+const cie = require('../../../../services/clientIntelligenceInterview');
+
+async function approvedAnchorFixture() {
+  const opts = { store: cie.createMemoryStore() };
+  const started = await cie.startClientInterview({ clientId: 10, forceNew: true }, opts);
+  const answers = [
+    'Anchor Cleaning — commercial cleaning for professional offices.',
+    'Recurring commercial cleaning and weekly office cleans.',
+    'Property managers, facility managers, and professional offices.',
+    'Lowest-price bargain hunters.',
+    'Greater Manchester including Bedford and Hooksett.',
+    'Reliable crews that do the work right without chasing.',
+    'Calm professional reliable voice.',
+    'Grow commercial cleaning in Greater Manchester.',
+    'Clearer path to commercial opportunities in 90 days.',
+  ];
+  let turn = started;
+  for (const answer of answers) {
+    turn = await cie.postInterviewMessage(started.interviewId, answer, opts);
+  }
+  assert.ok(turn.blueprint);
+  await cie.approveBlueprint(turn.blueprint.id, opts);
+  return opts;
+}
 
 describe('SPEC-102 retrieval before delegation — workspace hook', () => {
   let session;
@@ -48,6 +70,7 @@ describe('SPEC-102 retrieval before delegation — workspace hook', () => {
       question: 'What do you currently understand about our service area?',
       session,
       context: session.context,
+      cieOpts: await approvedAnchorFixture(),
     });
     assert.ok(turn);
     assert.equal(turn.delegated, false);
@@ -62,6 +85,7 @@ describe('SPEC-102 retrieval before delegation — workspace hook', () => {
       question: 'What do you know about Anchor?',
       session,
       context: session.context,
+      cieOpts: await approvedAnchorFixture(),
     });
     assert.ok(turn);
     assert.equal(turn.delegated, false);
@@ -108,6 +132,7 @@ describe('SPEC-102 retrieval before delegation — workspace hook', () => {
   it('does not claim explicit investigation questions', async () => {
     const turn = await maybeHandleRetrievalBeforeDelegationTurn({
       question: 'Find commercial cleaning opportunities.',
+      operatingEvidenceOpts: require('./workspaceTestHarness').unavailableOperatingEvidence(),
       session,
       context: session.context,
     });
@@ -192,23 +217,29 @@ describe('SPEC-102 Scout workspace entry', () => {
 });
 
 describe('SPEC-102 WorkspaceEngine wiring', () => {
-  it('places retrieval after interrogation and before Scout', () => {
-    const engineSrc = fs.readFileSync(
-      path.join(__dirname, '..', 'WorkspaceEngine.js'),
-      'utf8'
-    );
-    const interrogateAt = engineSrc.indexOf(
-      'const interrogationTurn = await maybeHandleSpecialistInterrogationTurn'
-    );
-    const retrieveAt = engineSrc.indexOf(
-      'const retrievalTurn = await maybeHandleRetrievalBeforeDelegationTurn'
-    );
-    const scoutAt = engineSrc.indexOf(
-      'await maybeHandleScoutAcquisitionTurn'
-    );
-    assert.ok(interrogateAt > 0);
-    assert.ok(retrieveAt > interrogateAt);
-    assert.ok(scoutAt > retrieveAt);
-    assert.match(engineSrc, /maybeHandleRetrievalBeforeDelegationTurn/);
+  it('retrieves approved service-area memory without rerunning a previous Scout investigation', async () => {
+    let scoutCalls = 0;
+    const engine = require('./workspaceTestHarness').createHermeticWorkspaceEngine({
+      disableLlm: true,
+      missionsEnabled: false,
+      clientIntelligenceOpts: await approvedAnchorFixture(),
+      scoutAcquisitionOpts: { runLoop: async () => { scoutCalls += 1; throw new Error('Unexpected Scout delegation'); } },
+    });
+    const opened = engine.open({ tenantId: '10', page: 'command-deck' });
+    const session = engine._sessions.get(opened.sessionId);
+    session.context.acquisitionLoop = true;
+    session.context.lastScoutEvaluation = { id: 'existing-evaluation', materialChange: false };
+    const result = await engine.ask({ sessionId: opened.sessionId, question: 'What do you currently understand about our service area?' });
+    assert.match(result.prose, /Greater Manchester|Bedford|Hooksett/i);
+    assert.equal(result.mission, null);
+    assert.equal(result.scoutLoop, undefined);
+    assert.equal(scoutCalls, 0);
+    assert.ok(result.clientIntelligence && result.clientIntelligence.approved);
   });
 });
+
+const { createHermeticRetrievalHandler } = require('./workspaceTestHarness');
+const maybeHandleRetrievalBeforeDelegationTurn = createHermeticRetrievalHandler(input => rawCieHandler({
+  operatingEvidenceOpts: require('./workspaceTestHarness').unavailableOperatingEvidence(),
+  ...input,
+}));

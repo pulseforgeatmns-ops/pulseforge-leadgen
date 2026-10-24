@@ -121,6 +121,13 @@ function assignProvidersForEvidence(evidenceType, opts = {}) {
   }
 
   for (const provider of capable) {
+    if (
+      evidenceType === INVESTIGATIVE_EVIDENCE.IDENTITY &&
+      provider.id === 'website' &&
+      opts.entityScopedIdentity !== true
+    ) {
+      continue;
+    }
     tryAssign(provider, false);
   }
 

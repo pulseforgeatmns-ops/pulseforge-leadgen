@@ -2,7 +2,7 @@
 
 /**
  * SPEC-141 Stage 6 — Qualification.
- * Reason about whether each candidate meets ICP and buying criteria.
+ * SPEC-194: delegates market qualification and readiness to ProspectEvaluation (ADR-101).
  */
 
 const {
@@ -10,38 +10,56 @@ const {
   enrichPeopleSafe,
 } = require('../../max/scoutAcquisition/FitEvaluation');
 const { QUALIFICATION_OUTCOMES } = require('./types');
-const { OPPORTUNITY_CLASSES } = require('../../max/scoutAcquisition/Types');
+const {
+  OPPORTUNITY_CLASSES,
+  QUALIFICATION_STATUSES,
+  READINESS_STATES,
+} = require('../../max/scoutAcquisition/Types');
+const { businessFitQualifiedCount } = require('../../max/scoutAcquisition/ProspectEvaluation');
 
-function hasDecisionMaker(candidate) {
-  const people = candidate.people || [];
-  return people.some(
-    (p) =>
-      p.decisionMaker === true ||
-      /\b(owner|principal|partner|operations|office manager|director|president|founder)\b/i.test(
-        String(p.jobTitle || '')
+function mapOutcomeFromEvaluation(evaluation) {
+  if (!evaluation) return QUALIFICATION_OUTCOMES.OUT;
+  if (evaluation.qualification.status === QUALIFICATION_STATUSES.QUALIFIED) {
+    return QUALIFICATION_OUTCOMES.QUALIFIED;
+  }
+  if (evaluation.qualification.status === QUALIFICATION_STATUSES.UNCERTAIN) {
+    return QUALIFICATION_OUTCOMES.WATCH;
+  }
+  return QUALIFICATION_OUTCOMES.OUT;
+}
+
+function buildChecksFromEvaluation(evaluation, working, attached) {
+  return {
+    meetsIcp: evaluation.qualification.status !== QUALIFICATION_STATUSES.NOT_QUALIFIED,
+    hasDecisionMaker: Boolean(
+      (working.people || []).some((p) =>
+        /\b(owner|principal|partner|operations|office manager|director|president|founder)\b/i.test(
+          String(p.jobTitle || '')
+        )
       )
-  );
-}
-
-function hasContactPath(candidate) {
-  return Boolean(
-    candidate.email ||
-      candidate.phone ||
-      (candidate.people || []).some((p) => p.email || p.phone)
-  );
-}
-
-function hasBuyingSignals(candidate) {
-  const signals = candidate.signals || [];
-  return signals.some((s) =>
-    ['portfolio_growth', 'expansion', 'hiring', 'new_location', 'operational_change'].includes(
-      String(s.type || s.kind || '').toLowerCase()
-    )
-  );
+    ),
+    hasContactPath: Boolean(
+      working.email ||
+        working.phone ||
+        (working.people || []).some((p) => p.email || p.phone)
+    ),
+    hasBuyingSignals: (evaluation.readiness.signals || []).some((s) =>
+      ['portfolio_growth', 'expansion', 'hiring', 'new_location', 'operational_change'].includes(
+        String(s.type || '').toLowerCase()
+      )
+    ),
+    evidenceSufficient: Boolean(
+      (working.evidenceRefs && working.evidenceRefs.length) ||
+        evaluation.readiness.status === READINESS_STATES.READY
+    ),
+    basicFit: attached.fit && attached.fit.basicFit === true,
+    qualificationStatus: evaluation.qualification.status,
+    readinessStatus: evaluation.readiness.status,
+  };
 }
 
 /**
- * Qualify candidates based on fit evaluation and evidence.
+ * Qualify candidates based on multi-dimensional prospect evaluation (SPEC-194).
  *
  * @param {object} input
  * @returns {Promise<object>}
@@ -61,6 +79,7 @@ async function qualifyCandidates(input = {}) {
   const rejected = [];
   const watch = [];
   const enrichedCandidates = [];
+  const prospectEvaluations = [];
 
   for (const candidate of candidates) {
     let working = { ...candidate };
@@ -80,29 +99,16 @@ async function qualifyCandidates(input = {}) {
 
     const attached = attachFitToClassified(classifiedSeed, working, searchDefinition, now);
     const next = attached.classified;
-    working = { ...working, ...next, opportunityClass: next.classification };
+    const evaluation = attached.evaluation;
+    working = { ...working, ...next, opportunityClass: next.classification, evaluation };
+    prospectEvaluations.push(evaluation);
 
     const evidence = evidenceMap.get(String(working.id)) || { confidence: 0.2, evidence: [] };
     const icpScore = working.icpScore != null ? Number(working.icpScore) : null;
     const fitScore = attached.fit && attached.fit.score != null ? Number(attached.fit.score) : null;
     const fitClass = next.classification;
-
-    const checks = {
-      meetsIcp: icpScore == null ? fitClass !== OPPORTUNITY_CLASSES.REJECTED : icpScore >= 70,
-      hasDecisionMaker: hasDecisionMaker(working),
-      hasContactPath: hasContactPath(working),
-      hasBuyingSignals: hasBuyingSignals(working),
-      evidenceSufficient: evidence.sufficient === true || evidence.confidence >= 0.45,
-      basicFit: attached.fit && attached.fit.basicFit === true,
-    };
-
-    const passCount = Object.values(checks).filter(Boolean).length;
-    const outcome =
-      checks.meetsIcp && checks.basicFit && passCount >= 3
-        ? QUALIFICATION_OUTCOMES.QUALIFIED
-        : checks.basicFit || passCount >= 2
-          ? QUALIFICATION_OUTCOMES.WATCH
-          : QUALIFICATION_OUTCOMES.OUT;
+    const outcome = mapOutcomeFromEvaluation(evaluation);
+    const checks = buildChecksFromEvaluation(evaluation, working, attached);
 
     const row = {
       candidateId: working.id,
@@ -114,7 +120,9 @@ async function qualifyCandidates(input = {}) {
       fitScore,
       evidenceConfidence: evidence.confidence,
       signals: working.signals || [],
-      reasons: buildQualificationReasons(checks, outcome),
+      reasons: evaluation.qualification.reasons || [],
+      evaluation,
+      investigation: evaluation.investigation,
     };
 
     enrichedCandidates.push(working);
@@ -129,28 +137,14 @@ async function qualifyCandidates(input = {}) {
     watch,
     rejected,
     enrichedCandidates,
-    qualifiedCount: qualified.length,
+    prospectEvaluations,
+    qualifiedCount: businessFitQualifiedCount(prospectEvaluations),
     watchCount: watch.length,
     rejectedCount: rejected.length,
   };
 }
 
-function buildQualificationReasons(checks, outcome) {
-  const reasons = [];
-  if (checks.meetsIcp) reasons.push('Meets ICP threshold');
-  if (checks.hasDecisionMaker) reasons.push('Identifiable decision-maker');
-  if (checks.hasContactPath) reasons.push('Reachable contact path');
-  if (checks.hasBuyingSignals) reasons.push('Buying signals present');
-  if (checks.evidenceSufficient) reasons.push('Sufficient evidence confidence');
-  if (outcome === QUALIFICATION_OUTCOMES.OUT && !checks.basicFit) {
-    reasons.push('Does not meet basic fit criteria');
-  }
-  return reasons;
-}
-
 module.exports = {
-  hasDecisionMaker,
-  hasContactPath,
-  hasBuyingSignals,
+  mapOutcomeFromEvaluation,
   qualifyCandidates,
 };

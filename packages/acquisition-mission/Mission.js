@@ -11,6 +11,7 @@ const {
   PRIORITIES,
   SPECIALISTS,
   OPERATOR_DECISION_KINDS,
+  OPERATOR_DECISION_RESPONSE_TYPES,
   RUNTIME_VERSION,
   clone,
   asText,
@@ -27,6 +28,7 @@ const {
   formatOperatorConfirmation,
   formatAmbiguityPrompt,
 } = require('./StructuredMission');
+const { responseTypeForAmbiguity } = require('./PendingDecisionResponseType');
 const { assertMissionStateConsistent } = require('./PendingOperatorDecision');
 
 function normalizePriority(value) {
@@ -37,8 +39,11 @@ function normalizePriority(value) {
 }
 
 function planMissionFromInput(objective, input = {}) {
-  if (input.resolvedObjective) {
-    return planMission(input.resolvedObjective, {
+  const resolvedFromInput = input.resolvedObjective || null;
+  if (resolvedFromInput && !asText(resolvedFromInput.objective)) {
+    delete input.resolvedObjective;
+  } else if (resolvedFromInput) {
+    return planMission(resolvedFromInput, {
       targetSegment: asText(input.targetSegment || input.segment) || null,
       constraints: input.constraints,
       priority: input.priority,
@@ -176,6 +181,7 @@ function buildPendingOperatorDecision({
       stage: STAGES.DISCOVER,
       kind: OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL,
       prompt: 'Approve discovery?',
+      responseType: OPERATOR_DECISION_RESPONSE_TYPES.YES_NO,
     };
   }
   const ambiguities = Array.isArray(planAmbiguities) ? planAmbiguities : [];
@@ -188,6 +194,7 @@ function buildPendingOperatorDecision({
       question: first.question,
       choices: first.choices || [],
       field: first.field,
+      responseType: responseTypeForAmbiguity(first),
       clarificationPrompt: formatAmbiguityPrompt(first),
     };
   }
@@ -196,6 +203,7 @@ function buildPendingOperatorDecision({
       stage: STAGES.DISCOVER,
       kind: OPERATOR_DECISION_KINDS.PLAN_APPROVAL,
       prompt: 'Approve mission plan?',
+      responseType: OPERATOR_DECISION_RESPONSE_TYPES.YES_NO,
       missionUnderstanding: formatOperatorConfirmation(missionPlanDraft)
         || (planned && planned.confirmation)
         || formatMissionUnderstandingProse(missionPlanDraft),

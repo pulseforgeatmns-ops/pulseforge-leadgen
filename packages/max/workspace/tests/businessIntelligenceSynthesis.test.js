@@ -161,6 +161,7 @@ async function retrieveTurn(question, extras = {}) {
     session: { id: 'spec-110', context },
     context,
     operatingEvidenceOpts: operatingOpts(extras),
+    cieService: { getApprovedClientBlueprint: async () => null },
     now: NOW,
     ...extras,
   });

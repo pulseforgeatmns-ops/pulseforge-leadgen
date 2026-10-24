@@ -1,9 +1,9 @@
 name: Revenue PostgreSQL Integration
 
+# PR path: .github/workflows/pr-ci-lean.yml (domain revenue-postgres)
+# Broad regression: .github/workflows/full-regression.yml
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -86,6 +86,19 @@ jobs:
 
       - name: Test — Anchor Phone Setter disposable PostgreSQL rehearsal
         run: npm run test:anchor-phone-setter:postgres
+
+      - name: Test — AO prospect routing authorization and PostgreSQL invariants
+        run: npm run test:ao-prospect-routing
+
+      - name: Install Chromium for isolated spreadsheet browser tests
+        # Dependency installation requires root; keep the executable in the
+        # runner user's cache so the subsequent non-root test can locate it.
+        run: sudo env "PATH=$PATH" "PUPPETEER_CACHE_DIR=$HOME/.cache/puppeteer" node node_modules/puppeteer/lib/cjs/puppeteer/node/cli.js browsers install chrome --install-deps
+
+      - name: Test — Max spreadsheet actual fixture, approval API and PostgreSQL reliability gate
+        env:
+          MAX_SPREADSHEET_BROWSER_TEST: '1'
+        run: npm run test:max:spreadsheet:reliability
 
       - name: Test — mission routing workspace regression suite
         run: npm run test:ci:application

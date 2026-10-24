@@ -1,0 +1,40 @@
+diff --git a/index.html b/index.html
+index 34b0a6b..b0aec58 100644
+--- a/index.html
++++ b/index.html
+@@ -1,6 +1,15 @@
+ <!DOCTYPE html>
+ <html lang="en">
+ <head>
++<!-- Google tag (gtag.js) -->
++<script async src="https://www.googletagmanager.com/gtag/js?id=AW-18463870847"></script>
++<script>
++  window.dataLayer = window.dataLayer || [];
++  function gtag(){dataLayer.push(arguments);}
++  gtag('js', new Date());
++
++  gtag('config', 'AW-18463870847');
++</script>
+ <meta charset="UTF-8">
+ <meta name="viewport" content="width=device-width, initial-scale=1.0">
+ <link rel="icon" href="https://goanchorcleaning.com/assets/brand/favicon-v20260916.ico?v=20260916" sizes="any">
+diff --git a/residential/index.html b/residential/index.html
+index 0e89586..33a33f0 100644
+--- a/residential/index.html
++++ b/residential/index.html
+@@ -1,6 +1,15 @@
+ <!DOCTYPE html>
+ <html lang="en">
+ <head>
++<!-- Google tag (gtag.js) -->
++<script async src="https://www.googletagmanager.com/gtag/js?id=AW-18463870847"></script>
++<script>
++  window.dataLayer = window.dataLayer || [];
++  function gtag(){dataLayer.push(arguments);}
++  gtag('js', new Date());
++
++  gtag('config', 'AW-18463870847');
++</script>
+ <meta charset="UTF-8">
+ <meta name="viewport" content="width=device-width, initial-scale=1.0">
+ <title>Reliable Home Cleaning in Bedford & Greater Manchester, NH | Anchor Cleaning</title>

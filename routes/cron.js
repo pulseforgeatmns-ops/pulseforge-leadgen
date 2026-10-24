@@ -1,6 +1,70 @@
 const express = require('express');
-const Anthropic = require('@anthropic-ai/sdk');
+const Anthropic = require('../utils/meteredAnthropic').forAgent('cron_summary');
 const router = express.Router();
+// PF-CLARITY-001: bearer-authenticated POST only, two flags + tenant grant fail closed.
+router.post('/cron/clarity-weekly-review', (req,res) => require('../services/clarityJobs').createClarityCronHandler()(req,res));
+// No missing-secret bypass and no GET mutation. These stay separate from legacy
+// agent enablement: the durable program is the delegated authority, not autosend.
+function anchorCron(method) {
+  return async (req, res) => {
+    const crypto = require('crypto');
+    const expected = Buffer.from(process.env.CRON_SECRET || '');
+    const supplied = Buffer.from(String(req.get('authorization') || '').replace(/^Bearer /, ''));
+    if (!expected.length || expected.length !== supplied.length || !crypto.timingSafeEqual(expected, supplied)) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    try {
+      const result = method === 'poll'
+        ? await require('../services/governedOutboundExecutionClock').runGovernedOutboundPollCycle()
+        : await require('../anchorDailyOutboundCron')[method]();
+      return res.set('Cache-Control', 'no-store').json(result);
+    } catch (e) { return res.status(500).json({ error: e.code || 'anchor_daily_outbound_failed' }); }
+  };
+}
+async function handleGovernedOutboundTickCron(req, res) {
+  const crypto = require('crypto');
+  const expected = Buffer.from(process.env.CRON_SECRET || '');
+  const supplied = Buffer.from(String(req.get('authorization') || '').replace(/^Bearer /, ''));
+  if (!expected.length || expected.length !== supplied.length || !crypto.timingSafeEqual(expected, supplied)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const result = await require('../services/governedOutboundExecutionClock').runGovernedOutboundTickCycle({
+      allTenants: true,
+    });
+    return res.set('Cache-Control', 'no-store').json(result);
+  } catch (e) {
+    return res.status(500).json({ error: e.code || 'governed_outbound_tick_failed' });
+  }
+}
+router.post('/cron/anchor-daily-outbound', handleGovernedOutboundTickCron);
+router.post('/cron/governed-outbound-tick', handleGovernedOutboundTickCron);
+router.post('/cron/anchor-outbound-replies', anchorCron('poll'));
+router.post('/cron/anchor-max-outbound-control', async (req, res) => {
+  const crypto = require('crypto');
+  const expected = Buffer.from(process.env.CRON_SECRET || '');
+  const supplied = Buffer.from(String(req.get('authorization') || '').replace(/^Bearer /, ''));
+  if (!expected.length || expected.length !== supplied.length || !crypto.timingSafeEqual(expected, supplied)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const pool = require('../db');
+    const execute = String(req.query.execute || 'true').toLowerCase() !== 'false';
+    const tenantId = req.query.tenant_id || req.query.tenantId || null;
+    // Bounded orchestration only. Each tenant cycle starts under its own
+    // control lock and continues after this response. Scout evidence stays in
+    // the control-loop event, not in this body.
+    const result = await require('../services/governedOutboundControlDispatch').dispatchGovernedOutboundControl({
+      pool,
+      execute,
+      logger: console,
+      tenantId: tenantId ? String(tenantId) : null,
+    });
+    return res.set('Cache-Control', 'no-store').json(result);
+  } catch (e) {
+    return res.status(500).json({ error: e.code || 'anchor_max_outbound_control_failed' });
+  }
+});
 const pool = require('../db');
 const { normalizeClientId } = require('../utils/clientContext');
 const {
@@ -11,6 +75,7 @@ const {
 const { runScoutExpansionCron } = require('../scoutExpansion');
 const { createMaxDecayCronHandler } = require('../utils/maxDecayCron');
 const { diagnoseScoutPlaces } = require('../services/scoutPlacesDiagnostic');
+const { withResearchProviderScope, isResearchProviderControlError } = require('../utils/anchorResearchProviderPause');
 
 const anthropic = new Anthropic();
 
@@ -27,7 +92,7 @@ function isScoutPlacesDiagnosticAgent(agent) {
 
 const CRON_MODULES = {
   scout:     '../leadgen',
-  emmett:    '../emmettAgent',
+  emmett:    '../emmettSchedulerCron',
   max:       '../maxAgent',
   rex:       '../rexAgent',
   sketch:    '../sketchAgent',
@@ -55,6 +120,7 @@ const CRON_MODULES = {
   warm_routing: '../warmRoutingAgent',
   max_decay: '../maxDecayAgent',
   paige_reflection: '../agents/reflection/run',
+  tenant_outreach_executor: '../tenantOutreachSchedulerCron',
 };
 
 async function runCronAgent(agent, res, query = {}) {
@@ -110,14 +176,39 @@ async function runCronAgent(agent, res, query = {}) {
       mod.run({ client_id: clientId, scheduled: true }).catch(err => {
         console.error(`[cron] ${agent} run error:`, err.message);
       });
-    } else if (agent === 'paige' && typeof mod.run === 'function') {
-      mod.run({
+    } else if (agent === 'paige_organic') {
+      const { runOrganicPipeline } = require('../services/paigeAnchorOrganicSocial');
+      runOrganicPipeline({
         client_id: clientId,
+        skipMediaSync: query.skipMediaSync === 'true' || query.skip_media_sync === 'true',
+        minBacklog: query.minBacklog || query.min_backlog,
+      }).catch(err => {
+        console.error(`[cron] ${agent} run error:`, err.message);
+      });
+    } else if (agent === 'paige') {
+      const { routePaigeSocialContentExecution } = require('../services/paigeSocialContentExecution');
+      routePaigeSocialContentExecution({
+        client_id: clientId,
+        tenantId: String(clientId),
         dryRun: query.dryRun ?? query.dry_run ?? query['dry-run'],
         channel: query.channel,
+        platform: query.platform || query.channel,
         format: query.format,
         count: query.count,
         simulateMiraUnavailable: query.simulateMiraUnavailable ?? query.simulate_mira_unavailable,
+        contentObjective: query.contentObjective || query.content_objective,
+        workspaceContext: query.workspaceContext || query.workspace_context,
+        missionContext: query.missionContext || query.mission_context,
+        evidence: (() => {
+          if (!query.evidence) return undefined;
+          try {
+            return JSON.parse(String(query.evidence));
+          } catch (_) {
+            return undefined;
+          }
+        })(),
+        cadenceContext: query.cadenceContext || query.cadence_context,
+        source: 'cron',
       }).catch(err => {
         console.error(`[cron] ${agent} run error:`, err.message);
       });
@@ -146,6 +237,137 @@ async function runCronAgent(agent, res, query = {}) {
     }
   } catch (err) {
     console.error(`[cron] ${agent} error:`, err.message);
+  }
+}
+
+async function handlePennyDailyReviewCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const clientId = normalizeClientId(
+    req.body?.client_id || req.body?.clientId || req.query.client_id || req.query.clientId || 10
+  );
+  const dispatchGate = await isAgentEnabledForClient(clientId, 'penny');
+  if (!dispatchGate.allowed) {
+    await logBlockedDispatch({
+      agentName: 'penny',
+      clientId,
+      reason: dispatchGate.reason || BLOCK_REASON,
+      channel: 'daily_cron',
+      payload: { triggered_by: 'penny_daily_review' },
+    });
+    return res.status(403).json({
+      success: false,
+      skipped: true,
+      reason: dispatchGate.reason || BLOCK_REASON,
+      agent: 'penny',
+      client_id: clientId,
+    });
+  }
+  try {
+    const result = await require('../pennyAgent').run({ client_id: clientId });
+    return res.set('Cache-Control', 'no-store').json({ success: true, agent: 'penny', ...result });
+  } catch (err) {
+    console.error('[cron] penny-daily error:', err.message);
+    return res.status(500).json({ success: false, error: err.message, agent: 'penny', client_id: clientId });
+  }
+}
+
+async function handleExecuteAnchorOneOutboundCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const { run } = require('../scripts/executeAnchorOneOutbound');
+    const missionId = String(
+      req.query.mission_id
+      || req.query.missionId
+      || req.body?.mission_id
+      || req.body?.missionId
+      || ''
+    ).trim() || undefined;
+    const report = await run({ confirmProduction: true, missionId });
+    const ok = report.verdict && report.verdict.startsWith('one real');
+    return res.status(ok ? 200 : 422).json(report);
+  } catch (err) {
+    console.error('[cron] execute-anchor-one-outbound error:', err.message);
+    return res.status(err.code === 'pre_send_not_green' ? 409 : 500).json({
+      error: { code: err.code || null, message: err.message, sent: err.sent || null },
+      completedAt: new Date().toISOString(),
+    });
+  }
+}
+
+async function handleInspectAnchorCanonicalOutboundCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const { run } = require('../scripts/inspectAnchorCanonicalOutbound');
+    const report = await run({ confirmProduction: true });
+    return res.json(report);
+  } catch (err) {
+    console.error('[cron] inspect-anchor-canonical-outbound error:', err.message);
+    return res.status(500).json({
+      error: { code: err.code || null, message: err.message },
+      completedAt: new Date().toISOString(),
+    });
+  }
+}
+
+async function handleContinueAnchorStrScoutInvestigationCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const { run } = require('../scripts/continueAnchorStrScoutInvestigation');
+    const missionId = String(
+      req.query.mission_id
+      || req.query.missionId
+      || req.body?.mission_id
+      || req.body?.missionId
+      || ''
+    ).trim() || undefined;
+    const report = await run({ confirmProduction: true, missionId });
+    const ok = report.candidatesPreserved !== false && report.rolledBack !== true;
+    return res.status(ok ? 200 : 422).json(report);
+  } catch (err) {
+    console.error('[cron] continue-anchor-str-scout-investigation error:', err.message);
+    return res.status(err.code === 'no_pending_investigation' ? 409 : 500).json({
+      error: { code: err.code || null, message: err.message },
+      before: err.before || null,
+      completedAt: new Date().toISOString(),
+      sent: false,
+    });
+  }
+}
+
+async function handleRecoverAnchorCanonicalOutboundCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const recover = ['1', 'true', 'yes'].includes(
+    String(req.query.recover || req.body?.recover || '').toLowerCase()
+  );
+  try {
+    const { run } = require('../scripts/recoverAnchorCanonicalOutbound');
+    if (!recover) {
+      const report = await run({ confirmProduction: true, inspectOnly: true });
+      return res.json({ ...report, recover_hint: 'POST recover=true to advance to READY without sending' });
+    }
+    const report = await run({ confirmProduction: true });
+    return res.status(report.success ? 200 : 422).json(report);
+  } catch (err) {
+    console.error('[cron] recover-anchor-canonical-outbound error:', err.message);
+    return res.status(500).json({
+      error: { code: err.code || null, message: err.message, sent: false },
+      completedAt: new Date().toISOString(),
+    });
   }
 }
 
@@ -399,13 +621,18 @@ async function handleScoutPlacesDiagnostic(req, res) {
       if (['1', 'true', 'yes', 'on'].includes(s)) comparePlacesNew = true;
     }
 
-    const report = await diagnoseScoutPlaces({
-      comparePlacesNew,
-      query:
-        req.query.query || req.body?.query
-          ? String(req.query.query || req.body.query)
-          : undefined,
-    });
+    // Unlike legacy cron defaults, a paid diagnostic needs explicit identity
+    // while armed. Preserve all supplied values so conflicts fail closed.
+    const tenants = [req.query.client_id, req.query.clientId, req.body?.client_id, req.body?.clientId]
+      .filter(value => value != null);
+    if (!tenants.length) tenants.push(undefined);
+    const run = tenants.reduceRight((next, tenant) => () => withResearchProviderScope(tenant, next),
+      () => diagnoseScoutPlaces({
+        comparePlacesNew,
+        query: req.query.query || req.body?.query
+          ? String(req.query.query || req.body.query) : undefined,
+      }));
+    const report = await run();
 
     res.set('Cache-Control', 'no-store');
     return res.status(report.ok ? 200 : 422).json({
@@ -419,7 +646,9 @@ async function handleScoutPlacesDiagnostic(req, res) {
     });
   } catch (err) {
     console.error('[cron] scout-places-diagnostic error:', err.message);
-    return res.status(500).json({
+    const status = isResearchProviderControlError(err)
+      ? (err.code === 'anchor_research_provider_paused' ? 423 : 400) : 500;
+    return res.status(status).json({
       ok: false,
       error: err.message,
       crmWritesMade: false,
@@ -430,8 +659,68 @@ async function handleScoutPlacesDiagnostic(req, res) {
   }
 }
 
+function maxAttentionCronResult(result) {
+  const response = { ...result, ok: !(result.failed > 0 || result.error) };
+  // Keep run/item identifiers and counters, but not database/provider exception
+  // messages. The scheduler's durable run record retains the detailed errors.
+  if (result.error) response.error = 'max_attention_cycle_failed';
+  if (result.telemetry) {
+    response.telemetry = Object.fromEntries(Object.entries(result.telemetry).map(([key, value]) => [
+      key,
+      key.startsWith('release_error_') ? 'attention_claim_release_failed'
+        : key.startsWith('error_') ? 'attention_item_failed' : value,
+    ]));
+  }
+  return response;
+}
+
+async function handleMaxAttentionCycleCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  // Missing configuration must never grant scheduler execution authority.
+  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  res.set('Cache-Control', 'no-store');
+  try {
+    // Attention cycles can create durable decisions/tasks. Never infer tenant 1
+    // or broaden an omitted/malformed selector into all-client execution.
+    const selectors = [req.query.client_id, req.query.clientId, req.body?.client_id, req.body?.clientId]
+      .filter(value => value !== undefined);
+    const tenantIds = selectors.map(value => {
+      if (!['string', 'number'].includes(typeof value) || !/^[1-9][0-9]*$/.test(String(value))) return null;
+      const id = Number(value);
+      return Number.isSafeInteger(id) ? id : null;
+    });
+    if (!tenantIds.length || tenantIds.some(id => id === null) || new Set(tenantIds).size !== 1) {
+      return res.status(400).json({ ok: false, error: 'max_attention_explicit_tenant_required' });
+    }
+    const clientId = tenantIds[0];
+    const limits = [req.query.limit, req.body?.limit].filter(value => value !== undefined);
+    const parsedLimits = limits.map(value => {
+      if (!['string', 'number'].includes(typeof value) || !/^[1-9][0-9]*$/.test(String(value))) return null;
+      const limit = Number(value);
+      return Number.isInteger(limit) && limit <= 20 ? limit : null;
+    });
+    if (parsedLimits.some(limit => limit === null) || new Set(parsedLimits).size > 1) {
+      return res.status(400).json({ ok: false, error: 'max_attention_invalid_limit' });
+    }
+    const limit = parsedLimits[0] ?? 20;
+    const now = req.query.now || req.body?.now ? new Date(req.query.now || req.body.now) : new Date();
+    const { runAttentionScheduler } = require('../services/maxAttentionService');
+    const result = maxAttentionCronResult(await runAttentionScheduler(clientId, { now, limit }));
+    return res.status(result.ok ? 200 : 500).json({ client_id: clientId, ...result });
+  } catch (err) {
+    console.error('[cron] max-attention-cycle failed');
+    return res.status(500).json({ ok: false, error: 'max_attention_cycle_failed' });
+  }
+}
+
+router.post('/cron/max-attention-cycle', handleMaxAttentionCycleCron);
+router.get('/cron/max-attention-cycle', handleMaxAttentionCycleCron);
+
 router.post('/cron/scoutExpansion', handleScoutExpansionCron);
 router.get('/cron/scoutExpansion', handleScoutExpansionCron);
+router.post('/cron/penny-daily', handlePennyDailyReviewCron);
 router.post('/cron/pulse-health', handlePulseHealthCron);
 router.get('/cron/pulse-health', handlePulseHealthCron);
 // Dedicated path (preferred). Also registered in /cron/:agent dispatcher below so
@@ -442,6 +731,83 @@ router.post('/cron/scout_places_diagnostic', handleScoutPlacesDiagnostic);
 router.get('/cron/scout_places_diagnostic', handleScoutPlacesDiagnostic);
 router.post('/cron/seed-direct-mail-ao', handleSeedDirectMailAoCron);
 router.get('/cron/seed-direct-mail-ao', handleSeedDirectMailAoCron);
+router.post('/cron/execute-anchor-one-outbound', handleExecuteAnchorOneOutboundCron);
+router.get('/cron/execute-anchor-one-outbound', handleExecuteAnchorOneOutboundCron);
+router.post('/cron/inspect-anchor-canonical-outbound', handleInspectAnchorCanonicalOutboundCron);
+router.get('/cron/inspect-anchor-canonical-outbound', handleInspectAnchorCanonicalOutboundCron);
+router.post('/cron/recover-anchor-canonical-outbound', handleRecoverAnchorCanonicalOutboundCron);
+router.get('/cron/recover-anchor-canonical-outbound', handleRecoverAnchorCanonicalOutboundCron);
+router.post('/cron/continue-anchor-str-scout-investigation', handleContinueAnchorStrScoutInvestigationCron);
+router.get('/cron/continue-anchor-str-scout-investigation', handleContinueAnchorStrScoutInvestigationCron);
+
+async function handleTenantOutreachExecutorCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const { executeDueScheduledSends } = require('../services/tenantOutreachScheduler');
+    const result = await executeDueScheduledSends({
+      limit: Number(req.query.limit || req.body?.limit || 20),
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('[cron] tenant-outreach-executor error:', err.message);
+    return res.status(500).json({ error: err.message, success: false });
+  }
+}
+
+router.post('/cron/tenant-outreach-executor', handleTenantOutreachExecutorCron);
+router.get('/cron/tenant-outreach-executor', handleTenantOutreachExecutorCron);
+
+async function handleTenantMailboxPollCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const { executeTenantMailboxPolls } = require('../services/tenantMailboxPollExecutor');
+    const result = await executeTenantMailboxPolls();
+    res.set('Cache-Control', 'no-store');
+    const status = result.success ? 200 : 207;
+    return res.status(status).json(result);
+  } catch (err) {
+    console.error('[cron] tenant-mailbox-poll error:', err.message);
+    return res.status(500).json({ success: false, error: err.message, failed: 1 });
+  }
+}
+
+router.post('/cron/tenant-mailbox-poll', handleTenantMailboxPollCron);
+router.get('/cron/tenant-mailbox-poll', handleTenantMailboxPollCron);
+
+async function handleSignalShadowCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (!process.env.DATABASE_URL) {
+    return res.status(503).json({ error: 'DATABASE_URL required for signal shadow cron' });
+  }
+  try {
+    const { createSignalStore } = require('../packages/signal-v1/storage/createSignalStore');
+    const { createShadowModeServiceFromStore, runShadowSchedulerTick } = require('../packages/signal-v1/prospective/shadowScheduler');
+    const { GeckoTerminalMarketDataProvider } = require('../packages/signal-v1/providers/GeckoTerminalMarketDataProvider');
+    const store = await createSignalStore(pool, { seedFixtures: false });
+    const marketProvider = new GeckoTerminalMarketDataProvider();
+    const service = await createShadowModeServiceFromStore(store, { marketProvider });
+    const result = await runShadowSchedulerTick(service);
+    res.set('Cache-Control', 'no-store');
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('[cron] signal-shadow error:', err.message);
+    return res.status(500).json({ error: err.message, success: false });
+  }
+}
+
+router.post('/cron/signal-shadow', handleSignalShadowCron);
+router.get('/cron/signal-shadow', handleSignalShadowCron);
+
 router.post('/internal/cron/max-decay', createMaxDecayCronHandler());
 
 router.post('/cron/:agent', async (req, res) => {
@@ -471,5 +837,10 @@ router.get('/cron/:agent', async (req, res) => {
 module.exports = router;
 module.exports.handleScoutPlacesDiagnostic = handleScoutPlacesDiagnostic;
 module.exports.handleSeedDirectMailAoCron = handleSeedDirectMailAoCron;
+module.exports.handlePennyDailyReviewCron = handlePennyDailyReviewCron;
+module.exports.handleExecuteAnchorOneOutboundCron = handleExecuteAnchorOneOutboundCron;
+module.exports.handleInspectAnchorCanonicalOutboundCron = handleInspectAnchorCanonicalOutboundCron;
+module.exports.handleRecoverAnchorCanonicalOutboundCron = handleRecoverAnchorCanonicalOutboundCron;
 module.exports.isScoutPlacesDiagnosticAgent = isScoutPlacesDiagnosticAgent;
 module.exports.CRON_SPECIAL_HANDLERS = CRON_SPECIAL_HANDLERS;
+

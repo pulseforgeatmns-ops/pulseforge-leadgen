@@ -235,6 +235,9 @@ function buildEvidenceRequirementsFromQuestions(questions = []) {
  */
 function evidenceRequirementSatisfied(requirement, collectedEvidence = []) {
   const norm = String(requirement.evidenceType || '').toLowerCase();
+  const entityId = requirement.entityId || requirement.candidateId || null;
+  const hypothesisId = requirement.hypothesisId || null;
+
   return collectedEvidence.some((row) => {
     const types = [
       row.evidenceType,
@@ -244,7 +247,20 @@ function evidenceRequirementSatisfied(requirement, collectedEvidence = []) {
     ]
       .filter(Boolean)
       .map((v) => String(v).toLowerCase());
-    return types.some((t) => t === norm || t.includes(norm.replace(/_/g, '')));
+
+    const typeMatch = types.some((t) => t === norm || t.includes(norm.replace(/_/g, '')));
+    if (!typeMatch) return false;
+
+    // Market-level evidence cannot satisfy candidate-specific requirements (SPEC-195 §4).
+    if (entityId || hypothesisId) {
+      const rowEntity = row.entityId || row.candidateId || null;
+      const rowHypothesis = row.hypothesisId || null;
+      if (entityId && rowEntity && String(rowEntity) !== String(entityId)) return false;
+      if (hypothesisId && rowHypothesis && String(rowHypothesis) !== String(hypothesisId)) return false;
+      if (entityId && !rowEntity && !rowHypothesis) return false;
+    }
+
+    return true;
   });
 }
 

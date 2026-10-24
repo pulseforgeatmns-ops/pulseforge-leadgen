@@ -448,6 +448,8 @@ function composeIdentityReasoning(input = {}) {
   const hasArc = input.activeReasoningContext && input.activeReasoningContext.primaryClaim;
   const shouldUseRoe =
     hasArc &&
+    // A concrete question about limits must not repeat the previous proposition.
+    query.target !== REASONING_TARGETS.FAILURE_MODES &&
     (query.arcBound ||
       detectExplicitOperator(input.question) ||
       (input.conversationIntent && input.conversationIntent.continuity));

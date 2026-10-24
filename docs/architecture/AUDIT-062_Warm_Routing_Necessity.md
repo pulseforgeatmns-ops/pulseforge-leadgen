@@ -1,14 +1,60 @@
 # AUDIT-062 — Warm Routing Necessity
 
+> **Historical record — August 26, 2026. Not current production measurement or removal authorization.**
+> The original report below preserves historical source analysis and harness observations, including historical line references and timings. These do not establish current production behavior, performance, or provider isolation. Keep existing default-off production wiring unchanged.
+>
+> The original executable was unsafe in ambient service configuration. Its replacement is a dedicated-process **offline fixture harness**, hardened on October 24, 2026, with isolation installed before application imports. New fixture results cannot reproduce or substantiate the historical production claims below. No removal, activation, production execution, or deployment is authorized by this report.
+
+## Current offline harness (October 24, 2026)
+
+Run only in a dedicated local Node process, not in a running application server:
+
+```sh
+node scripts/audit062WarmRoutingObservation.js --output /explicit/new/audit062-report.json
+node --test test/audit062WarmRoutingObservation.test.js
+```
+
+The output directory must already exist. The output path is mandatory; the report
+is created with owner-only permissions and refuses to overwrite an existing file
+or symlink. Importing the module performs no observation or application imports.
+
+- The router and direct approval use separate in-memory missions and explicitly
+  injected Scout results. They do **not** exercise real provider discovery.
+- Direct `Scout.discover` uses an injected empty repository, no discovery adapters,
+  and disabled memory persistence. It exercises the real local discovery code up
+  to its blocked outcome, not every canonical pipeline stage.
+- Database access is replaced before imports. Only the exact synthetic-tenant,
+  empty-seed gate query is accepted. Unexpected DB/provider/transport attempts
+  fail the observation, including errors swallowed by application code.
+- The ambient environment is not inspected. A temporary fixture-only environment
+  hides credentials; dotenv is inert, SDK calls are denied, and file reads are
+  restricted to source/package metadata. No scheduler starts. Environment,
+  module cache, loader, transport, timer and filesystem hooks restore in `finally`.
+- Only disabled and enabled-unseeded Warm Routing gates are measured. The seeded
+  worker, sends, scheduler, cron, webhooks and real providers are not executed.
+
+The nine focused regressions cover import safety, all three fixture boundaries,
+gate-query scope, ambient credential non-read, cache/hook cleanup after success
+and failure, transport and scheduler denial, swallowed-error rejection, exclusive
+use, explicit output, and non-overwrite behavior. They are not full CI or live
+production validation. Timing values are local fixture timings only. No production
+files, routing flags, provider policy or scheduler wiring are modified.
+
+## Historical report (August 26, 2026)
+
+Everything below is the historical record, including its original conclusions,
+line references and timings. These assertions have not been re-established by
+the offline harness and must not be read as current production guarantees.
+
 | Field | Value |
 |---|---|
-| **Status** | Completed — read-only |
+| **Status** | Historical source analysis and harness record; not revalidated in production |
 | **Date** | 2026-08-26 |
 | **Related** | [AUDIT-058](AUDIT-058_Scout_Cognitive_Unification_Audit.md), [EPIC-001](../epics/EPIC-001_Scout_Cognitive_Unification.md), SPEC-171 / ADR-090 |
 | **Scope** | Determine whether Warm Routing (`warmRoutingAgent.js`) performs any unique responsibility not already performed by the canonical cognitive architecture. Stop at the first architectural divergence. |
 | **Observation** | `scripts/audit062WarmRoutingObservation.js` |
 
-## Verdict
+## Historical verdict
 
 **Warm Routing does not sit on the canonical cognitive path.** It is a parallel operator-notification worker for already-known prospects.
 

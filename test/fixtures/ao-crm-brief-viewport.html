@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<link rel="stylesheet" href="/shared/tokens.css">
+<link rel="stylesheet" href="/shared/shell.css">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  max-width: 720px;
+  margin: 0 auto;
+  background: var(--pf-bg);
+  color: var(--pf-text);
+  font-family: var(--pf-font-body);
+  min-height: 120vh;
+  padding-bottom: 72px;
+}
+.modal-backdrop.brief-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex;
+  z-index: 300;
+  align-items: stretch;
+  justify-content: stretch;
+  padding: 0;
+  overflow: hidden;
+}
+.brief-panel {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  right: 16px;
+  bottom: max(16px, env(safe-area-inset-bottom, 0px));
+  max-width: 720px;
+  margin: 0 auto;
+  background: var(--pf-surface);
+  border-radius: 12px;
+  padding: 16px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.brief-section-body {
+  border: 1px solid var(--pf-border);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--pf-bg);
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+.detail-block { margin-bottom: 16px; }
+.detail-block h3 {
+  font-family: var(--pf-font-mono);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--pf-text-muted);
+  margin-bottom: 8px;
+}
+html.modal-open, body.modal-open { overflow: hidden; height: 100%; }
+body.modal-open { position: fixed; width: 100%; left: 0; right: 0; top: -320px; }
+.btn { padding: 8px 10px; border: 1px solid var(--pf-border); background: var(--pf-bg); }
+</style>
+</head>
+<body class="modal-open">
+<nav class="pf-shell-nav" data-ao-shell-nav="1" aria-label="AO navigation">
+  <span class="pf-nav-brand" aria-hidden="true">AO</span>
+  <div class="pf-nav-links"><a class="pf-nav-link" href="#">Open CRM</a></div>
+</nav>
+
+<div class="modal-backdrop brief-modal open" id="modal-backdrop">
+  <div class="brief-panel" id="brief-panel"></div>
+</div>
+
+<script>
+function renderBriefSections() {
+  const where = 'No prior conversation or decision-maker is logged yet. This is queued for an initial diagnostic call.';
+  const blocks = [
+    ['Where this stands', where],
+    ['Why this is the next move', 'Line two '.repeat(45)],
+    ['Known context', 'Line three '.repeat(45)],
+    ['Next action', 'Line four '.repeat(35)],
+    ['What to listen for', 'Line five '.repeat(35)],
+    ['Short talk track', 'Line six '.repeat(35)],
+  ];
+  return blocks.map(([title, body], index) => `
+    <div class="detail-block brief-block"${index === 0 ? ' data-brief-first-block' : ''}${index === blocks.length - 1 ? ' data-brief-last-block' : ''}>
+      <h3>${title}</h3>
+      <div class="brief-section-body">${body}</div>
+    </div>
+  `).join('');
+}
+
+const panel = document.getElementById('brief-panel');
+panel.innerHTML = `
+  <h2 style="font-family:var(--pf-font-display);letter-spacing:1px;">Curtin Law Office</h2>
+  ${renderBriefSections()}
+  <div style="display:flex;gap:8px;margin-top:12px;"><button class="btn" id="brief-close">Close</button></div>
+`;
+panel.scrollTop = 0;
+requestAnimationFrame(() => {
+  panel.scrollTop = 0;
+  requestAnimationFrame(() => { panel.scrollTop = 0; });
+});
+
+window.__measureAoBriefLayout = () => {
+  const scrollEl = document.getElementById('brief-panel');
+  const firstBlock = document.querySelector('[data-brief-first-block]');
+  const lastBlock = document.querySelector('[data-brief-last-block]');
+  const firstBody = firstBlock ? firstBlock.querySelector('.brief-section-body') : null;
+  const lastBody = lastBlock ? lastBlock.querySelector('.brief-section-body') : null;
+
+  function textStartRect(el) {
+    if (!el || !el.firstChild) return null;
+    const range = document.createRange();
+    range.setStart(el.firstChild, 0);
+    range.setEnd(el.firstChild, Math.min(1, el.firstChild.length || 1));
+    return range.getBoundingClientRect();
+  }
+
+  function textEndRect(el) {
+    if (!el || !el.firstChild) return null;
+    const text = el.textContent || '';
+    const node = el.firstChild;
+    const range = document.createRange();
+    range.setStart(node, Math.max(0, text.length - 1));
+    range.setEnd(node, text.length);
+    return range.getBoundingClientRect();
+  }
+
+  const scRect = scrollEl.getBoundingClientRect();
+  const firstStart = textStartRect(firstBody);
+  const lastEnd = textEndRect(lastBody);
+
+  const nestedScrollers = Array.from(scrollEl.querySelectorAll('*')).filter(el => {
+    const oy = getComputedStyle(el).overflowY;
+    return (oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 2;
+  });
+
+  return {
+    scrollTop: scrollEl.scrollTop,
+    scrollHeight: scrollEl.scrollHeight,
+    clientHeight: scrollEl.clientHeight,
+    panelTop: scRect.top,
+    firstStartTop: firstStart ? firstStart.top : null,
+    firstClippedAbove: firstStart ? firstStart.top < scRect.top - 0.5 : null,
+    firstTextPrefix: firstBody ? firstBody.textContent.slice(0, 55) : null,
+    nestedScrollerCount: nestedScrollers.length,
+    backdropZ: getComputedStyle(document.getElementById('modal-backdrop')).zIndex,
+    navZ: getComputedStyle(document.querySelector('.pf-shell-nav')).zIndex,
+  };
+};
+
+window.__scrollBriefToBottom = () => {
+  const scrollEl = document.getElementById('brief-panel');
+  scrollEl.scrollTop = scrollEl.scrollHeight;
+};
+
+window.__measureBriefBottom = () => {
+  const scrollEl = document.getElementById('brief-panel');
+  const lastBody = document.querySelector('[data-brief-last-block] .brief-section-body');
+  const scRect = scrollEl.getBoundingClientRect();
+  const range = document.createRange();
+  const node = lastBody.firstChild;
+  const text = lastBody.textContent || '';
+  range.setStart(node, Math.max(0, text.length - 1));
+  range.setEnd(node, text.length);
+  const endRect = range.getBoundingClientRect();
+  return {
+    scrollTop: scrollEl.scrollTop,
+    lastEndBottom: endRect.bottom,
+    panelBottom: scRect.bottom,
+    lastClippedBelow: endRect.bottom > scRect.bottom + 0.5,
+  };
+};
+</script>
+</body>
+</html>

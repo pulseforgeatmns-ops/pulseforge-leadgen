@@ -63,7 +63,8 @@ function buildDiscoveryResult(partial = {}) {
     phases: Array.isArray(partial.phases) ? partial.phases : [],
     gapAnalysis: partial.gapAnalysis || null,
     existingIntelligence: partial.existingIntelligence || null,
-    prospectCount: partial.prospectCount != null ? Number(partial.prospectCount) : 0,
+    prospectCount: partial.prospectCount === null ? null
+      : (partial.prospectCount != null ? Number(partial.prospectCount) : 0),
     companies: Array.isArray(partial.companies) ? partial.companies : [],
     prospects: Array.isArray(partial.prospects) ? partial.prospects : [],
     signals: Array.isArray(partial.signals) ? partial.signals : [],

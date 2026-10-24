@@ -9,14 +9,17 @@
   <link rel="stylesheet" href="/shared/tokens.css">
   <link rel="stylesheet" href="/shared/shell.css">
   <link rel="stylesheet" href="/command-deck/command-deck.css">
+  <link rel="stylesheet" href="/command-deck/living-command.css">
+  <link rel="stylesheet" href="/shared/content-review.css">
+  <link rel="stylesheet" href="/shared/account-review.css">
 </head>
-<body class="cd-page">
+<body class="cd-page lc-page">
   <a class="cd-skip" href="#command-deck-main">Skip to briefing</a>
 
   <main id="command-deck-main" class="cd-main" aria-label="Command Deck">
     <header class="cd-masthead" aria-label="Briefing masthead">
       <div class="cd-field-header">
-        <p class="cd-field-label" id="cdFieldLabel">Max</p>
+        <p class="cd-field-label" id="cdFieldLabel">Living Command</p>
         <p class="cd-field-state" id="cdFieldState" aria-live="polite">
           <span id="cdStatus" class="cd-status-inline" role="status"></span>
           <span class="cd-field-sep" aria-hidden="true">·</span>
@@ -27,6 +30,20 @@
     <div id="cdLiveNotify" class="cd-live-notify" hidden role="status" aria-live="polite"></div>
     <div id="cdUnseenBanner" class="cd-unseen-banner" hidden role="status" aria-live="polite"></div>
     <div id="cdError" class="cd-error" hidden></div>
+
+    <div class="lc-page-heading">
+      <div><h1>Your business, <span>in view.</span></h1><p>One conversation. A clear next move.</p></div>
+      <span class="lc-workspace-label" id="lcWorkspaceLabel"></span>
+    </div>
+    <div class="lc-layout">
+    <aside class="lc-brief" aria-labelledby="lcBriefTitle">
+      <div class="lc-brief-header"><span class="lc-max-mark" aria-hidden="true">✦</span><div><strong>Max</strong><span>Your daily brief</span></div><button type="button" class="lc-quiet-button" id="lcRefresh" aria-label="Refresh daily brief">↻</button></div>
+      <h2 id="lcBriefTitle">Getting your brief ready.</h2>
+      <p class="lc-brief-intro" id="lcBriefIntro">I’m checking this workspace’s latest activity.</p>
+      <div class="lc-brief-lines" id="lcBriefLines"></div>
+      <button type="button" class="lc-primary-button" data-lc-ask="Walk me through today's daily brief and recommend the next action, using the current workspace's live data.">Walk me through it <span aria-hidden="true">↗</span></button>
+      <p class="lc-brief-source" id="lcBriefSource">Preparing workspace intelligence…</p>
+    </aside>
 
     <!-- SPEC-097 Living Command Deck — spatial intelligence surface -->
     <section id="cdSpatialDeck" class="cd-spatial-deck" aria-label="Living Command Deck" hidden>
@@ -41,7 +58,10 @@
         </div>
         <svg class="cd-intel-connections" id="cdIntelConnections" aria-hidden="true" focusable="false"></svg>
         <div class="cd-spatial-orbit" id="cdSpatialOrbit">
-          <article class="cd-spatial-max" id="cdSpatialMax" aria-label="Max intelligence anchor">
+          <article class="cd-spatial-max" id="cdSpatialMax" role="button" tabindex="0" aria-label="Talk to Max">
+            <span class="lc-ring lc-ring-one" aria-hidden="true"></span>
+            <span class="lc-ring lc-ring-two" aria-hidden="true"></span>
+            <span class="lc-ring lc-ring-three" aria-hidden="true"></span>
             <div class="cd-spatial-max-halo" aria-hidden="true">
               <span class="cd-max-illumination"></span>
               <span class="cd-max-bloom"></span>
@@ -56,12 +76,14 @@
       </div>
       <div id="cdSpatialList" class="cd-spatial-list" hidden aria-label="Domain list view"></div>
     </section>
+    </div>
 
     <div id="cdOperatorLayout" class="cd-operator-layout" hidden>
       <div class="cd-operator-main">
         <section id="cdMorningBrief" class="cd-section cd-morning" aria-labelledby="cdMorningHeading" data-stage="morning" hidden></section>
         <section id="cdHighestLeverage" class="cd-section cd-hla" aria-labelledby="cdHlaHeading" data-stage="hla" hidden></section>
         <section id="cdTodayChanges" class="cd-section cd-brief-block" aria-labelledby="cdTodayHeading" data-stage="today" hidden></section>
+        <section id="cdGoogleAdsBrief" class="cd-section cd-brief-block" aria-labelledby="cdGoogleAdsHeading" data-stage="google-ads" hidden></section>
         <section id="cdNeedsJake" class="cd-section cd-brief-block" aria-labelledby="cdNeedsJakeHeading" data-stage="needs-jake" hidden></section>
         <section id="cdMikeNext" class="cd-section cd-brief-block" aria-labelledby="cdMikeNextHeading" data-stage="mike-next" hidden></section>
       </div>
@@ -144,14 +166,27 @@
 
       <div class="mx-composer-dock">
         <div id="mxSuggestions" class="mx-suggestions" aria-label="Suggested investigations"></div>
+        <div id="mxSpreadsheetScope"></div><div id="mxSpreadsheetProposal"></div>
+        <div id="mxComposerChips" class="mx-composer-chips" hidden></div>
         <form id="mxAskForm" class="mx-ask-form" autocomplete="off">
+          <button type="button" class="mx-composer-plus" id="mxComposerPlus" aria-label="Add attachment" title="Add attachment">+</button>
+          <div class="mx-composer-menu" id="mxComposerMenu" hidden>
+            <button type="button" data-mx-attach="voice">Voice note</button>
+            <button type="button" data-mx-attach="spreadsheet">Upload spreadsheet</button>
+            <button type="button" data-mx-attach="file">Upload file</button>
+            <button type="button" data-mx-attach="image">Photo / screenshot</button>
+          </div>
+          <input id="mxFileSpreadsheet" type="file" hidden accept=".xlsx,.xls,.csv,text/csv">
+          <input id="mxFileDocument" type="file" hidden accept=".txt,.md,.pdf,.docx,text/plain">
+          <input id="mxFileImage" type="file" hidden accept="image/png,image/jpeg,image/webp">
+          <input id="mxFileVoice" type="file" hidden accept="audio/*">
           <label class="pf-sr-only" for="mxAskInput">Ask Max</label>
           <textarea
             id="mxAskInput"
             class="mx-ask-input"
             rows="1"
             maxlength="100000"
-            placeholder="Issue an objective… Paste a prospect list on new lines to attach."
+            placeholder="Message Max…"
           ></textarea>
           <button type="submit" class="mx-ask-submit" id="mxAskSend">Send</button>
         </form>
@@ -196,6 +231,7 @@
       </header>
       <div id="cdDomainDrawerBody" class="cd-domain-body"></div>
       <footer class="cd-domain-footer">
+        <button type="button" class="cd-btn cd-btn-primary" id="cdDomainReviewContent" hidden>Review content</button>
         <button type="button" class="cd-btn cd-btn-primary" id="cdDomainDiscussMax">Discuss with Max</button>
       </footer>
     </div>
@@ -215,10 +251,18 @@
 
   <script src="/shared/accessibility.js"></script>
   <script src="/shared/api-client.js"></script>
+  <script src="/shared/tenantCoordinator.js"></script>
   <script src="/shared/shell.js"></script>
   <script src="/shared/maxInteractionCadence.js"></script>
+  <script src="/shared/maxVoiceRecorder.js"></script>
+<script src="/shared/review-navigation.js"></script>
+<script src="/shared/spreadsheetReview.js"></script>
+<link rel="stylesheet" href="/shared/spreadsheetReview.css">
   <script src="/command-deck/investigation.js"></script>
   <script src="/command-deck/spatial-deck.js"></script>
+  <script src="/shared/content-review.js"></script>
+  <script src="/shared/account-review.js"></script>
+  <script src="/command-deck/living-command.js"></script>
   <script src="/command-deck/command-deck.js"></script>
 </body>
 </html>

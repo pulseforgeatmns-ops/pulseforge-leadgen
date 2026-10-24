@@ -20,6 +20,9 @@ const {
 } = require('../utils/clientContext');
 const { getMaxRuntime } = require('../utils/maxRuntime');
 const { buildOperatorBrief } = require('../services/commandDeckOperatorBrief');
+const { buildLivingCommandBrief, resolveLivingGoogleAds } = require('../services/livingCommandBrief');
+// Authenticated, tenant-scoped review-only routes; no new server entrypoint.
+router.use(require('./clarity'));
 const {
   listMissions,
   toCommandDeckCard,
@@ -147,6 +150,20 @@ router.get('/api/v1/command-deck', requireDashboardRead, async (req, res) => {
     } catch (err) {
       console.warn('[command-deck] operator brief failed:', err.message);
     }
+
+    let clarityAuthorized = false;
+    if (process.env.CLARITY_ENABLED === 'true') {
+      try {
+        const clarityScope = await require('../services/clarityAuthorization').authorizeClarity(req, { pool: require('../db') });
+        clarityAuthorized = clarityScope.clientId === clientId;
+      } catch (_) { /* unrelated brief remains available; Clarity evidence fails closed */ }
+    }
+    model.livingBrief = await buildLivingCommandBrief({
+      clarityAuthorized,
+      clientId,
+      pool: require('../db'),
+      googleAds: await resolveLivingGoogleAds({ clientId, pool: require('../db'), operatorBrief }),
+    });
 
     res.set('Cache-Control', 'no-store');
     return res.json(model);

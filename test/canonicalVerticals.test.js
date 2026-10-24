@@ -11,6 +11,7 @@ const {
   labelForBusinessVertical,
   unsupportedVerticalMessage,
   assertCanonicalBusinessVertical,
+  resolveMissionBoundCrmVertical,
   mapVerticalConstraintError,
 } = require('../utils/canonicalVerticals');
 const { validateCreateClientInput } = require('../services/tenantWorkspace');
@@ -61,6 +62,16 @@ describe('PEC-116 canonical business verticals', () => {
     assert.equal(input.vertical, 'business_coaching');
   });
 
+  it('projects STR mission segment labels to property_management CRM vertical', () => {
+    const mission = {
+      targetSegment: 'Short-term rental operators',
+      structuredMission: { market: { label: 'Short-term rental operators', segment: 'str' } },
+    };
+    assert.equal(resolveMissionBoundCrmVertical(mission, { vertical: 'short-term rental operators' }), 'property_management');
+    assert.equal(resolveMissionBoundCrmVertical(mission, {}), 'property_management');
+    assert.equal(isCanonicalBusinessVertical('property_management'), true);
+  });
+
   it('maps database constraint violations to operator-safe messages', () => {
     const mapped = mapVerticalConstraintError({
       code: '23514',
@@ -73,12 +84,17 @@ describe('PEC-116 canonical business verticals', () => {
   });
 
   it('migration and registry stay aligned', () => {
-    const migration = fs.readFileSync(
+    const clientMigration = fs.readFileSync(
       path.join(__dirname, '../migrations/2026-08-19-canonical-business-verticals.sql'),
       'utf8'
     );
+    const prospectMigration = fs.readFileSync(
+      path.join(__dirname, '../migrations/2026-09-15-prospects-canonical-verticals.sql'),
+      'utf8'
+    );
     for (const entry of CANONICAL_BUSINESS_VERTICALS) {
-      assert.match(migration, new RegExp(`'${entry.value}'`));
+      assert.match(clientMigration, new RegExp(`'${entry.value}'`));
+      assert.match(prospectMigration, new RegExp(`'${entry.value}'`));
     }
   });
 

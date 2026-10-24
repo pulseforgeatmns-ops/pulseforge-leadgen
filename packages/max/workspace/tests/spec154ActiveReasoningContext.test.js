@@ -38,7 +38,7 @@ const {
   WORKSPACE_OWNERS,
 } = require('../WorkspaceOwnershipResolver');
 const { THINKING_MODES } = require('../../operatorCognition');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 
 function seedGovernanceArc(session) {
   const arc = createInitialArc({

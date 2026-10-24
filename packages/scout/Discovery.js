@@ -124,6 +124,9 @@ function pipelineStagesToLegacyPhases(pipelineStages = []) {
 async function syncMissionFromPipeline(input) {
   const { mission, missionEngine, pipelineResult, operatorId } = input;
   if (!missionEngine || !mission) return mission;
+  // A retrieval failure is not completed discovery and must not replace valid
+  // prior deliverables or advance the mission's step.
+  if (pipelineResult.existingIntelligence?.available === false) return mission;
 
   const discoveryIdx = findDiscoveryStepIndex(mission);
   const steps = (mission.plan && mission.plan.steps) || [];
@@ -235,6 +238,36 @@ async function discover(input) {
       tenantId,
     },
   });
+
+  if (pipelineResult.existingIntelligence?.available === false) {
+    const discoveryReport = {
+      missionId, objective: scoutPayload.objective || mission.objectiveText || mission.title || null,
+      targetSegment: scoutPayload.targetSegment || mission.constraints?.vertical || null,
+      geography: scoutPayload.geography || mission.constraints?.locationHint || null,
+      discoveryStrategy: 'No Strategy Selected',
+      evidenceSources: [{ source: 'Company Store', attempted: true, succeeded: false, unavailable: true, skipped: false }],
+      outcome: DISCOVERY_OUTCOMES.BLOCKED, blockReason: pipelineResult.blockReason,
+      stageOutcome: 'blocked', prospectCount: null, externalDiscoveryAttempted: false,
+      storedIntelligenceOnly: false, capabilityPath: 'scout.discover', scoutAcquisitionPathInvoked: false,
+      gapAnalysis: null, existingIntelligence: pipelineResult.existingIntelligence,
+      nextRecommendation: 'Retry tenant intelligence retrieval before investigating the market.',
+      missionStatus: mission.status, missionUpdated: false, coverageEngineUsed: false,
+      pipeline: pipelineResult, coveragePct: null, emptyMarketDecision: false, intelligenceReport: null,
+    };
+    emitDiscoveryPhase(DISCOVERY_PHASES.EXISTING_INTELLIGENCE, {
+      missionId, result: pipelineResult.existingIntelligence,
+    });
+    emitDiscoveryCompleted({ missionId, outcome: DISCOVERY_OUTCOMES.BLOCKED,
+      strategy: null, prospectCount: null, blockReason: pipelineResult.blockReason });
+    return {
+      ...buildDiscoveryResult({ outcome: DISCOVERY_OUTCOMES.BLOCKED,
+        blockReason: pipelineResult.blockReason, existingIntelligence: pipelineResult.existingIntelligence,
+        prospectCount: null, mission, discoveryReport }),
+      pipeline: pipelineResult, intelligenceResult: null, marketDefinition: null,
+      universeEstimate: null, coveragePlan: null, coveragePct: null,
+      intelligenceReport: null, emptyMarketDecision: false,
+    };
+  }
 
   const phases = pipelineStagesToLegacyPhases(pipelineResult.stages);
   for (const phaseRow of phases) {
@@ -394,6 +427,8 @@ async function discover(input) {
     coveragePct: pipelineResult.coveragePct,
     intelligenceReport: pipelineResult.intelligenceReport,
     emptyMarketDecision: pipelineResult.emptyMarketDecision,
+    learningInfluence: pipelineResult.learningInfluence || [],
+    priorOutcomeLearnings: pipelineResult.priorOutcomeLearnings || [],
   };
 }
 

@@ -18,7 +18,7 @@ const {
   toCommandDeckCard,
   isAcquisitionLegacyMissionType,
 } = require('../../../../services/acquisitionMission');
-const { maybeHandleAcquisitionOwnershipTurn } = require('../AcquisitionOwnership');
+const { maybeHandleAcquisitionOwnershipTurn: rawCieHandler } = require('../AcquisitionOwnership');
 const { advanceDiscoveryAfterApproval, advancePlanAfterApproval } = require('../AmoOperatorApproval');
 const { composeOperations } = require('../../commandDeck/sections/Operations');
 const { ensureAmoTenantHydrated, clearAmoHydrationCache } = require('../AmoWorkspaceHydration');
@@ -118,6 +118,8 @@ describe('SPEC-131 — Mission Runtime Unification', () => {
     };
 
     await advanceDiscoveryAfterApproval({
+      scoutCompanies: [],
+      scoutPeople: [],
       engine,
       mission,
       tenantId: '10',
@@ -150,3 +152,6 @@ describe('SPEC-131 — Mission Runtime Unification', () => {
     assert.ok(result.missionsLoaded > 0);
   });
 });
+
+const { createHermeticRetrievalHandler } = require('./workspaceTestHarness');
+const maybeHandleAcquisitionOwnershipTurn = createHermeticRetrievalHandler(rawCieHandler);

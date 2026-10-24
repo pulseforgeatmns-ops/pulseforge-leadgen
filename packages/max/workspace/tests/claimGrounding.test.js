@@ -7,9 +7,10 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
+const { createTestAmoRuntime } = require('./amoTestRuntime');
 const {
-  maybeHandleRetrievalBeforeDelegationTurn,
+  maybeHandleRetrievalBeforeDelegationTurn: rawRetrievalHandler,
 } = require('../RetrievalBeforeDelegationContext');
 const {
   shouldClaimClientIntelligenceTurn,
@@ -173,6 +174,7 @@ async function conversation(questions, overrides = {}) {
         session,
         context: { tenantId: '10', clientId: ANCHOR_ID },
         operatingEvidenceOpts: opts,
+        cieService: { getApprovedClientBlueprint: async () => null },
         now: opts.now,
       })
     );
@@ -341,6 +343,8 @@ describe('SPEC-108 safety', () => {
     const engine = createWorkspaceEngine({
       disableLlm: true,
       missionsEnabled: false,
+      acquisitionMissionRuntime: createTestAmoRuntime(),
+      clientIntelligenceService: { getApprovedClientBlueprint: async () => null },
       operatingEvidenceOpts: operatingOpts(),
     });
     const opened = engine.open({
@@ -362,3 +366,7 @@ describe('SPEC-108 safety', () => {
     assert.equal(result.retrieval.delegated, false);
   });
 });
+
+// The same explicit CIE fixture contract applies to direct retrieval entry points.
+const { createHermeticRetrievalHandler } = require('./workspaceTestHarness');
+const maybeHandleRetrievalBeforeDelegationTurn = createHermeticRetrievalHandler(rawRetrievalHandler);
