@@ -54,8 +54,41 @@ async function setup(t) {
     (await pool.query('SELECT sess FROM "session"')).rows[0].sess.active_client_id };
 }
 
+async function openSelectionForm(h) {
+  const expectedUrl = h.origin + FORM_PATH;
+  const response = await h.page.goto(expectedUrl);
+  const formSelector = `form[method="POST"][action="${FORM_PATH}"]`;
+  const form = await h.page.$(formSelector);
+  const submit = await h.page.$(`${formSelector} button[type="submit"][name="confirm"][value="select-anchor"]`);
+  const visible = submit ? await submit.isVisible() : false;
+  await form?.dispose(); await submit?.dispose();
+  if (response?.status() === 200 && response.url() === expectedUrl
+    && h.page.url() === expectedUrl && form && visible) return response;
+
+  // Fixture-only diagnostics: never print cookies, session IDs, CSRF tokens,
+  // form field values, or raw response/DOM bodies. Do not retry a failed GET.
+  const body = response ? await response.text().catch(() => '') : '';
+  let errorCode = null;
+  try {
+    const value = JSON.parse(body).error;
+    if (typeof value === 'string' && /^[a-z]+(?:_[a-z0-9]+)+$/.test(value) && value.length <= 80) errorCode = value;
+  } catch (_) { /* HTML responses are described only by structural booleans. */ }
+  const safeUrl = value => {
+    try { const url = new URL(value); return url.origin + url.pathname.slice(0,200); }
+    catch (_) { return '[unavailable]'; }
+  };
+  assert.fail(`Identity form precondition failed: ${JSON.stringify({
+    status: response?.status() ?? null, responseUrl: safeUrl(response?.url()),
+    pageUrl: safeUrl(h.page.url()), errorCode, formPresent: Boolean(form),
+    submitPresent: Boolean(submit), submitVisible: visible,
+    responseHasForm: body.includes(`<form method="POST" action="${FORM_PATH}">`),
+    responseHasSubmit: body.includes('<button type="submit" name="confirm" value="select-anchor">'),
+    requests: h.requests.slice(-12).map(({ method, path }) => ({ method, path: path.slice(0,200) })),
+  })}`);
+}
+
 test('real native form preserves exact Origin, CSRF and submitter and lands only on /api/me', async t => {
-  const h = await setup(t); const response = await h.page.goto(h.origin + FORM_PATH);
+  const h = await setup(t); const response = await openSelectionForm(h);
   assert.equal(response.headers()['referrer-policy'], 'same-origin');
   assert.equal(await h.active(), 1);
   await Promise.all([h.page.waitForNavigation(), h.page.click('button[type=submit]')]);
@@ -68,14 +101,14 @@ test('real native form preserves exact Origin, CSRF and submitter and lands only
 });
 
 test('native Cancel does not select a tenant or open dashboard', async t => {
-  const h = await setup(t); await h.page.goto(h.origin + FORM_PATH);
+  const h = await setup(t); await openSelectionForm(h);
   await Promise.all([h.page.waitForNavigation(), h.page.click('a[href="/api/me"]')]);
   assert.equal(h.page.url(), h.origin + '/api/me'); assert.equal(await h.active(), 1);
   assert.equal(h.requests.some(r => r.method === 'POST' || /command-deck|api\/clients/.test(r.path)), false);
 });
 
 test('native stale form after database demotion fails closed, without selecting or redirecting', async t => {
-  const h = await setup(t); await h.page.goto(h.origin + FORM_PATH);
+  const h = await setup(t); await openSelectionForm(h);
   await h.pool.query("UPDATE users SET role='manager' WHERE id=3");
   const [response] = await Promise.all([h.page.waitForNavigation(), h.page.click('button[type=submit]')]);
   assert.equal(response.status(), 403); assert.equal(h.page.url(), h.origin + FORM_PATH);
