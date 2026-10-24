@@ -486,6 +486,21 @@ function adapters(pool, dependencies = {}) {
       if (program.tenant_id != null && String(program.tenant_id) !== tenantId) fail('governed_outbound_tenant_mismatch');
       if (tenantId === '10') {
         const state = await require('./anchorEmailRecovery').loadRecoveryState(options.persistencePool || pool);
+        // A preinitialized recovery client is not an approval capability.
+        if (state.reason === 'recovery_preparation_only') fail('anchor_recovery_separate_preparation_approval_required');
+        if (options.preinitializedSchema === true && state.mode === 'maintenance') {
+          // Dedicated canary approval is permitted only under the separate
+          // recovery contract's empty durable control, never a typed draft grant
+          // or an unreadable state whose reason lost the authority discriminant.
+          // This canonical client is distinct from the recovery transaction
+          // already holding the control row FOR UPDATE. Use an MVCC read here;
+          // taking another row lock would invert that existing lock boundary.
+          const controls = await (options.persistencePool || pool).query(
+            'SELECT singleton,maintenance_armed,manifest FROM anchor_email_recovery_control');
+          if (controls.rows.length !== 1 || controls.rows[0].singleton !== true
+            || controls.rows[0].maintenance_armed !== true || controls.rows[0].manifest !== null)
+            fail('anchor_recovery_separate_preparation_approval_required');
+        }
         if (!['legacy', 'scoped_resume'].includes(state.mode) && options.preinitializedSchema !== true) {
           fail('anchor_recovery_separate_preparation_approval_required');
         }

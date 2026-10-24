@@ -34,8 +34,9 @@ function deepFreeze(value) { if (value && typeof value === 'object') { Object.va
 function cap(v, max) { return Number.isSafeInteger(v) && v >= 1 && v <= max; }
 function validateScopedResumeManifest(raw, { now = new Date() } = {}) {
   const invalid = why => fail('anchor_scoped_resume_invalid_manifest', why);
-  if (!exact(raw, TOP_KEYS)) invalid('resume_manifest_fields_required');
-  if (raw.version !== 1 || raw.kind !== 'scoped_resume' || raw.tenantId !== '10'
+  const preparationOnly = raw?.version === 2;
+  if (!exact(raw, preparationOnly ? [...TOP_KEYS, 'preparationAuthority'] : TOP_KEYS)) invalid('resume_manifest_fields_required');
+  if (![1, 2].includes(raw.version) || raw.kind !== 'scoped_resume' || raw.tenantId !== '10'
     || !['admin', 'manager'].includes(raw.operatorRole) || raw.reviewSchemaPolicy !== 'nullable_no_default_preserve_existing'
     || raw.admissionPolicy !== 'explicit_reviewed_identity_batch' || raw.calls !== 'existing_policy'
     || raw.otherPrograms !== 'legacy_unchanged'
@@ -80,6 +81,21 @@ function validateScopedResumeManifest(raw, { now = new Date() } = {}) {
   }
   if (raw.scopes.preparation.enabled && raw.scopes.preparation.operations.includes('approve_canonical_envelope')
     && (!raw.scopes.email.enabled || raw.scopes.email.approvalMode !== 'delegated_existing_program')) invalid('resume_canonical_delegation_required');
+  if (preparationOnly) {
+    const a = raw.preparationAuthority, p = raw.scopes.preparation;
+    if (!exact(a, ['kind', 'programBindingHash', 'sourceMissionHash', 'consumedOperations', 'consumedItems'])
+      || a.kind !== 'existing_crm_continuation' || !digest(a.programBindingHash) || !digest(a.sourceMissionHash)
+      || !Number.isSafeInteger(a.consumedOperations) || a.consumedOperations < 0 || a.consumedOperations >= 100
+      || !Number.isSafeInteger(a.consumedItems) || a.consumedItems < 0 || a.consumedItems >= 100
+      || raw.operatorRole !== 'admin' || raw.admissions.length > 5
+      || until - from > require('./anchorCrmPreparationAuthority').MAX_WINDOW_MS
+      || raw.scopes.email.enabled !== false || raw.scopes.research.enabled !== false || p.enabled !== true
+      || hash(p.operations) !== hash(['prepare_existing_crm'])
+      || p.totalCap !== a.consumedOperations + 1 || p.totalItemCap !== a.consumedItems + raw.admissions.length
+      || p.dailyItemCap < raw.admissions.length
+      || ['companyId', 'companyNameKey', 'companyDomain'].some(k => new Set(raw.admissions.map(row => row[k])).size !== raw.admissions.length))
+      invalid('resume_preparation_authority_invalid');
+  }
   return deepFreeze(JSON.parse(JSON.stringify(raw)));
 }
 
