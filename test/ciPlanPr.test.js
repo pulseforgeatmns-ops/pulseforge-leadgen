@@ -339,3 +339,12 @@ describe('renewable Scout coverage grants CI coverage', () => {
     assert.match(workflow, /test\/scoutCoverageGrant\.test\.js test\/scoutCoverageGrantPostgres\.test\.js/);
   });
 });
+
+// PF-CLARITY-001: an isolated auth/parser/UI edit must retain real database/browser gates.
+it('Clarity files always select Max with non-skipping PostgreSQL and browser validation',()=>{
+ for(const file of ['services/clarityAuthorization.js','services/clarityGmail.js','routes/clarity.js','public/clarity-review.html','packages/max/clarity/parser.js','test/clarityPostgres.test.js','test/browser/clarityReviewUi.test.js']) {
+  assert.ok(buildPlan([file]).suites.includes('max'),file);
+ }
+ const fs=require('node:fs');const workflow=fs.readFileSync(require('node:path').join(__dirname,'../.github/workflows/pr-ci-lean.yml'),'utf8');
+ assert.match(workflow,/npm run test:clarity/);assert.match(workflow,/npm run test:clarity:browser/);
+});

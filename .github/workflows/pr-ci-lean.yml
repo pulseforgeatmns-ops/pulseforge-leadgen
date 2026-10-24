@@ -384,6 +384,10 @@ jobs:
             tail -n 80 max-test-output.log | cut -c1-400
           }
           exit "$test_status"
+      - name: Clarity synthetic ingestion, tenant PostgreSQL and approval safety
+        run: npm run test:clarity
+      - name: Clarity visual review acceptance
+        run: CHROMIUM_PATH="$(command -v google-chrome)" npm run test:clarity:browser
       - name: Living Command brief and browser acceptance
         run: |
           node --test test/livingCommandBrief.test.js test/contentReview.test.js test/maxAccountReview.test.js test/maxSpreadsheetReviewUi.test.js
