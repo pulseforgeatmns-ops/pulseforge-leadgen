@@ -13,6 +13,7 @@ const express = require('express');
 const { isApiUsageQuestion, parseApiSpendCommand, answerApiUsageQuestion } = require('../services/apiUsageService');
 const Anthropic = require('../utils/meteredAnthropic').forAgent('max_workspace');
 const router = express.Router();
+const { reviewNavigationForRequest } = require('../services/reviewNavigation');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const {
   normalizeClientId,
@@ -99,6 +100,8 @@ router.post(
   }
 );
 
+router.use(require('./reviewNavigation').createReviewNavigationRouter());
+
 /**
  * POST /api/v1/max/workspace/ask
  * Body: { sessionId?, question, context? }
@@ -119,6 +122,14 @@ router.post(
       const question = String(req.body?.question || '').trim();
       if (!question) {
         return res.status(400).json({ error: 'Question is required' });
+      }
+
+      // Shared backend owner for typed review requests and explicit UI navigation.
+      // Resolve before mission context; this never performs an approval or action.
+      const navigation = await reviewNavigationForRequest(req);
+      if (navigation) {
+        res.set('Cache-Control', 'no-store');
+        return res.json(navigation);
       }
 
       if (isApiUsageQuestion(question) || parseApiSpendCommand(question)) {
@@ -209,12 +220,12 @@ router.post(
       return res.json(result);
     } catch (err) {
       console.error('[max-workspace] ask:', err);
-      const status = /required|Unknown workspace/i.test(err.message)
+      const status = err.statusCode || (/required|Unknown workspace/i.test(err.message)
         ? 400
-        : 500;
+        : 500);
       return res.status(status).json({
         error: 'workspace_ask_failed',
-        message: err && err.message ? String(err.message) : 'ask failed',
+        message: 'The workspace request could not be completed. No review or action is confirmed.',
       });
     }
   }

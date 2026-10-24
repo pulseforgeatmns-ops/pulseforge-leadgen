@@ -1458,7 +1458,9 @@ async function runMaxOutboundControlLoop(options = {}) {
 
   let scout = null;
   // Prepared-item caps are not authority to spend on discovery/enrichment.
-  let discoveryBlockedReason = program.policy.preparationOnly ? 'preparation_research_not_authorized' : null;
+  let discoveryBlockedReason = funnelStock.available === false
+    ? 'scout_funnel_unavailable'
+    : (program.policy.preparationOnly ? 'preparation_research_not_authorized' : null);
   let scopedResearch = null;
   if (recoveryState.mode === 'scoped_resume' && options.execute !== false && plan.shouldReplenish && !discoveryBlockedReason) {
     try { scopedResearch = await researchAuthority(pool, program, governed.tenantId, controlNow); }
@@ -1561,7 +1563,7 @@ async function runMaxOutboundControlLoop(options = {}) {
     cycleFunnel.permanentlyRejected = rejectedCount(scout.admission);
   }
   cycleFunnel.promotedVerified = Number(scout?.promoted || 0);
-  const funnel = {
+  const funnel = funnelStock.available === false ? { ...funnelStock } : {
     ...funnelStock,
     discovered: Math.max(Number(funnelStock.discovered || 0), cycleFunnel.discovered),
     fit: Number(funnelStock.fit || 0) + cycleFunnel.fit,

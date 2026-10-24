@@ -54,7 +54,7 @@
     "test:substral-pf-001": "node --test test/specSubstralPf001.test.js test/substralAssessmentIntake.test.js test/substralAssessmentNotification.test.js test/paigeStudioSubstralOutboundDoctrine.test.js",
     "test:mission": "node --test packages/mission-engine/tests/*.test.js packages/max/workspace/tests/missionRouting.test.js",
     "test:discovery": "node --test packages/capabilities/tests/*.test.js packages/mission-engine/tests/*.test.js",
-    "test:max": "node --test packages/max/tests/*.test.js packages/max/memory/tests/*.test.js packages/max/briefing/tests/*.test.js packages/max/policy/tests/*.test.js packages/max/commandDeck/tests/*.test.js packages/max/workspace/tests/*.test.js packages/max/intelligence/tests/*.test.js packages/max/live/tests/*.test.js packages/max/operator/tests/*.test.js packages/max/outcome/tests/*.test.js test/maxStateIngestion.test.js test/maxDecisionExecution.test.js test/maxAttentionReliability.test.js test/maxExpectationVerification.test.js test/maxAttentionRecovery.test.js test/maxAttentionCronRoute.test.js test/maxAttentionAuthorization.test.js test/maxCanonicalAoEvidence.test.js test/maxAoHelpReviewGuards.test.js",
+    "test:max": "node --test packages/max/tests/*.test.js packages/max/memory/tests/*.test.js packages/max/briefing/tests/*.test.js packages/max/policy/tests/*.test.js packages/max/commandDeck/tests/*.test.js packages/max/workspace/tests/*.test.js packages/max/intelligence/tests/*.test.js packages/max/live/tests/*.test.js packages/max/operator/tests/*.test.js packages/max/outcome/tests/*.test.js test/maxStateIngestion.test.js test/maxDecisionExecution.test.js test/maxDecisionReceiptTruth.test.js test/maxAttentionReliability.test.js test/maxExpectationVerification.test.js test/maxAttentionRecovery.test.js test/maxAttentionCronRoute.test.js test/maxAttentionAuthorization.test.js test/maxCanonicalAoEvidence.test.js test/maxAoHelpReviewGuards.test.js test/reviewNavigationAuthority.test.js",
     "test:max:expectations:postgres": "node --test test/maxExpectationVerificationPostgres.test.js test/maxCanonicalAoEvidencePostgres.test.js",
     "test:email-verifier": "node scripts/smokeEmailVerifier.js",
     "max:schema": "node scripts/validateMaxOrchestrationSchema.js",
@@ -163,8 +163,11 @@
     "test:anchor-portal": "node --test test/anchorPortalServiceRequests.test.js test/anchorPortalServiceRequestsPostgres.test.js test/anchorPortal.test.js test/anchorPortalSecurity.test.js test/anchorPortalUiSafety.test.js test/anchorPortalReferenceUi.test.js test/anchorPortalAcceptancePostgres.test.js test/anchorPortalStartupSafety.test.js test/anchorPortalStartupPostgres.test.js",
     "test:anchor-portal:browser": "node --test test/browser/anchorPortalUi.test.js test/browser/anchorPortalBrowserAcceptance.test.js",
     "anchor:portal:demo": "node scripts/demoExeterPortalLocal.js --disposable-local",
-    "test:anchor-portal:standalone": "node --test test/anchorPortalStandalone.test.js test/anchorPortalProvisioning.test.js test/anchorPortalTls.test.js test/anchorPortalPublicDemo.test.js",
-    "test:anchor-portal:standalone:browser": "node --test test/browser/anchorPortalStandaloneBrowser.test.js"
+    "test:anchor-portal:standalone": "node --test test/anchorPortalStandalone.test.js test/anchorPortalProvisioning.test.js test/anchorPortalTls.test.js",
+    "test:anchor-portal:standalone:browser": "node --test test/browser/anchorPortalStandaloneBrowser.test.js",
+    "test:max:unit": "node scripts/maxTestLanes.cjs unit",
+    "test:max:integration": "node scripts/maxTestLanes.cjs integration",
+    "test:max:fixtures": "node --require ./test/helpers/denyWebsiteEvidenceNetwork.cjs --test packages/max/workspace/tests/workspaceTestHarness.test.js test/maxTestLanes.test.js test/operatorObjectiveContextInjection.test.js test/maxWorkspaceDependencyInjection.test.js"
   },
   "repository": {
     "type": "git",

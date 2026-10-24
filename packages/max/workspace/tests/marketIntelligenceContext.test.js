@@ -8,10 +8,8 @@ const {
   getMarketIntelligenceBriefing,
   requestedPatternFields,
 } = require('../MarketIntelligenceContext');
-const {
-  createWorkspaceEngine,
-  EXECUTION_DOMAINS,
-} = require('../../index');
+const { EXECUTION_DOMAINS } = require('../../index');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 
 function fakeMarketService() {
   return {

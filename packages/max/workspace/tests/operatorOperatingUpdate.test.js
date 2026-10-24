@@ -7,10 +7,10 @@
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
-const { maybeHandleRetrievalBeforeDelegationTurn } = require('../RetrievalBeforeDelegationContext');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
+const { maybeHandleRetrievalBeforeDelegationTurn: rawRetrievalHandler } = require('../RetrievalBeforeDelegationContext');
 const {
-  maybeHandleClientIntelligenceTurn,
+  maybeHandleClientIntelligenceTurn: rawClientIntelligenceHandler,
   shouldClaimClientIntelligenceTurn,
 } = require('../ClientIntelligenceContext');
 const {
@@ -72,6 +72,7 @@ async function approveAnchor(store) {
 
 function anchorLoaders() {
   return {
+    capability: { available: false, reason: 'unit_fixture_not_recorded' },
     loadCampaignAo: async ({ clientId }) => ({
       available: true,
       campaignName: 'Campaign 001',
@@ -502,3 +503,9 @@ describe('SPEC-106 retrieval compose', () => {
     assert.equal(mail.epistemic, 'operator_attested');
   });
 });
+
+// The same explicit CIE fixture contract applies to direct retrieval entry points.
+const { createHermeticRetrievalHandler } = require('./workspaceTestHarness');
+const maybeHandleRetrievalBeforeDelegationTurn = createHermeticRetrievalHandler(rawRetrievalHandler);
+
+const maybeHandleClientIntelligenceTurn = createHermeticRetrievalHandler(rawClientIntelligenceHandler);

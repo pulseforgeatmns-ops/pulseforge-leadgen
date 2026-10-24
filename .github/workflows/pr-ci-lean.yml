@@ -370,6 +370,10 @@ jobs:
         run: npm run test:max:expectations:postgres
       - name: Verify attention lifecycle and crash recovery on real PostgreSQL
         run: npm run test:max:attention:postgres
+      - name: Run strict offline Max unit lane
+        run: npm run test:max:unit
+      - name: Verify hermetic Max fixture contracts
+        run: npm run test:max:fixtures
       - name: Run complete Max suite
         run: |
           set +e

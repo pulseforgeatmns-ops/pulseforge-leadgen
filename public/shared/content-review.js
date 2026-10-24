@@ -1,6 +1,6 @@
 'use strict';
 (function () {
-  let model = null, selectedId = null, generation = 0, previousFocus = null, previousOverflow = '', preview = null, busy = false;
+  let expectedTenant = null, model = null, selectedId = null, generation = 0, previousFocus = null, previousOverflow = '', preview = null, busy = false;
   const channelNames = { facebook: 'Facebook comment', facebook_page: 'Facebook', linkedin: 'LinkedIn comment', linkedin_page: 'LinkedIn Page', linkedin_personal: 'LinkedIn', google_business: 'Google Business', google_review: 'Review response', blog: 'Blog', ads_report: 'Google Ads report' };
   const node = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = String(text); if (cls) el.className = cls; return el; };
   const dialog = document.createElement('section');
@@ -155,8 +155,9 @@
     $('crDetail').replaceChildren(node('p', 'Preparing your visual review…', 'cr-muted'));
     notice('');
     try {
-      const next = await request('/api/content-review');
+      const next = await request(`/api/content-review?client_id=${encodeURIComponent(expectedTenant)}`);
       if (dialog.hidden || token !== generation || (activeClient() != null && Number(next.clientId) !== Number(activeClient()))) return;
+      if (String(next.clientId) !== String(expectedTenant)) throw new Error('scope_changed');
       model = next;
       $('crSubtitle').textContent = `${window.PulseforgeShell?.tenantName || 'Current workspace'} · ${next.pendingCount} awaiting review`;
       const selectedChannel = $('crChannel').value;
@@ -175,14 +176,19 @@
       button($('crDetail'), 'Try again', load);
     }
   }
-  function open() {
-    if (!dialog.hidden) return load();
+  function open(input = {}) {
+    const requestedTenant = input.tenantId ?? activeClient();
+    if (!requestedTenant) return false;
+    expectedTenant = String(requestedTenant);
+    if (!dialog.hidden) { load(); return true; }
     previousFocus = document.activeElement; previousOverflow = document.body.style.overflow;
     dialog.hidden = false; document.body.style.overflow = 'hidden';
     dialog.querySelector('button[data-cr-close]').focus();
     load();
+    return true;
   }
   function close() {
+    document.dispatchEvent(new CustomEvent('pulseforge:review-dismissed'));
     generation++; model = null; preview = null; selectedId = null; dialog.hidden = true;
     $('crChannel').replaceChildren(new Option('All channels', 'all'));
     $('crList').replaceChildren(); $('crDetail').replaceChildren(); $('crSubtitle').textContent = '';
@@ -200,11 +206,12 @@
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     }
   });
-  document.addEventListener('pulseforge:content-review', open);
+  const requestOpen = () => window.PulseforgeReviewNavigation?.open({ surface: 'content_review' });
+  document.addEventListener('pulseforge:content-review', requestOpen);
   document.addEventListener('pulseforge:tenant-changing', () => { if (!dialog.hidden) close(); });
   document.addEventListener('pulseforge:tenant-changed', () => { if (!dialog.hidden) close(); });
-  window.addEventListener('hashchange', () => { if (location.hash === '#content-review') open(); });
-  document.addEventListener('click', event => { const link = event.target.closest('a[href="/command-deck#content-review"]'); if (link && location.pathname === '/command-deck') { event.preventDefault(); open(); } });
+  window.addEventListener('hashchange', () => { if (location.hash === '#content-review') requestOpen(); });
+  document.addEventListener('click', event => { const link = event.target.closest('a[href="/command-deck#content-review"]'); if (link && location.pathname === '/command-deck') { event.preventDefault(); requestOpen(); } });
   window.PulseforgeContentReview = { open, close };
-  if (location.hash === '#content-review') open();
+  if (location.hash === '#content-review') requestOpen();
 })();

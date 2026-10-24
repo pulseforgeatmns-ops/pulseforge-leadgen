@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const { isNonExecutingOperatingTurn, isMissionExecutionCommand } = require('../ExecutionLanguageDetection');
 const { analyzeOperatorIntent } = require('../OperatorIntent');
 const { isAdvisoryNextStepQuestion, shouldClaimClientIntelligenceTurn } = require('../ClientIntelligenceContext');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { createTestAmoRuntime } = require('./amoTestRuntime');
 const amo = require('../../../acquisition-mission');
 

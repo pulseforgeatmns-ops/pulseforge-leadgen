@@ -90,13 +90,13 @@
     }
   }
   function open(input) {
-    if (!input?.aoId) return;
+    if (!input?.aoId || !(input.tenantId ?? activeTenant())) return false;
     if (dialog.hidden) { previousFocus = document.activeElement; previousOverflow = document.body.style.overflow; }
-    owner = { ...input, tenant: activeTenant() }; dialog.hidden = false; document.body.style.overflow = 'hidden';
+    owner = { ...input, tenant: input.tenantId ?? activeTenant() }; dialog.hidden = false; document.body.style.overflow = 'hidden';
     $('arTitle').textContent = input.aoName ? `${input.aoName}’s accounts` : 'Account review'; $('arSubtitle').textContent = '';
-    $('arSearch').value = ''; $('arFilter').value = 'all'; dialog.querySelector('button[data-ar-close]').focus(); load();
+    $('arSearch').value = ''; $('arFilter').value = 'all'; dialog.querySelector('button[data-ar-close]').focus(); load(); return true;
   }
-  function close() { generation++; dialog.hidden = true; model = null; owner = null; selected = null; $('arList').replaceChildren(); $('arDetail').replaceChildren(); $('arSubtitle').textContent = ''; document.body.style.overflow = previousOverflow; if (previousFocus?.isConnected) previousFocus.focus(); }
+  function close() { document.dispatchEvent(new CustomEvent('pulseforge:review-dismissed')); generation++; dialog.hidden = true; model = null; owner = null; selected = null; $('arList').replaceChildren(); $('arDetail').replaceChildren(); $('arSubtitle').textContent = ''; document.body.style.overflow = previousOverflow; if (previousFocus?.isConnected) previousFocus.focus(); }
   function filterChanged() { if (!model) return; renderList(); const first = visibleAccounts()[0]; if (first) select(first.prospect_id); else { generation++; selected = null; $('arDetail').replaceChildren(el('p', 'No accounts match these filters.', 'cr-muted')); } }
   $('arSearch').addEventListener('input', filterChanged); $('arFilter').addEventListener('change', filterChanged);
   dialog.querySelectorAll('[data-ar-close]').forEach(button => button.addEventListener('click', close));

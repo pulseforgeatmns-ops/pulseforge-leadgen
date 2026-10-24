@@ -19,7 +19,7 @@ const {
   resolvePendingOperatorDecision,
 } = require('../PendingDecisionResolver');
 const { analyzeOperatorIntent } = require('../OperatorIntent');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { createTestAmoRuntime } = require('./amoTestRuntime');
 const { WORKSPACE_OWNERS } = require('../WorkspaceOwnershipResolver');
 const { MISSION_RUNTIMES } = require('../MissionRuntimeDispatch');

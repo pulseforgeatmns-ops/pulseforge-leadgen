@@ -74,7 +74,7 @@ const {
   clearMissionApprovalAuditLog,
   listMissionApprovalAuditLog,
 } = require('../audit/MissionApprovalAudit');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 
 function instrumentCachedExport(fileSuffix, exportName, counterKey) {
   for (const file of Object.keys(require.cache)) {

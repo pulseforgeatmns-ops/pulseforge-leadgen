@@ -22,7 +22,7 @@ const {
   createWorkspaceOwnershipAudit,
   clearWorkspaceOwnershipAuditLog,
 } = require('../audit/WorkspaceOwnershipAudit');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const { createMissionEngine } = require('../../../mission-engine');
 const { createBuiltinRegistry } = require('../../../capabilities');
 
@@ -184,7 +184,21 @@ describe('SPEC-127 — Active Mission Lock', () => {
   });
 
   it('legacy Approved. Begin Scout discovery executes Discovery stage', async () => {
+    const repositoryTenants = [];
     const missionEngine = createMissionEngine({
+      scoutDiscoveryOpts: {
+        // These are deliberately hostile non-dependency fields. The stage must
+        // derive its authority from the mission, not this constructor option bag.
+        delegation: { tenantId: '17' },
+        tenantId: '17',
+        missionId: 'forged-mission',
+        amoMissionId: 'forged-mission',
+        executionContext: { forged: true },
+        attachScoutDiscovery: false,
+        loadCompanies: async ({ tenantId }) => { repositoryTenants.push(tenantId); return []; },
+        people: [],
+        acquisitionMissionRuntime: createTestAmoRuntime(),
+      },
       registry: createBuiltinRegistry({ discovery: { useFixture: true } }),
       resolverEnabled: true,
     });
@@ -213,6 +227,10 @@ describe('SPEC-127 — Active Mission Lock', () => {
 
     assert.equal(second.workspaceOwnership.owner, WORKSPACE_OWNERS.ACTIVE_MISSION);
     assert.equal(second.resolution.action, 'executed');
+    // Pipeline preflight and Scout intelligence both consult the same tenant repository.
+    assert.deepEqual(repositoryTenants, ['10', '10']);
+    assert.equal(second.mission.id, first.mission.id);
+    assert.equal(String(second.mission.tenantId), '10');
     assert.doesNotMatch(second.prose, /Switching from .* to General Conversation/i);
     assert.doesNotMatch(second.prose, /Today's Briefing/i);
   });

@@ -25,7 +25,7 @@ const {
 const { REASONING_GOALS } = require('../../reasoning/ConceptGraph/ConceptPlanner');
 const { CONVERSATION_SUBJECTS } = require('../ConversationSubject');
 const { composeIdentityReasoning } = require('../../identity/IdentityReasoning');
-const { createWorkspaceEngine } = require('../WorkspaceEngine');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 
 function seedSession() {
   const session = { context: {} };

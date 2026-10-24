@@ -16,7 +16,7 @@ const {
   REBUILD_TRIGGERS,
 } = require('../../../../services/operatorContext');
 const { loadOperatorContextForSession } = require('../OperatorContextLoader');
-const { createWorkspaceEngine } = require('../index');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
 const {
   createMemoryStore: createObjectiveStore,
   createOperatorObjective,
@@ -107,7 +107,7 @@ describe('SPEC-104 operator context service', () => {
         title: 'Land first recurring commercial account',
         objectiveText: 'Validate outbound before scaling.',
       },
-      { store: objectiveStore }
+      { store: objectiveStore, operatorContextOpts: baseOpts() }
     );
 
     const doc = await assembleOperatorContext({
@@ -237,6 +237,7 @@ describe('SPEC-104 startup loader and workspace open', () => {
       trigger: REBUILD_TRIGGERS.INITIAL,
       store: contextStore,
       cieOpts: { store: cieStore },
+      objectiveOpts: { store: createObjectiveStore() },
       listMissions: async () => [],
       loadOutcomes: async () => [],
     });
@@ -265,6 +266,7 @@ describe('SPEC-104 startup loader and workspace open', () => {
       trigger: REBUILD_TRIGGERS.INITIAL,
       store: contextStore,
       cieOpts: { store: cieStore },
+      objectiveOpts: { store: createObjectiveStore() },
       listMissions: async () => [],
       loadOutcomes: async () => [],
     });

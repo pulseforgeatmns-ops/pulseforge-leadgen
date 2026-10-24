@@ -118,7 +118,7 @@ describe('SPEC-101 Max workspace specialist interrogation', () => {
     await seedScout();
     const before = (await store.listDelegations({ tenantId: '10' })).length;
     let scoutCalls = 0;
-    const engine = require('../WorkspaceEngine').createWorkspaceEngine({
+    const engine = require('./workspaceTestHarness').createHermeticWorkspaceEngine({
       disableLlm: true,
       missionsEnabled: false,
       specialistDelegationService: service,
