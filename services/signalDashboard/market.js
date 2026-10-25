@@ -35,12 +35,12 @@ class GeckoCandleProvider extends MarketProvider {
     if(!address(tokenAddress)||!address(poolAddress)||!INTERVALS[interval])throw new Error('invalid_candle_request');
     const paid=Boolean(this.proKey);
     if(!paid && (!this.publicBudget || !await this.publicBudget.consume('existing')))throw new Error('shared_gecko_budget_unavailable');
-    await this.budget.take(paid?'coingecko-pro':'geckoterminal-dashboard',paid?1000:10000);
+    await this.budget.take(paid?'coingecko-pro':'geckoterminal-dashboard',paid?1000:60000);
     const seconds=INTERVALS[interval], frame=seconds>=3600?'hour':'minute',aggregate=seconds/(frame==='hour'?3600:60);
     const root=paid?'https://pro-api.coingecko.com/api/v3/onchain':'https://api.geckoterminal.com/api/v2';
     const url=`${root}/networks/solana/pools/${poolAddress}/ohlcv/${frame}?aggregate=${aggregate}&limit=300&currency=usd&token=${tokenAddress}&include_empty_intervals=false&before_timestamp=${Math.floor(Date.parse(before)/1000)}`;
     const r=await this.fetchFn(url,{headers:{Accept:'application/json;version=20230203',...(paid?{'x-cg-pro-api-key':this.proKey}:{})},redirect:'error',signal:AbortSignal.timeout(8000)});
-    if(r.status===429){await this.budget.backoff(paid?'coingecko-pro':'geckoterminal-dashboard',60000);throw new Error('candles_rate_limited');}
+    if(r.status===429){await this.budget.backoff(paid?'coingecko-pro':'geckoterminal-dashboard',60000);if(!paid&&this.publicBudget.backoff)await this.publicBudget.backoff(+this.now()+60000);throw new Error('candles_rate_limited');}
     if(!r.ok)throw new Error('candles_unavailable');
     const body=await r.json(),rows=body?.data?.attributes?.ohlcv_list;
     if(!Array.isArray(rows))throw new Error('invalid_candle_response');

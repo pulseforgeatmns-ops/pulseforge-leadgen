@@ -24,6 +24,10 @@ test('sampled candles retain gaps, real timestamps and partial coverage; future/
  const os=[observation(0),observation(30000,{priceUsd:2}),observation(180000,{priceUsd:3}),observation(120000,{knownAt:later(999999),priceUsd:100})];
  const cs=observedCandles(os,'1m',later(180000));assert.equal(cs.length,2);assert.equal(cs[0].open,1);assert.equal(cs[0].close,2);assert.equal(cs[0].volume,null);assert.equal(cs[0].quality,'PARTIAL');assert.equal(cs[1].time-cs[0].time,180);
 });
+test('public historical candles honor both shared reservations and a one-minute dashboard quota, including shared 429 backoff',async()=>{
+ const calls=[],shared=[];const p=new GeckoCandleProvider({publicBudget:{consume:async lane=>{shared.push(lane);return true;},backoff:async until=>shared.push(until)},budget:{take:async(...args)=>calls.push(args),backoff:async(...args)=>calls.push(args)},now:()=>new Date(at),fetchFn:async()=>({status:429})});
+ await assert.rejects(()=>p.getCandles({tokenAddress:CA,poolAddress:POOL,interval:'15m'}),/rate_limited/);assert.deepEqual(calls[0],['geckoterminal-dashboard',60000]);assert.equal(shared[0],'existing');assert.equal(shared[1],Date.parse(at)+60000);
+});
 test('entry/call observed peaks and drawdown preserve chronology without future ATH or late history',()=>{
  const os=[observation(-1000,{priceUsd:99}),observation(0),observation(1000,{priceUsd:2}),observation(2000,{priceUsd:1.5}),observation(3000,{priceUsd:100})];
  const p=peaks(os,at,later(1000),later(2000));assert.equal(p.postEntry.priceUsd,2);assert.equal(p.postEntry.drawdown,-.25);assert.equal(p.postEntry.chronology.length,2);assert.equal(p.postCall.chronology.length,1);

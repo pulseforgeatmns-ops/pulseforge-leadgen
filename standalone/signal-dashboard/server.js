@@ -6,6 +6,7 @@ const {DashboardStore,DurableBudget}=require('../../services/signalDashboard/sto
 const {DashboardService}=require('../../services/signalDashboard/service');
 const {createCollectors}=require('../../services/signalDashboard/collector');
 const {operationalSummary}=require('../../services/signalDashboard/diagnostics');
+const {SharedGeckoCandleBudget}=require('../../services/signalDashboard/publicCandleBudget');
 const {isValidSolanaAddress:address}=require('../../packages/signal-v1/acquisition/solanaAddress');
 async function boot({env=process.env,pool:providedPool,listen=true,collect=true}={}){
  const pool=providedPool||new Pool({connectionString:env.DATABASE_URL,ssl:env.DATABASE_SSL==='false'?false:{rejectUnauthorized:false},max:6,connectionTimeoutMillis:5000,query_timeout:10000});
@@ -25,11 +26,11 @@ async function boot({env=process.env,pool:providedPool,listen=true,collect=true}
   feed=async()=>{await budget.take('signal-dashboard-feed',30000);const r=await fetch(u,{headers:{authorization:`Bearer ${env.SIGNAL_OPERATOR_FEED_TOKEN}`},redirect:'error',signal:AbortSignal.timeout(5000)});if(!r.ok)throw Error('private_feed_unavailable');const j=await r.json();return j.calls;};
  }
  const researchReader=()=>require('../../services/signalDashboard/researchBridge').readEmpiricalEvents(pool,watches.map(w=>w.tokenAddress),{registry});
- const collectors=createCollectors({store,budget,env,feed,researchReader,registry});
+ const collectors=createCollectors({store,budget,env,feed,researchReader,registry,publicCandleBudget:new SharedGeckoCandleBudget(pool)});
  const app=createSignalApp({pool,service,config:cfg,sessionSecret:env.SESSION_SECRET,coreAppUrl:env.SIGNAL_CORE_APP_URL});
  let server;if(listen)server=app.listen(Number(env.PORT||3000),'0.0.0.0',()=>console.log('[signal-dashboard] ready: isolated authenticated service, public-wallet observation only'));
  let reportTimer,stopped=false;
- async function report(){if(stopped)return;try{for(const watch of watches){const [position,observations]=await Promise.all([service.detail(watch.tokenAddress),store.list('observation',watch.tokenAddress,{ascending:false,limit:7})]);console.log('[signal-dashboard] observation health',JSON.stringify(operationalSummary(position,observations)));}}catch{console.log('[signal-dashboard] observation health unavailable');}if(!stopped){reportTimer=setTimeout(report,60000);reportTimer.unref();}}
+ async function report(){if(stopped)return;try{for(const watch of watches){const [position,observations,candle]=await Promise.all([service.detail(watch.tokenAddress),store.list('observation',watch.tokenAddress,{ascending:false,limit:7}),store.latest('candle',watch.tokenAddress)]);console.log('[signal-dashboard] observation health',JSON.stringify(operationalSummary(position,observations,candle)));}}catch{console.log('[signal-dashboard] observation health unavailable');}if(!stopped){reportTimer=setTimeout(report,60000);reportTimer.unref();}}
  if(collect){collectors.start();reportTimer=setTimeout(report,45000);reportTimer.unref();}
  const stop=()=>{stopped=true;clearTimeout(reportTimer);collectors.stop();server?.close();};process.once('SIGTERM',stop);process.once('SIGINT',stop);
  return {app,service,store,collectors,stop};

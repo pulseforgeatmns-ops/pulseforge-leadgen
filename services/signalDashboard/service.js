@@ -42,7 +42,7 @@ class DashboardService {
     if(native.ledger.reconciliation.state!=='MATCH')for(const key of ['realizedPnl','unrealizedPnl','totalPnl','netCapitalAtRisk'])native.ledger[key]=null;
     if(!transactions.length&&!historyComplete)for(const key of ['grossCapitalDeployed','grossProceedsRealized','realizedCash','positionValue','tokensRemaining','netCashFlow'])native.ledger[key]=null;
     const quoteAccounting={symbol:native.symbol,asset:native.asset,cashBasis:native.cashBasis,feeItemization:native.feeItemization,quality:'PARTIAL'};
-    for(const key of ['grossCapitalDeployed','grossProceedsRealized','realizedCash','realizedPnl','unrealizedPnl','totalPnl','netCapitalAtRisk','remainingCostBasis','positionValue','netCashFlow'])quoteAccounting[key]=metric(native.ledger[key],{provider:'finalized quote-token wallet changes / FIFO',partial:true,observedAt:balance?.observedAt,reason:native.ledger.issues.join(', ')||native.cashBasis},at);
+    for(const key of ['grossCapitalDeployed','grossProceedsRealized','realizedCash','realizedPnl','unrealizedPnl','totalPnl','netCapitalAtRisk','remainingCostBasis','positionValue','netCashFlow','weightedAverageAcquisitionPrice'])quoteAccounting[key]=metric(native.ledger[key],{provider:'finalized quote-token wallet changes / FIFO',partial:true,observedAt:balance?.observedAt,reason:native.ledger.issues.join(', ')||native.cashBasis},at);
     ledger.quality='PARTIAL'; // Indexer history, USD estimates and unknown fees remain disclosed.
     const riskProjection=cursors.find(x=>x.key==='risk:'+ca);
     const risk=distribution(observations,events,asOf,riskProjection?.state);
@@ -55,6 +55,8 @@ class DashboardService {
     const accounting={};
     for(const key of ['positionValue','tokensRemaining','grossCapitalDeployed','grossProceedsRealized','realizedCash','netCashFlow','tokensPurchased','tokensSold','weightedAverageAcquisitionPrice','remainingCostBasis','realizedPnl','unrealizedPnl','totalPnl','feesUsd','netCapitalAtRisk'])
       accounting[key]=metric(ledger[key],{provider:'observed-wallet FIFO',observedAt:key==='positionValue'?current?.observedAt:balance?.observedAt,partial:true,reason:ledger.issues.join(', ')||'Observed indexer history and USD conversion estimates'},at);
+    const nativeTransactions=new Map(native.transactions.map(t=>[t.id,t]));
+    const nativeAnalytics=native.ledger.realizedPnl!==null;
     const markers=ledger.transactions.map(t=>{
       const atEvents=events.filter(e=>knownBy(e,t.blockTime));
       const historicalRisk=[...events.filter(e=>e.category.startsWith('DISTRIBUTION_')),...risk.transitions].filter(e=>knownBy(e,t.blockTime)).at(-1);
@@ -62,13 +64,14 @@ class DashboardService {
       const research=atEvents.filter(e=>e.researchState).at(-1);
       return {id:t.id,category:t.type,occurredAt:t.blockTime,knownAt:t.knownAt,time:Math.floor(Date.parse(t.blockTime)/1000),
         source:'solana finalized transaction',evidence:{signature:t.signature,tokenAmount:t.tokenAmount,valueUsd:t.valueUsd,
-          quoteAmount:t.quoteAmount,quoteAsset:t.quoteAsset,executionPriceUsd:t.executionPriceUsd,feesUsd:t.feesUsd,positionAfter:t.positionAfter,
-          lifecycle:t.lifecycle,signalState:research?.researchState||'UNKNOWN',distributionRisk:historicalRiskState},
+          quoteAmount:t.quoteAmount,quoteAsset:t.quoteAsset,executionPriceUsd:t.executionPriceUsd,executionPriceQuote:t.executionPriceQuote,feesUsd:t.feesUsd,positionAfter:t.positionAfter,
+          lifecycle:nativeAnalytics?nativeTransactions.get(t.id)?.lifecycle||t.lifecycle:t.lifecycle,signalState:research?.researchState||'UNKNOWN',distributionRisk:historicalRiskState},
         provenance:{provider:t.provenance.provider,commitment:t.provenance.commitment,valuation:t.valuation||null}};
     });
-    const milestones=ledger.transactions.filter((t,i,all)=>t.lifecycle==='DE_RISK'&&all[i-1]?.lifecycle!=='DE_RISK').map(t=>({
+    const milestoneTransactions=nativeAnalytics?native.transactions:ledger.transactions;
+    const milestones=milestoneTransactions.filter((t,i,all)=>t.lifecycle==='DE_RISK'&&all[i-1]?.lifecycle!=='DE_RISK').map(t=>({
       id:id(['de-risk',t.id]),category:'DE_RISK_MILESTONE',occurredAt:t.blockTime,knownAt:asOf,source:'FIFO trade analytics',
-      evidence:'Observed proceeds cover observed deployed capital and observable fees',provenance:{transactionSignature:t.signature,quality:ledger.quality,derived:true}}));
+      evidence:'Observed money received covers observed money put in, including fees in the observed cash changes',provenance:{transactionSignature:t.signature,quality:ledger.quality,unit:nativeAnalytics?native.symbol:'USD',derived:true}}));
     const timeline=[...events,...markers,...milestones,...annotations,...risk.transitions].sort((a,b)=>Date.parse(a.occurredAt)-Date.parse(b.occurredAt)||String(a.id).localeCompare(String(b.id)));
     const research=events.filter(e=>e.researchState).at(-1);
     return {tokenAddress:ca,symbol:current?.symbol||watch.symbol||ca.slice(0,8),walletConfigured:true,asOf,lastUpdated:current?.observedAt||balance?.observedAt||null,
@@ -83,7 +86,7 @@ class DashboardService {
   async positions(){
     const watches=await this.store.list('watch',null,{limit:100});
     const positions=[];
-    for(const w of watches){const p=await this.detail(w.tokenAddress);if(p)positions.push({tokenAddress:p.tokenAddress,symbol:p.symbol,accounting:p.accounting,quoteAccounting:p.quoteAccounting,risk:p.risk.state,drawdown:p.peak.postEntry.drawdown,lifecycle:p.lifecycle,asOf:p.asOf});}
+    for(const w of watches){const p=await this.detail(w.tokenAddress);if(p)positions.push({tokenAddress:p.tokenAddress,symbol:p.symbol,market:p.market,accounting:p.accounting,quoteAccounting:p.quoteAccounting,risk:p.risk.state,riskEvidence:{for:p.risk.for,unknown:p.risk.unknown},drawdown:p.peak.postEntry.drawdown,lifecycle:p.lifecycle,signalState:p.signalState,lastUpdated:p.lastUpdated,reconciliation:p.coverage.reconciliation.state,asOf:p.asOf});}
     // Operational CA events only. No cohort outcomes, returns, precision or performance are read.
     const events=await this.store.list('event',null,{ascending:false,limit:200});
     const seen=new Set(),liveSignals=[];

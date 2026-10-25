@@ -68,3 +68,24 @@ test('ten-second market polls tolerate receipt-time jitter without skipping ever
  const w=createDashboardWorker({store:s,includeCurrentMark:false,now:()=>new Date(later(n*10000)),marketProvider:{getSnapshot:async()=>{requests++;return observation(n*10000+500);}}});
  for(n=0;n<4;n++)await w.pollOnce();assert.equal(requests,4);assert.equal((await s.list('observation',CA,{asOf:later(50000)})).length,4);
 });
+test('native USDC analytics create principal-recovery markers without inventing historical dollar values',async()=>{
+ const {USDC}=require('../services/signalDashboard/wallet');const s=new MemoryStore();await seed(s);await complete(s);
+ const native={quoteAsset:USDC,quoteCashBasis:'NET_WALLET_DELTA',walletLamportDelta:'0',feesLamports:'0',valueUsd:null,feesUsd:'0'};
+ await s.put('transaction',CA,'buy',tx(1,'BUY',{...native,tokenAmount:'10',quoteAmount:'10'}));await s.put('transaction',CA,'sell',tx(2,'SELL',{...native,tokenAmount:'5',quoteAmount:'12',executionPriceQuote:'2.4'}));
+ await s.put('balance',CA,'b',{tokens:'5',slot:5,observedAt:later(2000),knownAt:later(2000)});
+ const service=new DashboardService(s,{now:()=>new Date(later(3000))}),p=await service.detail(CA);assert.equal(p.accounting.realizedPnl.value,null);assert.equal(p.quoteAccounting.realizedPnl.value,'7');
+ const milestone=p.events.find(e=>e.category==='DE_RISK_MILESTONE');assert.equal(milestone.occurredAt,later(2000));assert.equal(milestone.provenance.unit,'USDC');assert.equal(p.events.find(e=>e.category==='SELL').evidence.executionPriceQuote,'2.4');
+ const home=await service.positions();assert.ok(home.positions[0].market);assert.equal(home.positions[0].reconciliation,'MATCH');assert.equal(home.positions[0].quoteAccounting.realizedCash.value,'12');
+});
+test('minute quote marks tolerate receipt jitter so native position valuations remain available',async()=>{
+ const {USDC}=require('../services/signalDashboard/wallet');const s=new MemoryStore();await seed(s);let n=0,requests=0;const w=createDashboardWorker({store:s,now:()=>new Date(later(n*60000)),marketProvider:{getSnapshot:async()=>{requests++;return observation(n*60000+500,{tokenAddress:USDC,priceUsd:.999});}}});
+ for(n=0;n<3;n++)await w.currentMarkTick();assert.equal(requests,3);assert.equal((await s.list('quote',null)).length,3);
+});
+test('slow historical candles run independently of current market observations',async()=>{
+ const {createCollectors}=require('../services/signalDashboard/collector');const {POOL}=require('./helpers/signalDashboardFixtures');const s=new MemoryStore();await seed(s);await s.put('watch',CA,'watch',{tokenAddress:CA,poolAddress:POOL,occurredAt:at,knownAt:at},{mutable:true});
+ let release,entered;const started=new Promise(r=>entered=r),gate=new Promise(r=>release=r);const collectors=createCollectors({store:s,budget:{take:async()=>{}},publicCandleBudget:{consume:async()=>true},now:()=>new Date(later(60000)),fetchFn:async url=>{
+  if(url.includes('geckoterminal')){entered();await gate;return {ok:true,json:async()=>({data:{attributes:{ohlcv_list:[[Date.parse(at)/1000,1,2,.5,1.5,10]]}}})};}
+  return {ok:true,json:async()=>[{chainId:'solana',pairAddress:POOL,baseToken:{address:CA},priceUsd:'1',marketCap:1000,liquidity:{usd:100}}]};
+ }});
+ const history=collectors.candleTick();await started;await collectors.marketTick();assert.equal((await s.list('observation',CA)).length,1);assert.equal((await s.list('candle',CA)).length,0);release();await history;assert.equal((await s.list('candle',CA))[0].interval,'15m');collectors.stop();
+});

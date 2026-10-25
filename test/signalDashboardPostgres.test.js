@@ -20,6 +20,11 @@ async function exercise(pool) {
  let release,entered;const enter=new Promise(r=>entered=r),held=s.lock(async()=>{entered();await new Promise(r=>release=r);});await enter;assert.deepEqual(await new DashboardStore(pool,{tenantId:'1',wallet:W}).lock(()=>{throw Error('must not enter');}),{skipped:true});release();await held;
  const budget=new DurableBudget(pool);const attempts=await Promise.allSettled(Array.from({length:10},()=>budget.take('test-provider',60000)));assert.equal(attempts.filter(x=>x.status==='fulfilled').length,1);
  await budget.backoff('test-provider',60000);await assert.rejects(()=>new DurableBudget(pool).take('test-provider',60000),/budget_deferred/);
+ const existingSchema=fs.readFileSync(path.join(__dirname,'../migrations/2026-10-14-signal-distribution.sql'),'utf8');await pool.query(existingSchema);
+ const {SharedGeckoCandleBudget}=require('../services/signalDashboard/publicCandleBudget'),shared=new SharedGeckoCandleBudget(pool);
+ const reservations=await Promise.all(Array.from({length:10},()=>shared.consume('existing')));assert.equal(reservations.filter(Boolean).length,6);
+ await shared.backoff(Date.now()+60000);assert.equal(await new SharedGeckoCandleBudget(pool).consume('existing'),false);
+ assert.equal((await pool.query("SELECT count(*)::int AS count FROM signal_distribution_request_attempts WHERE lane='existing'")).rows[0].count,6);
  const service=new DashboardService(s,{now:()=>new Date(later(3000))});await service.annotate(CA,'Recovered principal','7');assert.equal((await s.list('annotation',CA)).length,1);
  assert.equal((await service.detail(CA)).peak.postEntry.priceUsd,2);
 }

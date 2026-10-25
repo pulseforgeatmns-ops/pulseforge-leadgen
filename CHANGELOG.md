@@ -2,6 +2,10 @@
 
 ## 2026-10-25 — Signal trading dashboard V1 (in progress)
 
+- Built a modern mobile dashboard with plain-language money cards, searchable positions, explained risk, chart layers/full history, activity filters and notes. Technical provenance is available on demand.
+- Added rate-limited public Gecko history on an independent collector, sharing Signal's durable provider reservation without starting orchestration or outbound. Native USDC recovery milestones preserve unknown historical USD values.
+
+
 - [SPEC-SIGNAL-DASH-001](docs/specs/SPEC-SIGNAL-DASH-001_Trading_Dashboard.md): isolated public-wallet observer, persisted market/event evidence, fixed-decimal FIFO trade analytics, owner-scoped read APIs, mobile candles/markers/risk/timeline and append-only notes. Separate collector, default off, no execution authority or Pulseforge core changes.
 - Public Solana RPC supports observed transaction version 1, verified PumpSwap instructions, sponsored fees, exact USDC cash flow, durable backfill/head cursors and finalized wallet balances. USDC accounting is labeled separately from USD.
 - Added an isolated authenticated Signal service using existing owner credentials, separate sessions, bounded login attempts and Signal-only migrations. Market updates run independently of wallet backfill.

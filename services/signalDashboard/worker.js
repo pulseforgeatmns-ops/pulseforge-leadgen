@@ -59,10 +59,35 @@ function createDashboardWorker({store,marketProvider,walletProvider,candleProvid
   async function currentMarkTick(){
     if(!marketProvider)return;
     const mark=(await store.list('quote',null,{ascending:false,limit:100})).find(q=>q.purpose==='CURRENT_MARK'&&q.asset===USDC);
-    if(mark&&+now()-Date.parse(mark.knownAt)<60000)return;
+    if(mark&&+now()-Date.parse(mark.knownAt)<55000)return;
     const o=await marketProvider.getSnapshot({tokenAddress:USDC});
     const price=Number(o.priceUsd);if(o.tokenAddress!==USDC||!Number.isFinite(price)||price<=0)throw Error('quote_mark_unavailable');
     const at=now().toISOString();await store.put('quote','*',id(['mark',USDC,at]),{asset:USDC,purpose:'CURRENT_MARK',priceUsd:price.toFixed(18),occurredAt:at,knownAt:at,provider:o.provider,sourceTimestamp:o.providerTimestamp||null,quality:'PARTIAL'});
+  }
+  async function captureCandles(watch,previous){
+          const all=await store.list('candle',watch.tokenAddress,{ascending:false,limit:10000});
+          const missing=['15m','1m','5m','1h','4h'].find(k=>!all.some(c=>c.interval===k));
+          const lastMinute=all.find(c=>c.interval==='1m');
+          const interval=missing||(!lastMinute||+now()-Date.parse(lastMinute.knownAt)>=10000?'1m':null);
+          if(!interval)return;
+          const revisions=new Map();
+          for(const c of all){const key=[c.provider,c.pairId,c.interval,c.time].join(':');if(!revisions.has(key))revisions.set(key,c);}
+          for(const c of await candleProvider.getCandles({tokenAddress:watch.tokenAddress,poolAddress:watch.poolAddress||previous?.pairId,interval})){
+            const key=[c.provider,c.pairId,c.interval,c.time].join(':'),prior=revisions.get(key);
+            if(prior&&['open','high','low','close','volume','complete'].every(field=>prior[field]===c[field]))continue;
+            await store.put('candle',watch.tokenAddress,id([c.provider,c.pairId,c.interval,c.time,c.knownAt]),c);
+          }
+    await status('candles:'+watch.tokenAddress,'PARTIAL','Provider candles; source freshness and gaps remain disclosed');
+  }
+  let candleOffset=0;
+  async function candleTick(){
+    if(!candleProvider)return;
+    return store.lock(async()=>{
+      const watches=await store.list('watch',null,{limit:100});
+      if(!watches.length)return;if(watches.length>maxActive)throw Error('dashboard_active_capacity_exceeded');
+      const watch=watches[candleOffset++%watches.length],previous=await store.latest('observation',watch.tokenAddress);
+      try{await captureCandles(watch,previous);}catch{await status('candles:'+watch.tokenAddress,'UNKNOWN','HISTORICAL_PROVIDER_UNAVAILABLE_OR_BUDGET_DEFERRED');}
+    },'candles');
   }
   async function pollOnce() {
     if(running)return {skipped:true};running=true;
@@ -97,20 +122,7 @@ function createDashboardWorker({store,marketProvider,walletProvider,candleProvid
           const b=await walletProvider.getBalance({wallet:store.wallet,tokenAddress:watch.tokenAddress});
           await store.put('balance',watch.tokenAddress,id([b.slot,b.observedAt]),{...b,occurredAt:b.observedAt,knownAt:now().toISOString()});
         });
-        if(candleProvider)await attempt('candles:'+watch.tokenAddress,async()=>{
-          const all=await store.list('candle',watch.tokenAddress,{ascending:false,limit:10000});
-          const missing=Object.keys(INTERVALS).find(k=>!all.some(c=>c.interval===k));
-          const lastMinute=all.find(c=>c.interval==='1m');
-          const interval=missing||(!lastMinute||+now()-Date.parse(lastMinute.knownAt)>=10000?'1m':null);
-          if(!interval)return;
-          const revisions=new Map();
-          for(const c of all){const key=[c.provider,c.pairId,c.interval,c.time].join(':');if(!revisions.has(key))revisions.set(key,c);}
-          for(const c of await candleProvider.getCandles({tokenAddress:watch.tokenAddress,poolAddress:watch.poolAddress||previous?.pairId,interval})){
-            const key=[c.provider,c.pairId,c.interval,c.time].join(':'),prior=revisions.get(key);
-            if(prior&&['open','high','low','close','volume','complete'].every(field=>prior[field]===c[field]))continue;
-            await store.put('candle',watch.tokenAddress,id([c.provider,c.pairId,c.interval,c.time,c.knownAt]),c);
-          }
-        });
+        if(candleProvider)await attempt('candles:'+watch.tokenAddress,()=>captureCandles(watch,previous));
       }
       if(walletProvider){await attempt('wallet-history',historyTick);await attempt('wallet-head',headTick);}
       await attempt('quotes',quoteTick);
@@ -119,6 +131,6 @@ function createDashboardWorker({store,marketProvider,walletProvider,candleProvid
       return {observed:true};
     });}finally{running=false;}
   }
-  return {pollOnce,historyTick,headTick,feedTick,quoteTick,currentMarkTick};
+  return {pollOnce,historyTick,headTick,feedTick,quoteTick,currentMarkTick,candleTick};
 }
 module.exports={createDashboardWorker};

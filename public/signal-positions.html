@@ -1,16 +1,62 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>Signal · Positions</title>
-<link rel="stylesheet" href="/signal-positions.css"><script defer src="/signal-positions-chart.js"></script><script defer src="/signal-positions.js"></script></head>
-<body><main><nav><a href="/signal-v1/positions">SIGNAL <span>positions</span></a><a href="/signal-v1">Research</a></nav>
-<p id="connection" role="status">Loading persisted observations…</p><div id="home" hidden><h1>Active positions</h1><div id="positions"></div><h2>Live signals</h2><p class="muted">Operational events. Prospective performance remains blinded.</p><div id="signals"></div></div>
-<section id="position" hidden><header><p class="eyebrow">READ-ONLY INTELLIGENCE</p><h1 id="symbol"></h1><p id="address" class="address"></p><p id="lifecycle" class="muted"></p></header>
-<div id="summary" class="summary"></div><aside id="risk" class="risk"></aside>
-<section class="panel"><div class="chart-toolbar"><h2>Market &amp; actions</h2><div id="intervals" class="intervals" role="group" aria-label="Candle interval"></div></div>
-<p id="chartQuality" class="muted"></p><canvas id="chart" height="320" aria-label="Interactive candlestick chart. Drag to pan, scroll or pinch to zoom. Tap a marker for evidence."></canvas>
-<div id="markerDetail" class="marker-detail" hidden></div><p class="muted">Drag to pan · scroll or pinch to zoom · tap B/S or an event marker. Gaps contain no candle observations.</p><div id="legend" class="legend"></div></section>
-<details class="panel"><summary>Distribution evidence &amp; promotion research</summary><div id="riskEvidence"></div></details>
-<details class="panel"><summary>Market data &amp; provenance</summary><div id="market" class="summary"></div></details>
-<details class="panel"><summary>Position accounting &amp; coverage</summary><div id="accounting" class="summary"></div><pre id="coverage"></pre><p class="muted">FIFO trade analytics. Historical USD conversion estimates are labeled PARTIAL. This dashboard is not tax accounting or tax advice.</p></details>
-<section class="panel"><h2>Event timeline</h2><div id="timeline"></div></section>
-<section class="panel"><h2>Operator notes</h2><form id="noteForm"><label for="note">Add context to your position</label><textarea id="note" maxlength="2000" placeholder="Recovered principal. Let remainder run."></textarea><button type="submit">Save note</button><p id="noteStatus" role="status"></p></form></section>
-</section><footer>Observation only. Execute trades in FOMO.</footer></main></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark"><meta name="theme-color" content="#0c0e14">
+  <meta name="description" content="Your positions, your actions, and what Signal knows. Read-only trading intelligence.">
+  <title>Signal · Your trading, in focus</title>
+  <link rel="stylesheet" href="/signal-positions.css">
+  <script defer src="/signal-positions-chart.js"></script><script defer src="/signal-positions.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to dashboard</a>
+  <aside class="sidebar" aria-label="Main navigation">
+    <a class="brand" href="/signal-v1/positions"><span class="brand-mark" aria-hidden="true">s</span><span>signal<span class="brand-dot">.</span></span></a>
+    <p class="nav-caption">YOUR WORKSPACE</p>
+    <nav class="side-nav"><a class="active" href="/signal-v1/positions" aria-current="page"><span aria-hidden="true">◫</span> Dashboard</a><a href="/signal-v1/positions#live-signals"><span aria-hidden="true">⌁</span> Live signals</a><a href="/signal-v1/positions#how-it-works"><span aria-hidden="true">ⓘ</span> How to read this</a></nav>
+    <div class="sidebar-bottom"><span class="shield-icon" aria-hidden="true">◇</span><strong>Look. Understand. Decide.</strong><p>Signal watches and explains.<br>You trade in FOMO.</p><span class="quiet-badge">READ-ONLY WALLET</span></div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar"><a class="mobile-brand brand" href="/signal-v1/positions"><span class="brand-mark" aria-hidden="true">s</span>signal<span class="brand-dot">.</span></a><span class="topbar-label">Your trading workspace</span><div class="topbar-right"><span class="connection-dot" id="connectionDot" data-state="loading"></span><span id="connectionShort">Connecting</span><button class="icon-button" id="refresh" type="button" aria-label="Refresh dashboard" title="Refresh dashboard">↻</button><details class="help-menu"><summary aria-label="Dashboard help">?</summary><div class="help-popover"><strong>A clearer view of your trades.</strong><p>Prices and wallet activity update automatically. Missing information stays unknown.</p><a href="/signal-v1/positions#how-it-works">How to read this dashboard →</a></div></details></div></header>
+    <main id="main">
+      <div id="connection" class="connection-message" role="status">Loading your latest saved view…</div>
+      <section id="home" hidden>
+        <div class="page-heading"><div><p class="eyebrow">THE BIG PICTURE</p><h1>Your trading, in focus<span class="accent">.</span></h1><p class="subtitle">Your money. Your moves. A clearer view of what comes next.</p></div><div class="day-label" id="today"></div></div>
+        <div id="portfolioSummary" class="portfolio-summary"></div>
+        <div class="section-heading"><div><p class="eyebrow">YOUR WALLET</p><h2>Your positions <span id="positionCount" class="count-badge"></span></h2></div><label class="search"><span aria-hidden="true">⌕</span><input id="positionSearch" type="search" placeholder="Find a token" aria-label="Find a position"></label></div>
+        <div class="filter-row" id="positionFilters" role="group" aria-label="Filter positions"><button type="button" data-filter="all" aria-pressed="true">All positions</button><button type="button" data-filter="holding" aria-pressed="false">Still holding</button><button type="button" data-filter="closed" aria-pressed="false">Fully sold</button></div>
+        <div id="positions" class="positions-grid"></div>
+        <div class="home-bottom">
+          <section class="panel" id="live-signals"><div class="section-heading"><div><p class="eyebrow">ON SIGNAL'S RADAR</p><h2>Live signals</h2></div><span class="quiet-badge">RESEARCH</span></div><p class="muted">Tracked mentions and source activity. A mention is a lead to investigate, not a reason to buy.</p><div id="signals"></div></section>
+          <section class="panel guide-card" id="how-it-works"><p class="eyebrow">A QUICK GUIDE</p><h2>The numbers, in plain English.</h2><dl class="guide-list"><div><dt>Still holding</dt><dd>What the tokens left in your wallet are worth now.</dd></div><div><dt>Money back</dt><dd>What you received from selling. This includes your original money, not just profit.</dd></div><div><dt>Total profit / loss</dt><dd>Profit from sales plus the change in value of what you still hold.</dd></div><div><dt>Original money at risk</dt><dd>Money put in that your sales have not yet paid back. Tokens you still hold can lose value.</dd></div></dl><p class="data-note">USDC is shown as USDC. We don't silently treat it as exactly one US dollar.</p></section>
+        </div>
+      </section>
+      <section id="position" hidden>
+        <a class="back-link" href="/signal-v1/positions">← All positions</a>
+        <header class="position-heading"><div class="token-identity"><div id="tokenAvatar" class="token-avatar" aria-hidden="true"></div><div><div class="title-line"><h1 id="symbol"></h1><span class="network-badge">Solana</span></div><p id="lifecycle" class="muted"></p></div></div><div class="address-control"><span id="address" class="address"></span><button id="copyAddress" class="icon-button" type="button" aria-label="Copy token address" title="Copy token address">⧉</button><span id="copyStatus" class="sr-only" role="status"></span></div></header>
+        <div id="priceStrip" class="price-strip"></div>
+        <div id="summary" class="position-summary"></div>
+        <div id="positionContext" class="position-context"></div>
+        <aside id="risk" class="risk"></aside>
+        <section class="panel chart-panel" id="market-chart"><div class="chart-toolbar"><div><p class="eyebrow">THE MARKET &amp; YOUR MOVES</p><h2>Price history</h2></div><div id="intervals" class="intervals" role="group" aria-label="Candle interval"></div></div>
+          <div class="chart-subbar"><div id="chartLayers" class="chart-layers" role="group" aria-label="Chart events"><button type="button" data-layer="trades" aria-pressed="true">Your trades</button><button type="button" data-layer="calls" aria-pressed="true">Calls &amp; promotion</button><button type="button" data-layer="risk" aria-pressed="true">Risk changes</button></div><div class="chart-views"><button id="chartHistory" class="text-button" type="button">Full history</button><button id="chartReset" class="text-button" type="button">Latest view ↗</button></div></div>
+          <canvas id="chart" height="320" tabindex="0" aria-label="Interactive candlestick chart. Drag to pan, scroll or pinch to zoom. Plus and minus keys zoom; arrow keys pan. Tap a trade marker to see what happened."></canvas>
+          <div id="markerDetail" class="marker-detail" hidden></div>
+          <div class="chart-footer"><div id="legend" class="legend"></div><span class="muted">Drag to explore · tap a marker</span></div><p id="chartQuality" class="data-note"></p>
+        </section>
+        <div class="detail-grid">
+          <section class="panel" id="signal-view"><div class="section-heading"><div><p class="eyebrow">WHAT SIGNAL SEES</p><h2>Behind the risk level</h2></div><span class="quiet-badge">EVIDENCE</span></div><div id="riskEvidence"></div></section>
+          <section class="panel" id="money-view"><p class="eyebrow">FOLLOW THE MONEY</p><h2>Your money, explained</h2><p class="muted">What went in, what came back, and what is still in play.</p><div id="accounting" class="money-breakdown"></div><p class="data-note">Trade analytics use your oldest purchases first (FIFO). This is not tax accounting or tax advice.</p></section>
+        </div>
+        <div class="detail-grid">
+          <section class="panel"><p class="eyebrow">A CLOSER LOOK</p><h2>Market snapshot</h2><div id="market" class="market-grid"></div></section>
+          <section class="panel"><p class="eyebrow">KNOW WHAT'S MISSING</p><h2>How complete is this view?</h2><div id="dataHealth"></div><details class="technical-details"><summary>Technical details &amp; provenance</summary><pre id="coverage"></pre></details></section>
+        </div>
+        <section class="panel" id="activity"><div class="section-heading"><div><p class="eyebrow">THE STORY SO FAR</p><h2>Your activity &amp; market events</h2></div><span id="eventCount" class="count-badge"></span></div><div class="filter-row" id="eventFilters" role="group" aria-label="Filter activity"><button type="button" data-filter="all" aria-pressed="true">Everything</button><button type="button" data-filter="trades" aria-pressed="false">Your trades</button><button type="button" data-filter="promotion" aria-pressed="false">Calls &amp; promotion</button><button type="button" data-filter="risk" aria-pressed="false">Risk</button><button type="button" data-filter="notes" aria-pressed="false">Notes</button></div><div id="timeline"></div></section>
+        <section class="panel notes-panel" id="your-notes"><div><p class="eyebrow">YOUR THINKING, SAVED</p><h2>Position notes</h2><p class="muted">Keep the reason behind your moves. Your notes stay separate from market evidence.</p><div id="savedNotes"></div></div><form id="noteForm"><label for="note">Add a note</label><textarea id="note" maxlength="2000" placeholder="Recovered my original money. Letting the rest run."></textarea><div class="note-actions"><span class="muted">Only you can add context here.</span><button class="primary-button" type="submit">Save note <span aria-hidden="true">↗</span></button></div><p id="noteStatus" role="status"></p></form></section>
+      </section>
+      <footer><a class="footer-brand" href="/signal-v1/positions">signal.</a><span>Intelligence here. Execution in FOMO.</span><span class="footer-note">No alert does not mean safe.</span></footer>
+    </main>
+  </div>
+</body>
+</html>
