@@ -31,8 +31,8 @@ function harness() {
 const h = harness();
 const revision = 'a'.repeat(40), saturday = '2026-10-24T16:00:00.000Z';
 const authority = () => require('../services/anchorCrmPreparationAuthority');
-const actor = f => ({ id: f.operator.id, role: 'admin' });
-const options = f => ({ env: f.env, now: () => f.now });
+const actor = f => ({ id: f.operator.id, role: 'admin', sessionId: f.sessionId });
+const options = f => ({ env: f.env, now: () => f.now, sessionId: f.sessionId });
 const input = f => ({ revision, manifestHash: hash(f.manifest), sourceMissionHash: hash(f.source) });
 function noSchemaWrites(pool) {
   const query = (db, q, values) => {
@@ -86,6 +86,8 @@ function pinManifest(f, { consumedOperations = 0, consumedItems = 0 } = {}) {
     dailyCap: 1, totalCap: consumedOperations + 1, dailyItemCap: f.manifest.admissions.length,
     totalItemCap: consumedItems + f.manifest.admissions.length, operations: ['prepare_existing_crm'] };
   f.manifest.preparationAuthority = { kind: 'existing_crm_continuation',
+    originalAuthorizerId: String(f.program.authorized_by), approverAccountClientId: 10,
+    approverSessionHash: require('../services/anchorCrmPreparationIdentity').sessionBindingHash(f.sessionId),
     programBindingHash: authority().programBindingHash(f.program), sourceMissionHash: hash(f.source),
     consumedOperations, consumedItems };
   f.env = { ANCHOR_EMAIL_SCOPED_RESUME_ID: f.manifest.id, ANCHOR_EMAIL_RECOVERY_MAINTENANCE: 'true',
@@ -97,6 +99,16 @@ async function setup(pool, t) {
   t.mock.timers.setTime(+new Date(saturday));
   const f = await h.setup(pool);
   f.now = new Date(saturday);
+  f.sessionId = 'synthetic-preparation-session';
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified boolean DEFAULT true,
+    ADD COLUMN IF NOT EXISTS password_change_required boolean DEFAULT false;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS operator_switchable boolean DEFAULT true;
+    CREATE TABLE IF NOT EXISTS "session" (sid text PRIMARY KEY, sess json NOT NULL, expire timestamp NOT NULL);`);
+  await pool.query('UPDATE users SET id=$1 WHERE id=$2', ['71', f.operator.id]);
+  f.operator.id = '71'; f.manifest.operatorId = '71';
+  await pool.query('INSERT INTO "session" (sid,sess,expire) VALUES ($1,$2,$3)', [f.sessionId,
+    { authenticated: true, active_client_id: 10, user: { id: '71', role: 'admin', client_id: 10,
+      active: true, email_verified: true, password_change_required: false } }, '2099-01-01']);
   await pool.query('ALTER TABLE acquisition_outbound_programs ADD COLUMN last_tick_at timestamptz, ADD COLUMN last_error text');
   const policy = { ...f.program.policy, startsAt: '2026-10-23T13:00:00.000Z', expiresAt: '2026-10-23T21:00:00.000Z' };
   await pool.query('UPDATE acquisition_outbound_programs SET policy=$1,policy_hash=$2 WHERE id=$3', [policy, hash(policy), f.program.id]);
@@ -128,7 +140,7 @@ test('separate finite preparation authority cannot renew expired outbound author
     assert.throws(() => recovery.validateLivePolicy(f.program, f.manifest, f.now));
     const installed = await install(pool, f);
     assert.equal(installed.installed, true); assert.equal(installed.providerAuthorized, false);
-    assert.equal((await recovery.loadRecoveryState(pool, { env: f.env, now: f.now })).mode, 'maintenance');
+    assert.equal((await recovery.loadRecoveryState(pool, { env: f.env, now: f.now, sessionId: f.sessionId })).mode, 'maintenance');
     const result = await run(pool, f);
     assert.equal(result.status, 'ready_for_review'); assert.equal(result.sent, 0); assert.equal(result.providerCalls, 0);
     assert.equal(result.executionApproved, false); assert.equal(result.envelopeAuthorized, false); assert.equal(result.retryAllowed, false);
@@ -361,10 +373,20 @@ test('separate finite preparation authority cannot renew expired outbound author
     const f = await h.setup(pool); keys.forEach(k => delete process.env[k]);
     process.env.ANCHOR_EMAIL_SCOPED_RESUME_ID = f.manifest.id;
     await h.install(pool, f);
-    await prepareExistingCrm(pool, f.input, { env: f.env, now: f.now });
+    await prepareExistingCrm(pool, f.input, { env: f.env, now: f.now, sessionId: f.sessionId });
     const historical = await rows(pool, 'anchor_scoped_resume_consumption');
     await revoke(pool, f);
-    f.now = new Date(saturday); t.mock.timers.setTime(+f.now);
+    f.now = new Date(saturday);
+  f.sessionId = 'synthetic-preparation-session';
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified boolean DEFAULT true,
+    ADD COLUMN IF NOT EXISTS password_change_required boolean DEFAULT false;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS operator_switchable boolean DEFAULT true;
+    CREATE TABLE IF NOT EXISTS "session" (sid text PRIMARY KEY, sess json NOT NULL, expire timestamp NOT NULL);`);
+  await pool.query('UPDATE users SET id=$1 WHERE id=$2', ['71', f.operator.id]);
+  f.operator.id = '71'; f.manifest.operatorId = '71';
+  await pool.query('INSERT INTO "session" (sid,sess,expire) VALUES ($1,$2,$3)', [f.sessionId,
+    { authenticated: true, active_client_id: 10, user: { id: '71', role: 'admin', client_id: 10,
+      active: true, email_verified: true, password_change_required: false } }, '2099-01-01']); t.mock.timers.setTime(+f.now);
     f.program = (await pool.query('SELECT * FROM acquisition_outbound_programs WHERE id=$1', [f.program.id])).rows[0];
     const original = await protectedState(pool, f);
     await pool.query('UPDATE acquisition_outbound_inbox_health SET last_success_at=$1', [f.now]);
@@ -416,11 +438,11 @@ test('separate finite preparation authority cannot renew expired outbound author
     for (const operation of ['freeze', 'refill', 'approve_canonical_envelope', 'generate_deterministic_existing_template'])
       await assertNoWrites(pool, () => consume(pool, f, `forbidden-${operation}`, { operation }));
     await assertNoWrites(pool, () => consume(pool, f, 'forbidden-research', { capability: 'research', operation: 'research_existing_source' }));
-    await assertNoWrites(pool, () => store.freeze(f.program, clock(f.now).day, result.missionId, result.preparedArtifactRevision, [entry], { env: f.env, now: f.now }));
-    await assertNoWrites(pool, () => store.appendToEnvelope(envelope, [entry], null, { env: f.env, now: f.now }));
+    await assertNoWrites(pool, () => store.freeze(f.program, clock(f.now).day, result.missionId, result.preparedArtifactRevision, [entry], { env: f.env, now: f.now, sessionId: f.sessionId }));
+    await assertNoWrites(pool, () => store.appendToEnvelope(envelope, [entry], null, { env: f.env, now: f.now, sessionId: f.sessionId }));
     await assertNoWrites(pool, () => require('../services/governedOutboundAdapters').adapters(pool, { tenantId: '10' }).approve(saved, f.program, {}), { code: 'anchor_recovery_separate_preparation_approval_required' });
     await assertNoWrites(pool, () => require('../services/governedOutboundAdapters').adapters(pool, { tenantId: '10' }).approve(saved, f.program, {}, { preinitializedSchema: true, persistencePool: pool }), { code: 'anchor_recovery_separate_preparation_approval_required' });
-    await assertNoWrites(pool, () => integration.assertLegacyPreparation(pool, { tenantId: '10', program: f.program, operation: 'approve_canonical_envelope' }, { env: f.env, now: f.now }));
+    await assertNoWrites(pool, () => integration.assertLegacyPreparation(pool, { tenantId: '10', program: f.program, operation: 'approve_canonical_envelope' }, { env: f.env, now: f.now, sessionId: f.sessionId }));
     for (const flags of [f.env, { ANCHOR_EMAIL_SCOPED_RESUME_ID: f.manifest.id }, { ...f.env, ANCHOR_EMAIL_RECOVERY_MAINTENANCE: 'false', ANCHOR_GOVERNED_OUTBOUND_ENABLED: 'true', ANCHOR_RESEARCH_PROVIDERS_PAUSED: 'false' }]) {
       assert.equal((await recovery.loadRecoveryState(pool, { env: flags, now: f.now })).mode, 'maintenance');
       await assertNoWrites(pool, () => scope.assertScopedResumeCapability(pool, { program: f.program, capability: 'email', operation: 'dispatch' }, { env: flags, now: f.now }));
@@ -436,11 +458,11 @@ test('separate finite preparation authority cannot renew expired outbound author
     const f = await h.setup(pool); keys.forEach(k => delete process.env[k]);
     process.env.ANCHOR_EMAIL_SCOPED_RESUME_ID = f.manifest.id;
     await h.install(pool, f);
-    const ready = await prepareExistingCrm(pool, f.input, { env: f.env, now: f.now });
+    const ready = await prepareExistingCrm(pool, f.input, { env: f.env, now: f.now, sessionId: f.sessionId });
     assert.equal(ready.readyForReview, true);
-    assert.equal((await recovery.loadRecoveryState(pool, { env: f.env, now: f.now })).mode, 'scoped_resume');
+    assert.equal((await recovery.loadRecoveryState(pool, { env: f.env, now: f.now, sessionId: f.sessionId })).mode, 'scoped_resume');
     const g = await h.setup(pool); await h.install(pool, g);
-    await assertNoWrites(pool, () => prepareExistingCrm(pool, g.input, { env: g.env, now: new Date(saturday) }));
+    await assertNoWrites(pool, () => prepareExistingCrm(pool, g.input, { env: g.env, now: new Date(saturday), sessionId: g.sessionId }));
     assert.equal((await effects(pool)).consumed, 0);
     assert.equal(deny.attempts(), 0);
   });

@@ -45,7 +45,7 @@ function validatePreparationProgram(program, manifest, now = new Date()) {
     || program.tenant_id !== '10' || program.id !== manifest.programId || program.mode !== 'active'
     || program.policy_hash !== manifest.policyHash || hash(p) !== manifest.policyHash
     || program.source_mission_id !== manifest.sourceMissionId || program.scope_hash !== manifest.scopeHash
-    || String(program.authorized_by) !== manifest.operatorId || p.tenantId !== '10'
+    || String(program.authorized_by) !== a.originalAuthorizerId || p.tenantId !== '10'
     || p.sourceMissionId !== manifest.sourceMissionId || p.senderEmail !== manifest.senderEmail
     || p.inboxIntegrationId !== manifest.inboxIntegrationId) fail('anchor_crm_preparation_program_changed');
   // Independently validate the historical policy's structure. Do not call the

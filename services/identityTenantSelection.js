@@ -136,4 +136,4 @@ function createIdentityTenantSelection({ pool }) {
   };
 }
 
-module.exports = { createIdentityTenantSelection, TARGET_CLIENT_ID, WORKFLOW, CHALLENGE_TTL_MS };
+module.exports = { checkSession, clientBinding, positiveId, createIdentityTenantSelection, TARGET_CLIENT_ID, WORKFLOW, CHALLENGE_TTL_MS };

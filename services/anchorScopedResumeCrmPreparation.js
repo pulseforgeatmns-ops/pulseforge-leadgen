@@ -57,6 +57,9 @@ async function bindings(db, input, options) {
   // just in route preflight. Legacy one-shot callers retain their old contract.
   if (options.actionAuthority) {
     const a = options.actionAuthority;
+    if (preparationAuthority.isPreparationAuthority(grant)) {
+      require('./anchorCrmPreparationIdentity').assertActorSession({ id: a.actorId, role: 'admin', sessionId: a.sessionId }, grant);
+    }
     if (grant.operatorId !== a.actorId || grant.operatorRole !== 'admin'
       || hash(grant) !== a.manifestHash || (options.env || process.env).RAILWAY_GIT_COMMIT_SHA !== a.revision)
       fail('anchor_crm_preparation_action_authority_changed');
@@ -154,7 +157,7 @@ function reviewExplanations(value) {
 }
 async function prepareExistingCrm(pool, rawInput, options = {}) {
   const input = validateInput(rawInput);
-  if (!pool?.connect || Object.keys(options).some(k => !['env', 'now', 'actionAuthority'].includes(k))) fail('anchor_crm_preparation_input_invalid');
+  if (!pool?.connect || Object.keys(options).some(k => !['env', 'now', 'actionAuthority', 'sessionId'].includes(k))) fail('anchor_crm_preparation_input_invalid');
   const reviewed = await locked(pool, async db => { const b = await bindings(db, input, options); await infrastructure(db, b, options); return b; });
   // Excludes grant ID/day/caller-generated IDs: changing any of those cannot
   // replay the same source+identity batch, even after a downstream failure.

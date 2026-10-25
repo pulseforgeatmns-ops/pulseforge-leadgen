@@ -83,7 +83,9 @@ function validateScopedResumeManifest(raw, { now = new Date() } = {}) {
     && (!raw.scopes.email.enabled || raw.scopes.email.approvalMode !== 'delegated_existing_program')) invalid('resume_canonical_delegation_required');
   if (preparationOnly) {
     const a = raw.preparationAuthority, p = raw.scopes.preparation;
-    if (!exact(a, ['kind', 'programBindingHash', 'sourceMissionHash', 'consumedOperations', 'consumedItems'])
+    if (!exact(a, ['kind', 'programBindingHash', 'sourceMissionHash', 'consumedOperations', 'consumedItems', 'originalAuthorizerId', 'approverAccountClientId', 'approverSessionHash'])
+      || !text(a.originalAuthorizerId) || ![null, 10].includes(a.approverAccountClientId)
+      || !digest(a.approverSessionHash) || !/^[1-9][0-9]*$/.test(raw.operatorId)
       || a.kind !== 'existing_crm_continuation' || !digest(a.programBindingHash) || !digest(a.sourceMissionHash)
       || !Number.isSafeInteger(a.consumedOperations) || a.consumedOperations < 0 || a.consumedOperations >= 100
       || !Number.isSafeInteger(a.consumedItems) || a.consumedItems < 0 || a.consumedItems >= 100
