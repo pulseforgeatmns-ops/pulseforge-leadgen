@@ -199,7 +199,8 @@ async function prepareWithTrace(pool, rawInput, options, trace) {
       await canonical.query("SET lock_timeout='5s'; SET statement_timeout='5s'");
       trace.enter('canonical_hydration');
       const runtime = getAcquisitionMissionRuntime({ pool, persist: true });
-      await runtime.hydrate('10', { pool: canonical, persist: true, preinitializedSchema: true });
+      await runtime.hydrate('10', { pool: canonical, persist: true, preinitializedSchema: true,
+        anchorCrmPreparation: { sourceMissionId: binding.source.id, childMissionId: missionId } });
       trace.enter('child_creation');
       const engine = runtime.engine();
       if (engine.get(missionId, '10')) fail('anchor_crm_preparation_already_exists');
