@@ -29,7 +29,7 @@ async function boot({env=process.env,pool:providedPool,listen=true,collect=true}
  const app=createSignalApp({pool,service,config:cfg,sessionSecret:env.SESSION_SECRET,coreAppUrl:env.SIGNAL_CORE_APP_URL});
  let server;if(listen)server=app.listen(Number(env.PORT||3000),'0.0.0.0',()=>console.log('[signal-dashboard] ready: isolated authenticated service, public-wallet observation only'));
  let reportTimer,stopped=false;
- async function report(){if(stopped)return;try{for(const watch of watches)console.log('[signal-dashboard] observation health',JSON.stringify(operationalSummary(await service.detail(watch.tokenAddress))));}catch{console.log('[signal-dashboard] observation health unavailable');}if(!stopped){reportTimer=setTimeout(report,60000);reportTimer.unref();}}
+ async function report(){if(stopped)return;try{for(const watch of watches){const [position,observations]=await Promise.all([service.detail(watch.tokenAddress),store.list('observation',watch.tokenAddress,{ascending:false,limit:7})]);console.log('[signal-dashboard] observation health',JSON.stringify(operationalSummary(position,observations)));}}catch{console.log('[signal-dashboard] observation health unavailable');}if(!stopped){reportTimer=setTimeout(report,60000);reportTimer.unref();}}
  if(collect){collectors.start();reportTimer=setTimeout(report,45000);reportTimer.unref();}
  const stop=()=>{stopped=true;clearTimeout(reportTimer);collectors.stop();server?.close();};process.once('SIGTERM',stop);process.once('SIGINT',stop);
  return {app,service,store,collectors,stop};

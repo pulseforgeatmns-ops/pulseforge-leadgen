@@ -4,7 +4,7 @@ const {feedEvents}=require('./events');
 const {INTERVALS}=require('./market');
 const {evaluate}=require('../signalDistribution/risk');
 function createDashboardWorker({store,marketProvider,walletProvider,candleProvider=null,quoteProvider=null,
-  feed=null,researchReader=null,registry={},now=()=>new Date(),maxActive=3,maxHistoryPages=50}) {
+  feed=null,researchReader=null,registry={},now=()=>new Date(),maxActive=3,maxHistoryPages=50,includeCurrentMark=true}) {
   if(!Number.isInteger(maxHistoryPages)||maxHistoryPages<1||maxHistoryPages>1000)throw new Error('invalid_history_page_limit');
   let running=false;
   const status=async(component,state,reason=null)=>{const at=now().toISOString();await store.put('status','*',component,{component,state,reason,occurredAt:at,knownAt:at},{mutable:true});};
@@ -40,7 +40,8 @@ function createDashboardWorker({store,marketProvider,walletProvider,candleProvid
     if(!feed)return status('feed','UNKNOWN','EMPIRICAL_FEED_NOT_CONFIGURED');
     const calls=await feed();
     if(!Array.isArray(calls)||calls.length>2000)throw new Error('invalid_caller_feed');
-    for(const call of calls)for(const e of feedEvents(call,{now:now(),registry}))await store.put('event',e.tokenAddress,e.id,e);
+    const watched=new Set((await store.list('watch',null)).map(w=>w.tokenAddress));
+    for(const call of calls)for(const e of feedEvents(call,{now:now(),registry}))if(watched.has(e.tokenAddress))await store.put('event',e.tokenAddress,e.id,e);
     await status('feed','PARTIAL','Only retained empirical messages with explicit CA; completeness is unknown');
   }
   async function quoteTick() {
@@ -55,23 +56,26 @@ function createDashboardWorker({store,marketProvider,walletProvider,candleProvid
       return;
     }
   }
+  async function currentMarkTick(){
+    if(!marketProvider)return;
+    const mark=(await store.list('quote',null,{ascending:false,limit:100})).find(q=>q.purpose==='CURRENT_MARK'&&q.asset===USDC);
+    if(mark&&+now()-Date.parse(mark.knownAt)<60000)return;
+    const o=await marketProvider.getSnapshot({tokenAddress:USDC});
+    const price=Number(o.priceUsd);if(o.tokenAddress!==USDC||!Number.isFinite(price)||price<=0)throw Error('quote_mark_unavailable');
+    const at=now().toISOString();await store.put('quote','*',id(['mark',USDC,at]),{asset:USDC,purpose:'CURRENT_MARK',priceUsd:price.toFixed(18),occurredAt:at,knownAt:at,provider:o.provider,sourceTimestamp:o.providerTimestamp||null,quality:'PARTIAL'});
+  }
   async function pollOnce() {
     if(running)return {skipped:true};running=true;
     try{return await store.lock(async()=>{
       const watches=await store.list('watch',null,{limit:100});
       if(watches.length>maxActive)throw new Error('dashboard_active_capacity_exceeded');
       const attempt=async(component,fn)=>{try{await fn();}catch{await status(component,'UNKNOWN','OBSERVATION_UNAVAILABLE_OR_RATE_LIMITED');}};
-      if(marketProvider){
-        const mark=(await store.list('quote',null,{ascending:false,limit:100})).find(q=>q.purpose==='CURRENT_MARK'&&q.asset===USDC);
-        if(!mark||+now()-Date.parse(mark.knownAt)>=60000)await attempt('quote-mark',async()=>{
-          const o=await marketProvider.getSnapshot({tokenAddress:USDC});
-          const price=Number(o.priceUsd);if(o.tokenAddress!==USDC||!Number.isFinite(price)||price<=0)throw Error('quote_mark_unavailable');
-          const at=now().toISOString();await store.put('quote','*',id(['mark',USDC,at]),{asset:USDC,purpose:'CURRENT_MARK',priceUsd:price.toFixed(18),occurredAt:at,knownAt:at,provider:o.provider,sourceTimestamp:o.providerTimestamp||null,quality:'PARTIAL'});
-        });
-      }
+      if(includeCurrentMark)await attempt('quote-mark',currentMarkTick);
       for(const watch of watches) {
         const previous=await store.latest('observation',watch.tokenAddress);
-        if(!previous||+now()-Date.parse(previous.observedAt)>=10000)await attempt('market:'+watch.tokenAddress,async()=>{
+        // Receipt timestamps follow the poll start. Allow timer/network jitter
+        // without accidentally skipping every other ten-second poll.
+        if(marketProvider&&(!previous||+now()-Date.parse(previous.observedAt)>=8000))await attempt('market:'+watch.tokenAddress,async()=>{
           const snapshot=await marketProvider.getSnapshot({tokenAddress:watch.tokenAddress,poolAddress:watch.poolAddress||previous?.pairId});
           await store.put('observation',watch.tokenAddress,id([snapshot.provider,snapshot.pairId,snapshot.observedAt]),snapshot);
           const key='risk:'+watch.tokenAddress,prior=(await store.list('cursor',null)).find(c=>c.key===key);
@@ -88,7 +92,7 @@ function createDashboardWorker({store,marketProvider,walletProvider,candleProvid
           if(!watch.poolAddress)await store.put('watch',watch.tokenAddress,'watch',{...watch,poolAddress:snapshot.pairId,occurredAt:now().toISOString(),knownAt:now().toISOString()},{mutable:true});
           await status('market:'+watch.tokenAddress,'PARTIAL','Provider source timestamp unavailable');
         });
-        const balance=await store.latest('balance',watch.tokenAddress);
+        const balance=walletProvider?await store.latest('balance',watch.tokenAddress):null;
         if(walletProvider&&(!balance||+now()-Date.parse(balance.observedAt)>=30000))await attempt('balance:'+watch.tokenAddress,async()=>{
           const b=await walletProvider.getBalance({wallet:store.wallet,tokenAddress:watch.tokenAddress});
           await store.put('balance',watch.tokenAddress,id([b.slot,b.observedAt]),{...b,occurredAt:b.observedAt,knownAt:now().toISOString()});
@@ -115,6 +119,6 @@ function createDashboardWorker({store,marketProvider,walletProvider,candleProvid
       return {observed:true};
     });}finally{running=false;}
   }
-  return {pollOnce,historyTick,headTick,feedTick,quoteTick};
+  return {pollOnce,historyTick,headTick,feedTick,quoteTick,currentMarkTick};
 }
 module.exports={createDashboardWorker};
