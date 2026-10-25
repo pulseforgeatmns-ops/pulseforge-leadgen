@@ -90,8 +90,13 @@ function createDashboardWorker({store,marketProvider,walletProvider,candleProvid
           const lastMinute=all.find(c=>c.interval==='1m');
           const interval=missing||(!lastMinute||+now()-Date.parse(lastMinute.knownAt)>=10000?'1m':null);
           if(!interval)return;
-          for(const c of await candleProvider.getCandles({tokenAddress:watch.tokenAddress,poolAddress:watch.poolAddress||previous?.pairId,interval}))
+          const revisions=new Map();
+          for(const c of all){const key=[c.provider,c.pairId,c.interval,c.time].join(':');if(!revisions.has(key))revisions.set(key,c);}
+          for(const c of await candleProvider.getCandles({tokenAddress:watch.tokenAddress,poolAddress:watch.poolAddress||previous?.pairId,interval})){
+            const key=[c.provider,c.pairId,c.interval,c.time].join(':'),prior=revisions.get(key);
+            if(prior&&['open','high','low','close','volume','complete'].every(field=>prior[field]===c[field]))continue;
             await store.put('candle',watch.tokenAddress,id([c.provider,c.pairId,c.interval,c.time,c.knownAt]),c);
+          }
         });
       }
       if(walletProvider){await attempt('wallet-history',historyTick);await attempt('wallet-head',headTick);}
