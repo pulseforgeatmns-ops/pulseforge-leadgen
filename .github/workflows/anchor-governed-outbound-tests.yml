@@ -18,6 +18,14 @@ jobs:
       - uses: ./.github/actions/setup-postgres-environment
       - run: npm ci --ignore-scripts
       - run: npm run test:anchor-outbound
+      - uses: browser-actions/setup-chrome@v1
+        id: anchor-chrome
+      - name: Native Anchor approval tablet journey (synthetic, no providers)
+        env:
+          CHROMIUM_PATH: ${{ steps.anchor-chrome.outputs.chrome-path }}
+          DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
+          DATABASE_SSL: 'false'
+        run: node --require ./test/helpers/denyExternalProviders.cjs --test test/browser/anchorPreparationApprovalBrowser.test.js
       - name: Mailbox and scheduling regressions
         env:
           DATABASE_URL: postgresql://localhost:1/pulseforge_test_only

@@ -81,5 +81,13 @@ jobs:
           sudo ln -sf "$bindir/initdb" /usr/local/bin/initdb
           sudo ln -sf "$bindir/pg_ctl" /usr/local/bin/pg_ctl
       - run: npm ci --ignore-scripts
+      - if: matrix.id == 'anchor-outbound'
+        uses: browser-actions/setup-chrome@v1
+        id: anchor-chrome
+      - name: Native Anchor approval tablet journey (synthetic, no providers)
+        if: matrix.id == 'anchor-outbound'
+        env:
+          CHROMIUM_PATH: ${{ steps.anchor-chrome.outputs.chrome-path }}
+        run: node --require ./test/helpers/denyExternalProviders.cjs --test test/browser/anchorPreparationApprovalBrowser.test.js
       - name: Run regression slice
         run: ${{ matrix.run }}

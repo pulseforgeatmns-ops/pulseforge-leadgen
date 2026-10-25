@@ -4,6 +4,23 @@ const assert = require('node:assert/strict');
 const { describe, it } = require('node:test');
 const { buildPlan, pathMatchesPattern } = require('../.github/scripts/ci-plan-pr.js');
 
+it('native Anchor approval UI and identity changes retain real browser/SQL safety gates', () => {
+  for (const file of ['routes/anchorPreparationApprovalPage.js', 'public/anchor-preparation-approval.html',
+    'public/anchor-preparation-approval.js', 'public/anchor-preparation-approval.css',
+    'services/anchorCrmPreparationApproval.js', 'services/anchorCrmPreparationReceipt.js',
+    'test/anchorScopedResumePreparationReceiptPostgres.test.js', 'test/browser/anchorPreparationApprovalBrowser.test.js',
+    'test/helpers/anchorPreparationApprovalBrowserHarness.js', 'public/shared/tokens.css',
+    'routes/identityTenantSelection.js', 'services/identityTenantSelection.js', 'test/helpers/loginIdentityHarness.js']) {
+    assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
+  }
+  const fs = require('node:fs'), path = require('node:path');
+  for (const file of ['pr-ci-lean.yml', 'anchor-governed-outbound-tests.yml', 'full-regression.yml']) {
+    const workflow = fs.readFileSync(path.join(__dirname, '../.github/workflows', file), 'utf8');
+    assert.match(workflow, /browser-actions\/setup-chrome@v1/);
+    assert.match(workflow, /node --require \.\/test\/helpers\/denyExternalProviders\.cjs --test test\/browser\/anchorPreparationApprovalBrowser\.test\.js/);
+  }
+});
+
 describe('CI plan PR selector (SPEC-CI-LEAN-001)', () => {
   it('isolated initial SMS safety edits select Signal and retain its test command coverage', () => {
     for (const file of ['test/signalInitialSms.test.js', 'docs/sql-drafts/2026-10-22-signal-initial-sms.sql']) {

@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="same-origin">
+  <title>Exact prospect review · Pulseforge</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/admin/anchor-preparation-approval/assets/tokens.css">
+  <link rel="stylesheet" href="/admin/anchor-preparation-approval/assets/style.css">
+  <script src="/admin/anchor-preparation-approval/assets/controller.js" defer></script>
+</head>
+<body>
+<main>
+  <header><a href="/api/me">← Account information</a><span class="eyebrow">Anchor · Administrator controls</span></header>
+  <h1>Exact prospect review</h1>
+  <p class="lead">Review an exact CRM preparation grant, separately prepare its draft batch, inspect the recorded result, or close the grant.</p>
+  <aside class="boundary"><strong>Installing a grant does not prepare drafts. Preparation is a separate, explicit decision below.</strong> This page does not activate settings, research, verify contacts, approve an email envelope, or send. Buying intent and provider readiness remain unknown.</aside>
+  <section class="card" aria-labelledby="identityHeading">
+    <h2 id="identityHeading">Your current authority</h2>
+    <p id="approvalContext" role="status">Checking current administrator session…</p>
+    <button id="reloadContextButton" type="button">Verify identity again</button>
+    <p class="help"><a href="/login?workflow=identity-check">Native sign-in</a> · <a href="/identity-check/tenant">Native Anchor selection</a>. Neither link retries an approval. Close other tenant-changing tabs.</p>
+  </section>
+  <aside class="recovery-warning"><strong>Returning after a reload, closed tab, or missing response?</strong> Proposals and confirmations are not saved. This tab keeps only a non-authorizing receipt locator for outstanding mutations. Use the exact saved manifest ID and hash in receipt lookup before any new approval. “Not installed” during an outstanding request is not proof of rollback. Do not replace an uncertain grant with a new ID or window.</aside>
+  <p id="approvalStatus" role="status" aria-live="polite" tabindex="-1"></p>
+  <section class="card" aria-labelledby="intentHeading">
+    <div class="section-title"><span class="step">1</span><h2 id="intentHeading">Describe one exact grant</h2></div>
+    <label class="check"><input id="newApprovalAcknowledgment" type="checkbox"> I have resolved any earlier approval attempt; this is an intentional new preview.</label>
+    <form id="intentForm" autocomplete="off">
+      <fieldset><legend>Identity and fixed window</legend><div class="fields">
+        <label>New manifest ID<input id="manifestId" name="id" required maxlength="512" spellcheck="false"></label>
+        <label>Existing program ID<input id="programId" name="programId" required maxlength="512" spellcheck="false"></label>
+        <label class="wide">Existing source mission ID<input id="sourceMissionId" name="sourceMissionId" required maxlength="512" spellcheck="false"></label>
+        <label>Valid from — UTC<input id="validFrom" name="validFrom" type="datetime-local" step="1" required></label>
+        <label>Expires at — UTC<input id="expiresAt" name="expiresAt" type="datetime-local" step="1" required></label>
+      </div><p class="help">These are UTC times, not your tablet’s local timezone. The fixed window must already have started and last no longer than 24 hours. Nothing renews automatically.</p></fieldset>
+      <fieldset><legend>Explicit approval references and daily caps</legend><div class="fields">
+        <label>Grant approval reference<input id="approvalReference" required maxlength="512"></label>
+        <label>Preparation approval reference<input id="preparationApprovalReference" required maxlength="512"></label>
+        <label>Daily operation cap<input id="dailyOperationCap" type="number" min="1" max="3" value="1" required></label>
+        <label>Daily item cap<input id="dailyItemCap" type="number" min="1" max="50" value="1" required></label>
+      </div><p class="help">Historical consumption is not reset. The server derives total caps: one additional operation and one additional item per admitted prospect. Daily caps include earlier usage.</p></fieldset>
+      <fieldset><legend>Exact prospects — one to five</legend><div id="admissions"></div>
+        <button id="addAdmission" type="button">Add another prospect</button>
+        <p class="help">Enter exact existing prospect IDs. No candidates are selected automatically. Ordinary preview does not release a review hold.</p>
+        <label>Separate review approval reference<input id="reviewApprovalReference" maxlength="512" disabled></label>
+        <p class="help">Only checked prospects will propose NULL → false. Existing TRUE holds cannot be released. This records a durable review decision; revoking the grant does not undo it.</p>
+      </fieldset>
+      <button id="previewButton" class="primary" type="submit" disabled>Preview only — no changes</button>
+    </form>
+  </section>
+  <section class="card" id="previewSection" aria-labelledby="previewHeading" hidden>
+    <div class="section-title"><span class="step">2</span><h2 id="previewHeading">Inspect exact server-derived evidence</h2></div>
+    <div id="previewResult"></div>
+    <h3>Save your recovery reference before installing</h3>
+    <textarea id="recoveryReference" rows="5" readonly aria-label="Exact recovery reference"></textarea>
+    <button id="downloadRecovery" type="button">Download recovery reference</button>
+    <label class="check"><input id="recoverySaved" type="checkbox"> I have saved the exact manifest ID and hash for receipt lookup if the response is lost.</label>
+    <label class="check"><input id="grantConfirm" type="checkbox"> I authorize installation of this exact preparation-only grant, with the displayed identities, references, fixed window and caps. This is not permission to prepare or send.</label>
+    <label class="check" id="reviewConfirmLabel" hidden><input id="reviewConfirm" type="checkbox"> I separately authorize only the displayed NULL → false review transitions. This does not establish buying intent, and revocation will not undo these reviews.</label>
+    <button id="installButton" class="primary" type="button" disabled>Confirm installation…</button>
+  </section>
+  <section class="card" aria-labelledby="receiptHeading">
+    <div class="section-title"><span class="step">3</span><h2 id="receiptHeading">Look up or close an exact grant</h2></div>
+    <p>Read a durable receipt after installation, a missing response, or a later login. This does not re-approve anything.</p>
+    <form id="receiptForm" autocomplete="off"><div class="fields">
+      <label>Manifest ID<input id="receiptManifestId" required maxlength="512" spellcheck="false"></label>
+      <label>Manifest hash — 64 lowercase hex characters<input id="receiptManifestHash" required pattern="[a-f0-9]{64}" maxlength="64" spellcheck="false"></label>
+    </div><button id="receiptButton" type="submit" disabled>Read exact receipt</button></form>
+    <div id="receiptResult" aria-live="polite"></div>
+    <p class="help">Grant receipts describe historical committed transitions, not current review state, buyer readiness, capacity, or preparation availability. A validated draft result is a current persisted snapshot, not evidence that a message was sent. Consumption stays charged; there is no retry or refund.</p>
+    <section id="preparationSection" aria-labelledby="preparationHeading" hidden>
+      <h3 id="preparationHeading">Prepare drafts — a separate decision</h3>
+      <div id="preparationIntent"></div>
+      <p class="boundary">One explicit attempt creates canonical draft artifacts for the exact installed batch. It can permanently consume the operation before finishing. Failures, reloads and revocation do not authorize another attempt, refund, replacement batch, or larger window.</p>
+      <label class="check"><input id="prepareConfirm" type="checkbox"> I separately authorize one preparation attempt for exactly the displayed installed batch and hashes. I understand that consumption can remain charged even if the result is incomplete or the response is lost. This does not approve or send any message.</label>
+      <button id="prepareButton" class="primary" type="button" disabled>Review preparation…</button>
+      <div id="preparationResult" aria-live="polite"></div>
+    </section>
+    <h3>Close the exact grant</h3>
+    <label>Revocation approval reference<input id="revokeReference" maxlength="512" autocomplete="off"></label>
+    <button id="revokeButton" class="danger" type="button" disabled>Review revocation…</button>
+    <p class="help">Revocation closes only this grant. It preserves recorded reviews, consumption, drafts and history, and does not alter activation settings or clear a preparation-attempt fence.</p>
+  </section>
+</main>
+<dialog id="confirmDialog" aria-labelledby="confirmTitle" aria-describedby="confirmDescription">
+  <h2 id="confirmTitle"></h2><p id="confirmDescription"></p><pre id="confirmIdentity"></pre>
+  <div class="actions"><button id="confirmSubmit" class="primary" type="button">Confirm</button><button id="confirmCancel" type="button">Cancel</button></div>
+</dialog>
+<template id="admissionTemplate"><div class="admission" data-admission>
+  <div class="fields"><label>Prospect ID<input name="prospectId" required maxlength="512" spellcheck="false"></label><label>Admission approval reference<input name="admissionReference" required maxlength="512"></label></div>
+  <div class="admission-actions"><label class="check"><input name="reviewSelected" type="checkbox"> Explicitly propose NULL → false review for this prospect</label><button name="removeAdmission" type="button">Remove prospect</button></div>
+</div></template>
+</body>
+</html>
