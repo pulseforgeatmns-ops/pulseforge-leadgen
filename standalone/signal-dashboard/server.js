@@ -7,6 +7,7 @@ const {DashboardService}=require('../../services/signalDashboard/service');
 const {createCollectors}=require('../../services/signalDashboard/collector');
 const {operationalSummary}=require('../../services/signalDashboard/diagnostics');
 const {SharedGeckoCandleBudget}=require('../../services/signalDashboard/publicCandleBudget');
+const {ZoneStore}=require('../../services/signalDashboard/zoneStore');
 const {isValidSolanaAddress:address}=require('../../packages/signal-v1/acquisition/solanaAddress');
 async function boot({env=process.env,pool:providedPool,listen=true,collect=true}={}){
  const pool=providedPool||new Pool({connectionString:env.DATABASE_URL,ssl:env.DATABASE_SSL==='false'?false:{rejectUnauthorized:false},max:6,connectionTimeoutMillis:5000,query_timeout:10000});
@@ -14,7 +15,8 @@ async function boot({env=process.env,pool:providedPool,listen=true,collect=true}
  const owner=await resolveOwner(pool,env);
  const cfg=config({...env,SIGNAL_DASHBOARD_TENANT_ID:env.SIGNAL_DASHBOARD_TENANT_ID||String(owner.client_id??1),SIGNAL_DASHBOARD_OWNER_USER_ID:String(owner.id)});
  if(!cfg.enabled)throw Error('signal_dashboard_disabled');
- const store=new DashboardStore(pool,cfg),service=new DashboardService(store),budget=new DurableBudget(pool);
+ const store=new DashboardStore(pool,cfg),zoneStore=new ZoneStore(pool,cfg),service=new DashboardService(store,{zoneStore}),budget=new DurableBudget(pool);
+ await pool.query('SELECT zone_id FROM signal_dashboard_zone_events LIMIT 0');
  const watches=JSON.parse(env.SIGNAL_DASHBOARD_WATCH_TOKENS||'[]');
  if(!Array.isArray(watches)||!watches.length||watches.length>3||watches.some(w=>!address(w.tokenAddress)||w.poolAddress&&!address(w.poolAddress)))throw Error('invalid_signal_watch_configuration');
  for(const watch of watches){const old=await store.latest('watch',watch.tokenAddress),at=new Date().toISOString();
@@ -26,7 +28,7 @@ async function boot({env=process.env,pool:providedPool,listen=true,collect=true}
   feed=async()=>{await budget.take('signal-dashboard-feed',30000);const r=await fetch(u,{headers:{authorization:`Bearer ${env.SIGNAL_OPERATOR_FEED_TOKEN}`},redirect:'error',signal:AbortSignal.timeout(5000)});if(!r.ok)throw Error('private_feed_unavailable');const j=await r.json();return j.calls;};
  }
  const researchReader=()=>require('../../services/signalDashboard/researchBridge').readEmpiricalEvents(pool,watches.map(w=>w.tokenAddress),{registry});
- const collectors=createCollectors({store,budget,env,feed,researchReader,registry,publicCandleBudget:new SharedGeckoCandleBudget(pool)});
+ const collectors=createCollectors({store,budget,env,feed,researchReader,registry,zoneStore,publicCandleBudget:new SharedGeckoCandleBudget(pool)});
  const app=createSignalApp({pool,service,config:cfg,sessionSecret:env.SESSION_SECRET,coreAppUrl:env.SIGNAL_CORE_APP_URL});
  let server;if(listen)server=app.listen(Number(env.PORT||3000),'0.0.0.0',()=>console.log('[signal-dashboard] ready: isolated authenticated service, public-wallet observation only'));
  let reportTimer,stopped=false;

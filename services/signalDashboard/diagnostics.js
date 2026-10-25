@@ -6,6 +6,7 @@ function operationalSummary(position,observations=[],candle=null){
  const known=name=>position.market?.[name]?.value!=null;
  const times=observations.map(o=>Date.parse(o.observedAt)).filter(Number.isFinite).sort((a,b)=>b-a);
  return {asOf:position.asOf,marketObservedAt:position.lastUpdated,marketIntervalsMs:times.slice(0,6).flatMap((t,i)=>times[i+1]!=null?[t-times[i+1]]:[]),
+  paperZoneResearch:{mode:position.researchZones?.mode||'UNKNOWN',quality:position.researchZones?.quality||'UNKNOWN',recordedInWindow:position.researchZones?.counts?.recordedInWindow||0,lastCheckedAt:position.researchZones?.lastCheckedAt||null},
   historicalCandlesAvailable:Boolean(candle),lastCandleInterval:candle?.interval||null,lastCandleCollectedAt:candle?.knownAt||null,
   priceAvailable:known('priceUsd'),marketCapAvailable:known('marketCapUsd'),liquidityAvailable:known('liquidityUsd'),
   historyExhausted:position.coverage.historyExhausted,headCaughtUp:position.coverage.headCaughtUp,

@@ -12,7 +12,7 @@ Implementation: SPEC-SIGNAL-DASH-001. This is a parallel Signal workstream with 
 
 ## Configuration
 
-Default off. Apply only `migrations/2026-10-25-signal-dashboard.sql` explicitly before activation. It creates two isolated tables and does not touch existing Signal research or Pulseforge business tables.
+Default off. Apply the Signal-only migrations through the explicit standalone migration command before activation. They create isolated dashboard, authentication and append-only zone-research tables without changing existing Signal research or Pulseforge business tables.
 
 Web service and dedicated worker both require:
 
@@ -71,7 +71,7 @@ V1 is not accepted as a complete live REMUS dashboard until these checks pass. N
 
 `standalone/signal-dashboard/Dockerfile` starts only Signal's authenticated web app and independent market/wallet collectors. It does not start `server.js`, Max, outbound agents, the Signal research scheduler, or message senders. Its login verifies the configured existing Pulseforge owner against the existing read-only users table, including active/role/workspace/password-change status. Signal sessions and rate limits use new Signal-only tables; password/role revocations are checked on every protected read.
 
-Pre-deploy: `node standalone/signal-dashboard/migrate.js`, requiring `SIGNAL_DASHBOARD_SCHEMA_APPROVAL=SPEC-SIGNAL-DASH-001`. This explicitly creates only the two dashboard tables and Signal-only session/login-attempt tables. No schema action occurs during normal app startup.
+Pre-deploy: `node standalone/signal-dashboard/migrate.js`, requiring `SIGNAL_DASHBOARD_SCHEMA_APPROVAL=SPEC-SIGNAL-DASH-001`. This explicitly creates only the dashboard, Signal-only session/login-attempt and append-only zone-research tables. No schema action occurs during normal app startup.
 
 Configure the existing database by reference, a dedicated server session secret, `SIGNAL_DASHBOARD_OWNER_EMAIL` referencing the existing configured admin identity, the verified public wallet and mint/pool watch JSON, and the existing private caller feed/bearer by reference. The standalone app resolves the owner's database ID and trusted workspace at boot. Provider secrets and wallet signing material are unnecessary for the default public RPC / DEX Screener mode. Paid candle/history adapters remain optional. Public historical candles share the existing durable Gecko quota; sampled observations remain clearly marked as partial coverage.
 
@@ -84,3 +84,21 @@ A separate Railway service uses a pinned reviewed commit, one replica limited to
 The positions home summarizes value still held, money received back, total profit/loss and original money not yet paid back. Search and holding/sold filters work on configured watches. The position page keeps money, drawdown and explained risk above the chart, with optional trade/call/risk overlays, a full-history view, readable activity filters and separate notes. Technical reason codes, provider provenance and raw evidence stay behind expandable details. Risk driven only by missing evidence is explicitly distinguished from an observed selling warning.
 
 USDC cash is never silently displayed as USD. Native quote analytics can establish recovered-principal milestones without inventing historical dollar conversion prices; raw transaction values remain unchanged. Historical candles acquired now are never treated as evidence known at an earlier trade, nor used to rewrite peak chronology.
+
+## TradingView chart and prospective watch areas
+
+The chart uses the official vendored TradingView Lightweight Charts 5.2.1 standalone production build. Candles/line, touch pan/pinch, keyboard pan/zoom, expansion, interval selection, full history and trade/call/risk toggles remain read-only. Exact-time DOM trade markers interpolate screen coordinates between bar times; they are not snapped to a candle boundary. Whitespace time rows contain no OHLC. Disconnected line segments preserve gaps. Actual observations may update only the current open provider candle; its volume remains the original provider volume with its own timestamp. Completed candles are not rewritten by sampled prices. Reference lines use observed peaks and known USD average acquisition prices only.
+
+The exploratory method `pullback-watch-v1` is frozen in `services/signalDashboard/zones.js`. Its rules are recorded with every setup. It examines 24 completed five-minute empirical provider bars, requires two lows within 1.5%, at least three bars apart, a 3% rebound between them, and a current observed price within 5% of the area. One-minute rollup requires all five actual complete bars from the same pool. Open bars, sampled-only bars, future knowledge, test/procedural evidence, missing recent history, stale current observations, unknown risk and high/critical risk block discovery. A RE_ENTRY label also requires an observed earlier sell; it is not a trade recommendation.
+
+A watch area is first recorded at discovery time, never at an earlier pivot. CONDITIONS_OBSERVED needs two entirely new completed bars: a test with a close above the area followed by another close above, current nearby price and no more than a 10% decline in observed pool value. Missing inputs block that transition. A new completed close 1.5% below the lower bound, a 20% pool-value decline, pool change, high/critical risk or two-hour expiry cancels the watch. Terminal setups never resurrect; discovery has a 30-minute cooldown. Changes to these rules require a new method version.
+
+The independent 30-second evaluator writes only append-only `signal_dashboard_zone_events`, scoped by tenant, public wallet and mint. Each change preserves input snapshot, rule version, discovery/knowledge times, input hash, pool, risk and reasons. Its lock/collector lane does not delay wallet or market collection. GET `/api/v1/signal/positions/:ca/zones` gives a bounded summary; GET `/zones/:zoneId` returns the saved evidence. No endpoint creates a setup, chain transaction or order. Initial mobile detail includes at most six summaries and omits full input snapshots; history is loaded on demand, and expanded evidence survives polling.
+
+Paper comparisons start from an actual current observed price when conditions are recorded. They do not assume an executable fill. Fifteen-minute and one-hour checkpoints use only actual observations within their two-minute windows; missed windows remain UNKNOWN. Invalidated setups retain comparisons, including negative observations. Net returns, fee impact and slippage remain UNKNOWN; there is no win rate, performance ranking or predictive confidence claim. These isolated records do not read outcome cohorts, overwrite Signal research state, alter distribution doctrine or create independent confirmations from promotion.
+
+If the evaluator is delayed, saved areas are labeled historical rather than current. No qualifying area is a valid result. The USDC what-if form only estimates the change in original capital not yet recovered from current matched wallet evidence; it does not choose a size or create an order. All remaining tokens can lose value. Detail-page last-verified cash/P&L may remain visible for at most five minutes during wallet-head checks, explicitly labeled DELAYED; authoritative API accounting, risk, zones and what-if inputs never use that display cache.
+
+### Third-party attribution
+
+`public/signal-positions-vendor.js` is copied unmodified from npm `lightweight-charts@5.2.1`, `dist/lightweight-charts.standalone.production.js`. SHA-256: `e21cc5caa0226ef30bd8549c50b9ef926615f2a4ee6b4e486353477a55f598cf`. The accompanying `signal-positions-chart-LICENSE.txt` contains its Apache 2.0 license and TradingView NOTICE. The chart retains its built-in attribution logo and links to TradingView and the license. No external chart script or trading integration is loaded.

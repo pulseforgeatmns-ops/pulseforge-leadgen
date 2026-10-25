@@ -1,7 +1,7 @@
 'use strict';
 // Explicit pre-deploy operation for the isolated Signal service only.
 const fs=require('node:fs'),path=require('node:path');
-const FILES=['2026-10-25-signal-dashboard.sql','2026-10-25-signal-dashboard-auth.sql'];
+const FILES=['2026-10-25-signal-dashboard.sql','2026-10-25-signal-dashboard-auth.sql','2026-10-25-signal-dashboard-zones.sql'];
 async function migrate(pool,env=process.env){
  if(env.SIGNAL_DASHBOARD_SCHEMA_APPROVAL!=='SPEC-SIGNAL-DASH-001')throw Error('explicit_signal_schema_approval_required');
  const c=await pool.connect();

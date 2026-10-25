@@ -27,6 +27,12 @@ async function exercise(pool) {
  assert.equal((await pool.query("SELECT count(*)::int AS count FROM signal_distribution_request_attempts WHERE lane='existing'")).rows[0].count,6);
  const service=new DashboardService(s,{now:()=>new Date(later(3000))});await service.annotate(CA,'Recovered principal','7');assert.equal((await s.list('annotation',CA)).length,1);
  assert.equal((await service.detail(CA)).peak.postEntry.priceUsd,2);
+ const {ZoneStore}=require('../services/signalDashboard/zoneStore'),{researchFixture}=require('./helpers/signalDashboardZoneFixtures'),zones=new ZoneStore(pool,{tenantId:'1',wallet:W}),zone=researchFixture().zone;
+ await Promise.all(Array.from({length:8},()=>zones.append(zone)));assert.equal((await zones.history(CA,zone.id)).length,1);
+ await assert.rejects(()=>zones.append({...zone,paper:{...zone.paper,automaticExecution:true}}),/invalid_paper_zone_record/);
+ const laterZone={...zone,state:'INVALIDATED',stateReason:'Test-only invalidation',knownAt:later(1000),occurredAt:later(1000)};await zones.append(laterZone);
+ assert.equal((await zones.latest(CA,later(500)))[0].state,'WATCHING');assert.equal((await new ZoneStore(pool,{tenantId:'1',wallet:W}).latest(CA,later(2000)))[0].state,'INVALIDATED');assert.equal((await zones.history(CA,zone.id))[0].state,'WATCHING');
+ assert.equal((await new ZoneStore(pool,{tenantId:'2',wallet:W}).latest(CA)).length,0);assert.equal((await new ZoneStore(pool,{tenantId:'1',wallet:CA}).history(CA,zone.id)).length,0);
 }
 test('native PostgreSQL migration, immutable evidence, tenant/wallet scope, restart, peaks, locks and durable quota',{timeout:90000},async t=>{
  const instance=await startDisposablePostgres('signal-dashboard-'),pool=createTrackedPostgresPool({connectionString:instance.connectionString});t.after(()=>closePostgresFixture(pool,instance));await exercise(pool);

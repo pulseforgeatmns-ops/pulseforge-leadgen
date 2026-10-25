@@ -89,3 +89,10 @@ test('slow historical candles run independently of current market observations',
  }});
  const history=collectors.candleTick();await started;await collectors.marketTick();assert.equal((await s.list('observation',CA)).length,1);assert.equal((await s.list('candle',CA)).length,0);release();await history;assert.equal((await s.list('candle',CA))[0].interval,'15m');collectors.stop();
 });
+test('new observed prices update only the open provider candle and never invent volume or revise closed history',async()=>{
+ const s=new MemoryStore();await seed(s);const time=Date.parse(at)/1000;
+ await s.put('candle',CA,'open',{time,interval:'1m',pairId:'2'.repeat(32),open:1,high:1.1,low:.9,close:1.05,volume:10,complete:false,coverage:'PROVIDER_OHLCV',occurredAt:at,knownAt:later(10000)});
+ await s.put('candle',CA,'closed',{time:time-60,interval:'1m',pairId:'2'.repeat(32),open:1,high:2,low:.5,close:1.5,volume:20,complete:true,coverage:'PROVIDER_OHLCV',occurredAt:later(-60000),knownAt:at});
+ await s.put('observation',CA,'new',observation(20000,{priceUsd:1.2}));const result=await new DashboardService(s,{now:()=>new Date(later(30000))}).candles(CA,'1m'),current=result.candles.find(c=>c.time===time);
+ assert.equal(current.close,1.2);assert.equal(current.high,1.2);assert.equal(current.open,1);assert.equal(current.volume,10);assert.equal(current.volumeObservedAt,later(10000));assert.equal(current.complete,false);assert.equal(current.coverage,'PROVIDER_AND_SAMPLED_OBSERVATIONS');assert.equal(result.candles.find(c=>c.time===time-60).close,1.5);
+});

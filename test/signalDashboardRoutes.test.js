@@ -17,19 +17,23 @@ test('authenticated HTTP API, polling, invalid-address guards, CSRF, notes-only 
  const app=express();app.use(express.json());let active=session,disabled=false,reads=0,notes=0;
  app.use((req,_res,next)=>{req.session=active;next();});
  app.use(createDashboardRouter({Router:express.Router,requireAuth:(req,res,next)=>req.session?next():res.sendStatus(401),requireRole:()=>((_q,_s,next)=>next()),getConfig:()=>({...c,enabled:!disabled}),
-  getService:()=>{reads++;return {positions:async()=>({positions:[],readOnly:true}),detail:async()=>({tokenAddress:CA,events:[],risk:{state:'UNKNOWN'},asOf:'now',pollAfterMs:10000}),candles:async()=>({candles:[]}),transactions:async()=>[],annotate:async()=>{notes++;return {category:'OPERATOR_NOTE'};}};}}));
+  getService:()=>{reads++;return {positions:async()=>({positions:[],readOnly:true}),detail:async()=>({tokenAddress:CA,events:[],risk:{state:'UNKNOWN'},asOf:'now',pollAfterMs:10000}),zones:async()=>({zones:[],mode:'PAPER_OBSERVATION',validated:false}),candles:async()=>({candles:[]}),transactions:async()=>[],annotate:async()=>{notes++;return {category:'OPERATOR_NOTE'};}};}}));
  const server=app.listen(0,'127.0.0.1');t.after(()=>new Promise(r=>server.close(r)));await new Promise(r=>server.once('listening',r));const base=`http://127.0.0.1:${server.address().port}`;
  let r=await fetch(base+'/api/v1/signal/positions');assert.equal(r.status,200);assert.equal(r.headers.get('cache-control'),'no-store');
  r=await fetch(base+'/api/v1/signal/stream/'+CA);assert.equal((await r.json()).transport,'bounded-polling');
  const before=reads;assert.equal((await fetch(base+'/api/v1/signal/positions/invalid')).status,400);assert.equal(reads,before);
  assert.equal((await fetch(base+`/api/v1/signal/positions/${CA}/candles?interval=1s`)).status,400);
+ assert.equal((await (await fetch(base+`/api/v1/signal/positions/${CA}/zones`)).json()).mode,'PAPER_OBSERVATION');
+ assert.equal((await fetch(base+`/api/v1/signal/positions/${CA}/zones/not-an-id`)).status,400);
+ assert.equal((await fetch(base+`/api/v1/signal/positions/${CA}/zones/${'0'.repeat(64)}`)).status,404);
+ assert.equal((await fetch(base+`/api/v1/signal/positions/${CA}/zones?wallet=${W}`)).status,403);
  const post={method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:'Recovered principal'})};
  assert.equal((await fetch(base+`/api/v1/signal/positions/${CA}/annotations`,post)).status,403);
  assert.equal((await fetch(base+`/api/v1/signal/positions/${CA}/annotations`,{...post,headers:{...post.headers,Origin:'https://attacker.example'}})).status,403);
  assert.equal((await fetch(base+`/api/v1/signal/positions/${CA}/annotations`,{...post,headers:{...post.headers,Origin:base}})).status,201);assert.equal(notes,1);
- for(const suffix of ['transactions','buy','sell','sign'])assert.equal((await fetch(base+`/api/v1/signal/positions/${CA}/${suffix}`,post)).status,404);
+ for(const suffix of ['transactions','buy','sell','sign','zones'])assert.equal((await fetch(base+`/api/v1/signal/positions/${CA}/${suffix}`,post)).status,404);
  active={user:{...session.user,id:8}};assert.equal((await fetch(base+'/api/v1/signal/positions')).status,403);
- active=null;assert.equal((await fetch(base+'/api/v1/signal/positions')).status,401);
+ active=null;assert.equal((await fetch(base+'/api/v1/signal/positions')).status,401);assert.equal((await fetch(base+`/api/v1/signal/positions/${CA}/zones`)).status,401);
  active=session;disabled=true;assert.equal((await fetch(base+'/api/v1/signal/positions')).status,503);
 });
 test('dashboard modules and disabled worker startup load without DB/provider calls or signing libraries',async()=>{

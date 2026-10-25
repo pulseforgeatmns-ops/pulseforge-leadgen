@@ -9,7 +9,7 @@ const {observedCandles,rollupCandles,INTERVALS}=require('./market');
 const {id}=require('./wallet');
 const {dec,str,mul,div,fromNumber}=require('./decimal');
 class DashboardService {
-  constructor(store,{now=()=>new Date()}={}){Object.assign(this,{store,now});this.cache=new Map();}
+  constructor(store,{now=()=>new Date(),zoneStore=null}={}){Object.assign(this,{store,now,zoneStore});this.cache=new Map();}
   async detail(ca) {
     const old=this.cache.get(ca);if(old&&+this.now()-old.at<2000)return old.promise;
     const promise=this.buildDetail(ca).catch(err=>{this.cache.delete(ca);throw err;});
@@ -81,7 +81,16 @@ class DashboardService {
         walletObservedAt:balance?.observedAt||null,balanceSlot:balance?.slot||null,transactionLimitReached:transactions.length>=5000,
         observationWindowTruncated:observations.length>=10000,telegram:statuses.find(x=>x.component==='feed')||{state:'UNKNOWN'},statuses},
       // Bounded initial mobile payload; full paginated evidence is available through subresources.
-      events:timeline.slice(-250),eventCount:timeline.length,pollAfterMs:10000,chartIntervals:Object.keys(INTERVALS),readOnly:true};
+      events:timeline.slice(-250),eventCount:timeline.length,researchZones:await this.zones(ca,asOf,statuses,6),pollAfterMs:10000,chartIntervals:Object.keys(INTERVALS),readOnly:true};
+  }
+  async zones(ca,asOf=this.now().toISOString(),statuses=null,limit=20){
+    const {VERSION,RULES}=require('./zones');
+    const checked=statuses||(await this.store.list('status','*',{asOf}));const status=checked.find(s=>s.component==='zone-watch:'+ca);
+    const rows=this.zoneStore?await this.zoneStore.latest(ca,asOf):[];
+    const delayed=status&&Date.parse(asOf)-Date.parse(status.knownAt)>90000;
+    return {version:VERSION,rules:RULES,mode:'PAPER_OBSERVATION',validated:false,execution:false,asOf,lastCheckedAt:status?.knownAt||null,quality:delayed?'DELAYED':status?.state||'UNKNOWN',missing:[...(status?.missing||[]),...(delayed?['The research evaluator has not checked recent observations. Saved zones are historical, not a current assessment.']:[])],reason:status?.reason||'The research collector has not evaluated this position yet.',
+      counts:{recordedInWindow:rows.length,conditionsObserved:rows.filter(z=>z.paper.reference).length,invalidated:rows.filter(z=>z.state==='INVALIDATED').length,expired:rows.filter(z=>z.state==='EXPIRED').length},
+      zones:rows.slice(0,limit).map(({inputSnapshot,...zone})=>zone),windowLimit:100};
   }
   async positions(){
     const watches=await this.store.list('watch',null,{limit:100});
@@ -109,8 +118,10 @@ class DashboardService {
       for(const c of rollupCandles([...minuteRevisions.values()],interval))if(!latest.get(c.time)?.complete)latest.set(c.time,c);
     }
     const sampled=observedCandles(observations.filter(o=>o.pairId===pair),interval,asOf);
-    // Samples never overwrite a provider OHLCV candle or imply all trades were observed.
-    for(const c of sampled)if(!latest.has(c.time))latest.set(c.time,c);
+    // Only the currently open bar can incorporate subsequently received real
+    // prices. Preserve the provider open/volume and disclose partial coverage.
+    for(const c of sampled){const old=latest.get(c.time);if(!old)latest.set(c.time,c);
+      else if(!old.complete&&(c.time+INTERVALS[interval])*1000>Date.parse(asOf)&&Date.parse(c.knownAt)>Date.parse(old.knownAt))latest.set(c.time,{...old,high:Math.max(old.high,c.high),low:Math.min(old.low,c.low),close:c.close,knownAt:c.knownAt,observedAt:c.observedAt,complete:false,coverage:'PROVIDER_AND_SAMPLED_OBSERVATIONS',quality:'PARTIAL',volumeObservedAt:old.knownAt});}
     return {interval,candles:[...latest.values()].sort((a,b)=>a.time-b.time).slice(-500),asOf,quality:latest.size?'PARTIAL':'UNKNOWN',
       sourceFreshness:'UNKNOWN',emptyIntervals:'UNAVAILABLE',pollAfterMs:10000};
   }

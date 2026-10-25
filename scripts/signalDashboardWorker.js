@@ -30,7 +30,8 @@ async function main(env=process.env) {
     registry[r.source_id]={clusterId:r.cluster_id,relationship:r.cluster_relationship_status};}catch{/* Missing registry stays UNKNOWN. */}
   const researchReader=async()=>require('../services/signalDashboard/researchBridge').readEmpiricalEvents(pool,(await store.list('watch',null)).map(w=>w.tokenAddress),{registry});
   const {SharedGeckoCandleBudget}=require('../services/signalDashboard/publicCandleBudget');
-  const collectors=require('../services/signalDashboard/collector').createCollectors({store,budget,env,feed,researchReader,registry,publicCandleBudget:new SharedGeckoCandleBudget(pool)});
+  const zoneStore=new(require('../services/signalDashboard/zoneStore').ZoneStore)(pool,c);
+  const collectors=require('../services/signalDashboard/collector').createCollectors({store,budget,env,feed,researchReader,registry,zoneStore,publicCandleBudget:new SharedGeckoCandleBudget(pool)});
   collectors.start();
   const stop=()=>collectors.stop();process.once('SIGTERM',stop);process.once('SIGINT',stop);
   return {worker:collectors,stop};

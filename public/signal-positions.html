@@ -6,7 +6,7 @@
   <meta name="description" content="Your positions, your actions, and what Signal knows. Read-only trading intelligence.">
   <title>Signal · Your trading, in focus</title>
   <link rel="stylesheet" href="/signal-positions.css">
-  <script defer src="/signal-positions-chart.js"></script><script defer src="/signal-positions.js"></script>
+  <script defer src="/signal-positions-vendor.js"></script><script defer src="/signal-positions-chart.js"></script><script defer src="/signal-positions.js"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to dashboard</a>
@@ -40,10 +40,13 @@
         <aside id="risk" class="risk"></aside>
         <section class="panel chart-panel" id="market-chart"><div class="chart-toolbar"><div><p class="eyebrow">THE MARKET &amp; YOUR MOVES</p><h2>Price history</h2></div><div id="intervals" class="intervals" role="group" aria-label="Candle interval"></div></div>
           <div class="chart-subbar"><div id="chartLayers" class="chart-layers" role="group" aria-label="Chart events"><button type="button" data-layer="trades" aria-pressed="true">Your trades</button><button type="button" data-layer="calls" aria-pressed="true">Calls &amp; promotion</button><button type="button" data-layer="risk" aria-pressed="true">Risk changes</button></div><div class="chart-views"><button id="chartHistory" class="text-button" type="button">Full history</button><button id="chartReset" class="text-button" type="button">Latest view ↗</button></div></div>
-          <canvas id="chart" height="320" tabindex="0" aria-label="Interactive candlestick chart. Drag to pan, scroll or pinch to zoom. Plus and minus keys zoom; arrow keys pan. Tap a trade marker to see what happened."></canvas>
+          <div class="chart-controls"><div id="chartModes" class="filter-row" role="group" aria-label="Chart style"><button type="button" data-mode="candles" aria-pressed="true">Candles</button><button type="button" data-mode="line" aria-pressed="false">Simple line</button></div><label class="zone-toggle"><input id="showZones" type="checkbox" checked> Research zones</label><button id="chartFullscreen" class="text-button" type="button">Expand chart ⛶</button></div>
+          <div id="chartHover" class="chart-hover" aria-live="off">Press or hover to inspect a price. B and S mark your actual trades.</div>
+          <div id="chart" class="trading-chart" tabindex="0" role="region" aria-label="Interactive price chart. Drag to pan, pinch to zoom. Plus and minus keys zoom; arrow keys pan. Tap a trade or research zone for details."></div>
           <div id="markerDetail" class="marker-detail" hidden></div>
-          <div class="chart-footer"><div id="legend" class="legend"></div><span class="muted">Drag to explore · tap a marker</span></div><p id="chartQuality" class="data-note"></p>
+          <div class="chart-footer"><div id="legend" class="legend"></div><span class="muted">Drag to explore · tap a marker</span></div><p id="chartQuality" class="data-note"></p><p class="chart-attribution">Charts by <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">TradingView Lightweight Charts™</a> · <a href="/signal-positions-chart-LICENSE.txt">License &amp; notices</a></p>
         </section>
+        <section class="panel research-panel" id="entry-watch"><div class="section-heading"><div><p class="eyebrow">ENTRY &amp; RE-ENTRY WATCH</p><h2>Research areas to follow</h2></div><span class="quiet-badge">PAPER OBSERVATION</span></div><p class="muted">An unvalidated pattern to study. Conditions observed does not establish a profitable entry. Execution stays in FOMO.</p><div id="zoneSummary"></div><div id="zoneCards"></div><details class="technical-details"><summary>The method &amp; its limits</summary><div id="zoneMethod"></div></details><div class="exposure-preview"><h3>What would an additional purchase change?</h3><label for="researchAmount">Try an amount in USDC</label><input id="researchAmount" type="number" min="0" max="1000000" step="0.01" inputmode="decimal" placeholder="e.g. 20"><p id="exposureResult" class="muted">A read-only estimate of original money at risk. No order is created.</p></div></section>
         <div class="detail-grid">
           <section class="panel" id="signal-view"><div class="section-heading"><div><p class="eyebrow">WHAT SIGNAL SEES</p><h2>Behind the risk level</h2></div><span class="quiet-badge">EVIDENCE</span></div><div id="riskEvidence"></div></section>
           <section class="panel" id="money-view"><p class="eyebrow">FOLLOW THE MONEY</p><h2>Your money, explained</h2><p class="muted">What went in, what came back, and what is still in play.</p><div id="accounting" class="money-breakdown"></div><p class="data-note">Trade analytics use your oldest purchases first (FIFO). This is not tax accounting or tax advice.</p></section>

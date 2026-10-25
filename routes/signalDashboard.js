@@ -24,6 +24,14 @@ function createDashboardRouter({Router,requireAuth,requireRole,getService,getCon
   router.get('/api/v1/signal/positions/:ca',...guard,handle(async(req,res)=>{
     const p=await getService().detail(req.params.ca);return p?res.json(p):res.status(404).json({error:'position_not_found'});
   }));
+  router.get('/api/v1/signal/positions/:ca/zones',...guard,handle(async(req,res)=>{
+    const service=getService();if(!await service.detail(req.params.ca))return res.status(404).json({error:'position_not_found'});return res.json(await service.zones(req.params.ca));
+  }));
+  router.get('/api/v1/signal/positions/:ca/zones/:zoneId',...guard,handle(async(req,res)=>{
+    const service=getService();if(!/^[a-f0-9]{64}$/.test(req.params.zoneId))return res.status(400).json({error:'invalid_zone_id'});
+    if(!await service.detail(req.params.ca))return res.status(404).json({error:'position_not_found'});
+    const events=service.zoneStore?await service.zoneStore.history(req.params.ca,req.params.zoneId):[];return events.length?res.json({events,mode:'PAPER_OBSERVATION',validated:false}):res.status(404).json({error:'zone_not_found'});
+  }));
   for(const kind of ['candles','events','transactions','risk'])router.get(`/api/v1/signal/positions/:ca/${kind}`,...guard,handle(async(req,res)=>{
     const service=getService(),p=await service.detail(req.params.ca);if(!p)return res.status(404).json({error:'position_not_found'});
     if(kind==='candles'){

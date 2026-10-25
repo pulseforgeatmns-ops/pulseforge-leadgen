@@ -22,7 +22,7 @@ function createSignalApp({pool,service,config,sessionSecret,secureCookies=true,s
  app.use(session({name:'signal.sid',store:sessionStore||new PgSession({pool,tableName:'signal_dashboard_session',createTableIfMissing:false,pruneSessionInterval:900}),
   secret:sessionSecret,resave:false,saveUninitialized:false,cookie:{httpOnly:true,secure:secureCookies,sameSite:'strict',maxAge:12*3600000}}));
  const originOK=req=>req.get('origin')===`${req.protocol}://${req.get('host')}`;
- const publicFiles={'/signal-positions.css':'signal-positions.css','/signal-positions.js':'signal-positions.js','/signal-positions-chart.js':'signal-positions-chart.js'};
+ const publicFiles={'/signal-positions.css':'signal-positions.css','/signal-positions.js':'signal-positions.js','/signal-positions-chart.js':'signal-positions-chart.js','/signal-positions-vendor.js':'signal-positions-vendor.js','/signal-positions-chart-LICENSE.txt':'signal-positions-chart-LICENSE.txt'};
  for(const [route,file]of Object.entries(publicFiles))app.get(route,(_req,res)=>res.sendFile(path.resolve(__dirname,'../../public',file)));
  app.get('/login',(_req,res)=>res.type('html').send(LOGIN));
  app.post('/login',async(req,res)=>{
