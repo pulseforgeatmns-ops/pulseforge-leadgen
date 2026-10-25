@@ -18,7 +18,11 @@ function createTransports(env=process.env,{fetchFn=globalThis.fetch}={}){
  const on=env.SIGNAL_OPPORTUNITY_ALERTS_ENABLED==='1',phone=/^\+[1-9]\d{7,14}$/;
  const from=env.TWILIO_FROM||env.TWILIO_PHONE_NUMBER;
  return [
-  {channel:'sms',ready:on&&Boolean(env.TWILIO_ACCOUNT_SID&&env.TWILIO_AUTH_TOKEN&&phone.test(from||'')&&phone.test(env.OPS_ALERT_PHONE||'')),async send(p){
+  {channel:'sms',ready:on&&Boolean(env.TWILIO_ACCOUNT_SID&&env.TWILIO_AUTH_TOKEN&&phone.test(from||'')&&phone.test(env.OPS_ALERT_PHONE||'')),async check(receipt){
+   if(!/^SM[a-f0-9]{32}$/i.test(receipt||''))throw Error('invalid_sms_receipt');
+   const r=await fetchFn(`https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_ACCOUNT_SID}/Messages/${receipt}.json`,{headers:{authorization:'Basic '+Buffer.from(env.TWILIO_ACCOUNT_SID+':'+env.TWILIO_AUTH_TOKEN).toString('base64')},redirect:'error',signal:AbortSignal.timeout(5000)});
+   if(!r.ok)throw Error('receipt_unavailable');const j=await r.json();return j.status==='delivered'?'DELIVERED':['failed','undelivered','canceled'].includes(j.status)?'UNDELIVERED':null;
+  },async send(p){
    // Reuse the existing Pulseforge Twilio account/sender/destination. This
    // isolated adapter avoids importing Sam and outbound CRM dependencies.
    const r=await fetchFn(`https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_ACCOUNT_SID}/Messages.json`,{method:'POST',redirect:'error',signal:AbortSignal.timeout(5000),headers:{authorization:'Basic '+Buffer.from(env.TWILIO_ACCOUNT_SID+':'+env.TWILIO_AUTH_TOKEN).toString('base64'),'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({From:from,To:env.OPS_ALERT_PHONE,Body:alertText(p)})});
@@ -34,5 +38,6 @@ async function deliver(store,transports){
  for(const t of transports){if(!t.ready)continue;const row=await store.claim(t.channel);if(!row)continue;
   try{const receipt=await t.send(row.payload);await store.finish(row,'ACCEPTED',receipt);}catch{await store.finish(row,'UNKNOWN');}
  }
+ for(const t of transports)if(t.ready&&t.check&&store.acceptedReceipts){for(const row of await store.acceptedReceipts(t.channel)){try{const state=await t.check(row.receipt);if(state)await store.confirm(row,state);}catch{}}}
 }
 module.exports={alertText,createTransports,deliver};

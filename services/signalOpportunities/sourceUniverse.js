@@ -36,4 +36,12 @@ const RELATIONSHIPS=[
  {a:'bagcalls',b:'bags-casino',status:'CORRELATED',evidence:'https://t.me/s/bagcalls',reason:'Main channel links its Gambles channel.'},
 ];
 function candidateSources(){return SOURCES.map(s=>({...s}));}
-module.exports={VERSION,SOURCES,RELATIONSHIPS,candidateSources};
+function relationshipGraph(env=process.env){
+ if(!env.SIGNAL_OPPORTUNITY_RELATIONSHIPS_JSON)return {version:'relationship-graph-v1.0.0',edges:RELATIONSHIPS};
+ const graph=JSON.parse(env.SIGNAL_OPPORTUNITY_RELATIONSHIPS_JSON),ids=new Set(SOURCES.map(s=>s.sourceId));
+ if(!/^relationship-graph-v\d+\.\d+\.\d+$/.test(graph.version||'')||graph.version==='relationship-graph-v1.0.0'||!Array.isArray(graph.edges)||graph.edges.length>250)throw Error('invalid_relationship_graph_version');
+ for(const e of graph.edges)if(!ids.has(e.a)||!ids.has(e.b)||e.a===e.b||!['INDEPENDENT','CORRELATED','UNKNOWN'].includes(e.status)
+  ||typeof e.evidence!=='string'||!e.evidence.startsWith('https://')||!e.reviewedBy||!Number.isFinite(Date.parse(e.knowledgeAt)))throw Error('relationship_review_evidence_required');
+ return {version:graph.version,edges:[...RELATIONSHIPS,...graph.edges]};
+}
+module.exports={VERSION,SOURCES,RELATIONSHIPS,candidateSources,relationshipGraph};

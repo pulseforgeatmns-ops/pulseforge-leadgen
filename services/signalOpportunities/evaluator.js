@@ -62,7 +62,7 @@ function evaluateOpportunity({tokenAddress,calls=[],observations=[],events=[],so
   sources:[...new Set(all.map(c=>c.sourceId))],independentClusters:graph.independentClusters,sourceRoles:[...new Set(all.map(c=>c.sourceRole))],
   marketCap:num(current?.marketCapUsd),liquidity:num(current?.liquidityUsd),tokenAge:num(current?.tokenAgeSeconds),priceMomentum,volumeMomentum,
   buyers:num(current?.buyers5m),sellers:num(current?.sellers5m),promotionIntensity:promotion,distributionRisk:credibleRisk?.state||'UNKNOWN',
-  evidence:{increases,decreases},unknowns,opportunityState,opportunityScore,graph,callerSequence,amplifiers,
+  evidence:{increases,decreases,market:current||null,momentumBaseline:base||null,risk:credibleRisk||null,relationshipEvidence:relationships.filter(r=>r.evidence&&(!r.knowledgeAt||Date.parse(r.knowledgeAt)<=end))},unknowns,opportunityState,opportunityScore,graph,callerSequence,amplifiers,
   preFrontRunners:preFront,frontRunnersLeadMs:beforeFR.length?Date.parse(front.occurredAt)-Date.parse(beforeFR[0].occurredAt):null,
   amplifierPotential:'Arrival is not predicted.',quality:fresh?'PARTIAL':'DELAYED',readOnly:true,
   provenance:{dataClass:'EMPIRICAL',derived:true,namespace:'signal-opportunities-live',researchEvaluation:false}};

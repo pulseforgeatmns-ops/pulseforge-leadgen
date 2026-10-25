@@ -14,7 +14,7 @@ function createCollectors({store,budget,env=process.env,fetchFn=globalThis.fetch
  const candles=createDashboardWorker({store,candleProvider,now});
  const zones=require('./zoneWorker').createZoneWorker({store,zoneStore,now});
  const opportunityWorker=opportunities?require('../signalOpportunities/worker').createOpportunityWorker({store,opportunities,feed:opportunityFeed,
-  marketProvider,now,transportTestId:env.SIGNAL_OPPORTUNITY_TRANSPORT_TEST_ID||null,transports:require('../signalOpportunities/notifications').createTransports(env,{fetchFn})}):null;
+  marketProvider,now,relationshipGraph:require('../signalOpportunities/sourceUniverse').relationshipGraph(env),transportTestId:env.SIGNAL_OPPORTUNITY_TRANSPORT_TEST_ID||null,transports:require('../signalOpportunities/notifications').createTransports(env,{fetchFn})}):null;
  async function walletTick(){
   if(!publicWallet){const watches=await store.list('watch',null);if(!watches.length)return;
    publicWallet=walletProvider||new SolanaRpcWalletWatchProvider({tokenAddresses:watches.map(w=>w.tokenAddress),rpcUrl:env.SIGNAL_DASHBOARD_RPC_URL,budget,fetchFn,now});}

@@ -12,7 +12,7 @@ function sourcesFromHealth(health,at){
   identityStatus:r?.identityStatus==='VERIFIED'?'VERIFIED':'CANDIDATE',channelId:r?.channelId||null,verifiedAt:r?.verifiedAt||null,
   reason:r?.reason||(!r?'NOT_CONFIGURED':null),knowledgeAt:at};});
 }
-function createOpportunityWorker({store,opportunities,feed,marketProvider,transports=[],now=()=>new Date(),maxTokens=120,transportTestId=null}){
+function createOpportunityWorker({store,opportunities,feed,marketProvider,transports=[],now=()=>new Date(),maxTokens=120,transportTestId=null,relationshipGraph={version:'relationship-graph-v1.0.0',edges:RELATIONSHIPS}}){
  let running=false,rotation=0;
  const status=async(state,reason,extra={})=>{const at=now().toISOString();await store.put('status','*','opportunity-engine',{component:'opportunity-engine',state,reason,...extra,occurredAt:at,knownAt:at},{mutable:true});};
  async function ingest(payload){
@@ -68,8 +68,9 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
     if(last){const ev=distribution(riskState||{},last,{now:now()});if(!ev.ignored){riskState=ev.state;await store.put('cursor',ca,'opportunity-risk:'+ca,{key:'opportunity-risk:'+ca,state:riskState,occurredAt:asOf,knownAt:asOf},{mutable:true});}}
     const risk=last&&riskState?{state:riskState.riskState,occurredAt:last.observedAt,knownAt:last.knownAt,provenance:last.provenance}:null;
     const decision=evaluateOpportunity({tokenAddress:ca,calls:calls.filter(c=>c.tokenAddress===ca),observations,events:events.filter(e=>e.tokenAddress===ca),sources,
-      relationships:RELATIONSHIPS.map(r=>({...r,knowledgeAt:sources.find(s=>s.sourceId===r.a)?.verifiedAt||asOf})),asOf,risk,previous:old.find(p=>p.tokenAddress===ca)});
+      relationships:relationshipGraph.edges.map(r=>({...r,knowledgeAt:r.knowledgeAt||sources.find(s=>s.sourceId===r.a)?.verifiedAt||asOf})),asOf,risk,previous:old.find(p=>p.tokenAddress===ca)});
     if(!decision)continue;
+    decision.relationshipVersion=relationshipGraph.version;
     const saved=await opportunities.append(decision,{held:held.has(ca)});
     if(saved.created&&saved.transition){const e={id:hash(['opportunity-state',decision.id]),tokenAddress:ca,category:'OPPORTUNITY_'+decision.opportunityState,occurredAt:decision.knowledgeAt,knownAt:decision.knowledgeAt,source:decision.definitionVersion,evidence:decision,provenance:decision.provenance};await store.put('event',ca,e.id,e);}
    }
