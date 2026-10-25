@@ -31,7 +31,7 @@
    const groups=segments(this.candles,interval),last=groups.pop()||[];this.lineSeries.setData(last.map(c=>({time:c.time,value:c.close})));
    for(const group of groups){const s=this.chart.addSeries(L.LineSeries,{color:'#b5a1ff',lineWidth:2,visible:this.mode==='line',priceLineVisible:false,lastValueVisible:false,pointMarkersVisible:true,pointMarkersRadius:2,priceFormat:format});s.setData(group.map(c=>({time:c.time,value:c.close})));this.extraLines.push(s);}
    this.candleSeries.applyOptions({visible:this.mode==='candles'});this.lineSeries.applyOptions({visible:this.mode==='line'});
-   if(this.candles.length&&(changedInterval||!oldRange||!oldEnd))this.resetView();else if(oldRange){this.chart.timeScale().setVisibleLogicalRange(oldRange);if(this.autoFollow)this.chart.timeScale().scrollToRealTime();}
+   if(this.candles.length&&(changedInterval||!oldRange||!oldEnd))this.resetView();else if(oldRange){this.chart.timeScale().setVisibleLogicalRange(oldRange);if(this.autoFollow){if(this.times.length<10)this.resetView();else this.chart.timeScale().scrollToRealTime();}}
    this.drawReferences();this.scheduleOverlay();
   }
   setMode(mode){if(!['candles','line'].includes(mode))return;this.mode=mode;this.candleSeries.applyOptions({visible:mode==='candles'});this.lineSeries.applyOptions({visible:mode==='line'});for(const s of this.extraLines)s.applyOptions({visible:mode==='line'});this.drawReferences();this.scheduleOverlay();}
@@ -39,7 +39,7 @@
   setZones(zones,show=true){this.zones=zones||[];this.showZones=show;this.scheduleOverlay();}
   setReferences(refs){this.references=refs||[];this.drawReferences();}
   drawReferences(){for(const [series,line]of this.referenceHandles)series.removePriceLine(line);this.referenceHandles=[];const series=this.mode==='candles'?this.candleSeries:this.lineSeries;for(const ref of this.references)if(Number.isFinite(ref.price)&&ref.price>0){const line=series.createPriceLine({price:ref.price,color:ref.color||'#b5a1ff80',lineWidth:1,lineStyle:L.LineStyle.Dashed,axisLabelVisible:false,title:ref.label});this.referenceHandles.push([series,line]);}}
-  resetView(){if(!this.times.length)return;this.autoFollow=true;this.chart.timeScale().setVisibleLogicalRange({from:Math.max(-2,this.times.length-65),to:this.times.length+4});this.scheduleOverlay();}
+  resetView(){if(!this.times.length)return;this.autoFollow=true;this.chart.timeScale().setVisibleLogicalRange({from:Math.max(-.5,this.times.length-65),to:this.times.length+(this.times.length<10?.5:4)});this.scheduleOverlay();}
   fitHistory(){this.autoFollow=false;this.chart.timeScale().fitContent();this.scheduleOverlay();}
   visibleEvent(e){const trade=['BUY','SELL','TRANSFER_IN','TRANSFER_OUT'].includes(e.category),risk=e.category.startsWith('DISTRIBUTION_')||['LIQUIDITY_WARNING','DE_RISK_MILESTONE'].includes(e.category);return trade?this.layers.trades:risk?this.layers.risk:this.layers.calls;}
   timeCoordinate(time){if(!this.times.length)return null;let lo=0,hi=this.times.length-1;while(lo<hi){const mid=Math.ceil((lo+hi)/2);if(this.times[mid]<=time)lo=mid;else hi=mid-1;}const scale=this.chart.timeScale(),base=scale.logicalToCoordinate(lo);if(base==null)return null;const next=this.times[lo+1],neighbor=scale.logicalToCoordinate(next!=null?lo+1:lo-1);if(neighbor==null)return base;const step=next!=null?neighbor-base:base-neighbor;return base+(time-this.times[lo])/(next!=null?next-this.times[lo]:this.interval)*step;}
