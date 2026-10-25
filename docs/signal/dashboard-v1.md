@@ -32,6 +32,8 @@ Provider credentials, when available, belong only in server configuration:
 - `SIGNAL_DASHBOARD_COINGECKO_PRO_KEY`: independent paid-quota OHLCV bootstrap, with no empty-interval padding. Public GeckoTerminal is supported only when an existing shared durable request budget is injected; the standalone process does not create an unbudgeted public Gecko consumer.
 - `SIGNAL_DASHBOARD_FEED_URL`: the existing private `http://<service>.railway.internal/feed`, using `SIGNAL_OPERATOR_FEED_TOKEN`. No Telegram credentials are copied to this worker. Existing empirical raw evidence and strict prospective FIRST_CALLER / INDEPENDENT_CONVERGENCE observations are read through an allowlist bridge. No cohort outcome/performance tables are queried.
 
+Backfill is limited to 50 pages of 100 wallet-history rows by default (`SIGNAL_DASHBOARD_MAX_HISTORY_PAGES`, 1–1000). Only watched mints are persisted/enriched. Reaching this limit stays PARTIAL; increasing it is an explicit configuration choice. Provider and observation quotas remain enforced across replicas.
+
 No wallet private key, seed, signing material, signing SDK, buy/sell API or trade execution controls exist in this feature.
 
 ## Data interpretation

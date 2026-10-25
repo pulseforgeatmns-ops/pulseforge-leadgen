@@ -21,4 +21,8 @@ function raw(amount, decimals) {
 }
 const mul = (a, b) => a === null || b === null ? null : a * b / SCALE;
 const div = (a, b) => a === null || b === null || b === 0n ? null : a * SCALE / b;
-module.exports = {dec, str, raw, mul, div, SCALE};
+function fromNumber(value){
+  if(typeof value!=='number'||!Number.isFinite(value)||Math.abs(value)>=1e21||value!==0&&Math.abs(value)<1e-18)return null;
+  return value.toFixed(18).replace(/0+$/,'').replace(/\.$/,'');
+}
+module.exports = {fromNumber,dec, str, raw, mul, div, SCALE};

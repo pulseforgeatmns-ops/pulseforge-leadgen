@@ -38,7 +38,7 @@ async function main(env=process.env) {
   try{for(const r of (await pool.query('SELECT source_id,cluster_id,cluster_relationship_status FROM signal_source_registry WHERE active=true')).rows)
     registry[r.source_id]={clusterId:r.cluster_id,relationship:r.cluster_relationship_status};}catch{/* Missing registry stays UNKNOWN. */}
   const researchReader=async()=>require('../services/signalDashboard/researchBridge').readEmpiricalEvents(pool,(await store.list('watch',null)).map(w=>w.tokenAddress),{registry});
-  const worker=createDashboardWorker({store,marketProvider,walletProvider,quoteProvider,candleProvider,feed,researchReader,registry});
+  const worker=createDashboardWorker({store,marketProvider,walletProvider,quoteProvider,candleProvider,feed,researchReader,registry,maxHistoryPages:Number(env.SIGNAL_DASHBOARD_MAX_HISTORY_PAGES||50)});
   let stopped=false,timer;
   const tick=async()=>{const startedAt=Date.now();try{await worker.pollOnce();}catch{console.error('[signal-dashboard] observation cycle unavailable');}finally{if(!stopped)timer=setTimeout(tick,Math.max(1000,10000-(Date.now()-startedAt)));}};
   await tick();

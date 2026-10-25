@@ -5,7 +5,7 @@ const {peaks,distribution}=require('./analytics');
 const {valueTransactions}=require('./quotes');
 const {observedCandles,rollupCandles,INTERVALS}=require('./market');
 const {id}=require('./wallet');
-const {dec,str,mul}=require('./decimal');
+const {dec,str,mul,fromNumber}=require('./decimal');
 class DashboardService {
   constructor(store,{now=()=>new Date()}={}){Object.assign(this,{store,now});this.cache=new Map();}
   async detail(ca) {
@@ -27,13 +27,13 @@ class DashboardService {
     const caughtUp=latestCursor?.caughtUp===true;
     const historyComplete=Boolean(history?.exhausted&&caughtUp&&balance&&at-Date.parse(balance.observedAt)<=60000
       &&transactions.length<5000&&valued.every(t=>t.slot<=balance.slot));
-    const ledger=account(valued,{priceUsd:current?.priceUsd!=null?current.priceUsd.toFixed(18).replace(/0+$/,'').replace(/\.$/,''):null,
+    const ledger=account(valued,{priceUsd:current?.priceUsd!=null?fromNumber(current.priceUsd):null,
       balance:balance?.tokens??null,asOf,historyComplete});
     if(ledger.reconciliation.state!=='MATCH'){ledger.realizedPnl=null;ledger.unrealizedPnl=null;ledger.totalPnl=null;ledger.netCapitalAtRisk=null;}
     if(!transactions.length&&!historyComplete) {
       for(const key of ['tokensRemaining','tokensPurchased','tokensSold','grossCapitalDeployed','grossProceedsRealized','realizedCash','feesUsd','netCashFlow','positionValue','remainingCostBasis'])ledger[key]=null;
     }
-    if(balance){ledger.tokensRemaining=balance.tokens;ledger.positionValue=current?.priceUsd!=null?str(mul(dec(balance.tokens),dec(current.priceUsd.toFixed(18)))):null;}
+    if(balance){ledger.tokensRemaining=balance.tokens;ledger.positionValue=current?.priceUsd!=null?str(mul(dec(balance.tokens),dec(fromNumber(current.priceUsd)))):null;}
     ledger.quality='PARTIAL'; // Indexer history, USD estimates and unknown fees remain disclosed.
     const riskProjection=cursors.find(x=>x.key==='risk:'+ca);
     const risk=distribution(observations,events,asOf,riskProjection?.state);

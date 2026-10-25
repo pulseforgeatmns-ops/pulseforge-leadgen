@@ -41,3 +41,7 @@ test('collector rate-limit failure leaves persisted observations available and n
  const s=new MemoryStore();await seed(s);let failed=true,now=()=>new Date(later(5000));const market={getSnapshot:async()=>{if(failed)throw Error('rate limited');return observation(5000);}};
  const w=createDashboardWorker({store:s,marketProvider:market,now});await w.pollOnce();assert.equal((await s.list('observation',CA)).length,0);failed=false;await w.pollOnce();assert.equal((await s.list('observation',CA)).length,1);
 });
+test('backfill respects page cap and does not persist/enrich unwatched token activity',async()=>{
+ const s=new MemoryStore();await seed(s);let calls=0;const w=createDashboardWorker({store:s,maxHistoryPages:1,now:()=>new Date(later(5000)),walletProvider:{getHistoryPage:async()=>{calls++;return {transactions:[tx(1),tx(2,'BUY',{tokenAddress:'3'.repeat(32)})],signatures:['a'],nextBefore:'a',exhausted:false};}}});
+ await w.historyTick();await w.historyTick();assert.equal(calls,1);assert.equal((await s.list('transaction',null)).length,1);assert.equal((await s.list('status','*')).find(x=>x.component==='wallet-history').reason,'BACKFILL_PAGE_LIMIT_REACHED');
+});

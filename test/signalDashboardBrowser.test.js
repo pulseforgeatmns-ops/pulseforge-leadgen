@@ -12,7 +12,8 @@ test('mobile/desktop candles, marker taps, notes, intervals, offline poll recove
  app.get('/api/v1/signal/positions/:ca/candles',async(req,res)=>res.json(await service.candles(CA,req.query.interval)));
  app.post('/api/v1/signal/positions/:ca/annotations',async(req,res)=>res.json({annotation:await service.annotate(CA,req.body.text,'7')}));
  const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));t.after(()=>new Promise(r=>server.close(r)));
- const browser=await require('puppeteer').launch({executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||undefined,headless:true,pipe:true,args:['--no-sandbox','--disable-dev-shm-usage','--no-process-singleton','--disable-breakpad','--disable-crash-reporter','--single-process','--no-zygote']});t.after(()=>browser.close());
+ const executablePath=process.env.PUPPETEER_EXECUTABLE_PATH||undefined,restricted=executablePath?.includes('headless-shell');
+ const browser=await require('puppeteer').launch({executablePath,headless:true,pipe:Boolean(restricted),args:['--no-sandbox','--disable-dev-shm-usage',...(restricted?['--no-process-singleton','--disable-breakpad','--disable-crash-reporter','--single-process','--no-zygote']:[])]});t.after(()=>browser.close());
  const page=await browser.newPage(),errors=[];await page.emulateTimezone('America/New_York');page.on('pageerror',e=>errors.push(e.message));await page.setRequestInterception(true);page.on('request',r=>new URL(r.url()).hostname==='127.0.0.1'?r.continue():r.abort());
  // Speed only the browser polling timer; providers are fixture-backed.
  await page.evaluateOnNewDocument(()=>{const original=window.setTimeout;window.setTimeout=(fn,ms,...args)=>original(fn,ms===10000||ms===20000||ms===40000||ms===60000?250:ms,...args);});

@@ -10,15 +10,15 @@ class BirdeyeHistoricalQuoteProvider extends HistoricalQuoteProvider {
     const end=Math.floor(Date.parse(blockTime)/1000);
     await this.budget.take('birdeye-historical',1000);
     const u=new URL('https://public-api.birdeye.so/defi/history_price');
-    for(const [k,v]of Object.entries({address:asset,address_type:'token',type:'1m',time_from:end-60,time_to:end}))u.searchParams.set(k,v);
+    for(const [k,v]of Object.entries({address:asset,address_type:'token',type:'1m',time_from:end-120,time_to:end-60}))u.searchParams.set(k,v);
     const r=await this.fetchFn(u.href,{headers:{'X-API-KEY':this.apiKey,'x-chain':'solana'},redirect:'error',signal:AbortSignal.timeout(5000)});
     if(r.status===429){await this.budget.backoff('birdeye-historical',60000);throw new Error('quote_rate_limited');}
     if(!r.ok)throw new Error('quote_unavailable');
     const b=await r.json();
-    const points=(b?.success===true&&Array.isArray(b.data?.items)?b.data.items:[]).filter(x=>Number.isSafeInteger(x.unixTime)&&x.unixTime<=end&&x.unixTime>=end-60&&Number.isFinite(x.value)&&x.value>0).sort((a,b)=>a.unixTime-b.unixTime);
+    const points=(b?.success===true&&Array.isArray(b.data?.items)?b.data.items:[]).filter(x=>Number.isSafeInteger(x.unixTime)&&x.unixTime+60<=end&&x.unixTime+60>=end-60&&Number.isFinite(x.value)&&x.value>0).sort((a,b)=>a.unixTime-b.unixTime);
     const p=points.at(-1);if(!p)return null;
-    return {asset,blockTime,priceUsd:p.value.toFixed(18).replace(/0+$/,'').replace(/\.$/,''),asOf:new Date(p.unixTime*1000).toISOString(),
-      provider:'birdeye-historical',quality:'PARTIAL',basis:'Historical minute price observation; USD conversion is an estimate, native consideration remains exact.',
+    return {asset,blockTime,priceUsd:p.value.toFixed(18).replace(/0+$/,'').replace(/\.$/,''),asOf:new Date((p.unixTime+60)*1000).toISOString(),
+      provider:'birdeye-historical',quality:'PARTIAL',sourceIntervalStart:new Date(p.unixTime*1000).toISOString(),basis:'Closed historical minute observation; no interval overlapping the transaction is used; USD conversion is an estimate, native consideration remains exact.',
       occurredAt:blockTime,knownAt:this.now().toISOString(),raw:b};
   }
 }

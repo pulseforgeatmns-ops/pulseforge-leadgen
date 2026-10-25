@@ -4,21 +4,24 @@ const {feedEvents}=require('./events');
 const {INTERVALS}=require('./market');
 const {evaluate}=require('../signalDistribution/risk');
 function createDashboardWorker({store,marketProvider,walletProvider,candleProvider=null,quoteProvider=null,
-  feed=null,researchReader=null,registry={},now=()=>new Date(),maxActive=3}) {
+  feed=null,researchReader=null,registry={},now=()=>new Date(),maxActive=3,maxHistoryPages=50}) {
+  if(!Number.isInteger(maxHistoryPages)||maxHistoryPages<1||maxHistoryPages>1000)throw new Error('invalid_history_page_limit');
   let running=false;
   const status=async(component,state,reason=null)=>{const at=now().toISOString();await store.put('status','*',component,{component,state,reason,occurredAt:at,knownAt:at},{mutable:true});};
   async function persistPage(page) {
-    for(const t of page.transactions)await store.put('transaction',t.tokenAddress,t.id,t);
+    const watched=new Set((await store.list('watch',null)).map(w=>w.tokenAddress));
+    for(const t of page.transactions)if(watched.has(t.tokenAddress))await store.put('transaction',t.tokenAddress,t.id,t);
   }
   async function historyTick() {
     let cursor=(await store.list('cursor',null)).find(x=>x.key==='history');
     if(cursor?.exhausted)return;
+    if((cursor?.pages||0)>=maxHistoryPages){await status('wallet-history','PARTIAL','BACKFILL_PAGE_LIMIT_REACHED');return;}
     const page=await walletProvider.getHistoryPage({wallet:store.wallet,before:cursor?.before||null});
     await persistPage(page);
     const at=now().toISOString();
     if(page.nextBefore&&page.nextBefore===cursor?.before)throw new Error('wallet_pagination_stalled');
     await store.put('cursor','*','history',{key:'history',before:page.nextBefore||cursor?.before||null,
-      exhausted:page.exhausted,coverage:page.coverage,occurredAt:at,knownAt:at},{mutable:true});
+      pages:(cursor?.pages||0)+1,exhausted:page.exhausted,coverage:page.coverage,occurredAt:at,knownAt:at},{mutable:true});
     if(!cursor&&page.signatures[0])await store.put('cursor','*','head',{key:'head',lastSeen:page.signatures[0],before:null,caughtUp:true,occurredAt:at,knownAt:at},{mutable:true});
   }
   async function headTick() {
@@ -32,7 +35,7 @@ function createDashboardWorker({store,marketProvider,walletProvider,candleProvid
       candidate:caughtUp?null:candidate,before:caughtUp?null:page.nextBefore,caughtUp,occurredAt:at,knownAt:at},{mutable:true});
   }
   async function feedTick() {
-    if(researchReader){for(const e of await researchReader())await store.put('event',e.tokenAddress,e.id,e);}
+    if(researchReader){try{for(const e of await researchReader())await store.put('event',e.tokenAddress,e.id,e);}catch{await status('research-bridge','UNKNOWN','EXISTING_EMPIRICAL_EVIDENCE_UNAVAILABLE');}}
     if(!feed)return status('feed','UNKNOWN','EMPIRICAL_FEED_NOT_CONFIGURED');
     const calls=await feed();
     if(!Array.isArray(calls)||calls.length>2000)throw new Error('invalid_caller_feed');
