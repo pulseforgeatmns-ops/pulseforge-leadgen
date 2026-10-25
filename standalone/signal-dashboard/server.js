@@ -15,20 +15,27 @@ async function boot({env=process.env,pool:providedPool,listen=true,collect=true}
  const owner=await resolveOwner(pool,env);
  const cfg=config({...env,SIGNAL_DASHBOARD_TENANT_ID:env.SIGNAL_DASHBOARD_TENANT_ID||String(owner.client_id??1),SIGNAL_DASHBOARD_OWNER_USER_ID:String(owner.id)});
  if(!cfg.enabled)throw Error('signal_dashboard_disabled');
- const store=new DashboardStore(pool,cfg),zoneStore=new ZoneStore(pool,cfg),service=new DashboardService(store,{zoneStore}),budget=new DurableBudget(pool);
+ const store=new DashboardStore(pool,cfg),zoneStore=new ZoneStore(pool,cfg),budget=new DurableBudget(pool);
+ const opportunities=env.SIGNAL_OPPORTUNITY_ENGINE_ENABLED==='1'?new(require('../../services/signalOpportunities/store').OpportunityStore)(pool,cfg):null;
+ if(opportunities)await pool.query('SELECT id FROM signal_opportunity_decisions LIMIT 0');
+ const service=new DashboardService(store,{zoneStore,opportunities});
  await pool.query('SELECT zone_id FROM signal_dashboard_zone_events LIMIT 0');
  const watches=JSON.parse(env.SIGNAL_DASHBOARD_WATCH_TOKENS||'[]');
  if(!Array.isArray(watches)||!watches.length||watches.length>3||watches.some(w=>!address(w.tokenAddress)||w.poolAddress&&!address(w.poolAddress)))throw Error('invalid_signal_watch_configuration');
  for(const watch of watches){const old=await store.latest('watch',watch.tokenAddress),at=new Date().toISOString();
   await store.put('watch',watch.tokenAddress,'watch',{tokenAddress:watch.tokenAddress,symbol:typeof watch.symbol==='string'?watch.symbol.slice(0,30):null,poolAddress:old?.poolAddress||watch.poolAddress||null,occurredAt:at,knownAt:at},{mutable:true});}
  const registry={};try{for(const row of (await pool.query('SELECT source_id,cluster_id,cluster_relationship_status FROM signal_source_registry WHERE active=true')).rows)registry[row.source_id]={clusterId:row.cluster_id,relationship:row.cluster_relationship_status};}catch{}
- let feed=null;
+ let feed=null,opportunityFeed=null;
  if(env.SIGNAL_DASHBOARD_FEED_URL&&env.SIGNAL_OPERATOR_FEED_TOKEN){
   const u=new URL(env.SIGNAL_DASHBOARD_FEED_URL);if(u.protocol!=='http:'||!u.hostname.endsWith('.railway.internal')||u.pathname!=='/feed'||u.username||u.password||u.search||u.hash)throw Error('invalid_private_caller_feed');
-  feed=async()=>{await budget.take('signal-dashboard-feed',30000);const r=await fetch(u,{headers:{authorization:`Bearer ${env.SIGNAL_OPERATOR_FEED_TOKEN}`},redirect:'error',signal:AbortSignal.timeout(5000)});if(!r.ok)throw Error('private_feed_unavailable');const j=await r.json();return j.calls;};
+  let cached=null,cachedAt=0,pending=null;
+  const read=async()=>{if(cached&&Date.now()-cachedAt<29000)return cached;if(pending)return pending;
+   pending=(async()=>{await budget.take('signal-dashboard-feed',30000);const r=await fetch(u,{headers:{authorization:`Bearer ${env.SIGNAL_OPERATOR_FEED_TOKEN}`},redirect:'error',signal:AbortSignal.timeout(20000)});if(!r.ok)throw Error('private_feed_unavailable');cached=await r.json();cachedAt=Date.now();return cached;})();
+   try{return await pending;}finally{pending=null;}};
+  feed=async()=>(await read()).calls;opportunityFeed=read;
  }
  const researchReader=()=>require('../../services/signalDashboard/researchBridge').readEmpiricalEvents(pool,watches.map(w=>w.tokenAddress),{registry});
- const collectors=createCollectors({store,budget,env,feed,researchReader,registry,zoneStore,publicCandleBudget:new SharedGeckoCandleBudget(pool)});
+ const collectors=createCollectors({store,budget,env,feed,opportunityFeed,opportunities,researchReader,registry,zoneStore,publicCandleBudget:new SharedGeckoCandleBudget(pool)});
  const app=createSignalApp({pool,service,config:cfg,sessionSecret:env.SESSION_SECRET,coreAppUrl:env.SIGNAL_CORE_APP_URL});
  let server;if(listen)server=app.listen(Number(env.PORT||3000),'0.0.0.0',()=>console.log('[signal-dashboard] ready: isolated authenticated service, public-wallet observation only'));
  let reportTimer,stopped=false;

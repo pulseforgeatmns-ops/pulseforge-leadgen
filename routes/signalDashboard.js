@@ -21,6 +21,10 @@ function createDashboardRouter({Router,requireAuth,requireRole,getService,getCon
   };
   for(const route of ['/signal-v1/positions','/signal-v1/positions/:ca'])router.get(route,...guard,handle((_req,res)=>res.sendFile(path.resolve(__dirname,'../public/signal-positions.html'))));
   router.get('/api/v1/signal/positions',...guard,handle(async(_req,res)=>res.json(await getService().positions())));
+  router.get('/api/v1/signal/opportunities',...guard,handle(async(_req,res)=>res.json(await getService().discovery())));
+  router.get('/api/v1/signal/opportunities/:ca/history',...guard,handle(async(req,res)=>{
+    const service=getService();return res.json({decisions:service.opportunities?await service.opportunities.history(req.params.ca):[],readOnly:true});
+  }));
   router.get('/api/v1/signal/positions/:ca',...guard,handle(async(req,res)=>{
     const p=await getService().detail(req.params.ca);return p?res.json(p):res.status(404).json({error:'position_not_found'});
   }));

@@ -9,7 +9,7 @@ const {observedCandles,rollupCandles,INTERVALS}=require('./market');
 const {id}=require('./wallet');
 const {dec,str,mul,div,fromNumber}=require('./decimal');
 class DashboardService {
-  constructor(store,{now=()=>new Date(),zoneStore=null}={}){Object.assign(this,{store,now,zoneStore});this.cache=new Map();}
+  constructor(store,{now=()=>new Date(),zoneStore=null,opportunities=null}={}){Object.assign(this,{store,now,zoneStore,opportunities});this.cache=new Map();}
   async detail(ca) {
     const old=this.cache.get(ca);if(old&&+this.now()-old.at<2000)return old.promise;
     const promise=this.buildDetail(ca).catch(err=>{this.cache.delete(ca);throw err;});
@@ -19,7 +19,8 @@ class DashboardService {
     const asOf=this.now().toISOString(), store=this.store;
     const [watches,transactions,observations,events,annotations,balances,cursors,quotes,statuses]=await Promise.all(
       ['watch','transaction','observation','event','annotation','balance','cursor','quote','status'].map(k=>store.list(k,k==='cursor'||k==='quote'||k==='status'?null:ca,{asOf,ascending:k!=='observation',limit:k==='observation'?10000:5000})));
-    const watch=watches[0];if(!watch)return null;
+    const opportunity=this.opportunities?await this.opportunities.latest(ca,asOf):null;
+    const watch=watches[0]||(opportunity?{tokenAddress:ca,symbol:opportunity.symbol}:null);if(!watch)return null;
     observations.reverse();
     const current=observations.at(-1)||null;
     const at=+this.now(),balance=balances.at(-1)||null;
@@ -81,7 +82,7 @@ class DashboardService {
         walletObservedAt:balance?.observedAt||null,balanceSlot:balance?.slot||null,transactionLimitReached:transactions.length>=5000,
         observationWindowTruncated:observations.length>=10000,telegram:statuses.find(x=>x.component==='feed')||{state:'UNKNOWN'},statuses},
       // Bounded initial mobile payload; full paginated evidence is available through subresources.
-      events:timeline.slice(-250),eventCount:timeline.length,researchZones:await this.zones(ca,asOf,statuses,6),pollAfterMs:10000,chartIntervals:Object.keys(INTERVALS),readOnly:true};
+      events:timeline.slice(-250),eventCount:timeline.length,opportunity,positionTracked:Boolean(watches[0]),researchZones:await this.zones(ca,asOf,statuses,6),pollAfterMs:10000,chartIntervals:Object.keys(INTERVALS),readOnly:true};
   }
   async zones(ca,asOf=this.now().toISOString(),statuses=null,limit=20){
     const {VERSION,RULES}=require('./zones');
@@ -103,7 +104,17 @@ class DashboardService {
       const observation=await this.store.latest('observation',e.tokenAddress);
       liveSignals.push({tokenAddress:e.tokenAddress,source:e.source,occurredAt:e.occurredAt,researchState:e.researchState||'UNKNOWN',
         marketCap:metric(observation?.marketCapUsd??null,observation||{},+this.now()),liquidity:metric(observation?.liquidityUsd??null,observation||{},+this.now()),convergence:events.some(x=>x.tokenAddress===e.tokenAddress&&x.category==='INDEPENDENT_CONVERGENCE')?'INDEPENDENT_CONVERGENCE':'UNKNOWN',risk:positions.find(p=>p.tokenAddress===e.tokenAddress)?.risk||'UNKNOWN',ageSeconds:Math.max(0,(+this.now()-Date.parse(e.occurredAt))/1000),performanceBlinded:true});}
-    return {positions,liveSignals,asOf:this.now().toISOString(),pollAfterMs:10000,readOnly:true};
+    return {positions,liveSignals,opportunityDiscovery:await this.discovery(),asOf:this.now().toISOString(),pollAfterMs:10000,readOnly:true};
+  }
+  async discovery(){
+    const asOf=this.now().toISOString(),rows=this.opportunities?await this.opportunities.list(asOf):[];
+    const statuses=await this.store.list('status','*',{asOf});
+    const sourceHealth=statuses.find(s=>s.component==='opportunity-engine')||null,capacity=statuses.find(s=>s.component==='opportunity-capacity')||null;
+    const age=sourceHealth?Date.parse(asOf)-Date.parse(sourceHealth.knownAt):Infinity;
+    const opportunities=rows.map(p=>({...p,evaluationDelayed:Date.parse(asOf)-Date.parse(p.knowledgeAt)>90000,
+      quality:Date.parse(asOf)-Date.parse(p.knowledgeAt)>90000?'DELAYED':p.quality}));
+    return {enabled:Boolean(this.opportunities),opportunities,sourceHealth,capacity,leadLag:require('../signalOpportunities/graph').leadLag(opportunities.map(p=>p.callerSequence)),quality:age>90000?'DELAYED':sourceHealth?.state||'UNKNOWN',
+      delivery:this.opportunities?await this.opportunities.deliveryHealth():[],asOf,readOnly:true};
   }
   async transactions(ca){const [txs,quotes]=await Promise.all([this.store.list('transaction',ca),this.store.list('quote',null)]);
     return valueTransactions(txs,quotes).map(({provenance,...t})=>({...t,provenance:{provider:provenance.provider,commitment:provenance.commitment}}));}

@@ -1,7 +1,7 @@
 'use strict';
 (function(root){
  const L=root.LightweightCharts;
- const styles={BUY:['B','#7fe1bc'],SELL:['S','#ff91a7'],CALLER:['C','#a4b9ff'],FIRST_CALLER:['F','#a4b9ff'],FRONT_RUNNERS_CALL:['FR','#b5a1ff'],INDEPENDENT_CONVERGENCE:['IC','#77d9eb'],PROMOTION_EVENT:['P','#d8b276'],DEX_BOOST:['DX','#d8b276'],AMPLIFIER_EVENT:['A','#d8b276'],DE_RISK_MILESTONE:['DR','#7fe1bc'],DISTRIBUTION_NORMAL:['N','#a2cdb5'],DISTRIBUTION_WATCH:['W','#efc47c'],DISTRIBUTION_HIGH:['H','#ff91a7'],DISTRIBUTION_CRITICAL:['!','#ff91a7'],LIQUIDITY_WARNING:['L','#dfaaff'],TRANSFER_IN:['IN','#a8b5cc'],TRANSFER_OUT:['OUT','#a8b5cc']};
+ const styles={OPPORTUNITY_OBSERVED:['O','#a4b9ff'],OPPORTUNITY_WATCH:['W','#efc47c'],OPPORTUNITY_OPPORTUNITY:['OP','#7fe1bc'],OPPORTUNITY_HOT:['HOT','#ffb770'],OPPORTUNITY_AVOID:['AV','#ff91a7'],BUY:['B','#7fe1bc'],SELL:['S','#ff91a7'],CALLER:['C','#a4b9ff'],FIRST_CALLER:['F','#a4b9ff'],FRONT_RUNNERS_CALL:['FR','#b5a1ff'],INDEPENDENT_CONVERGENCE:['IC','#77d9eb'],PROMOTION_EVENT:['P','#d8b276'],DEX_BOOST:['DX','#d8b276'],AMPLIFIER_EVENT:['A','#d8b276'],DE_RISK_MILESTONE:['DR','#7fe1bc'],DISTRIBUTION_NORMAL:['N','#a2cdb5'],DISTRIBUTION_WATCH:['W','#efc47c'],DISTRIBUTION_HIGH:['H','#ff91a7'],DISTRIBUTION_CRITICAL:['!','#ff91a7'],LIQUIDITY_WARNING:['L','#dfaaff'],TRANSFER_IN:['IN','#a8b5cc'],TRANSFER_OUT:['OUT','#a8b5cc']};
  function timeline(candles,interval){
   if(!candles.length)return[];const first=candles[0].time,last=candles.at(-1).time,byTime=new Map(candles.map(c=>[c.time,c]));
   if((last-first)/interval>20000)return candles;
