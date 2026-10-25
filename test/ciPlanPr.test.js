@@ -5,12 +5,15 @@ const { describe, it } = require('node:test');
 const { buildPlan, pathMatchesPattern } = require('../.github/scripts/ci-plan-pr.js');
 
 describe('CI plan PR selector (SPEC-CI-LEAN-001)', () => {
+  it('opportunity engine and acceptance tests select the Signal domain',()=>{
+    for(const file of ['services/signalOpportunities/worker.js','test/signalOpportunity.test.js','test/signalOpportunityPostgres.test.js','test/signalOpportunityBrowser.test.js'])assert.deepEqual(buildPlan([file]).suites,['global','signal-v1']);
+  });
   it('isolated initial SMS safety edits select Signal and retain its test command coverage', () => {
     for (const file of ['test/signalInitialSms.test.js', 'docs/sql-drafts/2026-10-22-signal-initial-sms.sql']) {
       assert.deepEqual(buildPlan([file]).suites, ['global', 'signal-v1'], file);
     }
     const command = require('../package.json').scripts['test:signal-v1'];
-    assert.equal(command, 'node --test packages/signal-v1/tests/*.test.js test/signalDistribution*.test.js test/signalInitialSms.test.js test/signalDashboard*.test.js');
+    assert.equal(command, 'node --test packages/signal-v1/tests/*.test.js test/signalDistribution*.test.js test/signalInitialSms.test.js test/signalDashboard*.test.js test/signalOpportunity*.test.js');
   });
 
   it('matches glob and directory patterns', () => {

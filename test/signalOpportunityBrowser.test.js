@@ -1,0 +1,24 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),express=require('express'),path=require('node:path');
+const {MemoryStore,CA,later,observation}=require('./helpers/signalDashboardFixtures');
+const {DashboardService}=require('../services/signalDashboard/service');
+const {evaluateOpportunity}=require('../services/signalOpportunities/evaluator');
+test('opportunity UI separates hot/watch/positions, opens new-token intelligence, shows unknowns and state chart markers',{timeout:30000},async t=>{
+ const sources=['a','b','c'].map(sourceId=>({sourceId,sourceRole:'DISCOVERY',clusterId:sourceId,identityStatus:'VERIFIED',active:true,available:true}));
+ const calls=sources.map((s,i)=>({...s,id:String(i),tokenAddress:CA,externalMessageId:'TEST:'+i,occurredAt:later(i*1000),knowledgeAt:later(i*1000),provenance:{dataClass:'EMPIRICAL'}}));
+ const observations=[observation(0,{liquidityUsd:30000,buyers5m:100}),observation(300000,{priceUsd:1.1,liquidityUsd:32000,volume5mUsd:150,buyers5m:150,symbol:'<script>TEST</script>'})];
+ const p=evaluateOpportunity({tokenAddress:CA,calls,sources,observations,asOf:later(300000),relationships:[{a:'a',b:'b'},{a:'a',b:'c'},{a:'b',b:'c'}].map(r=>({...r,status:'INDEPENDENT',evidence:'TEST ONLY'}))});assert.equal(p.opportunityState,'HOT');
+ const store=new MemoryStore();for(const o of observations)await store.put('observation',CA,o.knownAt,o);
+ await store.put('event',CA,'hot',{id:'hot',tokenAddress:CA,category:'OPPORTUNITY_HOT',occurredAt:later(240000),knownAt:later(240000),source:'TEST ONLY',evidence:p});
+ const sourceHealth={component:'opportunity-engine',knownAt:later(300000),occurredAt:later(300000),state:'PARTIAL',sources:sources.map(s=>({...s,displayName:s.sourceId})),sourceHealth:{activeSources:3,unavailableSources:0}};
+ await store.put('status','*','opportunity-engine',sourceHealth);
+ const opportunityStore={latest:async()=>p,list:async()=>[p],deliveryHealth:async()=>[]},service=new DashboardService(store,{opportunities:opportunityStore,now:()=>new Date(later(300000))});
+ const app=express();app.use(express.static(path.resolve(__dirname,'../public')));app.get('/signal-v1/positions{/:ca}',(_req,res)=>res.sendFile(path.resolve(__dirname,'../public/signal-positions.html')));
+ app.get('/api/v1/signal/positions',async(_req,res)=>res.json(await service.positions()));app.get('/api/v1/signal/stream/:ca',async(_req,res)=>res.json(await service.detail(CA)));app.get('/api/v1/signal/positions/:ca/candles',async(req,res)=>res.json(await service.candles(CA,req.query.interval)));
+ const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));t.after(()=>new Promise(r=>server.close(r)));
+ const executablePath=process.env.PUPPETEER_EXECUTABLE_PATH,restricted=executablePath?.includes('headless-shell');const browser=await require('puppeteer').launch({headless:true,executablePath,pipe:Boolean(restricted),args:['--no-sandbox','--disable-dev-shm-usage',...(restricted?['--no-process-singleton','--disable-breakpad','--disable-crash-reporter','--single-process','--no-zygote']:[])]});t.after(()=>browser.close());
+ const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));await page.setRequestInterception(true);page.on('request',r=>new URL(r.url()).hostname==='127.0.0.1'?r.continue():r.abort());const url=`http://127.0.0.1:${server.address().port}`;
+ await page.setViewport({width:375,height:812,isMobile:true,hasTouch:true});await page.goto(url+'/signal-v1/positions');await page.waitForSelector('#hotCards .opportunity-card');assert.equal(await page.$eval('body',e=>e.scrollWidth<=375),true);assert.equal(await page.$eval('#positions',e=>e.querySelectorAll('.position-card').length),0);assert.equal(await page.$('#hotCards script'),null);
+ await page.screenshot({path:'/tmp/signal-opportunity-home-mobile.png',fullPage:true});await page.setViewport({width:1440,height:1000});await page.waitForSelector('#hotCards .opportunity-card');await page.screenshot({path:'/tmp/signal-opportunity-home-desktop.png',fullPage:true});
+ await page.click('#hotCards a');await page.waitForFunction(()=>!document.querySelector('#tokenIntelligence').hidden);assert.match(await page.$eval('#opportunityDetail',e=>e.textContent),/WHY SCORE INCREASED.*WHY SCORE DECREASED.*WHAT IS UNKNOWN/);assert.match(await page.$eval('#callerSequence',e=>e.textContent),/1\. a/);await page.waitForSelector('.chart-event-marker[aria-label^="OPPORTUNITY_HOT"]');assert.equal(await page.$('#opportunityDetail script'),null);assert.deepEqual(errors,[]);
+});

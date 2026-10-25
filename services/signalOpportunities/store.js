@@ -42,7 +42,13 @@ class OpportunityStore {
    ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT 1)
    UPDATE signal_opportunity_notifications n SET status='SENDING',claimed_at=clock_timestamp() FROM candidate c WHERE n.tenant_id=$1 AND n.wallet=$2 AND n.id=c.id RETURNING n.*`,[this.tenantId,this.wallet,channel]);return r.rows[0]||null;
  }
- async finish(row,status,receipt=null){if(!['ACCEPTED','UNKNOWN','REJECTED'].includes(status))throw Error('invalid_delivery_state');await this.pool.query(`UPDATE signal_opportunity_notifications SET status=$4,receipt=$5 WHERE tenant_id=$1 AND wallet=$2 AND id=$3 AND status='SENDING'`,[this.tenantId,this.wallet,row.id,status,receipt]);}
+ async enqueueTransportTest(testId){
+  if(typeof testId!=='string'||!/^signal-opportunities-[a-z0-9-]{1,60}$/.test(testId))throw Error('invalid_transport_test_id');
+  for(const channel of ['sms','email']){const id=hash([this.tenantId,this.wallet,testId,channel]),payload={id,kind:'OPERATIONAL_TRANSPORT_TEST',testId};
+   await this.pool.query(`INSERT INTO signal_opportunity_notifications(tenant_id,wallet,id,token_address,channel,decision_id,state,payload) VALUES($1,$2,$3,'__transport_test__',$4,$3,'TRANSPORT_TEST',$5::jsonb) ON CONFLICT DO NOTHING`,[this.tenantId,this.wallet,id,channel,JSON.stringify(payload)]);
+  }
+ }
+ async finish(row,status,receipt=null){if(!['ACCEPTED','UNKNOWN','REJECTED'].includes(status))throw Error('invalid_delivery_state');await this.pool.query(`UPDATE signal_opportunity_notifications SET status=$4,receipt=$5 WHERE tenant_id=$1 AND wallet=$2 AND id=$3 AND status='SENDING'`,[this.tenantId,this.wallet,row.id,status,receipt]);if(row.payload?.kind==='OPERATIONAL_TRANSPORT_TEST')console.log('[signal-opportunity-delivery-test]',JSON.stringify({testId:row.payload.testId,channel:row.channel,status,receipt}));}
  async deliveryHealth(){const r=await this.pool.query('SELECT channel,status,count(*)::int AS count FROM signal_opportunity_notifications WHERE tenant_id=$1 AND wallet=$2 AND created_at>clock_timestamp()-interval \'24 hours\' GROUP BY channel,status',[this.tenantId,this.wallet]);return r.rows;}
 }
 module.exports={OpportunityStore};

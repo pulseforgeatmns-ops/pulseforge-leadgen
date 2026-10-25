@@ -114,7 +114,7 @@ class DashboardService {
     const opportunities=rows.map(p=>({...p,evaluationDelayed:Date.parse(asOf)-Date.parse(p.knowledgeAt)>90000,
       quality:Date.parse(asOf)-Date.parse(p.knowledgeAt)>90000?'DELAYED':p.quality}));
     return {enabled:Boolean(this.opportunities),opportunities,sourceHealth,capacity,leadLag:require('../signalOpportunities/graph').leadLag(opportunities.map(p=>p.callerSequence)),quality:age>90000?'DELAYED':sourceHealth?.state||'UNKNOWN',
-      delivery:this.opportunities?await this.opportunities.deliveryHealth():[],asOf,readOnly:true};
+      sourcePerformance:statuses.find(s=>s.component==='source-performance')||{state:'UNKNOWN'},delivery:this.opportunities?await this.opportunities.deliveryHealth():[],asOf,readOnly:true};
   }
   async transactions(ca){const [txs,quotes]=await Promise.all([this.store.list('transaction',ca),this.store.list('quote',null)]);
     return valueTransactions(txs,quotes).map(({provenance,...t})=>({...t,provenance:{provider:provenance.provider,commitment:provenance.commitment}}));}

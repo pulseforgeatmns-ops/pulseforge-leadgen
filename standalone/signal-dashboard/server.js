@@ -35,7 +35,8 @@ async function boot({env=process.env,pool:providedPool,listen=true,collect=true}
   feed=async()=>(await read()).calls;opportunityFeed=read;
  }
  const researchReader=()=>require('../../services/signalDashboard/researchBridge').readEmpiricalEvents(pool,watches.map(w=>w.tokenAddress),{registry});
- const collectors=createCollectors({store,budget,env,feed,opportunityFeed,opportunities,researchReader,registry,zoneStore,publicCandleBudget:new SharedGeckoCandleBudget(pool)});
+ const performanceReader=opportunities?at=>require('../../services/signalOpportunities/performanceReader').readReleasedPerformance(pool,at):null;
+ const collectors=createCollectors({store,budget,env,feed,opportunityFeed,opportunities,performanceReader,researchReader,registry,zoneStore,publicCandleBudget:new SharedGeckoCandleBudget(pool)});
  const app=createSignalApp({pool,service,config:cfg,sessionSecret:env.SESSION_SECRET,coreAppUrl:env.SIGNAL_CORE_APP_URL});
  let server;if(listen)server=app.listen(Number(env.PORT||3000),'0.0.0.0',()=>console.log('[signal-dashboard] ready: isolated authenticated service, public-wallet observation only'));
  let reportTimer,stopped=false;

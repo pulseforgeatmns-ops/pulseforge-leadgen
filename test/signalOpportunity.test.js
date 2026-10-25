@@ -80,3 +80,16 @@ test('unwatched opportunity has a token intelligence page with unknown wallet va
  const detail=await service.detail(CA);assert.equal(detail.positionTracked,false);assert.equal(detail.accounting.tokensRemaining.value,null);assert.equal(detail.opportunity.opportunityState,p.opportunityState);
  assert.equal((await service.positions()).positions.length,0);
 });
+test('batch market enrichment uses one documented request, validates identities and never substitutes transaction counts for buyers',async()=>{
+ const {DexScreenerMarketProvider}=require('../services/signalDashboard/market');let requests=0,reservations=0;
+ const provider=new DexScreenerMarketProvider({now:()=>new Date(at),budget:{take:async()=>{reservations++;}},fetchFn:async url=>{requests++;assert.match(url,/\/tokens\/v1\/solana\//);return {ok:true,json:async()=>[
+  {chainId:'solana',baseToken:{address:CA,symbol:'TEST ONLY'},pairAddress:CA,priceUsd:'1',liquidity:{usd:30000},txns:{m5:{buys:500,sells:40}}},
+  {chainId:'ethereum',baseToken:{address:CA},pairAddress:CA,priceUsd:'999',liquidity:{usd:1e9}}
+ ]};}});
+ const rows=await provider.getSnapshots([CA]);assert.equal(rows.length,1);assert.equal(rows[0].priceUsd,1);assert.equal(rows[0].buyers5m,null);assert.equal(rows[0].buys5m,500);assert.equal(requests,1);assert.equal(reservations,1);
+ await assert.rejects(()=>provider.getSnapshots(Array(31).fill(CA)),/invalid_market_batch/);
+});
+test('machine caller claims remain attributed, unverified observations; ROI and source quality are never imported',()=>{
+ const claims=require('../services/signalOpportunities/machineClaims').machineClaims('1. TEST Caller at $84.2K mc\nROI: 99999%');assert.equal(claims.reportedCalls[0].reportedMarketCap,84200);assert.equal(claims.reportedCalls[0].verifiedOriginalCall,false);assert.equal(claims.roiImported,false);
+ assert.match(alertText({kind:'OPERATIONAL_TRANSPORT_TEST',testId:'signal-opportunities-test'}),/No token, source call, opportunity/);
+});

@@ -8,6 +8,23 @@ class MarketProvider {
 }
 class DexScreenerMarketProvider extends MarketProvider {
   constructor({fetchFn=globalThis.fetch,budget,now=()=>new Date()}={}){super();Object.assign(this,{fetchFn,budget,now});}
+  async getSnapshots(tokenAddresses){
+    if(!Array.isArray(tokenAddresses)||!tokenAddresses.length||tokenAddresses.length>30||tokenAddresses.some(c=>!address(c)))throw Error('invalid_market_batch');
+    await this.budget.take('dexscreener',1000);
+    const r=await this.fetchFn('https://api.dexscreener.com/tokens/v1/solana/'+[...new Set(tokenAddresses)].join(','),{redirect:'error',signal:AbortSignal.timeout(5000)});
+    if(r.status===429){await this.budget.backoff('dexscreener',60000);throw Error('market_rate_limited');}if(!r.ok)throw Error('market_provider_unavailable');
+    const pairs=await r.json();if(!Array.isArray(pairs))throw Error('invalid_market_batch_response');
+    const now=this.now().toISOString();return tokenAddresses.flatMap(tokenAddress=>{
+      const p=pairs.filter(p=>p.chainId==='solana'&&p.baseToken?.address===tokenAddress&&address(p.pairAddress)&&number(p.priceUsd)>0)
+        .sort((a,b)=>(number(b.liquidity?.usd)??-1)-(number(a.liquidity?.usd)??-1))[0];if(!p)return[];
+      return [{tokenAddress,pairId:p.pairAddress,symbol:p.baseToken.symbol||null,name:p.baseToken.name||null,priceUsd:number(p.priceUsd),
+        marketCapUsd:number(p.marketCap),liquidityUsd:number(p.liquidity?.usd),volume5mUsd:number(p.volume?.m5),volume24hUsd:number(p.volume?.h24),
+        change24hPercent:number(p.priceChange?.h24,true),buys5m:count(p.txns?.m5?.buys),sells5m:count(p.txns?.m5?.sells),
+        buyVolume5mUsd:null,sellVolume5mUsd:null,buyers5m:null,sellers5m:null,tokenAgeSeconds:null,
+        observedAt:now,occurredAt:now,knownAt:now,providerTimestamp:null,provider:'dexscreener',
+        provenance:{dataClass:'EMPIRICAL',endpoint:'tokens-batch',timestampBasis:'response_received',sourceFreshness:'UNKNOWN',liquidityScope:'pool_reserve'}}];
+    });
+  }
   async getSnapshot({tokenAddress,poolAddress}) {
     if(!address(tokenAddress)||poolAddress&&!address(poolAddress))throw new Error('invalid_market_address');
     await this.budget.take('dexscreener',1000);

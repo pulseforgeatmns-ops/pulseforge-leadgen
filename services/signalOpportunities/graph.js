@@ -26,7 +26,7 @@ function sequence(calls,observations,asOf){
   if(first.has(c.sourceId)||Date.parse(c.knowledgeAt)>end)continue;
   const ms=observations.filter(o=>o.tokenAddress===c.tokenAddress&&o.provenance?.dataClass==='EMPIRICAL'&&Date.parse(o.knownAt)<=Date.parse(c.knowledgeAt)&&Date.parse(o.observedAt)<=Date.parse(c.occurredAt)&&Date.parse(c.occurredAt)-Date.parse(o.observedAt)<=90000).sort((a,b)=>Date.parse(b.observedAt)-Date.parse(a.observedAt))[0];
   first.set(c.sourceId,{sourceId:c.sourceId,role:c.sourceRole,clusterId:c.clusterId,occurredAt:c.occurredAt,knowledgeAt:c.knowledgeAt,
-   marketCap:ms?.marketCapUsd??null,marketCapBasis:ms?'PRIOR_EMPIRICAL_SNAPSHOT':'UNKNOWN',forwarding:c.forwarding||null,externalMessageId:c.externalMessageId,provenance:c.provenance});
+   marketCap:ms?.marketCapUsd??null,marketCapBasis:ms?'PRIOR_EMPIRICAL_SNAPSHOT':'UNKNOWN',machineClaims:c.machineClaims||null,forwarding:c.forwarding||null,externalMessageId:c.externalMessageId,provenance:c.provenance});
  }
  return [...first.values()];
 }

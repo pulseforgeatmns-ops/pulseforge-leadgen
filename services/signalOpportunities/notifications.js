@@ -2,6 +2,7 @@
 const clean=x=>String(x??'UNKNOWN').replace(/[\r\n\u0000-\u001f]/g,' ').slice(0,100);
 const dollars=x=>typeof x==='number'&&Number.isFinite(x)?'$'+Math.round(x).toLocaleString('en-US'):'UNKNOWN';
 function alertText(p){
+ if(p.kind==='OPERATIONAL_TRANSPORT_TEST')return `SIGNAL — DELIVERY TEST\nID: ${clean(p.testId)}\nOpportunity notification transport check only. No token, source call, opportunity, research result or trade. Manual execution remains in FOMO.`;
  const positive=p.evidence.increases.map(e=>e.text),negative=p.evidence.decreases.map(e=>e.text);
  return [`SIGNAL — ${p.opportunityState} ${p.opportunityState==='AVOID'?'RISK':'OPPORTUNITY'}`,
   clean(p.symbol||p.tokenAddress.slice(0,8)),`CA: ${p.tokenAddress}`,
@@ -24,7 +25,7 @@ function createTransports(env=process.env,{fetchFn=globalThis.fetch}={}){
    if(!r.ok)throw Error('sms_provider_rejected');const j=await r.json();if(!/^SM[a-f0-9]{32}$/i.test(j.sid||''))throw Error('sms_receipt_unknown');return j.sid;
   }},
   {channel:'email',ready:on&&Boolean(env.BREVO_API_KEY&&env.SIGNAL_OPPORTUNITY_EMAIL_TO&&env.SIGNAL_OPPORTUNITY_EMAIL_FROM),async send(p){
-   const r=await fetchFn('https://api.brevo.com/v3/smtp/email',{method:'POST',redirect:'error',signal:AbortSignal.timeout(5000),headers:{'api-key':env.BREVO_API_KEY,'Content-Type':'application/json'},body:JSON.stringify({sender:{email:env.SIGNAL_OPPORTUNITY_EMAIL_FROM},to:[{email:env.SIGNAL_OPPORTUNITY_EMAIL_TO}],subject:`[Signal ${p.opportunityState}] ${clean(p.symbol||p.tokenAddress.slice(0,8))}`,textContent:alertText(p),headers:{'X-Signal-Opportunity-Id':p.id}})});
+   const r=await fetchFn('https://api.brevo.com/v3/smtp/email',{method:'POST',redirect:'error',signal:AbortSignal.timeout(5000),headers:{'api-key':env.BREVO_API_KEY,'Content-Type':'application/json'},body:JSON.stringify({sender:{email:env.SIGNAL_OPPORTUNITY_EMAIL_FROM},to:[{email:env.SIGNAL_OPPORTUNITY_EMAIL_TO}],subject:p.kind==='OPERATIONAL_TRANSPORT_TEST'?`[Signal delivery test] ${clean(p.testId)}`:`[Signal ${p.opportunityState}] ${clean(p.symbol||p.tokenAddress.slice(0,8))}`,textContent:alertText(p),headers:{'X-Signal-Opportunity-Id':p.id}})});
    if(!r.ok)throw Error('email_provider_rejected');const j=await r.json();if(typeof j.messageId!=='string'||!j.messageId)throw Error('email_receipt_unknown');return j.messageId;
   }}
  ];

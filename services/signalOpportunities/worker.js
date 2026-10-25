@@ -8,10 +8,11 @@ const {deliver}=require('./notifications');
 function sourcesFromHealth(health,at){
  const runtime=new Map((health?.sources||[]).map(s=>[s.sourceId,s]));
  return SOURCES.map(s=>{const r=runtime.get(s.sourceId);return {...s,active:r?.active===true,available:r?.available===true,
+  correlatedWith:RELATIONSHIPS.filter(x=>x.a===s.sourceId||x.b===s.sourceId).map(x=>x.a===s.sourceId?x.b:x.a),
   identityStatus:r?.identityStatus==='VERIFIED'?'VERIFIED':'CANDIDATE',channelId:r?.channelId||null,verifiedAt:r?.verifiedAt||null,
   reason:r?.reason||(!r?'NOT_CONFIGURED':null),knowledgeAt:at};});
 }
-function createOpportunityWorker({store,opportunities,feed,marketProvider,transports=[],now=()=>new Date(),maxTokens=120}){
+function createOpportunityWorker({store,opportunities,feed,marketProvider,transports=[],now=()=>new Date(),maxTokens=120,transportTestId=null}){
  let running=false,rotation=0;
  const status=async(state,reason,extra={})=>{const at=now().toISOString();await store.put('status','*','opportunity-engine',{component:'opportunity-engine',state,reason,...extra,occurredAt:at,knownAt:at},{mutable:true});};
  async function ingest(payload){
@@ -28,6 +29,7 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
    for(const event of feedEvents(call,{now:now(),registry})){
     const e={...event,sourceRole:s.sourceRole,clusterId:s.clusterId,sourceUniverseVersion:VERSION,ingestedAt:call.ingestedAt,
       knowledgeAt:event.knownAt,forwarding:call.forwarding||null,forwardedFrom:call.forwardedFrom||null,
+      machineClaims:s.sourceRole==='MACHINE_INTELLIGENCE'?require('./machineClaims').machineClaims(call.rawText||call.text):null,
       // Import knowledge is the latest clock, preserving first live decision time.
       provenance:{...event.provenance,telegramChannelId:s.channelId,telegramMessageId:call.provenance.telegramMessageId,rawText:call.rawText||call.text,
         identityVerifiedAt:s.verifiedAt,originalKnowledgeAt:knowledgeAt}};
@@ -50,10 +52,12 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
    const recent=calls.filter(e=>Date.parse(asOf)-Date.parse(e.occurredAt)<=DEFINITION.windowMs);
    const counts=new Map();for(const c of recent)counts.set(c.tokenAddress,(counts.get(c.tokenAddress)||0)+1);
    const priority=[...counts].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,maxTokens).map(x=>x[0]);
-   // One extra market request per tick, sharing existing provider limits.
-   // Round robin avoids starving lower-ranked candidates. No auto watch/position.
-   if(priority.length&&marketProvider){const ca=priority[rotation++%priority.length];
-    try{const snapshot=await marketProvider.getSnapshot({tokenAddress:ca});await store.put('observation',ca,hash([ca,snapshot.observedAt]),snapshot);}catch{}
+   // The documented public endpoint accepts up to 30 addresses per request.
+   // Round robin preserves coverage while sharing existing provider budgets.
+   if(priority.length&&marketProvider){const batch=Array.from({length:Math.min(30,priority.length)},(_,i)=>priority[(rotation+i)%priority.length]);rotation=(rotation+batch.length)%priority.length;
+    try{const snapshots=marketProvider.getSnapshots?await marketProvider.getSnapshots(batch):[await marketProvider.getSnapshot({tokenAddress:batch[0]})];
+     for(const snapshot of snapshots)if(batch.includes(snapshot.tokenAddress))await store.put('observation',snapshot.tokenAddress,hash([snapshot.tokenAddress,snapshot.observedAt]),snapshot);
+    }catch{}
    }
    const old=await opportunities.list(asOf),tokens=[...new Set([...priority,...old.map(p=>p.tokenAddress)])].slice(0,200);
    const held=new Set((await store.list('balance',null,{ascending:false,limit:500})).filter(b=>Number(b.tokens)>0&&Date.parse(asOf)-Date.parse(b.observedAt)<90000).map(b=>b.tokenAddress));
@@ -69,6 +73,7 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
     const saved=await opportunities.append(decision,{held:held.has(ca)});
     if(saved.created&&saved.transition){const e={id:hash(['opportunity-state',decision.id]),tokenAddress:ca,category:'OPPORTUNITY_'+decision.opportunityState,occurredAt:decision.knowledgeAt,knownAt:decision.knowledgeAt,source:decision.definitionVersion,evidence:decision,provenance:decision.provenance};await store.put('event',ca,e.id,e);}
    }
+   if(transportTestId&&transports.every(t=>t.ready))await opportunities.enqueueTransportTest(transportTestId);
    await deliver(opportunities,transports);
    const at=now().toISOString();await store.put('status','*','opportunity-capacity',{component:'opportunity-capacity',state:counts.size>maxTokens?'PARTIAL':'OBSERVED',
      discoveredTokens:counts.size,evaluatedTokens:tokens.length,marketEnrichmentLimit:maxTokens,deferredTokens:Math.max(0,counts.size-maxTokens),
