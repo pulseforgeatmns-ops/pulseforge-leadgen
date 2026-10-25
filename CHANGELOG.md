@@ -1,5 +1,10 @@
 ## Unreleased — AUDIT-062 offline observation safety (2026-10-24)
 
+## 2026-10-25 — Signal trading dashboard V1 (in progress)
+
+- [SPEC-SIGNAL-DASH-001](docs/specs/SPEC-SIGNAL-DASH-001_Trading_Dashboard.md): isolated public-wallet observer, persisted market/event evidence, fixed-decimal FIFO trade analytics, owner-scoped read APIs, mobile candles/markers/risk/timeline and append-only notes. Separate collector, default off, no execution authority or Pulseforge core changes.
+- Unknown historical values, transfers, missing fees and reconciliation gaps remain explicit. Live REMUS acceptance is pending verified wallet/mint, provider coverage and deployment verification; see [runbook](docs/signal/dashboard-v1.md).
+
 - Preserve [AUDIT-062](docs/architecture/AUDIT-062_Warm_Routing_Necessity.md) as an explicitly dated historical report; its conclusions are not current production evidence or removal authorization.
 - Replace the manual observation with pre-import DB/provider/environment isolation, three explicit fixture paths, transport denial, deterministic cleanup and an explicit non-overwriting output path. Add focused offline regressions for the [SPEC-171](docs/specs/SPEC-171_Canonical_Execution_Router.md) routing observation. No production wiring, scheduler activation or live provider/DB execution.
 

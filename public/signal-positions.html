@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>Signal · Positions</title>
+<link rel="stylesheet" href="/signal-positions.css"><script defer src="/signal-positions-chart.js"></script><script defer src="/signal-positions.js"></script></head>
+<body><main><nav><a href="/signal-v1/positions">SIGNAL <span>positions</span></a><a href="/signal-v1">Research</a></nav>
+<p id="connection" role="status">Loading persisted observations…</p><div id="home" hidden><h1>Active positions</h1><div id="positions"></div><h2>Live signals</h2><p class="muted">Operational events. Prospective performance remains blinded.</p><div id="signals"></div></div>
+<section id="position" hidden><header><p class="eyebrow">READ-ONLY INTELLIGENCE</p><h1 id="symbol"></h1><p id="address" class="address"></p><p id="lifecycle" class="muted"></p></header>
+<div id="summary" class="summary"></div><aside id="risk" class="risk"></aside>
+<section class="panel"><div class="chart-toolbar"><h2>Market &amp; actions</h2><div id="intervals" class="intervals" role="group" aria-label="Candle interval"></div></div>
+<p id="chartQuality" class="muted"></p><canvas id="chart" height="320" aria-label="Interactive candlestick chart. Drag to pan, scroll or pinch to zoom. Tap a marker for evidence."></canvas>
+<div id="markerDetail" class="marker-detail" hidden></div><p class="muted">Drag to pan · scroll or pinch to zoom · tap B/S or an event marker. Gaps contain no candle observations.</p><div id="legend" class="legend"></div></section>
+<details class="panel"><summary>Distribution evidence &amp; promotion research</summary><div id="riskEvidence"></div></details>
+<details class="panel"><summary>Market data &amp; provenance</summary><div id="market" class="summary"></div></details>
+<details class="panel"><summary>Position accounting &amp; coverage</summary><div id="accounting" class="summary"></div><pre id="coverage"></pre><p class="muted">FIFO trade analytics. Historical USD conversion estimates are labeled PARTIAL. This dashboard is not tax accounting or tax advice.</p></details>
+<section class="panel"><h2>Event timeline</h2><div id="timeline"></div></section>
+<section class="panel"><h2>Operator notes</h2><form id="noteForm"><label for="note">Add context to your position</label><textarea id="note" maxlength="2000" placeholder="Recovered principal. Let remainder run."></textarea><button type="submit">Save note</button><p id="noteStatus" role="status"></p></form></section>
+</section><footer>Observation only. Execute trades in FOMO.</footer></main></body></html>

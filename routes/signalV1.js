@@ -17,6 +17,10 @@ const { resolveResearchWindow } = require('../packages/signal-v1/fixtures/resear
 const { HISTORICAL_DATA_UNAVAILABLE } = require('../packages/signal-v1/ingestion/ingestHistoricalMarketData');
 
 const router = express.Router();
+router.use(require('./signalDashboard').createDashboardRouter({
+  Router:express.Router, requireAuth, requireRole,
+  getService:()=>require('../services/signalDashboard/runtime').getService(),
+}));
 const requireResearch = [requireAuth, requireRole('admin', 'manager')];
 
 /** @type {Promise<SignalService>|null} */

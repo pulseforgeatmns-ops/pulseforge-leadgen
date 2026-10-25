@@ -12,6 +12,8 @@
 
 # CURRENT_STATE
 
+[SPEC-SIGNAL-DASH-001](docs/specs/SPEC-SIGNAL-DASH-001_Trading_Dashboard.md) is an approved parallel Signal implementation. Read-only wallet/market intelligence, isolated collector and default-off dashboard; no Pulseforge core orchestration/outbound changes. REMUS live acceptance remains pending verified wallet/mint, provider coverage and reconciliation.
+
 [SPEC-266](docs/specs/SPEC-266_Signal_Default_Off_Initial_SMS.md) records PR 980's
 in-progress local, default-off initial-SMS staging and explicit UNKNOWN risk-card
 limits; proposed [ADR-109](docs/adr/ADR-109_Signal_Initial_SMS_Staging.md) records the

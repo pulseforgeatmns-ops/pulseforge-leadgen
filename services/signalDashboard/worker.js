@@ -1,0 +1,103 @@
+'use strict';
+const {id,SOL}=require('./wallet');
+const {feedEvents}=require('./events');
+const {INTERVALS}=require('./market');
+const {evaluate}=require('../signalDistribution/risk');
+function createDashboardWorker({store,marketProvider,walletProvider,candleProvider=null,quoteProvider=null,
+  feed=null,researchReader=null,registry={},now=()=>new Date(),maxActive=3}) {
+  let running=false;
+  const status=async(component,state,reason=null)=>{const at=now().toISOString();await store.put('status','*',component,{component,state,reason,occurredAt:at,knownAt:at},{mutable:true});};
+  async function persistPage(page) {
+    for(const t of page.transactions)await store.put('transaction',t.tokenAddress,t.id,t);
+  }
+  async function historyTick() {
+    let cursor=(await store.list('cursor',null)).find(x=>x.key==='history');
+    if(cursor?.exhausted)return;
+    const page=await walletProvider.getHistoryPage({wallet:store.wallet,before:cursor?.before||null});
+    await persistPage(page);
+    const at=now().toISOString();
+    if(page.nextBefore&&page.nextBefore===cursor?.before)throw new Error('wallet_pagination_stalled');
+    await store.put('cursor','*','history',{key:'history',before:page.nextBefore||cursor?.before||null,
+      exhausted:page.exhausted,coverage:page.coverage,occurredAt:at,knownAt:at},{mutable:true});
+    if(!cursor&&page.signatures[0])await store.put('cursor','*','head',{key:'head',lastSeen:page.signatures[0],before:null,caughtUp:true,occurredAt:at,knownAt:at},{mutable:true});
+  }
+  async function headTick() {
+    const cursor=(await store.list('cursor',null)).find(x=>x.key==='head');if(!cursor)return;
+    const page=await walletProvider.getHistoryPage({wallet:store.wallet,before:cursor.before||null});
+    await persistPage(page);
+    const found=page.signatures.includes(cursor.lastSeen), caughtUp=found||page.exhausted;
+    const candidate=cursor.candidate||page.signatures[0]||cursor.lastSeen,at=now().toISOString();
+    if(!caughtUp&&!page.nextBefore)throw new Error('wallet_head_pagination_stalled');
+    await store.put('cursor','*','head',{key:'head',lastSeen:caughtUp?candidate:cursor.lastSeen,
+      candidate:caughtUp?null:candidate,before:caughtUp?null:page.nextBefore,caughtUp,occurredAt:at,knownAt:at},{mutable:true});
+  }
+  async function feedTick() {
+    if(researchReader){for(const e of await researchReader())await store.put('event',e.tokenAddress,e.id,e);}
+    if(!feed)return status('feed','UNKNOWN','EMPIRICAL_FEED_NOT_CONFIGURED');
+    const calls=await feed();
+    if(!Array.isArray(calls)||calls.length>2000)throw new Error('invalid_caller_feed');
+    for(const call of calls)for(const e of feedEvents(call,{now:now(),registry}))await store.put('event',e.tokenAddress,e.id,e);
+    await status('feed','PARTIAL','Only retained empirical messages with explicit CA; completeness is unknown');
+  }
+  async function quoteTick() {
+    if(!quoteProvider)return;
+    const [txs,quotes]=await Promise.all([store.list('transaction',null),store.list('quote',null)]);
+    const exists=new Set(quotes.filter(x=>x.priceUsd!=null||+now()-Date.parse(x.knownAt)<300000).map(x=>`${x.asset}:${x.blockTime}`));
+    for(const t of txs)for(const asset of [...new Set([...(t.quoteAsset?[t.quoteAsset]:[]),...(t.feesLamports&&t.feesLamports!=='0'?[SOL]:[])])]) {
+      if(exists.has(`${asset}:${t.blockTime}`))continue;
+      const q=await quoteProvider.getQuote(asset,t.blockTime);
+      const at=now().toISOString();
+      await store.put('quote','*',id([asset,t.blockTime,at]),q||{asset,blockTime:t.blockTime,priceUsd:null,quality:'UNKNOWN',occurredAt:t.blockTime,knownAt:at});
+      return;
+    }
+  }
+  async function pollOnce() {
+    if(running)return {skipped:true};running=true;
+    try{return await store.lock(async()=>{
+      const watches=await store.list('watch',null,{limit:100});
+      if(watches.length>maxActive)throw new Error('dashboard_active_capacity_exceeded');
+      const attempt=async(component,fn)=>{try{await fn();}catch{await status(component,'UNKNOWN','OBSERVATION_UNAVAILABLE_OR_RATE_LIMITED');}};
+      for(const watch of watches) {
+        const previous=await store.latest('observation',watch.tokenAddress);
+        if(!previous||+now()-Date.parse(previous.observedAt)>=10000)await attempt('market:'+watch.tokenAddress,async()=>{
+          const snapshot=await marketProvider.getSnapshot({tokenAddress:watch.tokenAddress,poolAddress:watch.poolAddress||previous?.pairId});
+          await store.put('observation',watch.tokenAddress,id([snapshot.provider,snapshot.pairId,snapshot.observedAt]),snapshot);
+          const key='risk:'+watch.tokenAddress,prior=(await store.list('cursor',null)).find(c=>c.key===key);
+          const evaluated=evaluate(prior?.state||{},snapshot,{now:now()});
+          if(!evaluated.ignored){
+            if(prior?.state?.riskState!==evaluated.state.riskState || JSON.stringify(prior?.state?.reasons)!==JSON.stringify(evaluated.state.reasons)){
+              const event={id:id([watch.tokenAddress,snapshot.observedAt,evaluated.state.riskState]),tokenAddress:watch.tokenAddress,
+                category:'DISTRIBUTION_'+evaluated.state.riskState,occurredAt:snapshot.observedAt,knownAt:snapshot.knownAt,
+                source:'distribution-v1.0',evidence:evaluated.state.reasons,provenance:{...snapshot.provenance,provider:snapshot.provider}};
+              await store.put('event',watch.tokenAddress,event.id,event);
+            }
+            await store.put('cursor',watch.tokenAddress,key,{key,state:evaluated.state,occurredAt:snapshot.observedAt,knownAt:snapshot.knownAt},{mutable:true});
+          }
+          if(!watch.poolAddress)await store.put('watch',watch.tokenAddress,'watch',{...watch,poolAddress:snapshot.pairId,occurredAt:now().toISOString(),knownAt:now().toISOString()},{mutable:true});
+          await status('market:'+watch.tokenAddress,'PARTIAL','Provider source timestamp unavailable');
+        });
+        const balance=await store.latest('balance',watch.tokenAddress);
+        if(walletProvider&&(!balance||+now()-Date.parse(balance.observedAt)>=30000))await attempt('balance:'+watch.tokenAddress,async()=>{
+          const b=await walletProvider.getBalance({wallet:store.wallet,tokenAddress:watch.tokenAddress});
+          await store.put('balance',watch.tokenAddress,id([b.slot,b.observedAt]),{...b,occurredAt:b.observedAt,knownAt:now().toISOString()});
+        });
+        if(candleProvider)await attempt('candles:'+watch.tokenAddress,async()=>{
+          const all=await store.list('candle',watch.tokenAddress,{ascending:false,limit:10000});
+          const missing=Object.keys(INTERVALS).find(k=>!all.some(c=>c.interval===k));
+          const lastMinute=all.find(c=>c.interval==='1m');
+          const interval=missing||(!lastMinute||+now()-Date.parse(lastMinute.knownAt)>=10000?'1m':null);
+          if(!interval)return;
+          for(const c of await candleProvider.getCandles({tokenAddress:watch.tokenAddress,poolAddress:watch.poolAddress||previous?.pairId,interval}))
+            await store.put('candle',watch.tokenAddress,id([c.provider,c.pairId,c.interval,c.time,c.knownAt]),c);
+        });
+      }
+      if(walletProvider){await attempt('wallet-history',historyTick);await attempt('wallet-head',headTick);}
+      await attempt('quotes',quoteTick);
+      const lastFeed=(await store.list('status','*')).find(s=>s.component==='feed');
+      if(!lastFeed||+now()-Date.parse(lastFeed.knownAt)>=30000)await attempt('feed',feedTick);
+      return {observed:true};
+    });}finally{running=false;}
+  }
+  return {pollOnce,historyTick,headTick,feedTick,quoteTick};
+}
+module.exports={createDashboardWorker};
