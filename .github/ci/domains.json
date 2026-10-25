@@ -100,6 +100,15 @@
       "packages/max/workspace/tests/paige"
     ],
     "anchor-outbound": [
+      "routes/anchorPreparationApprovalPage.js",
+      "public/anchor-preparation-approval",
+      "services/anchorCrmPreparation",
+      "test/browser/anchorPreparationApprovalBrowser.test.js",
+      "test/helpers/anchorPreparationApprovalBrowserHarness.js",
+      "public/shared/tokens.css",
+      "routes/identityTenantSelection.js",
+      "services/identityTenantSelection.js",
+      "test/helpers/loginIdentityHarness.js",
       "utils/anchorResearchProviderPause.js",
       "packages/capabilities/discovery/ProspectDiscovery.js",
       "packages/capabilities/acquisition/providerContract.js",

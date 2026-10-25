@@ -124,6 +124,8 @@ app.use(session({
 
 // Own the bounded form parser before global parsers and legacy session normalization.
 app.use('/', require('./routes/identityTenantSelection').createIdentityTenantSelectionRouter({ Router: express.Router, pool }));
+// Detached, display-only approval shell owns its requests before session normalization/static handling.
+app.use(require('./routes/anchorPreparationApprovalPage').createAnchorPreparationApprovalPageRouter({ pool }));
 
 // Stripe signature verification needs the untouched request Buffer. This is
 // deliberately mounted before express.json() (raw-body Pattern A).

@@ -7,6 +7,7 @@ const control = require('./anchorScopedResumeControl');
 const authority = require('./anchorCrmPreparationAuthority');
 const identity = require('./anchorCrmPreparationIdentity');
 const { clientBinding } = require('./identityTenantSelection');
+const preparationReceipt = require('./anchorCrmPreparationReceipt');
 const text = v => typeof v === 'string' && v.length > 0 && v.length <= 512 && v.trim() === v && !/[\x00-\x1f\x7f]/.test(v);
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
 const digest = v => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
@@ -38,6 +39,17 @@ async function actorBinding(db, actor) {
     approverAccountClientId: account, approverSessionHash: identity.sessionBindingHash(actor.sessionId) } };
   await identity.assertPreparationApprover(db, binding, { lock: false, actor });
   return binding;
+}
+// UI readiness is authenticated against the same live database identity as the
+// controls. This is not approval authority and exposes no session identifier or
+// digest. Never trust a stale middleware snapshot to enable the review screen.
+async function readPreparationApprovalContext(pool, actor, options = {}) {
+  const env = options.env || process.env;
+  revision({ revision: env.RAILWAY_GIT_COMMIT_SHA }, actor, env);
+  return read(pool, async db => {
+    await actorBinding(db, actor);
+    return { revision: env.RAILWAY_GIT_COMMIT_SHA, actorId: actor.id, tenantId: '10', role: 'admin' };
+  });
 }
 function publicProposal(manifest) {
   const p = structuredClone(manifest); delete p.operatorId; delete p.operatorRole;
@@ -125,7 +137,8 @@ async function readPreparationReceipt(pool, input, actor, options) {
     const rows = (await db.query(`SELECT g.manifest,g.manifest_hash,g.operator_id,g.operator_role,g.revoked_at,g.review_initializations,
       c.manifest AS current_control_manifest,c.maintenance_armed,
       (SELECT count(*)::int FROM anchor_scoped_resume_consumption x WHERE x.tenant_id='10' AND x.manifest_id=g.manifest_id AND x.capability='preparation') AS total_operations,
-      (SELECT coalesce(sum(item_count),0)::int FROM anchor_scoped_resume_consumption x WHERE x.tenant_id='10' AND x.manifest_id=g.manifest_id AND x.capability='preparation') AS total_items
+      (SELECT coalesce(sum(item_count),0)::int FROM anchor_scoped_resume_consumption x WHERE x.tenant_id='10' AND x.manifest_id=g.manifest_id AND x.capability='preparation') AS total_items,
+      ${preparationReceipt.snapshotSql}
       FROM anchor_scoped_resume_grants g LEFT JOIN anchor_email_recovery_control c ON c.singleton=true
       WHERE g.manifest_id=$1 AND g.tenant_id=$2`, [input.receipt.manifestId, '10'])).rows;
     if (!rows.length) return { status: 'not_installed', recorded: false, installed: false, manifestId: input.receipt.manifestId,
@@ -139,11 +152,16 @@ async function readPreparationReceipt(pool, input, actor, options) {
     await identity.assertPreparationRevoker(db, manifest, actor, { lock: false });
     const reviewInitializations = storedReviewAudit(grant);
     const revoked = grant.revoked_at !== null;
+    const expected = preparationReceipt.expectedPreparation(manifest);
     return { status: revoked ? 'revoked' : grant.total_operations ? 'consumed' : 'installed', recorded: true,
       installed: !revoked, revoked, expired: Date.parse(manifest.expiresAt) <= +at(options),
       manifestId: manifest.id, manifestHash: grant.manifest_hash, approverId: manifest.operatorId,
       currentControlMatches: hash(grant.current_control_manifest) === grant.manifest_hash, maintenanceArmed: grant.maintenance_armed === true,
       consumedOperations: grant.total_operations, consumedItems: grant.total_items,
+      preparationIntent: { proposal: publicProposal(manifest), sourceMissionHash: manifest.preparationAuthority.sourceMissionHash,
+        originalSessionMatches: identity.sessionBindingHash(actor.sessionId) === manifest.preparationAuthority.approverSessionHash,
+        expectedOperationId: expected.operationId, expectedMissionId: expected.missionId },
+      preparationOutcome: preparationReceipt.preparationOutcome(grant),
       reviewInitializations, reviewInitializationCount: reviewInitializations.length,
       reviewInitializationHash: reviewAuditHash(grant.manifest_hash, reviewInitializations),
       reviewAuditScope: 'historical_committed_transition', currentReviewState: 'not_checked',
@@ -218,4 +236,4 @@ async function revokePreparationApproval(pool, input, actor, options = {}) {
   return { status: result.idempotent ? 'already_revoked' : 'revoked', revoked: true, idempotent: result.idempotent,
     manifestId: input.manifestId, manifestHash: input.manifestHash, preparationInvoked: false, sent: 0, providerCalls: 0, retryAllowed: false };
 }
-module.exports = { previewPreparationApproval, installPreparationApproval, revokePreparationApproval };
+module.exports = { readPreparationApprovalContext, previewPreparationApproval, installPreparationApproval, revokePreparationApproval };
