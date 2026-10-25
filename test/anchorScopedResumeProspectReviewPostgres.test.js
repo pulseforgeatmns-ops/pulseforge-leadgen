@@ -5,7 +5,8 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const { createRequire } = require('node:module');
 const express = require('express'), session = require('express-session');
-const PgStore = require('connect-pg-simple')(session), { Pool } = require('pg');
+const PgStore = require('connect-pg-simple')(session);
+const { createTrackedPostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
 const deny = require('./helpers/denyExternalProviders.cjs');
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
 const { hash } = require('../packages/acquisition-mission/DailyOutboundPolicy');
@@ -39,7 +40,7 @@ const confirmHash = body => hash({ kind: 'anchor_preparation_review_confirmation
 
 test('exact authenticated prospect review is explicit, atomic and never outbound authority', { timeout: 240000 }, async t => {
   const pg = await startDisposablePostgres('anchor-prospect-review-');
-  const pool = new Pool({ connectionString: pg.connectionString, max: 14 });
+  const pool = createTrackedPostgresPool({ connectionString: pg.connectionString, max: 14 });
   const keys = ['APP_URL', 'RAILWAY_GIT_COMMIT_SHA', 'ANCHOR_EMAIL_SCOPED_RESUME_ID', 'ANCHOR_EMAIL_RECOVERY_MANIFEST_ID',
     'ANCHOR_EMAIL_RECOVERY_MAINTENANCE', 'ANCHOR_GOVERNED_OUTBOUND_ENABLED', 'ANCHOR_RESEARCH_PROVIDERS_PAUSED'];
   const old = Object.fromEntries(keys.map(k => [k, process.env[k]]));
@@ -61,7 +62,7 @@ test('exact authenticated prospect review is explicit, atomic and never outbound
     cached.forEach(([id, previous]) => { delete require.cache[id]; if (previous) require.cache[id] = previous; });
     restores.reverse().forEach(restore => restore());
     keys.forEach(k => old[k] === undefined ? delete process.env[k] : process.env[k] = old[k]);
-    resetAcquisitionMissionRuntime(); await pool.end(); await pg.stop();
+    resetAcquisitionMissionRuntime(); await closePostgresFixture(pool, pg);
   });
   t.mock.timers.enable({ apis: ['Date'], now: +new Date('2026-10-24T16:00:00Z') });
   process.env.APP_URL = origin;

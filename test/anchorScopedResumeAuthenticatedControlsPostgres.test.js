@@ -6,7 +6,7 @@ const fs = require('node:fs'), path = require('node:path'), vm = require('node:v
 const { createRequire } = require('node:module');
 const http = require('node:http'), express = require('express'), session = require('express-session');
 const PgStore = require('connect-pg-simple')(session), signature = require('cookie-signature');
-const { Pool } = require('pg');
+const { createTrackedPostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
 const deny = require('./helpers/denyExternalProviders.cjs');
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
 const { hash } = require('../packages/acquisition-mission/DailyOutboundPolicy');
@@ -73,7 +73,7 @@ async function grantCount(pool) { return (await pool.query('SELECT count(*)::int
 
 test('authenticated preview/install/revoke lifecycle uses existing persisted sessions without implicit activation', { timeout: 240000 }, async t => {
   const pg = await startDisposablePostgres('anchor-auth-controls-');
-  const pool = new Pool({ connectionString: pg.connectionString, max: 14 });
+  const pool = createTrackedPostgresPool({ connectionString: pg.connectionString, max: 14 });
   const keys = ['APP_URL', 'RAILWAY_GIT_COMMIT_SHA', 'ANCHOR_EMAIL_SCOPED_RESUME_ID', 'ANCHOR_EMAIL_RECOVERY_MANIFEST_ID',
     'ANCHOR_EMAIL_RECOVERY_MAINTENANCE', 'ANCHOR_GOVERNED_OUTBOUND_ENABLED', 'ANCHOR_RESEARCH_PROVIDERS_PAUSED'];
   const envBefore = Object.fromEntries(keys.map(k => [k, process.env[k]]));
@@ -95,7 +95,7 @@ test('authenticated preview/install/revoke lifecycle uses existing persisted ses
     cached.forEach(([id, old]) => { delete require.cache[id]; if (old) require.cache[id] = old; });
     restores.reverse().forEach(restore => restore());
     keys.forEach(k => envBefore[k] === undefined ? delete process.env[k] : process.env[k] = envBefore[k]);
-    resetAcquisitionMissionRuntime(); await pool.end(); await pg.stop();
+    resetAcquisitionMissionRuntime(); await closePostgresFixture(pool, pg);
   });
   t.mock.timers.enable({ apis: ['Date'], now: +new Date('2026-10-24T16:00:00Z') });
   process.env.APP_URL = origin;
