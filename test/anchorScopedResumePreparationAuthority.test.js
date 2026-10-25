@@ -16,16 +16,30 @@ function fixture() {
   f.program.policy.expiresAt = '2026-10-23T21:00:00Z';
   f.program.policy_hash = hash(f.program.policy);
   f.manifest.policyHash = f.program.policy_hash;
-  f.manifest.version = 2;
+  f.manifest.version = 2; f.manifest.operatorId = '71';
+  f.sessionId = 'synthetic-preparation-session';
+  f.installation = { operator_id: '71', operator_role: 'admin' };
   f.manifest.validFrom = '2026-10-24T13:00:00Z';
   f.manifest.expiresAt = '2026-10-24T20:00:00Z';
   f.manifest.scopes.email = { enabled: false };
   f.manifest.scopes.preparation = { enabled: true, approvalReference: 'local-prepare-only', dailyCap: 1,
     totalCap: 1, dailyItemCap: 1, totalItemCap: 1, operations: ['prepare_existing_crm'] };
-  f.manifest.preparationAuthority = { kind: 'existing_crm_continuation', programBindingHash: authority.programBindingHash(f.program),
+  f.manifest.preparationAuthority = { kind: 'existing_crm_continuation',
+    originalAuthorizerId: String(f.program.authorized_by), approverAccountClientId: 10,
+    approverSessionHash: require('../services/anchorCrmPreparationIdentity').sessionBindingHash(f.sessionId), programBindingHash: authority.programBindingHash(f.program),
     sourceMissionHash: hash(f.sourceMission), consumedOperations: 0, consumedItems: 0 };
   f.env = { ANCHOR_EMAIL_SCOPED_RESUME_ID: f.manifest.id, ANCHOR_EMAIL_RECOVERY_MAINTENANCE: 'true',
     ANCHOR_GOVERNED_OUTBOUND_ENABLED: 'false', ANCHOR_RESEARCH_PROVIDERS_PAUSED: 'true' };
+  const query = f.db.query;
+  f.db.query = async (sql, values) => {
+    if (/SELECT sid,sess FROM "session"/.test(sql)) return { rows: [{ sid: f.sessionId,
+      sess: { authenticated: true, active_client_id: 10, user: { id: '71', role: 'admin', client_id: 10 } } }] };
+    if (/SELECT expire >/.test(sql)) return { rows: [{ unexpired: true }] };
+    if (/SELECT id,role,active,client_id,email_verified,password_change_required/.test(sql)) return { rows: [{
+      id: '71', role: 'admin', active: true, client_id: 10, email_verified: true, password_change_required: false }] };
+    if (/SELECT id FROM clients WHERE id=10/.test(sql)) return { rows: [{ id: 10 }] };
+    return query(sql, values);
+  };
   return f;
 }
 test('typed authority retains complete immutable manifest and validates expired Saturday historical binding without send validation', () => {
@@ -92,19 +106,19 @@ test('full source payload pin includes non-scope payload and rejects cancellatio
 });
 test('separate preparation reader is active only under all closed environment controls; shared readers always deny', async () => {
   const f = fixture();
-  const state = await authority.readPreparationState(f.db, { env: f.env, now: f.now });
+  const state = await authority.readPreparationState(f.db, { env: f.env, now: f.now, sessionId: f.sessionId });
   assert.equal(state.mode, 'preparation_only'); assert.deepEqual(state.manifest, f.manifest);
   for (const key of ['ANCHOR_EMAIL_RECOVERY_MAINTENANCE', 'ANCHOR_GOVERNED_OUTBOUND_ENABLED',
     'ANCHOR_RESEARCH_PROVIDERS_PAUSED', 'ANCHOR_EMAIL_SCOPED_RESUME_ID']) {
     const env = { ...f.env }; delete env[key];
-    await assert.rejects(authority.readPreparationState(f.db, { env, now: f.now }), /maintenance_required/);
+    await assert.rejects(authority.readPreparationState(f.db, { env, now: f.now, sessionId: f.sessionId }), /maintenance_required/);
   }
   await assert.rejects(authority.readPreparationState(f.db, { env: { ...f.env, ANCHOR_EMAIL_RECOVERY_MANIFEST_ID: 'other' }, now: f.now }), /maintenance_required/);
   for (const env of [f.env, { ...f.env, ANCHOR_EMAIL_RECOVERY_MAINTENANCE: 'false',
     ANCHOR_GOVERNED_OUTBOUND_ENABLED: 'true', ANCHOR_RESEARCH_PROVIDERS_PAUSED: 'false' }]) {
-    const closed = await recovery.loadRecoveryState(f.db, { env, now: f.now });
+    const closed = await recovery.loadRecoveryState(f.db, { env, now: f.now, sessionId: f.sessionId });
     assert.equal(closed.mode, 'maintenance'); assert.equal(closed.reason, 'recovery_preparation_only');
-    await assert.rejects(scope.assertScopedResumeCapability(f.db, { program: f.program, capability: 'preparation', operation: 'freeze' }, { env, now: f.now }), /preparation_only/);
+    await assert.rejects(scope.assertScopedResumeCapability(f.db, { program: f.program, capability: 'preparation', operation: 'freeze' }, { env, now: f.now, sessionId: f.sessionId }), /preparation_only/);
   }
 });
 test('data-only canonical Scout adapter never invokes injected discovery, inventory or fallback and leaves research paused', async t => {

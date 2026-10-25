@@ -34,7 +34,7 @@ test('admin draft preparation HTTP boundary fails closed and returns only no-sen
   const validInput = { revision: REVISION, manifestHash: hash(manifest), sourceMissionHash: hash(source) };
   const safeResult = { missionId: 'draft-mission', operationId: 'operation-1', preparedArtifactRevision: 2,
     candidateCount: 2, readyForReview: true, executionApproved: false, envelopeAuthorized: false, sent: 0, providerCalls: 0 };
-  let session, calls, connections, error, result;
+  let session, calls, connections, error, result, finalSession;
   const pool = { connect: async () => {
     connections++;
     return { query: async query => { const sql = typeof query === 'string' ? query : query.text;
@@ -62,19 +62,22 @@ test('admin draft preparation HTTP boundary fails closed and returns only no-sen
     const router = require('../routes/tenantOutreach');
     const app = express();
     app.use(express.json({ strict: true }));
-    app.use((req, res, next) => { req.session = structuredClone(session); next(); });
+    app.use((req, res, next) => { req.session = structuredClone(session);
+      res.on('finish', () => { finalSession = req.session; }); next(); });
     app.use(router);
     app.use((err, req, res, next) => res.status(400).json({ error: 'invalid_json' }));
     server = app.listen(0, '127.0.0.1');
     await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
     function reset() {
-      session = { user: { id: 71, role: 'admin', active: true, client_id: 10 }, active_client_id: 10 };
-      calls = []; connections = 0; error = null; result = { ...safeResult, secret: 'DO_NOT_EXPOSE', subject: 'PRIVATE_COPY', body: 'PRIVATE_BODY' };
+      session = { authenticated: true, user: { id: 71, role: 'admin', active: true, client_id: 10 }, active_client_id: 10 };
+      finalSession = undefined; calls = []; connections = 0; error = null; result = { ...safeResult, secret: 'DO_NOT_EXPOSE', subject: 'PRIVATE_COPY', body: 'PRIVATE_BODY' };
     }
     async function denied(status, options = {}) {
       const response = await request(server, { body: validInput, ...options });
       assert.equal(response.status, status, response.text);
       assert.equal(calls.length, 0); assert.equal(connections, 0);
+      assert.equal(finalSession, status === 400 ? undefined : null,
+        'route denials detach snapshots; parser failures happen before fixture session middleware');
       return response;
     }
     const identities = [
@@ -84,6 +87,9 @@ test('admin draft preparation HTTP boundary fails closed and returns only no-sen
       ['inactive admin', () => { session.user.active = false; }, 403],
       ['password reset required', () => { session.user.password_change_required = true; }, 403],
       ['impersonating admin', () => { session.impersonation = { active: true, effectiveUser: { id: 72, role: 'admin', client_id: 10 } }; }, 403],
+      ['inactive impersonation object', () => { session.impersonation = { active: false }; }, 403],
+      ['unverified session account', () => { session.user.email_verified = false; }, 403],
+      ['unauthenticated snapshot with user', () => { session.authenticated = false; }, 403],
       ['malformed active impersonation', () => { session.impersonation = { active: true }; }, 403],
       ['array-valued tenant', () => { session.active_client_id = [10]; }, 403],
       ['object-valued tenant', () => { session.active_client_id = { id: 10 }; }, 403],

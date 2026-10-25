@@ -200,8 +200,14 @@ router.post('/api/v1/tenant-outreach/anchor-program/:id/mode', requireAnchorOper
 router.post('/api/v1/tenant-outreach/anchor-program/prepare-drafts',
   (req, res, next) => {
     noStore(res);
-    // Reject even malformed active impersonation before generic auth cleans it up.
-    if (req.session?.impersonation?.active) return res.status(403).json({ error: 'anchor_crm_action_forbidden', retryAllowed: false });
+    // Validate before generic auth can normalize or save a stale snapshot.
+    // Retain ordinary unauthenticated status, and detach on every early denial.
+    try { require('../services/anchorCrmPreparationAction').actorFromRequest(req); }
+    catch {
+      const status = req.session?.user || req.session?.authenticated === true ? 403 : 401;
+      req.session = null;
+      return res.status(status).json({ error: 'anchor_crm_action_forbidden', retryAllowed: false });
+    }
     next();
   },
   requireAuth, requireRole('admin'), async (req, res) => {
@@ -210,12 +216,41 @@ router.post('/api/v1/tenant-outreach/anchor-program/prepare-drafts',
     let actor;
     try {
       actor = action.actorFromRequest(req);
+      // Do not let Express save a stale session snapshot over revocation.
+      req.session = null;
       const expected = new URL(process.env.APP_URL);
       if (!['http:', 'https:'].includes(expected.protocol) || req.get('origin') !== expected.origin
         || req.get('sec-fetch-site') === 'cross-site' || !req.is('application/json')) throw new Error('forbidden');
-    } catch { return res.status(403).json({ error: 'anchor_crm_action_forbidden', retryAllowed: false }); }
+    } catch { req.session = null; return res.status(403).json({ error: 'anchor_crm_action_forbidden', retryAllowed: false }); }
     try { return res.json(await action.prepareDrafts(pool, req.body, actor)); }
     catch (error) { return res.status(409).json({ error: 'anchor_crm_action_rejected',
       status: error.status || 'rejected', writesMayHaveOccurred: error.writesMayHaveOccurred === true, retryAllowed: false }); }
   });
+// Explicit same-origin approval controls. These never invoke preparation.
+for (const [operation, method] of Object.entries({ preview: 'previewPreparationApproval', install: 'installPreparationApproval', revoke: 'revokePreparationApproval' })) {
+  router.post(`/api/v1/tenant-outreach/anchor-program/preparation-approval/${operation}`,
+    (req, res, next) => {
+      noStore(res);
+      try { require('../services/anchorCrmPreparationAction').actorFromRequest(req); }
+      catch {
+        const status = req.session?.user || req.session?.authenticated === true ? 403 : 401;
+        req.session = null;
+        return res.status(status).json({ error: 'anchor_crm_approval_forbidden', retryAllowed: false });
+      }
+      next();
+    }, requireAuth, requireRole('admin'), async (req, res) => {
+      noStore(res);
+      let actor;
+      try {
+        actor = require('../services/anchorCrmPreparationAction').actorFromRequest(req);
+        req.session = null;
+        const expected = new URL(process.env.APP_URL);
+        if (!['http:', 'https:'].includes(expected.protocol) || req.get('origin') !== expected.origin
+          || req.get('sec-fetch-site') === 'cross-site' || !req.is('application/json')) throw new Error('forbidden');
+      } catch { req.session = null; return res.status(403).json({ error: 'anchor_crm_approval_forbidden', retryAllowed: false }); }
+      try { return res.json(await require('../services/anchorCrmPreparationApproval')[method](pool, req.body, actor)); }
+      catch { return res.status(409).json({ error: 'anchor_crm_approval_rejected', status: operation === 'preview' ? 'rejected' : 'outcome_requires_readback',
+        writesMayHaveOccurred: operation !== 'preview', retryAllowed: false }); }
+    });
+}
 module.exports = router;

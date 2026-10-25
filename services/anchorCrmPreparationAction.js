@@ -3,15 +3,16 @@
 const { hash, missionScope } = require('../packages/acquisition-mission/DailyOutboundPolicy');
 const recovery = require('./anchorEmailRecovery');
 const preparationAuthority = require('./anchorCrmPreparationAuthority');
+const preparationIdentity = require('./anchorCrmPreparationIdentity');
 const { prepareExistingCrm } = require('./anchorScopedResumeCrmPreparation');
 function reject() { throw Object.assign(new Error('anchor_crm_action_rejected'), { code: 'anchor_crm_action_rejected' }); }
 function actorFromRequest(req) {
   const user = req.session?.user;
-  const tenant = req.session?.active_client_id ?? user?.client_id;
-  if (!user?.id || user.role !== 'admin' || user.active === false || user.password_change_required
-    || req.session?.impersonation?.active || req.impersonation?.active
+  const tenant = req.session?.active_client_id;
+  if (req.session?.authenticated !== true || !user?.id || user.role !== 'admin' || user.active === false || user.password_change_required
+    || user.email_verified === false || req.session?.impersonation || req.impersonation?.active
     || (tenant !== 10 && tenant !== '10')) reject();
-  return { id: String(user.id), role: 'admin' };
+  return { id: String(user.id), role: 'admin', sessionId: req.sessionID };
 }
 function validateInput(input) {
   if (!input || Object.keys(input).sort().join(',') !== 'manifestHash,revision,sourceMissionHash'
@@ -43,17 +44,21 @@ async function prepareDrafts(pool, input, actor, { env = process.env, now = () =
     try {
       await db.query('BEGIN READ ONLY'); begun = true;
       await db.query("SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='5s'");
-      const preparationState = await preparationAuthority.readPreparationState(db, { env, now: now(), lockControl: false });
+      const preparationState = await preparationAuthority.readPreparationState(db, { env, now: now(), lockControl: false, sessionId: actor.sessionId });
       const state = preparationState.mode === 'preparation_only' ? preparationState
-        : await recovery.loadRecoveryState(db, { env, now: now(), lockControl: false });
+        : await recovery.loadRecoveryState(db, { env, now: now(), lockControl: false, sessionId: actor.sessionId });
       manifest = state.manifest;
       if (!['scoped_resume', 'preparation_only'].includes(state.mode) || hash(manifest) !== input.manifestHash
         || manifest.operatorId !== String(actor.id) || manifest.operatorRole !== 'admin'
         || manifest.scopes.email.enabled || manifest.scopes.research.enabled
         || !manifest.scopes.preparation.enabled
         || !manifest.scopes.preparation.operations.includes('prepare_existing_crm')) reject();
-      const users = (await db.query('SELECT id FROM users WHERE id::text=$1 AND client_id=10 AND role=\'admin\' AND active=true', [String(actor.id)])).rows;
-      if (users.length !== 1) reject();
+      if (preparationAuthority.isPreparationAuthority(manifest)) {
+        await preparationIdentity.assertPreparationApprover(db, manifest, { lock: false, actor });
+      } else {
+        const users = (await db.query('SELECT id FROM users WHERE id::text=$1 AND client_id=10 AND role=\'admin\' AND active=true', [String(actor.id)])).rows;
+        if (users.length !== 1) reject();
+      }
       const source = (await db.query('SELECT payload FROM acquisition_missions WHERE id=$1 AND tenant_id=\'10\'', [manifest.sourceMissionId])).rows[0]?.payload;
       if (!source || source.id !== manifest.sourceMissionId || String(source.tenantId) !== '10'
         || source.stage !== 'discover' || source.structuredMission?.immutable !== true
@@ -69,7 +74,9 @@ async function prepareDrafts(pool, input, actor, { env = process.env, now = () =
     started = true;
     const result = await prepareExistingCrm(pool, { programId: manifest.programId,
       sourceMissionHash: input.sourceMissionHash, admissions: manifest.admissions },
-    { env: pinnedEnv, now, actionAuthority: { actorId: String(actor.id), manifestHash: input.manifestHash, revision: input.revision } });
+    { env: pinnedEnv, now, sessionId: actor.sessionId, actionAuthority: { actorId: String(actor.id),
+      ...(preparationAuthority.isPreparationAuthority(manifest) ? { sessionId: actor.sessionId } : {}),
+      manifestHash: input.manifestHash, revision: input.revision } });
     if (result.readyForReview !== true || result.executionApproved !== false || result.envelopeAuthorized !== false
       || result.sent !== 0 || result.providerCalls !== 0) reject();
     return { status: 'ready_for_review', missionId: result.missionId, operationId: result.operationId,
