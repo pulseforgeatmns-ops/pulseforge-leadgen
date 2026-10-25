@@ -4,7 +4,7 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { createHash } = require('node:crypto');
-const { Pool } = require('pg');
+const { createTrackedPostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
 const deny = require('./helpers/denyExternalProviders.cjs');
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
 const { hash, missionScope } = require('../packages/acquisition-mission/DailyOutboundPolicy');
@@ -119,8 +119,8 @@ async function mutate(pool, f, kind) {
 
 test('current preparation admin is distinct from immutable historical outbound authorizer', { timeout: 240000 }, async t => {
   const pg = await startDisposablePostgres('anchor-admin-identity-');
-  const pool = new Pool({ connectionString: pg.connectionString, max: 14 });
-  t.after(async () => { resetAcquisitionMissionRuntime(); await pool.end(); await pg.stop(); });
+  const pool = createTrackedPostgresPool({ connectionString: pg.connectionString, max: 14 });
+  t.after(async () => { resetAcquisitionMissionRuntime(); await closePostgresFixture(pool, pg); });
   const keys = ['ANCHOR_EMAIL_SCOPED_RESUME_ID', 'ANCHOR_EMAIL_RECOVERY_MANIFEST_ID', 'ANCHOR_EMAIL_RECOVERY_MAINTENANCE',
     'ANCHOR_GOVERNED_OUTBOUND_ENABLED', 'ANCHOR_RESEARCH_PROVIDERS_PAUSED', 'RAILWAY_GIT_COMMIT_SHA'];
   const old = Object.fromEntries(keys.map(k => [k, process.env[k]]));
