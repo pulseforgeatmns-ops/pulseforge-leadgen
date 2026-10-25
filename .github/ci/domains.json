@@ -65,6 +65,7 @@
       "services/signalOperator/",
       "services/signalDistribution/",
       "services/signalDashboard/",
+      "standalone/signal-dashboard/",
       "routes/signalDashboard.js",
       "public/signal-positions",
       "test/signalDashboard",

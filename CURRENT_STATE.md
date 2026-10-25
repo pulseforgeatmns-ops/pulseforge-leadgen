@@ -12,7 +12,7 @@
 
 # CURRENT_STATE
 
-[SPEC-SIGNAL-DASH-001](docs/specs/SPEC-SIGNAL-DASH-001_Trading_Dashboard.md) is an approved parallel Signal implementation. Read-only wallet/market intelligence, isolated collector and default-off dashboard; no Pulseforge core orchestration/outbound changes. REMUS live acceptance remains pending verified wallet/mint, provider coverage and reconciliation.
+[SPEC-SIGNAL-DASH-001](docs/specs/SPEC-SIGNAL-DASH-001_Trading_Dashboard.md) is an approved parallel Signal implementation. The public wallet and REMUS mint are verified; observed on-chain trades reconcile exactly to the finalized token balance. The isolated authenticated service uses public, read-only Solana RPC and independent market/wallet collectors. Live deployment verification and historical market coverage remain pending; no Pulseforge core orchestration/outbound changes.
 
 [SPEC-266](docs/specs/SPEC-266_Signal_Default_Off_Initial_SMS.md) records PR 980's
 in-progress local, default-off initial-SMS staging and explicit UNKNOWN risk-card

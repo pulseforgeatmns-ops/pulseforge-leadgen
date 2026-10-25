@@ -1,11 +1,13 @@
 'use strict';
+const {quoteAccount}=require('./quoteAccounting');
+const {USDC}=require('./wallet');
 const {account}=require('./accounting');
 const {metric,knownBy}=require('./quality');
 const {peaks,distribution}=require('./analytics');
 const {valueTransactions}=require('./quotes');
 const {observedCandles,rollupCandles,INTERVALS}=require('./market');
 const {id}=require('./wallet');
-const {dec,str,mul,fromNumber}=require('./decimal');
+const {dec,str,mul,div,fromNumber}=require('./decimal');
 class DashboardService {
   constructor(store,{now=()=>new Date()}={}){Object.assign(this,{store,now});this.cache=new Map();}
   async detail(ca) {
@@ -24,7 +26,7 @@ class DashboardService {
     const history=cursors.find(x=>x.key==='history'),latestCursor=cursors.find(x=>x.key==='head');
     const valued=valueTransactions(transactions,quotes);
     // Exhausted paginated history + reconciled finalized balance is still only observed coverage.
-    const caughtUp=latestCursor?.caughtUp===true;
+    const caughtUp=latestCursor?.caughtUp===true&&at-Date.parse(latestCursor.knownAt)<=120000;
     const historyComplete=Boolean(history?.exhausted&&caughtUp&&balance&&at-Date.parse(balance.observedAt)<=60000
       &&transactions.length<5000&&valued.every(t=>t.slot<=balance.slot));
     const ledger=account(valued,{priceUsd:current?.priceUsd!=null?fromNumber(current.priceUsd):null,
@@ -34,6 +36,13 @@ class DashboardService {
       for(const key of ['tokensRemaining','tokensPurchased','tokensSold','grossCapitalDeployed','grossProceedsRealized','realizedCash','feesUsd','netCashFlow','positionValue','remainingCostBasis'])ledger[key]=null;
     }
     if(balance){ledger.tokensRemaining=balance.tokens;ledger.positionValue=current?.priceUsd!=null?str(mul(dec(balance.tokens),dec(fromNumber(current.priceUsd)))):null;}
+    const quoteMark=quotes.filter(q=>q.asset===USDC&&q.purpose==='CURRENT_MARK'&&q.priceUsd!=null&&at-Date.parse(q.knownAt)<120000).at(-1);
+    const priceQuote=current?.priceUsd!=null&&quoteMark?str(div(dec(fromNumber(current.priceUsd)),dec(quoteMark.priceUsd))):null;
+    const native=quoteAccount(valued,{asOf,historyComplete,balance:balance?.tokens??null,priceQuote});
+    if(native.ledger.reconciliation.state!=='MATCH')for(const key of ['realizedPnl','unrealizedPnl','totalPnl','netCapitalAtRisk'])native.ledger[key]=null;
+    if(!transactions.length&&!historyComplete)for(const key of ['grossCapitalDeployed','grossProceedsRealized','realizedCash','positionValue','tokensRemaining','netCashFlow'])native.ledger[key]=null;
+    const quoteAccounting={symbol:native.symbol,asset:native.asset,cashBasis:native.cashBasis,feeItemization:native.feeItemization,quality:'PARTIAL'};
+    for(const key of ['grossCapitalDeployed','grossProceedsRealized','realizedCash','realizedPnl','unrealizedPnl','totalPnl','netCapitalAtRisk','remainingCostBasis','positionValue','netCashFlow'])quoteAccounting[key]=metric(native.ledger[key],{provider:'finalized quote-token wallet changes / FIFO',partial:true,observedAt:balance?.observedAt,reason:native.ledger.issues.join(', ')||native.cashBasis},at);
     ledger.quality='PARTIAL'; // Indexer history, USD estimates and unknown fees remain disclosed.
     const riskProjection=cursors.find(x=>x.key==='risk:'+ca);
     const risk=distribution(observations,events,asOf,riskProjection?.state);
@@ -63,8 +72,8 @@ class DashboardService {
     const timeline=[...events,...markers,...milestones,...annotations,...risk.transitions].sort((a,b)=>Date.parse(a.occurredAt)-Date.parse(b.occurredAt)||String(a.id).localeCompare(String(b.id)));
     const research=events.filter(e=>e.researchState).at(-1);
     return {tokenAddress:ca,symbol:current?.symbol||watch.symbol||ca.slice(0,8),walletConfigured:true,asOf,lastUpdated:current?.observedAt||balance?.observedAt||null,
-      market,accounting,peak,risk,signalState:metric(research?.researchState||null,{provider:'signal empirical events',partial:true,observedAt:research?.knownAt},at),
-      lifecycle:ledger.lifecycle,ledger:{...ledger,transactions:undefined,rawLots:undefined},
+      market,accounting,quoteAccounting,peak,risk,signalState:metric(research?.researchState||null,{provider:'signal empirical events',partial:true,observedAt:research?.knownAt},at),
+      lifecycle:quoteAccounting.totalPnl.value!==null?native.ledger.lifecycle:ledger.lifecycle,ledger:{...ledger,transactions:undefined,rawLots:undefined},
       coverage:{historyExhausted:history?.exhausted||false,headCaughtUp:caughtUp,indexerCoverage:'PARTIAL',reconciliation:ledger.reconciliation,
         walletObservedAt:balance?.observedAt||null,balanceSlot:balance?.slot||null,transactionLimitReached:transactions.length>=5000,
         observationWindowTruncated:observations.length>=10000,telegram:statuses.find(x=>x.component==='feed')||{state:'UNKNOWN'},statuses},
@@ -74,7 +83,7 @@ class DashboardService {
   async positions(){
     const watches=await this.store.list('watch',null,{limit:100});
     const positions=[];
-    for(const w of watches){const p=await this.detail(w.tokenAddress);if(p)positions.push({tokenAddress:p.tokenAddress,symbol:p.symbol,accounting:p.accounting,risk:p.risk.state,drawdown:p.peak.postEntry.drawdown,lifecycle:p.lifecycle,asOf:p.asOf});}
+    for(const w of watches){const p=await this.detail(w.tokenAddress);if(p)positions.push({tokenAddress:p.tokenAddress,symbol:p.symbol,accounting:p.accounting,quoteAccounting:p.quoteAccounting,risk:p.risk.state,drawdown:p.peak.postEntry.drawdown,lifecycle:p.lifecycle,asOf:p.asOf});}
     // Operational CA events only. No cohort outcomes, returns, precision or performance are read.
     const events=await this.store.list('event',null,{ascending:false,limit:200});
     const seen=new Set(),liveSignals=[];

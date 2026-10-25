@@ -36,9 +36,9 @@ class DashboardStore {
     const row=r.rows[0],chronology=row.chronology||[];
     return {priceUsd:row.peak??null,at:chronology.at(-1)?.observedAt||null,drawdown:row.peak>0?(row.current-row.peak)/row.peak:null,chronology};
   }
-  async lock(fn) {
+  async lock(fn,lane='market') {
     const c=await this.pool.connect();
-    const key=`signal-dashboard:${this.tenantId}:${this.wallet}`;
+    const key=`signal-dashboard:${this.tenantId}:${this.wallet}:${lane}`;
     try {
       const r=await c.query('SELECT pg_try_advisory_lock(hashtextextended($1,0)) AS locked',[key]);
       if(!r.rows[0].locked)return {skipped:true};

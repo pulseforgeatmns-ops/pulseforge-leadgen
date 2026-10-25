@@ -27,6 +27,7 @@ Run the separate process with `npm run signal:dashboard-worker`. It uses the exi
 
 Provider credentials, when available, belong only in server configuration:
 
+- Public Solana RPC is the default wallet observer when no Helius key is configured. It reads finalized v1 transactions, wallet signatures and current owned token accounts, verifies PumpSwap instruction discriminators against the official IDL, and preserves token-account/closed-account coverage gaps. Head cursors acknowledge a signature only after its transaction response is processed.
 - `SIGNAL_DASHBOARD_HELIUS_API_KEY`: enhanced finalized public-address history with token-account activity. Optional `SIGNAL_DASHBOARD_RPC_URL` selects an HTTPS finalized balance-read endpoint. The adapter exposes only GET history and `getTokenAccountsByOwner`; signing and transaction RPC methods are rejected.
 - `SIGNAL_DASHBOARD_BIRDEYE_API_KEY`: historical preceding minute SOL/USDC prices for USD conversion. Native consideration remains exact; minute USD estimates are PARTIAL. Missing/late quotes remain UNKNOWN. USDC quantity is not silently equated with USD.
 - `SIGNAL_DASHBOARD_COINGECKO_PRO_KEY`: independent paid-quota OHLCV bootstrap, with no empty-interval padding. Public GeckoTerminal is supported only when an existing shared durable request budget is injected; the standalone process does not create an unbudgeted public Gecko consumer.
@@ -65,3 +66,15 @@ Supply and verify the public FOMO wallet and exact REMUS mint. Confirm provider 
 5. Verify empirical Telegram/promotion overlays, risk explanations, exact-timestamp markers and automatic recovery after a network interruption.
 
 V1 is not accepted as a complete live REMUS dashboard until these checks pass. No deployment, migration, provider call, wallet import or live money result is implied by local tests.
+
+## Isolated service rollout
+
+`standalone/signal-dashboard/Dockerfile` starts only Signal's authenticated web app and independent market/wallet collectors. It does not start `server.js`, Max, outbound agents, the Signal research scheduler, or message senders. Its login verifies the configured existing Pulseforge owner against the existing read-only users table, including active/role/workspace/password-change status. Signal sessions and rate limits use new Signal-only tables; password/role revocations are checked on every protected read.
+
+Pre-deploy: `node standalone/signal-dashboard/migrate.js`, requiring `SIGNAL_DASHBOARD_SCHEMA_APPROVAL=SPEC-SIGNAL-DASH-001`. This explicitly creates only the two dashboard tables and Signal-only session/login-attempt tables. No schema action occurs during normal app startup.
+
+Configure the existing database by reference, a dedicated server session secret, `SIGNAL_DASHBOARD_OWNER_EMAIL` referencing the existing configured admin identity, the verified public wallet and mint/pool watch JSON, and the existing private caller feed/bearer by reference. The standalone app resolves the owner's database ID and trusted workspace at boot. Provider secrets and wallet signing material are unnecessary for the default public RPC / DEX Screener mode. Paid candle/history adapters remain optional. The price chart labels sampled observations as partial coverage.
+
+Native quote accounting is shown explicitly in USDC. Net observed wallet USDC changes include embedded token fees; network fees paid by a separate sponsor are recorded separately. A current observed USDC/USD market quote can value the remaining tokens in USDC without assuming a $1 peg. Historical USD conversion and complete fee itemization remain UNKNOWN unless observed.
+
+A separate Railway service must be staged with a pinned reviewed commit, bounded resources, `/health`, and the explicit pre-deploy command. Review the environment patch for unrelated changes before activation. Existing Pulseforge service source, variables, deployment and switches remain unchanged. An activated preview is not full V1 acceptance until live market, chain accounting, source overlays, risk chronology and mobile refresh have been checked.

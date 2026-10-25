@@ -51,3 +51,11 @@ test('unchanged provider OHLCV is not duplicated on every live poll; changed rea
  for(n=0;n<8;n++)await w.pollOnce();assert.equal((await s.list('candle',CA)).length,5);
  close=2;n++;await w.pollOnce();assert.equal((await s.list('candle',CA)).length,6);
 });
+test('an empty wallet gets a head cursor so later deposits can be discovered',async()=>{
+ const s=new MemoryStore();await seed(s);const w=createDashboardWorker({store:s,walletProvider:{getHistoryPage:async()=>({transactions:[],signatures:[],nextBefore:null,exhausted:true})},now:()=>new Date(later(1000))});
+ await w.historyTick();const head=(await s.list('cursor',null)).find(x=>x.key==='head');assert.equal(head.lastSeen,null);await w.headTick();assert.equal((await s.list('cursor',null)).find(x=>x.key==='head').caughtUp,true);
+});
+test('a metadata-only RPC page creates the head cursor when its evidence page is processed',async()=>{
+ const s=new MemoryStore();await seed(s);let n=0;const w=createDashboardWorker({store:s,walletProvider:{getHistoryPage:async()=>++n===1?{transactions:[],signatures:[],nextBefore:{pending:['head']},exhausted:false}:{transactions:[tx(1)],signatures:['head'],nextBefore:{pending:[]},exhausted:true}},now:()=>new Date(later(1000))});
+ await w.historyTick();assert.equal((await s.list('cursor',null)).some(x=>x.key==='head'),false);await w.historyTick();assert.equal((await s.list('cursor',null)).find(x=>x.key==='head').lastSeen,'head');
+});

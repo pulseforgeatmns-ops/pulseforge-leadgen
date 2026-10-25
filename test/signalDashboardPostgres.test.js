@@ -6,6 +6,7 @@ const {DashboardStore,DurableBudget}=require('../services/signalDashboard/store'
 const {DashboardService}=require('../services/signalDashboard/service');
 const {CA,W,at,later,observation,tx}=require('./helpers/signalDashboardFixtures');
 async function exercise(pool) {
+ await require('../standalone/signal-dashboard/migrate').migrate(pool,{SIGNAL_DASHBOARD_SCHEMA_APPROVAL:'SPEC-SIGNAL-DASH-001'});
  const sql=fs.readFileSync(path.join(__dirname,'../migrations/2026-10-25-signal-dashboard.sql'),'utf8');await pool.query(sql);await pool.query(sql);
  let s=new DashboardStore(pool,{tenantId:'1',wallet:W});
  await s.put('watch',CA,'watch',{tokenAddress:CA,symbol:'SYNTHETIC QA',occurredAt:at,knownAt:at});
