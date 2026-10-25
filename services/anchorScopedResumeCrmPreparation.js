@@ -15,6 +15,7 @@ const { getAcquisitionMissionRuntime } = require('./acquisitionMissionRuntime');
 const persistence = require('./acquisitionMissionPersistence');
 const { buildInboxSnapshot } = require('./emmettOutboundSnapshot');
 const { resolveCanonicalSenderIdentity } = require('../utils/canonicalSenderIdentity');
+const { createPreparationTrace } = require('./anchorCrmPreparationDiagnostics');
 const OPERATION = 'prepare_existing_crm';
 const MAX_BATCH = 5;
 function fail(code) { throw Object.assign(new Error(code), { code, retryAllowed: false, providerBoundaryCrossed: false }); }
@@ -37,15 +38,22 @@ async function connection(pool) {
   return { query: (q, values = []) => client.query(typeof q === 'string' ? { text: q, values, query_timeout: 6000 } : { ...q, query_timeout: 6000 }),
     release: () => client.release(true) };
 }
-async function locked(pool, work) {
+async function locked(pool, work, trace, phase) {
+  trace.enter(`${phase}_connect`);
   const db = await connection(pool); let begun = false;
   try {
+    trace.enter(`${phase}_begin`);
     await db.query('BEGIN'); begun = true;
+    trace.enter(`${phase}_timeouts`);
     await db.query("SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='5s'");
     const result = await work(db);
+    trace.enter(`${phase}_commit`);
     await db.query('COMMIT'); begun = false;
     return result;
-  } finally { if (begun) await db.query('ROLLBACK').catch(() => {}); db.release(); }
+  } finally {
+    if (begun) await db.query('ROLLBACK').catch(() => {});
+    try { db.release(); } catch (error) { trace.enter(`${phase}_release`); throw error; }
+  }
 }
 async function bindings(db, input, options) {
   const program = (await db.query('SELECT * FROM acquisition_outbound_programs WHERE id=$1 AND tenant_id=$2', [input.programId, '10'])).rows[0];
@@ -155,27 +163,44 @@ function reviewExplanations(value) {
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, reviewExplanations(v)]));
   return value;
 }
-async function prepareExistingCrm(pool, rawInput, options = {}) {
+async function prepareWithTrace(pool, rawInput, options, trace) {
   const input = validateInput(rawInput);
   if (!pool?.connect || Object.keys(options).some(k => !['env', 'now', 'actionAuthority', 'sessionId'].includes(k))) fail('anchor_crm_preparation_input_invalid');
-  const reviewed = await locked(pool, async db => { const b = await bindings(db, input, options); await infrastructure(db, b, options); return b; });
+  const reviewed = await locked(pool, async db => {
+    trace.enter('preflight_bindings');
+    const b = await bindings(db, input, options);
+    trace.enter('preflight_infrastructure');
+    await infrastructure(db, b, options);
+    return b;
+  }, trace, 'preflight');
   // Excludes grant ID/day/caller-generated IDs: changing any of those cannot
   // replay the same source+identity batch, even after a downstream failure.
   const operationId = hash(['anchor-crm-preparation-v1', input.programId, reviewed.source.id, reviewed.program.policy_hash, reviewed.program.scope_hash,
     reviewed.admissions.map(a => [a.prospectId, a.companyId, a.recipientEmail, a.identityFingerprint])]);
+  trace.operation(operationId);
+  trace.enter('claim');
+  trace.claimStarted();
   await control.consumeScopedOperation(pool, { manifest: reviewed.manifest, capability: 'preparation', operation: OPERATION,
     operationId, identities: reviewed.admissions }, { ...options, now: time(options) });
+  trace.claimCommitted();
   return locked(pool, async db => {
+    trace.enter('postclaim_bindings');
     let binding = await bindings(db, input, options);
     if (hash(binding.manifest) !== hash(reviewed.manifest)) fail('anchor_crm_preparation_grant_changed');
+    trace.enter('postclaim_infrastructure');
     let snapshot = await infrastructure(db, binding, options);
     const missionId = `mission_crm_${operationId.slice(0, 32)}`;
+    trace.enter('existing_child_check');
     if ((await db.query('SELECT id FROM acquisition_missions WHERE id=$1', [missionId])).rows.length) fail('anchor_crm_preparation_already_exists');
+    trace.enter('canonical_connect');
     const canonical = await connection(pool);
     try {
+      trace.enter('canonical_timeouts');
       await canonical.query("SET lock_timeout='5s'; SET statement_timeout='5s'");
+      trace.enter('canonical_hydration');
       const runtime = getAcquisitionMissionRuntime({ pool, persist: true });
       await runtime.hydrate('10', { pool: canonical, persist: true, preinitializedSchema: true });
+      trace.enter('child_creation');
       const engine = runtime.engine();
       if (engine.get(missionId, '10')) fail('anchor_crm_preparation_already_exists');
       const mission = engine.create({ ...missionScope(binding.source), id: missionId, tenantId: '10', clientId: 10,
@@ -184,6 +209,7 @@ async function prepareExistingCrm(pool, rawInput, options = {}) {
       mission.crmPreparation = { operationId, sourceMissionHash: input.sourceMissionHash, manifestHash: hash(binding.manifest),
         admissions: binding.admissions, providerReadiness: 'not_checked', providerCalls: 0, preparationOnly: true };
       engine.store.putMission(mission);
+      trace.enter('specialist_setup');
       const crmByProspectId = new Map();
       for (const row of binding.rows) { const crm = { ...row, prospect_id: String(row.id) };
         crmByProspectId.set(String(row.id), crm); crmByProspectId.set(String(row.company_id), crm); }
@@ -211,24 +237,33 @@ async function prepareExistingCrm(pool, rawInput, options = {}) {
         return result;
       };
       for (let step = 0; step < 6; step++) {
+        trace.stage(step, null);
+        trace.enter('stage_bindings');
         binding = await bindings(db, input, options);
+        trace.enter('stage_infrastructure');
         snapshot = await infrastructure(db, binding, options);
+        trace.enter('stage_intent');
         const current = engine.get(missionId, '10');
         if (current.stage === 'ready') break;
         const ctx = amo.specialistContext(engine.inspect(missionId, { tenantId: '10' }).contributions, { missionId });
         const intent = current.stage === 'discover' ? amo.intentFromPendingDecision(current.pendingOperatorDecision)
           : !ctx.acquisitionApproachComplete ? 'DECIDE_ACQUISITION_APPROACH' : !ctx.paigeComplete ? 'GENERATE_VARIANTS' : 'GENERATE_CAPACITY';
+        trace.stage(step, intent);
         if (!['APPROVE_DISCOVERY', 'APPROVE_PRIORITIZATION', 'DECIDE_ACQUISITION_APPROACH', 'GENERATE_VARIANTS', 'GENERATE_CAPACITY'].includes(intent)) fail('anchor_crm_preparation_operator_judgment_required');
         const request = amo.createExecutionRequest({ source: amo.EXECUTION_SOURCES.API, missionId, mission: current,
           stage: current.stage, operatorId: binding.manifest.operatorId, intent, permissions: { canExecute: true, role: 'operator' },
           payload: { question: 'Explicit existing CRM preparation only', approach: 'outbound' } });
+        trace.enter('stage_execution');
         const routed = await amo.routeExecutionRequest(request, { engine, tenantId: '10', pool: canonical, persist: true,
           preinitializedSchema: true, operatorId: binding.manifest.operatorId, allowFixtureFallback: false,
           runScout, runPaige, runEmmett, infrastructureSnapshot: snapshot });
         if (routed.executionResult?.rolledBack) throw routed.executionResult.error || new Error(routed.executionResult.rollbackReason);
       }
+      trace.enter('final_bindings');
       binding = await bindings(db, input, options);
+      trace.enter('final_snapshot');
       const result = await persistence.loadMissionSnapshot(missionId, '10', canonical, { skipEnsure: true });
+      trace.enter('final_validation');
       if (result.mission.stage !== 'ready' || result.mission.pendingOperatorDecision?.kind !== 'execution_approval'
         || require('../packages/acquisition-mission/ExecutionApproval').findExecutionApprovals(result.contributions).length) fail('anchor_crm_preparation_not_review_ready');
       const capacity = amo.findEmmettCapacity(result.contributions, result.mission);
@@ -241,12 +276,20 @@ async function prepareExistingCrm(pool, rawInput, options = {}) {
           && String(item.paige?.candidateId) === a.companyId);
         if (matches.length !== 1 || matches[0].paige?.ready !== true || !matches[0].paige?.subject || !matches[0].paige?.body) fail('anchor_crm_preparation_output_identity_changed');
       }
+      trace.enter('ready_event');
       await new GovernedOutboundStore(db, '10').event('scoped_crm_preparation_ready', operationId, { programId: input.programId,
         missionId, operationId, selectedDraftCount: binding.admissions.length, sourceMissionHash: input.sourceMissionHash, providerReadiness: 'not_checked', providerCalls: 0 });
       return { readyForReview: true, missionId, operationId, preparedArtifactRevision: amo.computePreparedArtifactRevision(missionId, result.contributions),
         candidateCount: binding.admissions.length, providerReadiness: 'not_checked', providerCalls: 0,
         executionApproved: false, envelopeAuthorized: false, sent: 0 };
-    } finally { canonical.release(); }
-  });
+    } finally {
+      try { canonical.release(); } catch (error) { trace.enter('canonical_release'); throw error; }
+    }
+  }, trace, 'preparation');
+}
+async function prepareExistingCrm(pool, rawInput, options = {}) {
+  const trace = createPreparationTrace();
+  try { return await prepareWithTrace(pool, rawInput, options, trace); }
+  catch (error) { trace.failure(error); throw error; }
 }
 module.exports = { prepareExistingCrm };

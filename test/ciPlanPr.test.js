@@ -4,6 +4,14 @@ const assert = require('node:assert/strict');
 const { describe, it } = require('node:test');
 const { buildPlan, pathMatchesPattern } = require('../.github/scripts/ci-plan-pr.js');
 
+it('preparation phase diagnostics and real historical-data regressions retain the Anchor gate', () => {
+  for (const file of ['services/anchorCrmPreparationDiagnostics.js', 'services/anchorScopedResumeCrmPreparation.js',
+    'test/anchorScopedResumePreparationDiagnostics.test.js', 'test/anchorScopedResumePreparationDiagnosticsPostgres.test.js']) {
+    assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
+  }
+  assert.match(require('../package.json').scripts['test:anchor-outbound'], /test\/anchorScopedResume\*\.test\.js/);
+});
+
 it('native Anchor approval UI and identity changes retain real browser/SQL safety gates', () => {
   for (const file of ['routes/anchorPreparationApprovalPage.js', 'public/anchor-preparation-approval.html',
     'public/anchor-preparation-approval.js', 'public/anchor-preparation-approval.css',
