@@ -5,6 +5,7 @@ const {config}=require('../../services/signalDashboard/config');
 const {DashboardStore,DurableBudget}=require('../../services/signalDashboard/store');
 const {DashboardService}=require('../../services/signalDashboard/service');
 const {createCollectors}=require('../../services/signalDashboard/collector');
+const {operationalSummary}=require('../../services/signalDashboard/diagnostics');
 const {isValidSolanaAddress:address}=require('../../packages/signal-v1/acquisition/solanaAddress');
 async function boot({env=process.env,pool:providedPool,listen=true,collect=true}={}){
  const pool=providedPool||new Pool({connectionString:env.DATABASE_URL,ssl:env.DATABASE_SSL==='false'?false:{rejectUnauthorized:false},max:6,connectionTimeoutMillis:5000,query_timeout:10000});
@@ -27,8 +28,10 @@ async function boot({env=process.env,pool:providedPool,listen=true,collect=true}
  const collectors=createCollectors({store,budget,env,feed,researchReader,registry});
  const app=createSignalApp({pool,service,config:cfg,sessionSecret:env.SESSION_SECRET,coreAppUrl:env.SIGNAL_CORE_APP_URL});
  let server;if(listen)server=app.listen(Number(env.PORT||3000),'0.0.0.0',()=>console.log('[signal-dashboard] ready: isolated authenticated service, public-wallet observation only'));
- if(collect)collectors.start();
- const stop=()=>{collectors.stop();server?.close();};process.once('SIGTERM',stop);process.once('SIGINT',stop);
+ let reportTimer,stopped=false;
+ async function report(){if(stopped)return;try{for(const watch of watches)console.log('[signal-dashboard] observation health',JSON.stringify(operationalSummary(await service.detail(watch.tokenAddress))));}catch{console.log('[signal-dashboard] observation health unavailable');}if(!stopped){reportTimer=setTimeout(report,60000);reportTimer.unref();}}
+ if(collect){collectors.start();reportTimer=setTimeout(report,45000);reportTimer.unref();}
+ const stop=()=>{stopped=true;clearTimeout(reportTimer);collectors.stop();server?.close();};process.once('SIGTERM',stop);process.once('SIGINT',stop);
  return {app,service,store,collectors,stop};
 }
 if(require.main===module)boot().catch(error=>{const allowed=['signal_owner_identity_unresolved','explicit_signal_schema_approval_required','signal_dashboard_disabled','signal_session_secret_required','invalid_private_caller_feed'];console.error('[signal-dashboard] startup blocked:',allowed.includes(error.message)?error.message:'configuration_or_schema_unavailable');process.exitCode=1;});

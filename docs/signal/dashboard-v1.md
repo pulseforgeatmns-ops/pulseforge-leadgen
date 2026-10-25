@@ -57,7 +57,7 @@ Synthetic fixtures explicitly identify themselves as tests. They are not REMUS r
 
 ## REMUS live acceptance — pending
 
-Supply and verify the public FOMO wallet and exact REMUS mint. Confirm provider credentials/coverage, configure the dedicated worker and watched mint, then:
+The public FOMO wallet and exact REMUS mint are verified and the privately retained chain reconstruction reconciles to a finalized balance. The isolated service has reached Railway SUCCESS and passed public health/sign-in/unauthenticated-API checks. Full acceptance still requires:
 
 1. Backfill finalized token-account-inclusive history until exhausted; inspect missing/ambiguous transactions and historical USD coverage.
 2. Reconcile remaining tokens against a finalized wallet balance at a slot covering all imported trades. Check chronological slot order where multiple transactions share a slot.
@@ -77,4 +77,4 @@ Configure the existing database by reference, a dedicated server session secret,
 
 Native quote accounting is shown explicitly in USDC. Net observed wallet USDC changes include embedded token fees; network fees paid by a separate sponsor are recorded separately. A current observed USDC/USD market quote can value the remaining tokens in USDC without assuming a $1 peg. Historical USD conversion and complete fee itemization remain UNKNOWN unless observed.
 
-A separate Railway service must be staged with a pinned reviewed commit, bounded resources, `/health`, and the explicit pre-deploy command. Review the environment patch for unrelated changes before activation. Existing Pulseforge service source, variables, deployment and switches remain unchanged. An activated preview is not full V1 acceptance until live market, chain accounting, source overlays, risk chronology and mobile refresh have been checked.
+A separate Railway service uses a pinned reviewed commit, one replica limited to 0.25 CPU / 0.5 GB, `/health`, and the explicit pre-deploy command. Set these service settings directly with the Railway API; new services cannot opt into the deprecated `railway.json` configuration format. Never commit unrelated environment patches when rolling out Signal: create/configure only the new service directly if the shared environment already contains pending Pulseforge work. Existing Pulseforge service source, variables, deployment and switches remain unchanged. Private observation-health logs expose availability, chronology, reconciliation status and marker count, never financial values, signatures or wallet identities. An activated preview is not full V1 acceptance until live market, chain accounting, source overlays, risk chronology and mobile refresh have been checked.

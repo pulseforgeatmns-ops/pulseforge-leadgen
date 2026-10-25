@@ -59,3 +59,7 @@ test('a metadata-only RPC page creates the head cursor when its evidence page is
  const s=new MemoryStore();await seed(s);let n=0;const w=createDashboardWorker({store:s,walletProvider:{getHistoryPage:async()=>++n===1?{transactions:[],signatures:[],nextBefore:{pending:['head']},exhausted:false}:{transactions:[tx(1)],signatures:['head'],nextBefore:{pending:[]},exhausted:true}},now:()=>new Date(later(1000))});
  await w.historyTick();assert.equal((await s.list('cursor',null)).some(x=>x.key==='head'),false);await w.historyTick();assert.equal((await s.list('cursor',null)).find(x=>x.key==='head').lastSeen,'head');
 });
+test('operational diagnostics prove collection health without exposing financial values or wallet identities',async()=>{
+ const s=new MemoryStore();await seed(s);await s.put('transaction',CA,'t',tx(1));await s.put('observation',CA,'o',observation(2000));const p=await new DashboardService(s,{now:()=>new Date(later(3000))}).detail(CA);
+ const health=require('../services/signalDashboard/diagnostics').operationalSummary(p);assert.equal(health.priceAvailable,true);assert.equal(health.tradeMarkerCount,1);assert.equal(health.reconciliation,'UNKNOWN');assert.doesNotMatch(JSON.stringify(health),new RegExp(CA+'|tokenAmount|signature|realizedCash|rawTransaction|wallet'));
+});
