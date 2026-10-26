@@ -39,7 +39,7 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
     await store.put('event',e.tokenAddress,e.id,e);if(e.category==='CALLER')accepted++;
    }
   }
-  await status('PARTIAL','Prospective collection only; source and market coverage may be incomplete.',{sources,sourceHealth:payload.health?.expansionHealth||null,medianIngestionLatencyMs:payload.health?.medianIngestionLatencyMs??null,acceptedFromRetainedFeed:accepted,sourceActivity:[...activity.values()],productiveSources:[...activity.values()].filter(x=>x.acceptedCalls>0).length,lastAcceptedCallAt:[...activity.values()].map(x=>x.lastKnowledgeAt).filter(Boolean).sort().at(-1)||null,feedCheckedAt:at});
+  await status('PARTIAL','Prospective collection only; source and market coverage may be incomplete.',{sources,sourceHealth:payload.health?.expansionHealth||null,medianIngestionLatencyMs:payload.health?.medianIngestionLatencyMs??null,acceptedFromRetainedFeed:accepted,retainedFeedCalls:payload.calls.length,sourceActivity:[...activity.values()],productiveSources:[...activity.values()].filter(x=>x.acceptedCalls>0).length,lastAcceptedCallAt:[...activity.values()].map(x=>x.lastKnowledgeAt).filter(Boolean).sort().at(-1)||null,feedCheckedAt:at});
   await store.put('status','*','feed',{component:'feed',state:'PARTIAL',reason:'Verified source universe; completeness is unknown',occurredAt:at,knownAt:at},{mutable:true});
   return sources;
  }
