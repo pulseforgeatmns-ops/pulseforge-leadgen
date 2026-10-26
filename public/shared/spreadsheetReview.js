@@ -134,7 +134,11 @@
     }
     async function selectAoByName(name) {
       await loadScope();
-      const matches = scope.aos.filter(ao => String(ao.name).trim().toLowerCase() === String(name).trim().toLowerCase());
+      const target = String(name).trim().toLowerCase();
+      const matches = scope.aos.filter(ao => {
+        const full = String(ao.name).trim().toLowerCase();
+        return full === target || full.split(/\s+/)[0] === target;
+      });
       if (matches.length !== 1) throw new Error('Could not uniquely identify that acquisition operator. Select the destination from the list.');
       if (String(selectedAo) !== String(matches[0].id)) {
         const selector = (typeof scopeHost === 'function' ? scopeHost() : scopeHost)?.querySelector('[data-spreadsheet-ao]');
