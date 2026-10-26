@@ -5297,7 +5297,7 @@
     }
   }
 
-  document.getElementById('cdAskUpload')?.addEventListener('click', () => {
+  document.getElementById?.('cdAskUpload')?.addEventListener('click', () => {
     openWorkspaceFromAction({ page: 'command-deck', context: 'spreadsheet_upload' });
     document.getElementById('mxFileSpreadsheet')?.click();
   });
