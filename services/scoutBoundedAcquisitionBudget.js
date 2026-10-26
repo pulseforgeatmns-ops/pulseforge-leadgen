@@ -31,9 +31,15 @@ async function assertLegacy(db) {
   const state = await loadRecoveryState(db);
   if (state.mode !== 'legacy') throw error('bounded_recovery_not_legacy');
 }
-async function lockRecovery(db) {
+async function lockRecovery(db, manifest) {
   await db.query('SELECT pg_advisory_xact_lock_shared(hashtextextended($1,0))', [RECOVERY_LOCK_KEY]);
-  await assertLegacy(db);
+  if (manifest?.version === 2) {
+    // A research grant does not reinterpret or disable the permanent recovery latch.
+    // Scope entry is private to the DB-verified native runner, never a caller token.
+    require('./scoutBoundedResearchAuthority').assertResearchExecutionScope(manifest.manifestHash);
+    assertResearchProviderAllowed('google_places', '10');
+    await require('./scoutBoundedResearchAuthority').assertResearchAuthority(db, manifest);
+  } else await assertLegacy(db);
 }
 async function assertGrant(db, manifest) {
   // Lock first, then inspect a fresh DB clock. Time predicates in a locking
@@ -85,7 +91,7 @@ function createBoundedBudget({ pool, manifest, assertSource }) {
   async function claim() {
     await ready();
     await transaction(pool, async db => {
-      await lockRecovery(db); await assertGrant(db, manifest); await assertSource(db);
+      await lockRecovery(db, manifest); await assertGrant(db, manifest); await assertSource(db);
       const { rows } = await db.query(`INSERT INTO scout_bounded_acquisition_runs
         (approval_ref,manifest_hash,tenant_id,search_fingerprint,grant_hash,query_key,execution_token,max_usd_micros)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING RETURNING approval_ref`,
@@ -100,7 +106,7 @@ function createBoundedBudget({ pool, manifest, assertSource }) {
       || String(metadata.tenantId) !== manifest.tenantId || metadata.missionId !== manifest.missionId) throw error('bounded_attempt_denied');
     const id = randomUUID(), operation = metadata.operation;
     await transaction(pool, async db => {
-      await lockRecovery(db); await assertGrant(db, manifest); await assertSource(db);
+      await lockRecovery(db, manifest); await assertGrant(db, manifest); await assertSource(db);
       const run = (await db.query(`SELECT state,execution_token FROM scout_bounded_acquisition_runs WHERE approval_ref=$1 FOR UPDATE`, [manifest.approvalRef])).rows[0];
       if (run?.state !== 'claimed' || run.execution_token !== executionToken) throw error('bounded_run_fenced');
       const rows = (await db.query('SELECT operation,reserved_usd_micros,state FROM scout_bounded_acquisition_attempts WHERE approval_ref=$1', [manifest.approvalRef])).rows;
@@ -149,11 +155,12 @@ function createBoundedBudget({ pool, manifest, assertSource }) {
     return transaction(pool, async db => {
       // Shared recovery lock covers this attempt only. Maintenance can interlock
       // between requests; no broad table lock is held over HTTP.
-      await lockRecovery(db); await assertGrant(db, manifest); await assertSource(db);
+      await lockRecovery(db, manifest); await assertGrant(db, manifest); await assertSource(db);
       const result = await pool.query(`UPDATE scout_bounded_acquisition_attempts SET state='sent' WHERE id=$1 AND state='reserved' RETURNING id`, [pending.id]);
       if (result.rows.length !== 1) throw error('bounded_attempt_unconfirmed');
       pending.sent = true;
       await assertGrant(db,manifest);
+      if (manifest.version === 2) await require('./scoutBoundedResearchAuthority').assertResearchAuthority(db,manifest);
       assertResearchProviderAllowed('google_places','10');
       // Commit durable sent marker separately before network. The outer shared
       // lock remains held until body consumption, at most 30 seconds.
