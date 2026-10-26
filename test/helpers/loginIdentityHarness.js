@@ -118,6 +118,11 @@ function response() {
 }
 
 async function login(harness, body = {}, currentSession = {}) {
+  // Unit calls have no express-session middleware. Mirror its non-enumerable
+  // save contract; HTTP/native PostgreSQL tests use the real session method.
+  if (typeof currentSession.save !== 'function') {
+    Object.defineProperty(currentSession, 'save', { value: callback => callback(), configurable: true });
+  }
   const req = { body: { email: 'identity@example.test', password: fixturePassword, ...body }, session: currentSession };
   const res = response();
   await harness.handlers['POST /login'][0](req, res);

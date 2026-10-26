@@ -397,3 +397,29 @@ it('Clarity files always select Max with non-skipping PostgreSQL and browser val
  const fs=require('node:fs');const workflow=fs.readFileSync(require('node:path').join(__dirname,'../.github/workflows/pr-ci-lean.yml'),'utf8');
  assert.match(workflow,/npm run test:clarity/);assert.match(workflow,/npm run test:clarity:browser/);
 });
+
+
+it('bounded research authority selects native Scout and executes both new isolated suites', () => {
+  for (const file of ['services/scoutBoundedResearchAuthority.js',
+    'migrations/2026-10-26-scout-bounded-research-authority.sql', 'test/helpers/scoutBoundedResearchFixture.js',
+    'test/helpers/denyAcquisitionHydration.cjs',
+    'test/scoutBoundedResearchAuthorityPostgres.test.js', 'test/scoutBoundedResearchCli.test.js',
+    'scripts/scout-bounded/run.cjs']) {
+    assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
+  }
+  for (const file of ['pr-ci-lean.yml', 'full-regression.yml']) {
+    const workflow = require('node:fs').readFileSync(require('node:path').join(__dirname, '../.github/workflows', file), 'utf8');
+    assert.match(workflow, /test\/scoutBoundedResearchAuthorityPostgres\.test\.js/);
+    assert.match(workflow, /test\/scoutBoundedResearchCli\.test\.js/);
+  }
+});
+
+
+it('native login persistence is covered by identity and Anchor CI with PostgreSQL', () => {
+  assert.ok(buildPlan(['test/loginSessionPersistencePostgres.test.js']).suites.includes('anchor-outbound'));
+  for (const file of ['identity-workflow.yml', 'pr-ci-lean.yml', 'anchor-governed-outbound-tests.yml', 'full-regression.yml']) {
+    const workflow = require('node:fs').readFileSync(require('node:path').join(__dirname, '../.github/workflows', file), 'utf8');
+    assert.match(workflow, /test\/loginSessionPersistencePostgres\.test\.js/);
+    assert.match(workflow, /setup-postgres-environment/);
+  }
+});

@@ -438,8 +438,9 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
 }
 
 // Search already returns rating. Re-requesting it adds the Atmosphere SKU.
+// Legacy request field is "type"; the returned JSON field remains "types".
 const PLACE_DETAILS_FIELDS =
-  'name,formatted_address,formatted_phone_number,website,place_id,types,address_component,business_status';
+  'name,formatted_address,formatted_phone_number,website,place_id,type,address_component,business_status';
 
 async function fetchPlacesPage(querySpec, apiKey, fetchImpl, pageToken = null, opts = {}) {
   const q = `${querySpec.industry || ''} ${querySpec.location || ''}`.trim();

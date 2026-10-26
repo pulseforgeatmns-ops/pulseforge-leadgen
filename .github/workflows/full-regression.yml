@@ -42,7 +42,7 @@ jobs:
               PAIGE_SOCIAL_PUBLISH_ENABLED=false
           - id: anchor-outbound
             label: Anchor governed outbound
-            run: npm run test:anchor-outbound && node --test test/emailVerificationRecovery.test.js test/emailVerificationRecoveryPostgres.test.js test/scoutCoverageGrant.test.js test/scoutCoverageGrantPostgres.test.js test/scoutDurableEpochPipelinePostgres.test.js test/scoutBoundedAcquisitionPostgres.test.js test/scoutBoundedTransport.test.js
+            run: npm run test:anchor-outbound && node --test test/emailVerificationRecovery.test.js test/emailVerificationRecoveryPostgres.test.js test/scoutCoverageGrant.test.js test/scoutCoverageGrantPostgres.test.js test/scoutDurableEpochPipelinePostgres.test.js test/scoutBoundedAcquisitionPostgres.test.js test/scoutBoundedTransport.test.js test/scoutBoundedResearchAuthorityPostgres.test.js test/scoutBoundedResearchCli.test.js test/loginSessionPersistencePostgres.test.js
             postgres: true
           - id: decision-shadow
             label: Decision shadow

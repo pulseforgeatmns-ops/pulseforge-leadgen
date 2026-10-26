@@ -11,14 +11,19 @@ const { withPlacesContext } = require('../utils/placesCostAttribution');
 const { withResearchProviderScope } = require('../utils/anchorResearchProviderPause');
 const { GovernedOutboundStore } = require('./governedOutboundStore');
 const { scoutSearchFingerprint, sourceScope, resolveScoutRampAllowedCities, _test: { persistDiscoveredCompanies } } = require('./maxOutboundControlLoop');
-const { createBoundedBudget, transaction, lockRecovery, hash, error } = require('./scoutBoundedAcquisitionBudget');
+const { createBoundedBudget, transaction, lockRecovery, assertGrant, hash, error } = require('./scoutBoundedAcquisitionBudget');
 const PROGRAM_AUTHORITY_COLUMNS = 'id,tenant_id,source_mission_id,policy,policy_hash,scope_hash,authorized_by,authorized_at,mode';
 const HEX = /^[a-f0-9]{64}(?![\s\S])/;
 function validateManifest(input) {
+  if (require('node:util').types.isProxy(input)) throw error('bounded_manifest_invalid');
+  const version = input && Object.getOwnPropertyDescriptor(input, 'version');
+  if (version && !Object.hasOwn(version, 'value')) throw error('bounded_manifest_invalid');
+  const research = version?.value === 2;
+  if (research) require('./scoutBoundedResearchAuthority').validateJsonDocument(input);
   const keys = ['version','approvalRef','tenantId','programId','missionId','programHash','sourceHash','fingerprint',
-    'query','rootQueryKey','evidenceRequest','grant','maxModeledUsdMicros'];
+    'query','rootQueryKey','evidenceRequest','grant','maxModeledUsdMicros', ...(research ? ['researchAuthority'] : [])];
   if (!input || Object.keys(input).length !== keys.length || keys.some(k => !Object.hasOwn(input,k))
-    || input.version !== 1 || input.tenantId !== '10'
+    || ![1,2].includes(input.version) || input.tenantId !== '10'
     || !/^[a-zA-Z0-9_.:-]{1,120}(?![\s\S])/.test(input.approvalRef)
     || !['programId','missionId','query'].every(k => typeof input[k] === 'string' && input[k].length > 0 && input[k].length < 512)
     || !['programHash','sourceHash','fingerprint','rootQueryKey'].every(k => HEX.test(input[k]))
@@ -36,8 +41,12 @@ function validateManifest(input) {
   const grant = validateCoverageEpochConfig(input.grant, { tenantId:input.tenantId,fingerprint:input.fingerprint });
   if (grant?.version !== 2 || grant.maxNewPages !== 1 || grant.rootQueryKeys.length !== 1
     || grant.rootQueryKeys[0] !== input.rootQueryKey || grant.approvalRef !== input.approvalRef) throw error('bounded_grant_mismatch');
+  if (research) require('./scoutBoundedResearchAuthority').validateResearchFields(input);
   const copy = JSON.parse(JSON.stringify(input));
-  return { ...copy, grant, manifestHash:hash(copy), pageKey:epochRootIdentity(input.rootQueryKey) };
+  const manifest = { ...copy, grant, manifestHash:hash(copy), pageKey:epochRootIdentity(input.rootQueryKey) };
+  // Persist/hash the approved document, never the normalized grant's derived fields.
+  Object.defineProperty(manifest, 'approvalDocument', { value:copy });
+  return manifest;
 }
 async function loadBoundSource(pool, manifest, lock = false) {
   const program = (await pool.query(`SELECT ${PROGRAM_AUTHORITY_COLUMNS} FROM acquisition_outbound_programs WHERE tenant_id=$1 AND id=$2${lock ? ' FOR SHARE' : ''}`, [manifest.tenantId,manifest.programId])).rows[0];
@@ -49,8 +58,14 @@ async function loadBoundSource(pool, manifest, lock = false) {
   if (!scope.cities.some(city => city.toLowerCase() === manifest.evidenceRequest.geography.cities[0].toLowerCase())) throw error('bounded_city_outside_mission');
   return { program, source, scope };
 }
-async function runBoundedAcquisition({ pool, manifest:input, apiKey, fetchImpl }) {
+async function runBoundedAcquisition(args) {
+  const manifest = validateManifest(args?.manifest);
+  if (manifest.version === 2) return require('./scoutBoundedResearchAuthority').runWithResearchAuthority(args);
+  return runBoundedAcquisitionInScope(args);
+}
+async function runBoundedAcquisitionInScope({ pool, manifest:input, apiKey, fetchImpl }) {
   const manifest = validateManifest(input);
+  if (manifest.version === 2) require('./scoutBoundedResearchAuthority').assertResearchExecutionScope(manifest.manifestHash);
   if (!pool?.connect || !apiKey || typeof fetchImpl !== 'function' || pool.options?.max < 3
     || !(pool.options?.connectionTimeoutMillis > 0 && pool.options.connectionTimeoutMillis <= 2000)
     || !['statement_timeout','query_timeout'].every(key => pool.options?.[key] > 0 && pool.options[key] <= 30000)
@@ -68,9 +83,9 @@ async function runBoundedAcquisition({ pool, manifest:input, apiKey, fetchImpl }
     await pool.query('SELECT client_id,company,domain,website_url,vertical,location,source,enrichment_attempts,last_attempt_at,notes FROM scout_unenriched LIMIT 0');
     let claimed = false;
     try {
-      // Plan only under the existing legacy recovery interlock. V2 allocation is
+      // Plan under the legacy interlock or separately installed research authority. V2 allocation is
       // stable; a standalone attempt does not alter its cumulative root/page caps.
-      const selected = await transaction(pool, async db => { await lockRecovery(db); return pages.plan(manifest.rootQueryKey); });
+      const selected = await transaction(pool, async db => { await lockRecovery(db,manifest); return pages.plan(manifest.rootQueryKey); });
       if (selected.key !== manifest.pageKey || selected.index !== 0 || selected.pageToken || selected.row || selected.status
         || selected.coverageVersion !== 2) throw error('bounded_fresh_first_page_required');
       await budget.claim(); claimed = true;
@@ -78,7 +93,7 @@ async function runBoundedAcquisition({ pool, manifest:input, apiKey, fetchImpl }
         plan:async root => { if (root !== manifest.rootQueryKey) throw error('bounded_unapproved_root'); return selected; },
         reserve:async plan => {
           if (plan.key !== manifest.pageKey || plan.index !== 0) throw error('bounded_page_mismatch');
-          return transaction(pool, async db => { await lockRecovery(db); return pages.reserve(plan); });
+          return transaction(pool, async db => { await lockRecovery(db,manifest); return pages.reserve(plan); });
         },
         // Even proven no-network denial cannot reopen this one-shot invocation.
         // Keep the page stop as well as the separate immutable run claim.
@@ -95,11 +110,17 @@ async function runBoundedAcquisition({ pool, manifest:input, apiKey, fetchImpl }
       const dependencyKey = candidateTicketDependencyKey({ tenantId:manifest.tenantId,program,source });
       // SQL restriction is applied BEFORE claim/attempt increments. Candidates
       // shared with any older query remain untouched by this admission pass.
-      const claims = await tickets.claimDue({ dependencyKey,limit:20,exclusiveQueryKey:manifest.pageKey });
+      const claims = await transaction(pool, async db => {
+        await lockRecovery(db,manifest);
+        await assertGrant(db,manifest);
+        await loadBoundSource(db,manifest,true);
+        return tickets.claimDue({ dependencyKey,limit:20,exclusiveQueryKey:manifest.pageKey });
+      });
       const pass = { renew:async refs => { await tickets.renew(refs); return true; },
         finish:(refs,outcome,write) => tickets.finish(refs,{ ...outcome,dependencyKey },write) };
       const admission = await transaction(pool, async db => {
-        await lockRecovery(db);
+        await lockRecovery(db,manifest);
+        await assertGrant(db,manifest);
         await loadBoundSource(db,manifest,true);
         return persistDiscoveredCompanies(pool,ownership,{ tenantId:manifest.tenantId,
           companies:claimedCompanies(claims,manifest.tenantId),
@@ -132,4 +153,4 @@ async function runBoundedAcquisition({ pool, manifest:input, apiKey, fetchImpl }
     }
   });
 }
-module.exports = { PROGRAM_AUTHORITY_COLUMNS, validateManifest, loadBoundSource, runBoundedAcquisition };
+module.exports = { PROGRAM_AUTHORITY_COLUMNS, validateManifest, loadBoundSource, runBoundedAcquisition, runBoundedAcquisitionInScope };
