@@ -136,6 +136,16 @@ class DashboardService {
     return {interval,candles:[...latest.values()].sort((a,b)=>a.time-b.time).slice(-500),asOf,quality:latest.size?'PARTIAL':'UNKNOWN',
       sourceFreshness:'UNKNOWN',emptyIntervals:'UNAVAILABLE',pollAfterMs:10000};
   }
+  async overrideZone(ca,zoneId,{lower,upper},userId){
+    lower=Number(lower);upper=Number(upper);if(!Number.isFinite(lower)||!Number.isFinite(upper)||lower<=0||upper<=lower)throw new Error('invalid_zone_bounds');
+    if(upper/lower>1.5)throw new Error('zone_too_wide');
+    const current=(await this.zoneStore.latest(ca)).find(z=>z.id===zoneId);if(!current)throw new Error('zone_not_found');
+    const now=this.now().toISOString(),override={...current,lower,upper,knownAt:now,occurredAt:now,lastCheckedAt:now,
+      confidence:null,why:[`Operator replaced the working range with ${lower}–${upper} after reviewing repeated price reversals in this area.`,...(current.why||[])],
+      provenance:{...current.provenance,type:'OPERATOR_OVERRIDE',userId:String(userId),replaces:{lower:current.lower,upper:current.upper,knownAt:current.knownAt}},
+      operatorOverride:{lower,upper,userId:String(userId),at:now,computedBounds:{lower:current.lower,upper:current.upper}}};
+    await this.zoneStore.append(override);this.cache.delete(ca);return override;
+  }
   async annotate(ca,text,userId){
     if(typeof text!=='string'||!text.trim()||text.length>2000)throw new Error('invalid_annotation');
     if(!await this.store.latest('watch',ca))throw new Error('position_not_found');
