@@ -4,6 +4,8 @@ ENV NODE_ENV=production PORT=3099 PUPPETEER_SKIP_DOWNLOAD=true PLAYWRIGHT_SKIP_B
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
 COPY services/telegramCallerFeed ./services/telegramCallerFeed
+COPY services/signalOpportunities/historicalDataset.js ./services/signalOpportunities/historicalDataset.js
+COPY scripts/signalHistoricalBackfill.js ./scripts/signalHistoricalBackfill.js
 COPY services/signalOpportunities/sourceUniverse.js ./services/signalOpportunities/sourceUniverse.js
 COPY packages/signal-v1/prospective/constants.js ./packages/signal-v1/prospective/constants.js
 COPY packages/signal-v1/prospective/caExtraction.js ./packages/signal-v1/prospective/caExtraction.js
