@@ -5297,6 +5297,11 @@
     }
   }
 
+  document.getElementById('cdAskUpload')?.addEventListener('click', () => {
+    openWorkspaceFromAction({ page: 'command-deck', context: 'spreadsheet_upload' });
+    document.getElementById('mxFileSpreadsheet')?.click();
+  });
+
   els.askForm.addEventListener('submit', (event) => {
     event.preventDefault();
     const question = (els.askInput.value || '').trim();
