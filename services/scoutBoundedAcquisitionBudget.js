@@ -151,7 +151,7 @@ function createBoundedBudget({ pool, manifest, assertSource }) {
       || [...url.searchParams.keys()].some(key => !keys.includes(key)) || keys.some(key => url.searchParams.getAll(key).length !== 1)
       || (operation === 'text_search' && url.searchParams.get('query') !== manifest.query)
       || (operation === 'place_details' && (!allowedPlaceIds.has(url.searchParams.get('place_id'))
-        || url.searchParams.get('fields') !== 'name,formatted_address,formatted_phone_number,website,place_id,types,address_component,business_status'))) throw error('bounded_transport_scope_mismatch');
+        || url.searchParams.get('fields') !== 'name,formatted_address,formatted_phone_number,website,place_id,type,address_component,business_status'))) throw error('bounded_transport_scope_mismatch');
     return transaction(pool, async db => {
       // Shared recovery lock covers this attempt only. Maintenance can interlock
       // between requests; no broad table lock is held over HTTP.

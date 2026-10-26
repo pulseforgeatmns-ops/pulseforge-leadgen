@@ -405,3 +405,13 @@ it('bounded research authority selects native Scout and executes both new isolat
     assert.match(workflow, /test\/scoutBoundedResearchCli\.test\.js/);
   }
 });
+
+
+it('native login persistence is covered by identity and Anchor CI with PostgreSQL', () => {
+  assert.ok(buildPlan(['test/loginSessionPersistencePostgres.test.js']).suites.includes('anchor-outbound'));
+  for (const file of ['identity-workflow.yml', 'pr-ci-lean.yml', 'anchor-governed-outbound-tests.yml', 'full-regression.yml']) {
+    const workflow = require('node:fs').readFileSync(require('node:path').join(__dirname, '../.github/workflows', file), 'utf8');
+    assert.match(workflow, /test\/loginSessionPersistencePostgres\.test\.js/);
+    assert.match(workflow, /setup-postgres-environment/);
+  }
+});

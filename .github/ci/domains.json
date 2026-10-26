@@ -109,6 +109,7 @@
       "routes/identityTenantSelection.js",
       "services/identityTenantSelection.js",
       "test/helpers/loginIdentityHarness.js",
+      "test/loginSessionPersistencePostgres.test.js",
       "utils/anchorResearchProviderPause.js",
       "packages/capabilities/discovery/ProspectDiscovery.js",
       "packages/capabilities/acquisition/providerContract.js",
