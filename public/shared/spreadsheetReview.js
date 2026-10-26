@@ -83,7 +83,7 @@
       const el = typeof scopeHost === 'function' ? scopeHost() : scopeHost;
       if (el) {
         el.classList.add('pf-spreadsheet-scope');
-        el.innerHTML = `<label>Review accounts assigned to <select data-spreadsheet-ao><option value="">Choose an acquisition operator</option>${next.aos.map(ao => `<option value="${escape(ao.id)}" ${String(ao.id) === String(selectedAo) ? 'selected' : ''}>${escape(ao.name)}</option>`).join('')}</select></label><div class="pf-spreadsheet-scope-actions"><button type="button" data-account-review ${selectedAo ? '' : 'disabled'}>Review accounts</button><button type="button" data-spreadsheet-refresh>Saved spreadsheet previews</button></div><p data-spreadsheet-feedback role="status"></p><div data-spreadsheet-resume></div>`;
+        el.innerHTML = `<label>Assign uploaded prospects to <select data-spreadsheet-ao><option value="">Choose an acquisition operator</option>${next.aos.map(ao => `<option value="${escape(ao.id)}" ${String(ao.id) === String(selectedAo) ? 'selected' : ''}>${escape(ao.name)}</option>`).join('')}</select></label><div class="pf-spreadsheet-scope-actions"><button type="button" data-account-review ${selectedAo ? '' : 'disabled'}>Review accounts</button><button type="button" data-spreadsheet-refresh>Saved spreadsheet previews</button></div><p data-spreadsheet-feedback role="status"></p><div data-spreadsheet-resume></div>`;
         const feedback = error => { el.querySelector('[data-spreadsheet-feedback]').textContent = error.message; };
         el.querySelector('[data-account-review]')?.addEventListener('click', () => reviewAccounts().catch(feedback));
         el.querySelector('[data-spreadsheet-refresh]')?.addEventListener('click', () => listProposals().catch(feedback));
@@ -131,6 +131,17 @@
       if (!res.ok) throw new Error(data.message || data.error || 'Could not open this preview.');
       if (!accept(data, requestEpoch)) throw new Error('The saved preview does not match the current review scope.');
       return data;
+    }
+    async function selectAoByName(name) {
+      await loadScope();
+      const matches = scope.aos.filter(ao => String(ao.name).trim().toLowerCase() === String(name).trim().toLowerCase());
+      if (matches.length !== 1) throw new Error('Could not uniquely identify that acquisition operator. Select the destination from the list.');
+      if (String(selectedAo) !== String(matches[0].id)) {
+        const selector = (typeof scopeHost === 'function' ? scopeHost() : scopeHost)?.querySelector('[data-spreadsheet-ao]');
+        if (!selector) throw new Error('AO destination selector unavailable.');
+        selector.value = String(matches[0].id);
+        selector.dispatchEvent(new Event('change', { bubbles: true }));
+      }
     }
     async function appendScope(form) {
       await loadScope();
@@ -259,7 +270,7 @@
       else onMessage('Nothing saved. The proposal remains available for review. To revise it, resolve a row or upload the workbook for a fresh comparison. Close the review to return to chat.');
       return true;
     }
-    return { accept, commit, resolve, handleText, handleAccountReview, clear, render, loadScope, listProposals, reviewAccounts, resume, appendScope, hasPending: checkScope, token: () => epoch };
+    return { accept, commit, resolve, handleText, handleAccountReview, clear, render, loadScope, listProposals, reviewAccounts, resume, appendScope, selectAoByName, hasPending: checkScope, token: () => epoch };
   }
   return { create, intent, proposalHtml };
 }));
