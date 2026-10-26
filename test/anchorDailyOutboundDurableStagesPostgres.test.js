@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test');const assert=require('node:assert/strict');const fs=require('node:fs');const path=require('node:path');
 const {startDisposablePostgres}=require('./helpers/disposablePostgres');
-const {createTrackedPostgresPool,closePostgresFixture}=require('./helpers/closePostgresPool');
+const {createTrackedPostgresPool,closePostgresPool,closePostgresFixture}=require('./helpers/closePostgresPool');
 const {PostgresStageStore}=require('../services/governedOutboundStageStore');
 const {runStage}=require('../services/governedOutboundStageScheduler');
 test('durable claims, recovery and fencing against disposable PostgreSQL',{timeout:60000},async t=>{
@@ -22,6 +22,6 @@ test('durable claims, recovery and fencing against disposable PostgreSQL',{timeo
 
  await t.test('simultaneous contenders admit exactly one owner',async()=>{await clear();const claims=await Promise.all(Array.from({length:8},()=>new PostgresStageStore(pool).acquire('10','poll')));assert.equal(claims.filter(x=>x.status==='claimed').length,1);const owner=claims.find(x=>x.status==='claimed');await s.start(owner);await s.finish(owner,'completed');});
  await t.test('expired start versus recovery race never permits stale execution',async()=>{for(let i=0;i<10;i++){await clear();const old=await s.acquire('13','poll');await pool.query("UPDATE governed_outbound_stage_schedule SET lease_until=clock_timestamp()-interval '1 second'");const [start,recovered]=await Promise.allSettled([s.start(old),s.acquire('13','poll')]);assert.equal(start.status,'rejected');assert.equal(recovered.status,'fulfilled');assert.equal(recovered.value.status,'claimed');await assert.rejects(s.finish(old,'completed'));await s.start(recovered.value);await s.finish(recovered.value,'completed');}});
- await t.test('small pool supports claim operations without reserved clients',async()=>{await clear();const small=createTrackedPostgresPool({connectionString:instance.connectionString,max:4});try{const store=new PostgresStageStore(small);const claims=await Promise.all(['1','10','13','17'].map(id=>store.acquire(id,'poll')));assert.equal(claims.filter(x=>x.status==='claimed').length,4);assert.equal(small.totalCount-small.idleCount,0);await Promise.all(claims.map(async claim=>{await store.start(claim);await store.finish(claim,'uncertain','fixture');}));}finally{await small.end();}});
+ await t.test('small pool supports claim operations without reserved clients',async()=>{await clear();const small=createTrackedPostgresPool({connectionString:instance.connectionString,max:4});try{const store=new PostgresStageStore(small);const claims=await Promise.all(['1','10','13','17'].map(id=>store.acquire(id,'poll')));assert.equal(claims.filter(x=>x.status==='claimed').length,4);assert.equal(small.totalCount-small.idleCount,0);await Promise.all(claims.map(async claim=>{await store.start(claim);await store.finish(claim,'uncertain','fixture');}));}finally{await closePostgresPool(small);}});
 
 });
