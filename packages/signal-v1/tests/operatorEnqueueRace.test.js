@@ -4,7 +4,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
-const {Pool}=require('pg');
+const {createTrackedPostgresPool,closePostgresFixture}=require('../../../test/helpers/closePostgresPool');
 const {startDisposablePostgres}=require('../../../test/helpers/disposablePostgres');
 const {ensureSignalSchema}=require('../storage/ensureSignalSchema');
 const {OperatorAlertOutbox}=require('../operator/alertOutbox');
@@ -28,14 +28,14 @@ function researchInput(messageId) {
 }
 async function database(run) {
   const instance=await startDisposablePostgres('sig-outbox-race-',{socketPrefix:'sigr-'});
-  const pool=new Pool({connectionString:instance.connectionString});
+  const pool=createTrackedPostgresPool({connectionString:instance.connectionString});
   try {
     await ensureSignalSchema(pool);
     for(const name of ['2026-10-07-signal-v1-operator-outbox.sql','2026-10-07-signal-v1-operator-relay.sql']) {
       await pool.query(fs.readFileSync(path.join(__dirname,'../../../migrations',name),'utf8'));
     }
     await run(pool);
-  } finally {await pool.end();await instance.stop();}
+  } finally {await closePostgresFixture(pool,instance);}
 }
 async function rowFor(pool,messageId) {
   const rows=(await pool.query('SELECT * FROM signal_operator_alert_outbox WHERE external_message_id=$1',
