@@ -36,6 +36,12 @@ function createDashboardRouter({Router,requireAuth,requireRole,getService,getCon
     if(!await service.detail(req.params.ca))return res.status(404).json({error:'position_not_found'});
     const events=service.zoneStore?await service.zoneStore.history(req.params.ca,req.params.zoneId):[];return events.length?res.json({events,mode:'PAPER_OBSERVATION',validated:false}):res.status(404).json({error:'zone_not_found'});
   }));
+  router.post('/api/v1/signal/positions/:ca/zones/:zoneId/override',...guard,handle(async(req,res)=>{
+    const origin=req.get('origin');if(!origin||origin!==`${req.protocol}://${req.get('host')}`||!req.is('application/json'))return res.status(403).json({error:'zone_override_origin_denied'});
+    if(!/^[a-f0-9]{64}$/.test(req.params.zoneId)||!req.body||Object.keys(req.body).some(k=>!['lower','upper'].includes(k)))return res.status(400).json({error:'invalid_zone_override'});
+    const lower=Number(req.body.lower),upper=Number(req.body.upper);if(!Number.isFinite(lower)||!Number.isFinite(upper)||lower<=0||upper<=lower)return res.status(400).json({error:'invalid_zone_bounds'});
+    try{return res.status(201).json({zone:await getService().overrideZone(req.params.ca,req.params.zoneId,{lower,upper},req.session.user.id)});}catch(e){return res.status(e.message==='zone_not_found'?404:400).json({error:e.message});}
+  }));
   for(const kind of ['candles','events','transactions','risk'])router.get(`/api/v1/signal/positions/:ca/${kind}`,...guard,handle(async(req,res)=>{
     const service=getService(),p=await service.detail(req.params.ca);if(!p)return res.status(404).json({error:'position_not_found'});
     if(kind==='candles'){
