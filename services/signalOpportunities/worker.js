@@ -22,6 +22,17 @@ function cadenceProfile(calls,sources,asOf){
    medianGapMinutes:gaps.length?Math.round(gaps[Math.floor(gaps.length/2)]/60000):null,activeHoursUtc,
    cadenceClass:items.length>=12?'HIGH_FREQUENCY':items.length>=3?'OPPORTUNISTIC':'INSUFFICIENT_SAMPLE',quality:items.length>=3?'HISTORICAL':'PARTIAL'};});
 }
+
+function madApesResearch(calls,events,observationsByToken,asOf){
+ const gambles=calls.filter(x=>x.source==='madapes-gambles').sort((a,b)=>Date.parse(a.knownAt)-Date.parse(b.knownAt));
+ const first=new Map();for(const x of gambles)if(!first.has(x.tokenAddress))first.set(x.tokenAddress,x);
+ const horizons=[5,15,30,60,240,1440];
+ return [...first.values()].map(entry=>{const t0=Date.parse(entry.knownAt),obs=(observationsByToken.get(entry.tokenAddress)||[]).filter(o=>Date.parse(o.knownAt)>=t0).sort((a,b)=>Date.parse(a.knownAt)-Date.parse(b.knownAt));
+  const base=obs[0]||null,basePrice=Number(base?.priceUsd),outcomes={};
+  for(const m of horizons){const cutoff=t0+m*60000,eligible=obs.filter(o=>Date.parse(o.knownAt)<=cutoff&&Number(o.priceUsd)>0),prices=eligible.map(o=>Number(o.priceUsd));outcomes[m+'m']={status:Date.parse(asOf)>=cutoff?'MATURED':'PENDING',observations:prices.length,mfePct:basePrice&&prices.length?Math.max(...prices)/basePrice*100-100:null,maePct:basePrice&&prices.length?Math.min(...prices)/basePrice*100-100:null};}
+  const arrivals=calls.filter(x=>x.tokenAddress===entry.tokenAddress&&x.sourceRole==='AMPLIFIER'&&x.source!=='madapes-gambles'&&Date.parse(x.knownAt)>=t0).sort((a,b)=>Date.parse(a.knownAt)-Date.parse(b.knownAt)).map(x=>({sourceId:x.source,knownAt:x.knownAt,lagMinutes:Math.round((Date.parse(x.knownAt)-t0)/60000)}));
+  return {cohort:'madapes-gambles-prospective-001',dataClass:'EMPIRICAL',mode:'PROSPECTIVE',tokenAddress:entry.tokenAddress,t0KnowledgeAt:entry.knownAt,entryMarket:base?{observedAt:base.observedAt,knownAt:base.knownAt,priceUsd:base.priceUsd,marketCapUsd:base.marketCapUsd,liquidityUsd:base.liquidityUsd}:null,outcomes,amplifierArrivals:arrivals,quality:base?'PARTIAL':'UNKNOWN'};});
+}
 function createOpportunityWorker({store,opportunities,feed,marketProvider,transports=[],now=()=>new Date(),maxTokens=120,transportTestId=null,relationshipGraph={version:'relationship-graph-v1.0.0',edges:RELATIONSHIPS}}){
  let running=false,rotation=0;
  const status=async(state,reason,extra={})=>{const at=now().toISOString();await store.put('status','*','opportunity-engine',{component:'opportunity-engine',state,reason,...extra,occurredAt:at,knownAt:at},{mutable:true});};
@@ -61,6 +72,8 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
    const events=await store.list('event',null,{ascending:false,limit:20000});
    const calls=events.filter(e=>e.category==='CALLER'&&Date.parse(asOf)-Date.parse(e.knownAt)<=86400000);
    const recent=calls.filter(e=>Date.parse(asOf)-Date.parse(e.occurredAt)<=DEFINITION.windowMs);
+   const obsAll=await store.list('observation',null,{ascending:false,limit:20000}),obsBy=new Map();for(const o of obsAll){if(!obsBy.has(o.tokenAddress))obsBy.set(o.tokenAddress,[]);obsBy.get(o.tokenAddress).push(o);}
+   const madapes=madApesResearch(calls,events,obsBy,asOf);await store.put('status','*','madapes-gambles-prospective-001',{component:'madapes-gambles-prospective-001',state:'PARTIAL',reason:'Prospective empirical research only; not used by live opportunity scoring.',sampleSize:madapes.length,records:madapes,occurredAt:asOf,knownAt:asOf},{mutable:true});
    const cadence=cadenceProfile(calls,sources,asOf);await store.put('status','*','amplifier-cadence',{component:'amplifier-cadence',state:'PARTIAL',reason:'Rolling retained-feed history; not an announced schedule.',profiles:cadence,occurredAt:asOf,knownAt:asOf},{mutable:true});
    const counts=new Map();for(const c of recent)counts.set(c.tokenAddress,(counts.get(c.tokenAddress)||0)+1);
    const priority=[...counts].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,maxTokens).map(x=>x[0]);
@@ -97,4 +110,4 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
  }
  return {tick,ingest};
 }
-module.exports={createOpportunityWorker,sourcesFromHealth,cadenceProfile};
+module.exports={createOpportunityWorker,sourcesFromHealth,cadenceProfile,madApesResearch};
