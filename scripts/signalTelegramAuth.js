@@ -7,6 +7,8 @@
  */
 
 const readline = require('node:readline');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const { TelegramClient } = require('telegram');
 const { StringSession } = require('telegram/sessions');
@@ -111,7 +113,14 @@ async function main() {
       fail('Authentication completed but no session string was produced.');
     }
 
-    console.log(`TELEGRAM_SESSION_STRING=${sessionString}`);
+    const outputPath = process.env.TELEGRAM_SESSION_OUTPUT_PATH;
+    if (outputPath) {
+      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+      fs.writeFileSync(outputPath, sessionString, { mode: 0o600 });
+      console.log(`Telegram session stored securely at ${outputPath}`);
+    } else {
+      console.log(`TELEGRAM_SESSION_STRING=${sessionString}`);
+    }
   } finally {
     try {
       await client.disconnect();
