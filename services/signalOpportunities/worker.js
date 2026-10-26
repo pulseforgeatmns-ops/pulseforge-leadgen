@@ -35,6 +35,7 @@ function madApesResearch(calls,events,observationsByToken,asOf){
 }
 function createOpportunityWorker({store,opportunities,feed,marketProvider,transports=[],now=()=>new Date(),maxTokens=120,transportTestId=null,relationshipGraph={version:'relationship-graph-v1.0.0',edges:RELATIONSHIPS}}){
  let running=false,rotation=0;
+ const paper=new (require('./paperAccount').PaperAccount)({store,now});
  const status=async(state,reason,extra={})=>{const at=now().toISOString();await store.put('status','*','opportunity-engine',{component:'opportunity-engine',state,reason,...extra,occurredAt:at,knownAt:at},{mutable:true});};
  async function ingest(payload){
   if(!payload||!Array.isArray(payload.calls)||payload.calls.length>10000)throw Error('invalid_opportunity_feed');
@@ -97,10 +98,12 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
     if(!decision)continue;
     decision.relationshipVersion=relationshipGraph.version;
     const saved=await opportunities.append(decision,{held:held.has(ca)});
+    if(saved.created&&last)await paper.evaluate(decision,last);
     if(saved.created&&saved.transition){const e={id:hash(['opportunity-state',decision.id]),tokenAddress:ca,category:'OPPORTUNITY_'+decision.opportunityState,occurredAt:decision.knowledgeAt,knownAt:decision.knowledgeAt,source:decision.definitionVersion,evidence:decision,provenance:decision.provenance};await store.put('event',ca,e.id,e);}
    }
    if(transportTestId&&transports.every(t=>t.ready))await opportunities.enqueueTransportTest(transportTestId);
    await deliver(opportunities,transports);
+   const paperAccount=await paper.snapshot();await store.put('status','*','paper-account',{component:'paper-account',state:'OBSERVED',version:require('./paperAccount').VERSION,config:require('./paperAccount').CONFIG,account:paperAccount,reason:'Prospective simulated execution only. No real orders or wallet access.',occurredAt:asOf,knownAt:asOf},{mutable:true});
    const at=now().toISOString();await store.put('status','*','opportunity-capacity',{component:'opportunity-capacity',state:counts.size>maxTokens?'PARTIAL':'OBSERVED',
      discoveredTokens:counts.size,evaluatedTokens:tokens.length,marketEnrichmentLimit:maxTokens,deferredTokens:Math.max(0,counts.size-maxTokens),
      sourceCandidateCount:SOURCES.length,liveSources:sources.filter(s=>s.active).length,requiredLiveSources:10,
