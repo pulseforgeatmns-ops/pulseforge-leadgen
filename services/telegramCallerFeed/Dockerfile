@@ -1,4 +1,5 @@
 FROM node:22-bookworm-slim
+# Historical worker image includes isolated archive dependencies.
 WORKDIR /app
 ENV NODE_ENV=production PORT=3099 PUPPETEER_SKIP_DOWNLOAD=true PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 COPY package.json package-lock.json ./
