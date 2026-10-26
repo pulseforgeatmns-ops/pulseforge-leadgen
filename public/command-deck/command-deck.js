@@ -74,6 +74,8 @@
 
   function renderMxComposerChips() {
     const host = document.getElementById('mxComposerChips');
+    const reviewButton = document.getElementById?.('mxReviewSpreadsheet');
+    if (reviewButton) reviewButton.hidden = !mxPendingComposerFiles.some(entry => inferMxAttachmentType(entry.file) === 'spreadsheet');
     if (!host) return;
     if (!mxPendingComposerFiles.length) {
       host.hidden = true;
@@ -5359,13 +5361,14 @@
       if (input.files?.[0]) {
         mxPendingComposerFiles.push({ file: input.files[0], type: inferMxAttachmentType(input.files[0]) });
         renderMxComposerChips();
-        // A spreadsheet upload is itself a preview request; no extra Send is needed.
-        if (input.id === 'mxFileSpreadsheet') void askWorkspace('');
+        // The Review spreadsheet action submits without requiring a chat message.
       }
       input.value = '';
     });
   });
   loadMxComposerMemory();
+
+  document.getElementById?.('mxReviewSpreadsheet')?.addEventListener('click', () => { void askWorkspace(''); });
 
   // Enter sends; Shift+Enter keeps a newline so multi-row ProspectList pastes survive.
   els.mxAskInput?.addEventListener('keydown', (event) => {
