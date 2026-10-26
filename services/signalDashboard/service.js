@@ -20,6 +20,7 @@ class DashboardService {
     const [watches,transactions,observations,events,annotations,balances,cursors,quotes,statuses]=await Promise.all(
       ['watch','transaction','observation','event','annotation','balance','cursor','quote','status'].map(k=>store.list(k,k==='cursor'||k==='quote'||k==='status'?null:ca,{asOf,ascending:k!=='observation',limit:k==='observation'?10000:5000})));
     const opportunity=this.opportunities?await this.opportunities.latest(ca,asOf):null;
+    const paperEvents=await store.list('paper','*',{asOf,ascending:true,limit:10000}),paperToken=paperEvents.filter(e=>e.tokenAddress===ca);
     const watch=watches[0]||(opportunity?{tokenAddress:ca,symbol:opportunity.symbol}:null);if(!watch)return null;
     observations.reverse();
     const current=observations.at(-1)||null;
@@ -73,7 +74,8 @@ class DashboardService {
     const milestones=milestoneTransactions.filter((t,i,all)=>t.lifecycle==='DE_RISK'&&all[i-1]?.lifecycle!=='DE_RISK').map(t=>({
       id:id(['de-risk',t.id]),category:'DE_RISK_MILESTONE',occurredAt:t.blockTime,knownAt:asOf,source:'FIFO trade analytics',
       evidence:'Observed money received covers observed money put in, including fees in the observed cash changes',provenance:{transactionSignature:t.signature,quality:ledger.quality,unit:nativeAnalytics?native.symbol:'USD',derived:true}}));
-    const timeline=[...events,...markers,...milestones,...annotations,...risk.transitions].sort((a,b)=>Date.parse(a.occurredAt)-Date.parse(b.occurredAt)||String(a.id).localeCompare(String(b.id)));
+    const paperMarkers=paperToken.map(e=>({id:'paper:'+e.id,category:e.side==='BUY'?'PAPER_BUY':'PAPER_SELL',occurredAt:e.occurredAt,knownAt:e.knownAt,source:'Signal paper account',evidence:{...e.evidence,fillPrice:e.fillPrice,notionalUsd:e.notionalUsd,tokens:e.tokens,action:e.action},provenance:e.provenance}));
+    const timeline=[...events,...markers,...paperMarkers,...milestones,...annotations,...risk.transitions].sort((a,b)=>Date.parse(a.occurredAt)-Date.parse(b.occurredAt)||String(a.id).localeCompare(String(b.id)));
     const research=events.filter(e=>e.researchState).at(-1);
     return {tokenAddress:ca,symbol:current?.symbol||watch.symbol||ca.slice(0,8),walletConfigured:true,asOf,lastUpdated:current?.observedAt||balance?.observedAt||null,
       market,accounting,quoteAccounting,peak,risk,signalState:metric(research?.researchState||null,{provider:'signal empirical events',partial:true,observedAt:research?.knownAt},at),
@@ -82,7 +84,7 @@ class DashboardService {
         walletObservedAt:balance?.observedAt||null,balanceSlot:balance?.slot||null,transactionLimitReached:transactions.length>=5000,
         observationWindowTruncated:observations.length>=10000,telegram:statuses.find(x=>x.component==='feed')||{state:'UNKNOWN'},statuses},
       // Bounded initial mobile payload; full paginated evidence is available through subresources.
-      events:timeline.slice(-250),eventCount:timeline.length,opportunity,positionTracked:Boolean(watches[0]),researchZones:await this.zones(ca,asOf,statuses,6),pollAfterMs:10000,chartIntervals:Object.keys(INTERVALS),readOnly:true};
+      events:timeline.slice(-250),eventCount:timeline.length,opportunity,paperPosition:this.paperPosition(paperToken,current),positionTracked:Boolean(watches[0]),researchZones:await this.zones(ca,asOf,statuses,6),pollAfterMs:10000,chartIntervals:Object.keys(INTERVALS),readOnly:true};
   }
   async zones(ca,asOf=this.now().toISOString(),statuses=null,limit=20){
     const {VERSION,RULES}=require('./zones');
@@ -93,6 +95,8 @@ class DashboardService {
       counts:{recordedInWindow:rows.length,conditionsObserved:rows.filter(z=>z.paper.reference).length,invalidated:rows.filter(z=>z.state==='INVALIDATED').length,expired:rows.filter(z=>z.state==='EXPIRED').length},
       zones:rows.slice(0,limit).map(({inputSnapshot,...zone})=>zone),windowLimit:100};
   }
+  paperPosition(events,current){let tokens=0,cost=0,realized=0;for(const e of events){if(e.side==='BUY'){tokens+=Number(e.tokens);cost+=Number(e.notionalUsd);}else if(e.side==='SELL'&&tokens>0){const basis=cost;realized+=Number(e.notionalUsd)-basis;tokens=0;cost=0;}}const mark=Number(current?.priceUsd),value=tokens&&Number.isFinite(mark)?tokens*mark:null;return {mode:'PAPER',tokens,costBasisUsd:cost,positionValueUsd:value,realizedPnlUsd:realized,unrealizedPnlUsd:value==null?null:value-cost,events:events.slice(-50),quality:events.length?'OBSERVED':'EMPTY'};}
+  async paperPortfolio(){const asOf=this.now().toISOString(),events=await this.store.list('paper','*',{asOf,ascending:true,limit:10000}),status=(await this.store.list('status','*',{asOf})).find(s=>s.component==='paper-account')||null;let cash=10000,realized=0,trades=0;const positions=new Map();for(const e of events){if(e.side==='BUY'){cash-=Number(e.notionalUsd);positions.set(e.tokenAddress,{tokenAddress:e.tokenAddress,tokens:Number(e.tokens),costBasisUsd:Number(e.notionalUsd),entryFillPrice:Number(e.fillPrice),enteredAt:e.knownAt});trades++;}else if(e.side==='SELL'){cash+=Number(e.notionalUsd);const p=positions.get(e.tokenAddress);if(p){realized+=Number(e.notionalUsd)-p.costBasisUsd;positions.delete(e.tokenAddress);}trades++;}}let openValue=0;const open=[];for(const p of positions.values()){const o=await this.store.latest('observation',p.tokenAddress);const mark=Number(o?.priceUsd),value=Number.isFinite(mark)?p.tokens*mark:null;if(value!=null)openValue+=value;open.push({...p,markPriceUsd:Number.isFinite(mark)?mark:null,positionValueUsd:value,unrealizedPnlUsd:value==null?null:value-p.costBasisUsd});}return {mode:'PROSPECTIVE_PAPER',startingCashUsd:10000,cashUsd:cash,openPositionValueUsd:openValue,equityUsd:cash+openValue,realizedPnlUsd:realized,totalPnlUsd:cash+openValue-10000,trades,openPositions:open,events:events.slice(-100).reverse(),status,asOf};}
   async positions(){
     const watches=await this.store.list('watch',null,{limit:100});
     const positions=[];
@@ -104,7 +108,7 @@ class DashboardService {
       const observation=await this.store.latest('observation',e.tokenAddress);
       liveSignals.push({tokenAddress:e.tokenAddress,source:e.source,occurredAt:e.occurredAt,researchState:e.researchState||'UNKNOWN',
         marketCap:metric(observation?.marketCapUsd??null,observation||{},+this.now()),liquidity:metric(observation?.liquidityUsd??null,observation||{},+this.now()),convergence:events.some(x=>x.tokenAddress===e.tokenAddress&&x.category==='INDEPENDENT_CONVERGENCE')?'INDEPENDENT_CONVERGENCE':'UNKNOWN',risk:positions.find(p=>p.tokenAddress===e.tokenAddress)?.risk||'UNKNOWN',ageSeconds:Math.max(0,(+this.now()-Date.parse(e.occurredAt))/1000),performanceBlinded:true});}
-    return {positions,liveSignals,opportunityDiscovery:await this.discovery(),asOf:this.now().toISOString(),pollAfterMs:10000,readOnly:true};
+    return {positions,liveSignals,opportunityDiscovery:await this.discovery(),paperPortfolio:await this.paperPortfolio(),asOf:this.now().toISOString(),pollAfterMs:10000,readOnly:true};
   }
   async discovery(){
     const asOf=this.now().toISOString(),rows=this.opportunities?await this.opportunities.list(asOf):[];
