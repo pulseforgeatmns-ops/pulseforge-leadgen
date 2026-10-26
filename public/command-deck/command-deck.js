@@ -110,7 +110,11 @@
     }
     const form = new FormData();
     const isSpreadsheet = mxPendingComposerFiles.some(entry => inferMxAttachmentType(entry.file) === 'spreadsheet');
-    if (isSpreadsheet) await spreadsheetReview.appendScope(form);
+    if (isSpreadsheet) {
+      const destination = String(question || '').match(/\b(?:add|assign|import|upload)\b[\s\S]{0,160}?\b(?:to|for)\s+([A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*)?)\s*(?:'s)?\s+(?:account|portfolio)\b/i);
+      if (destination) await spreadsheetReview.selectAoByName(destination[1]);
+      await spreadsheetReview.appendScope(form);
+    }
     const reviewEpoch = spreadsheetReview.token();
     form.append('text', question || '');
     form.append('conversation_id', mxComposerConversationId);
