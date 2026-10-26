@@ -272,6 +272,7 @@
       "packages/max/composer/headerMap.js",
       "packages/max/stateIngestion/",
       "routes/maxStateIngestion.js",
+      "utils/maxOperationalAuthorization.js",
       "services/maxSpreadsheetService.js",
       "services/maxStateIngestionService.js",
       "services/maxComposerService.js",
@@ -334,6 +335,8 @@
       "scripts/studioSubstral"
     ],
     "max": [
+      "utils/maxOperationalAuthorization.js",
+      "utils/maxAttentionAuthorization.js",
       "utils/businessNameShort.js",
       "maxAgent.js",
       "maxDecayAgent.js",

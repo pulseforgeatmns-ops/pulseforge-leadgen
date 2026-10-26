@@ -4,6 +4,14 @@ const assert = require('node:assert/strict');
 const { describe, it } = require('node:test');
 const { buildPlan, pathMatchesPattern } = require('../.github/scripts/ci-plan-pr.js');
 
+it('Max operational principal and tenant boundaries retain strict and full regression coverage', () => {
+  for (const file of ['utils/maxOperationalAuthorization.js', 'utils/maxAttentionAuthorization.js',
+    'routes/maxDecisionExecution.js', 'routes/maxStateIngestion.js', 'test/maxOperationalAuthorization.test.js']) {
+    assert.ok(buildPlan([file]).suites.includes('max'), file);
+  }
+  assert.match(require('../package.json').scripts['test:max'], /test\/maxOperationalAuthorization\.test\.js/);
+});
+
 it('legacy prepared-history isolation and its native regression retain the Anchor safety gate', () => {
   for (const file of ['services/anchorCrmPreparationLegacyHistory.js', 'services/acquisitionMissionRuntime.js',
     'services/anchorScopedResumeCrmPreparation.js', 'test/anchorScopedResumeLegacyHistoryPostgres.test.js']) {

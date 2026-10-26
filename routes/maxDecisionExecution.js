@@ -3,7 +3,8 @@
 const express = require('express');
 const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
-const { normalizeClientId } = require('../utils/clientContext');
+const pool = require('../db');
+const { resolveMaxOperationalScope } = require('../utils/maxOperationalAuthorization');
 const {
   evaluateDecision,
   runExpectationDecisionScan,
@@ -14,17 +15,13 @@ const requireDecisionWrite = [
   requireRole('admin', 'manager'),
 ];
 
-function resolveClientId(req) {
-  const fromBody = normalizeClientId(req.body?.client_id ?? req.body?.clientId);
-  if (fromBody != null) return fromBody;
-  const fromQuery = normalizeClientId(req.query?.client_id);
-  if (fromQuery != null) return fromQuery;
-  return normalizeClientId(req.session?.active_client_id);
+async function resolveClientId(req) {
+  return (await resolveMaxOperationalScope(req, pool)).clientId;
 }
 
 router.post('/api/v1/max/decisions/evaluate', requireDecisionWrite, async (req, res) => {
   try {
-    const clientId = resolveClientId(req);
+    const clientId = await resolveClientId(req);
     if (clientId == null) {
       return res.status(400).json({ error: 'client_id_required' });
     }
@@ -39,6 +36,7 @@ router.post('/api/v1/max/decisions/evaluate', requireDecisionWrite, async (req, 
       telemetry: result.telemetry,
     });
   } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ error: error.code });
     console.error('[max-decision-execution]', error);
     return res.status(500).json({ error: 'decision_evaluation_failed', message: error.message });
   }
@@ -46,7 +44,7 @@ router.post('/api/v1/max/decisions/evaluate', requireDecisionWrite, async (req, 
 
 router.post('/api/v1/max/decisions/scan-expectations', requireDecisionWrite, async (req, res) => {
   try {
-    const clientId = resolveClientId(req);
+    const clientId = await resolveClientId(req);
     if (clientId == null) {
       return res.status(400).json({ error: 'client_id_required' });
     }
@@ -63,17 +61,17 @@ router.post('/api/v1/max/decisions/scan-expectations', requireDecisionWrite, asy
       })),
     });
   } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ error: error.code });
     return res.status(500).json({ error: 'expectation_scan_failed', message: error.message });
   }
 });
 
 router.get('/api/v1/max/decisions/:id/receipt', requireDecisionWrite, async (req, res) => {
   try {
-    const clientId = resolveClientId(req);
+    const clientId = await resolveClientId(req);
     if (clientId == null) {
       return res.status(400).json({ error: 'client_id_required' });
     }
-    const pool = require('../db');
     const { rows } = await pool.query(
       `SELECT id, rationale, execution_status, verification_status, receipt_summary, owner, reevaluate_after, created_at
        FROM max_operational_decisions WHERE id = $1 AND client_id = $2`,
@@ -84,6 +82,7 @@ router.get('/api/v1/max/decisions/:id/receipt', requireDecisionWrite, async (req
     }
     return res.json({ ok: true, decision: rows[0] });
   } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ error: error.code });
     return res.status(500).json({ error: 'receipt_failed', message: error.message });
   }
 });

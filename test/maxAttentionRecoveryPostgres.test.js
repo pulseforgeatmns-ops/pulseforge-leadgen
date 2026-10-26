@@ -3,8 +3,8 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { randomUUID } = require('node:crypto');
-const { Pool } = require('pg');
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
+const { createTrackedPostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
 const { applyCanonicalAoFixture } = require('./helpers/canonicalAoPostgres');
 const { PostgresStateStore } = require('../packages/max/stateIngestion/store/postgresStore');
 const { PostgresDecisionStore } = require('../packages/max/decisionExecution/store/postgresStore');
@@ -15,8 +15,10 @@ const { runAttentionCycle, evaluateAttentionItem } = require('../packages/max/at
 // never DATABASE_URL, live routes, health/init endpoints, or provider credentials.
 test('PostgreSQL attention lifecycle, fencing and atomic restart recovery', { timeout: 90000 }, async t => {
   const instance = await startDisposablePostgres('max-attention-');
-  const db = new Pool({ connectionString: instance.connectionString });
-  t.after(async () => { await db.end(); await instance.stop(); });
+  const db = createTrackedPostgresPool({ connectionString: instance.connectionString });
+  // pool.end() can resolve before discarded/idle client sockets physically close.
+  // Do not let synchronous pg_ctl stop manufacture late backend-termination errors.
+  t.after(() => closePostgresFixture(db, instance));
   await applyCanonicalAoFixture(db);
   const now = new Date('2026-10-13T12:00:00Z');
   function stores(pool = db, clientId = 1) {
