@@ -21,6 +21,7 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
   for(const s of sources)registry[s.sourceId]={clusterId:s.clusterId,relationship:s.clusterRelationshipStatus};
   const verified=new Map(sources.filter(s=>s.identityStatus==='VERIFIED').map(s=>[s.sourceId,s]));
   let accepted=0;
+  const activity=new Map(sources.map(s=>[s.sourceId,{sourceId:s.sourceId,active:s.active,available:s.available,channelId:s.channelId||null,acceptedCalls:0,lastObservedAt:null,lastIngestedAt:null,lastKnowledgeAt:null,lastLatencyMs:null}]));
   for(const call of payload.calls){const s=verified.get(call.sourceId);if(!s||String(call.communityId)!==String(s.channelId))continue;
    const edit=Date.parse(call.provenance?.messageEditAt),ingested=Date.parse(call.ingestedAt),occurred=Date.parse(call.occurredAt);
    if(!Number.isFinite(ingested)||!Number.isFinite(occurred)||Number.isFinite(edit)&&edit>Date.parse(at))continue;
@@ -38,7 +39,7 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
     await store.put('event',e.tokenAddress,e.id,e);if(e.category==='CALLER')accepted++;
    }
   }
-  await status('PARTIAL','Prospective collection only; source and market coverage may be incomplete.',{sources,sourceHealth:payload.health?.expansionHealth||null,medianIngestionLatencyMs:payload.health?.medianIngestionLatencyMs??null,acceptedFromRetainedFeed:accepted,feedCheckedAt:at});
+  await status('PARTIAL','Prospective collection only; source and market coverage may be incomplete.',{sources,sourceHealth:payload.health?.expansionHealth||null,medianIngestionLatencyMs:payload.health?.medianIngestionLatencyMs??null,acceptedFromRetainedFeed:accepted,sourceActivity:[...activity.values()],productiveSources:[...activity.values()].filter(x=>x.acceptedCalls>0).length,lastAcceptedCallAt:[...activity.values()].map(x=>x.lastKnowledgeAt).filter(Boolean).sort().at(-1)||null,feedCheckedAt:at});
   await store.put('status','*','feed',{component:'feed',state:'PARTIAL',reason:'Verified source universe; completeness is unknown',occurredAt:at,knownAt:at},{mutable:true});
   return sources;
  }
