@@ -8,6 +8,7 @@ COPY services/telegramCallerFeed ./services/telegramCallerFeed
 COPY services/signalOpportunities/historicalDataset.js ./services/signalOpportunities/historicalDataset.js
 COPY scripts/signalHistoricalBackfill.js ./scripts/signalHistoricalBackfill.js
 COPY scripts/signalTelegramAuth.js ./scripts/signalTelegramAuth.js
+COPY scripts/signalTelegramAuthProbe.js ./scripts/signalTelegramAuthProbe.js
 COPY services/signalOpportunities/sourceUniverse.js ./services/signalOpportunities/sourceUniverse.js
 COPY packages/signal-v1/prospective/constants.js ./packages/signal-v1/prospective/constants.js
 COPY packages/signal-v1/prospective/caExtraction.js ./packages/signal-v1/prospective/caExtraction.js
