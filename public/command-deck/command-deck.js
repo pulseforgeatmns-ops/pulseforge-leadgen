@@ -5359,6 +5359,8 @@
       if (input.files?.[0]) {
         mxPendingComposerFiles.push({ file: input.files[0], type: inferMxAttachmentType(input.files[0]) });
         renderMxComposerChips();
+        // A spreadsheet upload is itself a preview request; no extra Send is needed.
+        if (input.id === 'mxFileSpreadsheet') void askWorkspace('');
       }
       input.value = '';
     });
