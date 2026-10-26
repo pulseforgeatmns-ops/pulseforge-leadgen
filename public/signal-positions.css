@@ -18,3 +18,6 @@ h1,.title-line{overflow-wrap:anywhere}.title-line{flex-wrap:wrap}.metric .explan
 #hot-opportunities,#watch-opportunities,#source-health{margin:28px 0} .opportunity-card p{line-height:1.6;overflow-wrap:anywhere} .opportunity-card[data-state="HOT"]{border-color:#efc47c;box-shadow:0 0 24px #efc47c12} .opportunity-card[data-state="AVOID"]{border-color:#ff91a7} #tokenIntelligence{margin:24px 0} #callerSequence .health-row,#sourceRows .health-row{gap:16px;flex-wrap:wrap} #callerSequence span,#sourceRows span{overflow-wrap:anywhere} #sourceRows .health-row{padding:12px 0} @media(max-width:600px){#sourceRows .health-row{display:grid;gap:5px}}
 
 .opportunity-card .card-grid .label{display:block;margin-bottom:6px} .opportunity-card .card-grid strong{display:block}
+
+/* Chart declutter: keep current structure prominent; compress dense event activity. */
+.chart-event-marker[data-cluster="true"]{width:24px;height:20px;border-radius:10px;font-size:8px;background:#1a2030ee;color:#aebbd0!important;border-color:#66738c;box-shadow:none}.research-zone-band[data-historical="true"]{opacity:.22;border-style:dotted;background:transparent}.research-zone-label[data-historical="true"]{opacity:.32;background:#151922;color:#8994a9;border-color:#59627455;max-width:105px}.research-zone-label[data-historical="false"]{z-index:5}
