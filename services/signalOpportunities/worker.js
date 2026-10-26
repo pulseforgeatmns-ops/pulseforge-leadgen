@@ -12,6 +12,16 @@ function sourcesFromHealth(health,at){
   identityStatus:r?.identityStatus==='VERIFIED'?'VERIFIED':'CANDIDATE',channelId:r?.channelId||null,verifiedAt:r?.verifiedAt||null,
   reason:r?.reason||(!r?'NOT_CONFIGURED':null),knowledgeAt:at};});
 }
+function cadenceProfile(calls,sources,asOf){
+ const nowMs=Date.parse(asOf),by=new Map(sources.filter(s=>s.sourceRole==='AMPLIFIER').map(s=>[s.sourceId,[]]));
+ for(const call of calls){if(by.has(call.source))by.get(call.source).push(call);}
+ return [...by].map(([sourceId,items])=>{const sorted=items.map(x=>Date.parse(x.knownAt)).filter(Number.isFinite).sort((a,b)=>a-b),gaps=sorted.slice(1).map((t,i)=>t-sorted[i]).sort((a,b)=>a-b);
+  const last=sorted.at(-1)||null,hours=Array(24).fill(0);for(const t of sorted)hours[new Date(t).getUTCHours()]++;
+  const activeHoursUtc=hours.map((n,h)=>({h,n})).filter(x=>x.n).sort((a,b)=>b.n-a.n||a.h-b.h).slice(0,4).map(x=>x.h);
+  return {sourceId,sampleCalls:items.length,lastCallAt:last?new Date(last).toISOString():null,minutesSinceLast:last?Math.round((nowMs-last)/60000):null,
+   medianGapMinutes:gaps.length?Math.round(gaps[Math.floor(gaps.length/2)]/60000):null,activeHoursUtc,
+   cadenceClass:items.length>=12?'HIGH_FREQUENCY':items.length>=3?'OPPORTUNISTIC':'INSUFFICIENT_SAMPLE',quality:items.length>=3?'HISTORICAL':'PARTIAL'};});
+}
 function createOpportunityWorker({store,opportunities,feed,marketProvider,transports=[],now=()=>new Date(),maxTokens=120,transportTestId=null,relationshipGraph={version:'relationship-graph-v1.0.0',edges:RELATIONSHIPS}}){
  let running=false,rotation=0;
  const status=async(state,reason,extra={})=>{const at=now().toISOString();await store.put('status','*','opportunity-engine',{component:'opportunity-engine',state,reason,...extra,occurredAt:at,knownAt:at},{mutable:true});};
@@ -51,6 +61,7 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
    const events=await store.list('event',null,{ascending:false,limit:20000});
    const calls=events.filter(e=>e.category==='CALLER'&&Date.parse(asOf)-Date.parse(e.knownAt)<=86400000);
    const recent=calls.filter(e=>Date.parse(asOf)-Date.parse(e.occurredAt)<=DEFINITION.windowMs);
+   const cadence=cadenceProfile(calls,sources,asOf);await store.put('status','*','amplifier-cadence',{component:'amplifier-cadence',state:'PARTIAL',reason:'Rolling retained-feed history; not an announced schedule.',profiles:cadence,occurredAt:asOf,knownAt:asOf},{mutable:true});
    const counts=new Map();for(const c of recent)counts.set(c.tokenAddress,(counts.get(c.tokenAddress)||0)+1);
    const priority=[...counts].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,maxTokens).map(x=>x[0]);
    // The documented public endpoint accepts up to 30 addresses per request.
@@ -86,4 +97,4 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
  }
  return {tick,ingest};
 }
-module.exports={createOpportunityWorker,sourcesFromHealth};
+module.exports={createOpportunityWorker,sourcesFromHealth,cadenceProfile};
