@@ -51,7 +51,7 @@ describe('CI plan PR selector (SPEC-CI-LEAN-001)', () => {
       assert.deepEqual(buildPlan([file]).suites, ['global', 'signal-v1'], file);
     }
     const command = require('../package.json').scripts['test:signal-v1'];
-    assert.equal(command, 'node --test packages/signal-v1/tests/*.test.js test/signalDistribution*.test.js test/signalInitialSms.test.js');
+    assert.equal(command, 'node --test packages/signal-v1/tests/*.test.js test/signalDistribution*.test.js test/signalInitialSms.test.js test/signalDashboard*.test.js');
   });
 
   it('matches glob and directory patterns', () => {

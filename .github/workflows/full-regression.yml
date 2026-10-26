@@ -29,7 +29,7 @@ jobs:
             postgres: false
           - id: signal-v1
             label: Signal V1 core
-            run: npm run test:signal-v1 && node --test test/signalV1Startup.test.js
+            run: PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome npm run test:signal-v1 && node --test test/signalV1Startup.test.js
             postgres: true
             docker: signal
           - id: paige-social
