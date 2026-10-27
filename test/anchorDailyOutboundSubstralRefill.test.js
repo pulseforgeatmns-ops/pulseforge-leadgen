@@ -7,7 +7,7 @@ const { selectInventoryRefillEntries, selectRefillEntries } = require('../servic
 const sender = { senderEmail: 'sender@substral.example', senderName: 'Studio Substral' };
 const program = { tenant_id: '17', policy: { tenantId: '17', allowedContactClassifications: ['VERIFIED_FOUNDER_EMAIL'] } };
 function contact(id = 'p1', tenantId = 17, extra = {}) {
-  const crm = { id, prospect_id: id, client_id: tenantId, company_id: `company-${id}`,
+  const crm = { id, prospect_id: id, client_id: tenantId, ao_outreach_review_required:false, company_id: `company-${id}`,
     company_name: `Company ${id}`, domain: 'customer.example',
     email: `${id}@customer.example`, email_verified: true, email_status: 'valid', do_not_contact: false,
     enrichment_provenance: { email: { source: 'website_email' } }, ...extra };

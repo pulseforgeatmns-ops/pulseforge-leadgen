@@ -49,7 +49,7 @@ test('real PostgreSQL preserves original 42703 boundary and post-dispatch uncert
   assert.equal(new URL(instance.connectionString).hostname, '127.0.0.1');
   const pool = createTrackedPostgresPool({ connectionString: instance.connectionString });
   t.after(() => closePostgresFixture(pool, instance));
-  await pool.query('CREATE TABLE prospects(id text, client_id integer, do_not_contact boolean, is_synthetic boolean); INSERT INTO prospects VALUES(\'contact-fixture\',10,false,false)');
+  await pool.query('CREATE TABLE prospects(id text, client_id integer, company_id uuid, do_not_contact boolean, is_synthetic boolean); INSERT INTO prospects(id,client_id,do_not_contact,is_synthetic) VALUES(\'contact-fixture\',10,false,false)');
   await t.test('exact original missing call-only column is pre-provider when scoped instrumentation is enabled', async () => {
     const actual = await sender(pool).execute();
     assert.equal(actual.result.providerErrorCode, '42703');

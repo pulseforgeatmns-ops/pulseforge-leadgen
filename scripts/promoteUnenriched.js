@@ -227,7 +227,7 @@ async function promoteRecordScoped(record, {
   const babrunResolution = Number(record.client_id) === 13
     ? babrunPromotionContactResolution({ enriched, verification, officialDomain: domain })
     : null;
-  const contactReason = Number(record.client_id) === 10 && require('../utils/governedContactEligibility').governedContactReason({
+  const contactReason = Number(record.client_id) === 10 && require('../utils/governedContactEligibility').governedContactDataReason({
     client_id: record.client_id, domain, email: enriched.email,
     email_verified: verification.emailVerified, email_status: verification.emailStatus,
     do_not_contact: verification.doNotContact, enrichment_provenance: enrichmentProvenance,
@@ -284,7 +284,8 @@ async function promoteRecordScoped(record, {
 
   if (!insert.rows.length) {
     const existing = await db.query(
-      `SELECT id, company_id, client_id, do_not_contact, email_verified, email_status, enrichment_provenance
+      `SELECT id, company_id, client_id, do_not_contact, email_verified, email_status, enrichment_provenance,
+         (to_jsonb(prospects)->>'ao_outreach_review_required')::boolean AS ao_outreach_review_required
        FROM prospects
        WHERE lower(email) = lower($1)
        LIMIT 1`,
@@ -304,6 +305,10 @@ async function promoteRecordScoped(record, {
     }
     if (String(row.company_id) !== String(companyId)) return { promoted: false, recovered: false,
       emailResolved: true, emailVerified: verification.emailVerified === true, reason: 'email_company_binding_mismatch' };
+    if (require('../utils/anchorOutreachReview').anchorOutreachReviewRequired(row, record.client_id)) {
+      return { promoted: false, recovered: false, emailResolved: true,
+        emailVerified: verification.emailVerified === true, reason: 'outreach_review_required' };
+    }
     if (row.do_not_contact === true) {
       await db.query(`
         UPDATE scout_unenriched

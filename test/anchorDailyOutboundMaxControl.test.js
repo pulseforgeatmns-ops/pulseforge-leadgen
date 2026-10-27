@@ -481,7 +481,7 @@ test('restaurant inventory does not require FOH scope before a facilities assess
 test('qualified knowledge cannot bypass restaurant business fit or geography but retains unrelated tenant behavior', async t => {
   const { loadCleanInventory } = require('../services/maxOutboundControlLoop');
   const inventory = require('../services/acquisitionMissionInventory');
-  const row = { id: 'restaurant-test', company_id: 'c', client_id: 10,
+  const row = { id: 'restaurant-test', company_id: 'c', client_id: 10, ao_outreach_review_required:false,
     company_name: 'Elm Bistro', company_domain: 'elm.example', email: 'owner@elm.example',
     email_verified: true, email_status: 'valid', enrichment_provenance: { email: { source: 'website_email' } },
     vertical: 'restaurant', service_area_match: 'Manchester', company_location: 'Manchester, NH' };

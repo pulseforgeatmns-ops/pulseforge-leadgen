@@ -14,6 +14,7 @@ const { routeProspect } = require('../services/aoProspectRoutingService');
 function loadIsolated(file, dependencies) {
   const module = { exports: {} };
   const localRequire = id => {
+    if (['./utils/anchorOutreachReview','../utils/anchorOutreachReview','./anchorOutreachReview'].includes(id)) return require('../utils/anchorOutreachReview');
     if (!(id in dependencies)) throw new Error(`Unstubbed dependency: ${id}`);
     return dependencies[id];
   };
@@ -25,7 +26,7 @@ function loadIsolated(file, dependencies) {
 }
 
 function calModules(row, queryLog = [], providerCalls = []) {
-  const pool = { query: async (sql, params) => { if (typeof sql === 'object') { params = sql.values; sql = sql.text; } queryLog.push({ sql, params }); return { rows: row ? [row] : [] }; }, release() {} };
+  const pool = { query: async (sql, params) => { if (typeof sql === 'object') { params = sql.values; sql = sql.text; } queryLog.push({ sql, params }); return { rows: row ? [{...row, id:params?.[0],client_id:params?.[1]}] : [] }; }, release() {} };
   pool.connect = async () => pool;
   const common = {
     dotenv: { config() {} },
@@ -63,10 +64,10 @@ test('missing record, invalid scope, or CRM read failure prevents dispatch', asy
 
 test('fresh unblocked prospect can reach the stub provider and batch formatting rejects suppressed snapshots', async () => {
   const calls = [];
-  const { single, batch } = calModules({ do_not_contact: false, is_synthetic: false, ao_call_suppressed: false }, [], calls);
+  const { single, batch } = calModules({ do_not_contact: false, is_synthetic: false, ao_call_suppressed: false, ao_outreach_review_required:false }, [], calls);
   await single.initiateCall({ id: 'allowed', client_id: 10, phone: '6035551212' }, 'Example');
   assert.equal(calls.length, 1);
-  const formatted = batch.buildCallData([{ id: 'blocked', phone: '6035551212', ao_call_suppressed: true }, { id: 'allowed', client_id: 10, phone: '6035551212' }]);
+  const formatted = batch.buildCallData([{ id: 'blocked', phone: '6035551212', ao_call_suppressed: true }, { id: 'allowed', client_id: 10, phone: '6035551212',ao_outreach_review_required:false }]);
   assert.equal(formatted.formattedProspects.length, 1);
   assert.equal(formatted.skipped[0].reason, 'call_suppressed');
 });
@@ -121,7 +122,7 @@ test('provider handoff holds sorted unique suppression locks until it settles', 
     query: async (config, params) => {
       const sql = config.text || config; params = config.values || params;
       events.push({ sql, params, queryTimeout: config.query_timeout });
-      return { rows: [{ ao_call_suppressed: false }] };
+      return { rows: [{ id:params?.[0],client_id:params?.[1],ao_call_suppressed: false,ao_outreach_review_required:false }] };
     },
     release: discard => events.push({ release: discard }),
   };
@@ -143,7 +144,7 @@ test('failed provider handoff and rollback never leak a reusable locked session'
   const client = {
     query: async config => {
       if (config.text === 'ROLLBACK') throw new Error('connection lost');
-      return { rows: [{}] };
+      return { rows: /FROM prospects/.test(config.text) ? [{id:config.values[0],client_id:config.values[1],ao_outreach_review_required:false}] : [] };
     },
     release: discard => { released = discard; },
   };
@@ -217,9 +218,9 @@ test('legacy email shares the admission lock and respects call-only scope for An
       if (/to_regclass/.test(config.text)) return { rows: [{ control_table: null }] };
       if (/FROM prospects/.test(config.text)) {
         assert.deepEqual(Array.from(config.values), ['id', clientId]);
-        return { rows: [{ ao_call_suppressed: true, do_not_contact: false, ao_outreach_review_required: held }] };
+        return { rows: [{ id:'id',client_id:clientId,ao_call_suppressed: true, do_not_contact: false, ao_outreach_review_required: held }] };
       }
-      assert.match(config.text, /^(BEGIN READ ONLY|COMMIT|ROLLBACK|SELECT (set_config|pg_advisory_xact_lock))/);
+      assert.match(config.text, /^(BEGIN(?: READ ONLY)?|COMMIT|ROLLBACK|SELECT (set_config|pg_advisory_xact_lock))/);
       return { rows: [] };
     }, release() {} };
     const send = loadIsolated('packages/providers/brevo/sendEmail.js', {

@@ -18,6 +18,7 @@ const prospect = {
   email_status: 'valid',
   email_verified: true,
   do_not_contact: false,
+  ao_outreach_review_required: false,
   vertical: 'law_firm',
 };
 const sequenceCatalog = { law_firm: [{ day: 0, subject: '{{business_name}}', body: 'Hi {{first_name}}' }] };

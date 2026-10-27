@@ -1,5 +1,6 @@
 'use strict';
 const crypto = require('crypto');
+const { assertAnchorOutreachReviewCleared } = require('../../../utils/anchorOutreachReview');
 const { PostgresStateStore } = require('./store/postgresStore');
 const TABLES = ['max_spreadsheet_contacts','max_spreadsheet_suppressions','max_spreadsheet_relationships'];
 const TYPES = new Set(['SET_ACCOUNT_FIELD','ADD_NOTE','ADD_ACTIVITY','ADD_TASK','SUPPRESS_CALL','ADD_CONTACT','CREATE_ACCOUNT','ADD_PROVIDER_RELATIONSHIP']);
@@ -291,6 +292,7 @@ class PostgresSpreadsheetProposalStore {
         return insertRelation('max_spreadsheet_contacts');
       case 'ADD_TASK': {
         if(!after?.description || (after.dueDate && !/^\d{4}-\d{2}-\d{2}$/.test(after.dueDate))) fail('INVALID_TASK');
+        await assertAnchorOutreachReviewCleared(db,accountId,this.clientId,{lock:true});
         if((account.ao_call_suppressed || account.do_not_contact) && ['call','phone','phone_call'].includes(after.kind)) fail('CALL_SUPPRESSED');
         const id=crypto.randomUUID();
         await db.query(`INSERT INTO ao_prospect_tasks(id,client_id,prospect_id,assigned_ao_id,assignment_category,motion,first_action,deadline,routing_snapshot) VALUES($1,$2,$3,$4,'FOLLOW_UP_REQUIRED','AO_LED',$5,$6::date,$7::jsonb)`,[id,this.clientId,accountId,this.aoId,after.description,after.dueDate || null,JSON.stringify(data)]);
