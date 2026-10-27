@@ -100,7 +100,7 @@ test('AO refill triggers below 12, fills toward target, and assigns each company
       if (/FROM prospects p LEFT JOIN companies c/.test(compact)) {
         candidateSql = compact;
         const base = {
-          client_id: 10, do_not_contact: false, vertical: 'property_manager', icp_score: 90,
+          client_id: 10, do_not_contact: false, ao_outreach_review_required: false, vertical: 'property_manager', icp_score: 90,
           phone: '603-555-0100', service_area_match: 'Manchester', company_location: 'Manchester, NH',
         };
         return { rows: [

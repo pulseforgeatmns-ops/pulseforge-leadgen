@@ -21,8 +21,11 @@ test('real PostgreSQL bounds call lock waits and never leaks transaction-local t
     await db.end();
     await instance.stop();
   });
-  await db.query(`CREATE TABLE prospects(id text, client_id integer, do_not_contact boolean, is_synthetic boolean, ao_call_suppressed boolean, ao_outreach_review_required boolean);
-    INSERT INTO prospects VALUES('fixture',10,false,false,false,false);
+  // A reviewed, unlinked contact isolates timeout restoration. Linked-company
+  // row/FK lock behavior has its own native review-admission regression.
+  await db.query(`CREATE TABLE prospects(id text, client_id integer, company_id uuid, do_not_contact boolean, is_synthetic boolean, ao_call_suppressed boolean, ao_outreach_review_required boolean);
+    INSERT INTO prospects(id,client_id,do_not_contact,is_synthetic,ao_call_suppressed,ao_outreach_review_required)
+      VALUES('fixture',10,false,false,false,false);
     SET lock_timeout='42s'; SET statement_timeout='43s'; SET idle_in_transaction_session_timeout='44s';`);
   const settings = async () => (await db.query(`SELECT pg_backend_pid() AS pid,
     current_setting('lock_timeout') AS lock_timeout,

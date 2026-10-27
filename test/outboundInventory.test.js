@@ -78,6 +78,7 @@ test('already usable canonical prospects are recovered instead of queued again',
           rows: [{
             id: 44,
             company_id: 9,
+            ao_outreach_review_required: false,
             email: 'ops@recovered.example', enrichment_provenance: { email: { source: 'website_email' } },
             email_verified: true,
             email_status: 'valid',
@@ -318,6 +319,7 @@ test('promoteRecord recovers an existing same-tenant verified prospect without d
           rows: [{
             id: 88, company_id: 3,
             client_id: 10,
+            ao_outreach_review_required: false,
             do_not_contact: false,
             email_verified: true,
             email_status: 'valid',

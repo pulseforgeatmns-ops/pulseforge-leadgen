@@ -23,6 +23,7 @@ function prospect(overrides = {}) {
     status: 'cold',
     service_area_match: 'Manchester, NH',
     do_not_contact: false,
+    ao_outreach_review_required: false,
     ...overrides,
   };
 }

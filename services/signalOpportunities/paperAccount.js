@@ -11,7 +11,7 @@ function desiredAction({opportunityState,position}){
  return 'PASS';
 }
 function decide({decision,observation,account,position,asOf}){
- if(!decision||!observation||!Number(observation.priceUsd)>0)return {action:'PASS',reason:'CURRENT_MARKET_OBSERVATION_REQUIRED'};
+ if(!decision||!observation||!Number.isFinite(Number(observation.priceUsd))||Number(observation.priceUsd)<=0)return {action:'PASS',reason:'CURRENT_MARKET_OBSERVATION_REQUIRED'};
  const action=desiredAction({opportunityState:decision.opportunityState,position});
  const evidence={opportunityId:decision.id,opportunityState:decision.opportunityState,opportunityKnowledgeAt:decision.knowledgeAt,marketObservedAt:observation.observedAt,marketKnownAt:observation.knownAt,priceUsd:Number(observation.priceUsd),liquidityUsd:Number(observation.liquidityUsd)||null};
  if(action==='PASS')return {action,reason:'NO_PAPER_PORTFOLIO_TRANSITION',evidence};

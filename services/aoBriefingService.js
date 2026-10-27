@@ -1,4 +1,5 @@
 'use strict';
+const { anchorOutreachReviewSql } = require('../utils/anchorOutreachReview');
 
 const pool = require('../db');
 const { listOpenAccountFlags } = require('./aoAccountFlagService');
@@ -96,7 +97,7 @@ async function fetchEnrichedLeads(clientId, { campaignName = null, aoOwnerId = n
       u.name AS ao_name,
       EXISTS (SELECT 1 FROM prospects p WHERE p.id = l.crm_prospect_id AND p.client_id = l.client_id
         AND COALESCE(p.ao_call_suppressed, false) = false
-        AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
+        AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false AND ${anchorOutreachReviewSql('p')}
         AND COALESCE(p.do_not_contact, false) = false AND COALESCE(p.is_synthetic, false) = false) AS crm_call_allowed,
       c.contact_name, c.contact_title, c.phone AS contact_phone, c.email AS contact_email,
       c.is_decision_maker,

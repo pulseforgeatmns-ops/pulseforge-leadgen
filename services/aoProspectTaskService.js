@@ -9,6 +9,7 @@ const {
 } = require('./aoProspectRoutingService');
 const { ensureAoProspectRoutingSchema } = require('../utils/aoProspectRoutingSchema');
 const { formatAoTask } = require('../utils/aoProspectTaskFormat');
+const { anchorOutreachReviewRequired, anchorOutreachReviewSql, assertAnchorOutreachReviewCleared } = require('../utils/anchorOutreachReview');
 
 async function inTransaction(db, work) {
   if (typeof db.connect !== 'function') return work(db);
@@ -106,6 +107,7 @@ async function persistRouting(prospectId, clientId, routing, db = pool) {
       END,
       updated_at = NOW()
     WHERE id = $1 AND client_id = $2
+      AND ${anchorOutreachReviewSql('prospects')}
     RETURNING id
   `, [
     prospectId,
@@ -137,6 +139,10 @@ async function createTaskFromRouting({
   deadline,
   db = pool,
 }) {
+  if (String(clientId) === '10' && typeof db.connect === 'function' && typeof db.release !== 'function') {
+    return inTransaction(db, client => createTaskFromRouting({ clientId, prospectId, routing, deadline, db: client }));
+  }
+  await assertAnchorOutreachReviewCleared(db, prospectId, clientId, { lock: true });
   const formatted = formatAoTask(routing);
   const { rows } = await db.query(`
     INSERT INTO ao_prospect_tasks (
@@ -205,6 +211,9 @@ async function routeAndPersistProspect({ clientId, prospectId, aoName, db = pool
   return inTransaction(db, async client => {
     const bundle = await fetchProspectBundle(prospectId, clientId, client);
     if (!bundle) return null;
+    if (anchorOutreachReviewRequired(bundle.prospect, clientId)) {
+      return { prospect_id: prospectId, blocked: true, reason: 'outreach_review_required' };
+    }
     const availableAos = await fetchAvailableAos(clientId, client);
     const routing = routeProspect({
       prospect: bundle.prospect,
@@ -214,7 +223,9 @@ async function routeAndPersistProspect({ clientId, prospectId, aoName, db = pool
       aoName,
       existingAssignment: bundle.prospect,
     });
-    await persistRouting(prospectId, clientId, routing, client);
+    if (!await persistRouting(prospectId, clientId, routing, client)) {
+      return { prospect_id: prospectId, blocked: true, reason: 'outreach_review_required' };
+    }
     return { prospect_id: prospectId, routing, formatted_task: formatAoTask(routing) };
   });
 }
@@ -230,6 +241,7 @@ async function generateWeeklyAoTasks({ clientId, prospectIds = null, db = pool }
       SELECT p.id
       FROM prospects p
       WHERE p.client_id = $1
+        AND ${anchorOutreachReviewSql('p')}
         AND COALESCE(p.disposition_status, 'active') = 'active'
         AND COALESCE(p.do_not_contact, false) = false
         AND COALESCE(p.icp_score, 0) >= 40
@@ -244,6 +256,7 @@ async function generateWeeklyAoTasks({ clientId, prospectIds = null, db = pool }
   for (const prospectId of ids) {
     const bundle = await fetchProspectBundle(prospectId, clientId, client);
     if (!bundle) continue;
+    if (anchorOutreachReviewRequired(bundle.prospect, clientId)) continue;
     if (String(bundle.prospect?.disposition_status || 'active').toLowerCase() === 'dead') {
       continue;
     }
@@ -270,7 +283,7 @@ async function generateWeeklyAoTasks({ clientId, prospectIds = null, db = pool }
     const prospectId = entry.prospectId;
     if (!prospectId || !entry.recommended_ao_id) continue;
     const { prospectId: _ignored, deadline, required_debrief, ...routing } = entry;
-    await persistRouting(prospectId, clientId, routing, client);
+    if (!await persistRouting(prospectId, clientId, routing, client)) continue;
     const result = await createTaskFromRouting({
       clientId,
       prospectId,
@@ -332,6 +345,7 @@ async function listOpenTasks({ clientId, aoOwnerId = null, db = pool }) {
     JOIN users u ON u.id = t.assigned_ao_id
     JOIN prospects p ON p.id = t.prospect_id AND p.client_id = t.client_id
     WHERE t.client_id = $1
+      AND ${anchorOutreachReviewSql('p')}
       AND t.status IN ('open', 'in_progress')
       AND COALESCE(p.disposition_status, 'active') = 'active'
       AND COALESCE(p.do_not_contact, false) = false

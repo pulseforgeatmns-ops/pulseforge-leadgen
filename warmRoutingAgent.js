@@ -7,6 +7,7 @@ const { getRuntimeClientId } = require('./utils/clientContext');
 const { reportAgentRun } = require('./utils/agentObservability');
 const { OPEN_SOURCE, ensureOpenSignalSchema } = require('./utils/openSignalGate');
 const { resolveVerticalTier } = require('./utils/verticalTiers');
+const { anchorOutreachReviewSql, assertAnchorOutreachReviewCleared, withAnchorOutreachReview } = require('./utils/anchorOutreachReview');
 
 const AGENT_NAME = 'warm_routing';
 const CLIENT_ID = getRuntimeClientId();
@@ -384,6 +385,7 @@ async function getWarmProspects(clientId) {
       LIMIT 1
     ) last_email ON TRUE
     WHERE p.client_id = $1
+      AND ${anchorOutreachReviewSql('p')}
       AND COALESCE(p.mira_archived, false) = false
       AND COALESCE(p.do_not_contact, false) = false
       AND COALESCE(p.status, '') NOT IN ('dead', 'bounced', 'disqualified', 'closed', 'do_not_email', 'auto_responder')
@@ -655,17 +657,18 @@ async function pingsSentToday(clientId) {
 }
 
 async function sendWarmTelegramMessage(prospect, reason) {
+  await assertAnchorOutreachReviewCleared(pool, prospect.id, prospect.client_id);
   const { botToken, chatId } = telegramConfig();
   if (!botToken || !chatId) {
     console.warn('[warm_routing] Telegram env missing. Warm ping skipped.');
     return null;
   }
 
-  const response = await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+  const response = await withAnchorOutreachReview(pool, prospect.id, prospect.client_id, () => axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, {
     chat_id: chatId,
     text: buildWarmTelegramText(prospect, reason),
     reply_markup: warmKeyboard(prospect.id),
-  }, { timeout: 5000 });
+  }, { timeout: 5000 }));
 
   return {
     chatId: normalizeId(chatId),
@@ -708,6 +711,7 @@ async function answerWarmCallback(callbackQueryId, text = null) {
 }
 
 async function createTodoistTask({ prospect, reason, due, auto = false }) {
+  await assertAnchorOutreachReviewCleared(pool, prospect.id, prospect.client_id);
   const token = todoistToken();
   if (!token) throw new Error('TODOIST_API_TOKEN not set');
 
@@ -720,13 +724,13 @@ async function createTodoistTask({ prospect, reason, due, auto = false }) {
     due_string: due,
   };
 
-  const response = await axios.post(`${TODOIST_API_BASE}/tasks`, payload, {
+  const response = await withAnchorOutreachReview(pool, prospect.id, prospect.client_id, () => axios.post(`${TODOIST_API_BASE}/tasks`, payload, {
     headers: {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
     timeout: 8000,
-  });
+  }));
 
   if (!response.data?.id) throw new Error('Todoist task create response did not include id');
   return String(response.data.id);
@@ -923,6 +927,11 @@ async function markSignalEventsConsumed(clientId, events, fireId) {
 }
 
 async function processProspectEvents(prospect, events) {
+  try { await assertAnchorOutreachReviewCleared(pool, prospect.id, prospect.client_id); }
+  catch (error) {
+    if (error.code !== 'outreach_review_required') throw error;
+    return { fired: false, reason: error.code, consumed: 0 };
+  }
   const claimedEvents = [];
   for (const event of events) {
     const claim = await claimSignalEvent(prospect, event);
@@ -969,6 +978,7 @@ async function autoEscalateStaleFires(clientId) {
     JOIN prospects p ON p.id = fire.prospect_id AND p.client_id = fire.client_id
     LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
     WHERE fire.client_id = $1
+      AND ${anchorOutreachReviewSql('p')}
       AND fire.resolved_action IS NULL
       AND fire.fired_at <= NOW() - INTERVAL '24 hours'
     ORDER BY fire.fired_at ASC
@@ -978,7 +988,7 @@ async function autoEscalateStaleFires(clientId) {
   let escalated = 0;
   for (const row of rows) {
     const payload = row.trigger_payload || {};
-    const prospect = { ...row, ...payload, id: row.id, company_name: row.company_name };
+    const prospect = { ...row, ...payload, id: row.id, client_id: row.client_id, company_name: row.company_name };
     try {
       const taskId = await createTodoistTask({ prospect, reason: row.trigger_reason, due: 'today', auto: true });
       await pool.query(`
@@ -1045,6 +1055,7 @@ async function sendOverflowDigest(clientId) {
     JOIN prospects p ON p.id = fire.prospect_id AND p.client_id = fire.client_id
     LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
     WHERE fire.client_id = $1
+      AND ${anchorOutreachReviewSql('p')}
       AND fire.ping_sent = false
       AND fire.digest_sent = false
       AND (fire.fired_at AT TIME ZONE $2)::date = (NOW() AT TIME ZONE $2)::date
@@ -1317,9 +1328,10 @@ async function handleWarmTelegramCallback(callbackQuery) {
     await editWarmTelegramMessage(callbackQuery, `→ already resolved at ${localClock()}`);
     return true;
   }
+  await assertAnchorOutreachReviewCleared(pool, fire.prospect_id, fire.client_id);
 
   const payload = fire.trigger_payload || {};
-  const prospect = { ...fire, ...payload, id: fire.prospect_id, company_name: fire.company_name };
+  const prospect = { ...fire, ...payload, id: fire.prospect_id, client_id: fire.client_id, company_name: fire.company_name };
 
   if (action === 'working') {
     await pool.query(`

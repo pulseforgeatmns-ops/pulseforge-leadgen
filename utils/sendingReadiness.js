@@ -1,3 +1,4 @@
+const { anchorOutreachReviewRequired } = require('./anchorOutreachReview');
 const axios = require('axios');
 const { inspectSequenceTemplates } = require('./templateMerge');
 
@@ -340,7 +341,8 @@ async function evaluateSendingReadiness({
   ));
   checks.push(condition(
     'prospect_outreach_review_complete',
-    !current.error && evaluatedProspect?.ao_outreach_review_required !== true,
+    !current.error && evaluatedProspect?.ao_outreach_review_required !== true
+      && !anchorOutreachReviewRequired(evaluatedProspect, client?.id ?? evaluatedProspect?.client_id),
     'Imported or changed contact details require separate outreach review before sending.',
     { ao_outreach_review_required: evaluatedProspect?.ao_outreach_review_required ?? null, error: current.error }
   ));

@@ -1,3 +1,4 @@
+const { anchorOutreachReviewSql } = require('./utils/anchorOutreachReview');
 require('dotenv').config();
 const axios = require('axios');
 const pool = require('./db');
@@ -35,7 +36,7 @@ async function getQueuedCandidates(limit) {
       AND q.status = 'pending'
       AND COALESCE(p.do_not_contact, false) = false
       AND COALESCE(p.ao_call_suppressed, false) = false
-      AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
+      AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false AND ${anchorOutreachReviewSql('p')}
       AND ${syntheticGuard}
       AND p.phone IS NOT NULL AND p.phone != ''
     ORDER BY q.priority ASC, q.created_at ASC
@@ -66,7 +67,7 @@ async function getCallCandidates(excludeIds = []) {
       AND p.do_not_contact = false
       AND p.client_id = $3
       AND COALESCE(p.ao_call_suppressed, false) = false
-      AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
+      AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false AND ${anchorOutreachReviewSql('p')}
       AND ${syntheticGuard}
       AND p.phone IS NOT NULL AND p.phone != ''
       AND p.icp_score >= 60

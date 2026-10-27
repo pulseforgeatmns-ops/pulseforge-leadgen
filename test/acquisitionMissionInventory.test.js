@@ -15,7 +15,7 @@ test('governed daily Scout reuses clean inventory through SEC with unknown buyer
  const m={id:'daily',tenantId:'10',orchestrationMissionId:'source',objective:'Acquire local property managers',
   structuredMission:{market:{segment:'property_management'},geography:{cities:['Manchester']}}};
  const p={source_mission_id:'source',scope_hash:hash(missionScope(m)),policy:{tenantId:'10'}};
- const contact={id:'p',company_id:'c',client_id:10,name:'Local Property Management',company_name:'Local Property Management',
+ const contact={id:'p',company_id:'c',client_id:10,ao_outreach_review_required:false,name:'Local Property Management',company_name:'Local Property Management',
   email:'owner@local.example',email_verified:true,email_status:'valid',company_domain:'local.example',domain:'local.example',
   vertical:'property_manager',service_area_match:'Manchester',location:'Manchester, NH',company_location:'Manchester, NH',
   enrichment_provenance:{email:{source:'website_email',source_url:'https://local.example/contact',resolved_at:'2026-10-01T12:00:00Z'}}};

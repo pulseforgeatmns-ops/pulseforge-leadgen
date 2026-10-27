@@ -1,4 +1,5 @@
 'use strict';
+const { anchorOutreachReviewSql } = require('../utils/anchorOutreachReview');
 
 const { hash, fail } = require('../packages/acquisition-mission/DailyOutboundPolicy');
 const { resolveOperatorDelegatedMaximumDailyCapacity } = require('../packages/emmett-outbound/OperatorDelegatedCapacity');
@@ -320,7 +321,7 @@ class GovernedOutboundStore {
         prospectId: item.prospectId || item.prospect_id, companyId: item.companyId || item.company_id, email: item.email });
     } catch (error) { return error.code || 'anchor_recovery_quarantine_check_failed'; }
     const admission = await this.one(`SELECT id FROM prospects p WHERE client_id=$2 AND id::text=$1
-      AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false)`, [String(item.prospectId || item.candidateId), this.clientId]);
+      AND (COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) OR NOT ${anchorOutreachReviewSql('p')} )`, [String(item.prospectId || item.candidateId), this.clientId]);
     if (admission) return 'outreach_review_required';
     const hit = await this.one(`SELECT state FROM acquisition_outbound_lifecycle WHERE tenant_id=$3 AND suppressed=true
       AND (email=$1 OR company_id=$2) LIMIT 1`, [item.email.toLowerCase(), String(item.companyId), this.tenantId]);

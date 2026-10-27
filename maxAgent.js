@@ -1,3 +1,4 @@
+const { anchorOutreachReviewSql } = require('./utils/anchorOutreachReview');
 require('dotenv').config();
 const pool = require('./db');
 const axios = require('axios');
@@ -2520,7 +2521,7 @@ async function runQueueWarmForCal() {
     WHERE p.client_id = $1
       AND COALESCE(p.do_not_contact, false) = false
       AND COALESCE(p.ao_call_suppressed, false) = false
-      AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
+      AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false AND ${anchorOutreachReviewSql('p')}
       AND (p.is_hot = true OR p.status = 'warm')
       AND NOT EXISTS (
         SELECT 1 FROM touchpoints t
@@ -2549,7 +2550,7 @@ async function runQueueWarmForCal() {
        SELECT id, client_id, 1, $3, 'pending' FROM prospects
        WHERE id = $1 AND client_id = $2
          AND COALESCE(ao_call_suppressed, false) = false
-         AND COALESCE((to_jsonb(prospects)->>'ao_outreach_review_required')::boolean,false) = false
+         AND COALESCE((to_jsonb(prospects)->>'ao_outreach_review_required')::boolean,false) = false AND ${anchorOutreachReviewSql('prospects')}
          AND COALESCE(do_not_contact, false) = false
        RETURNING id`,
       [row.id, CLIENT_ID, reason]
@@ -2582,7 +2583,7 @@ async function runHandoff5TouchNoReply() {
       AND p.status IN ('cold', 'contacted')
       AND COALESCE(p.do_not_contact, false) = false
       AND COALESCE(p.ao_call_suppressed, false) = false
-      AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
+      AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false AND ${anchorOutreachReviewSql('p')}
       AND (
         SELECT COUNT(*) FROM touchpoints t
         WHERE t.prospect_id = p.id AND t.client_id = p.client_id
@@ -2612,7 +2613,7 @@ async function runHandoff5TouchNoReply() {
        SELECT id, client_id, 2, '5_touch_no_reply', 'pending' FROM prospects
        WHERE id = $1 AND client_id = $2
          AND COALESCE(ao_call_suppressed, false) = false
-         AND COALESCE((to_jsonb(prospects)->>'ao_outreach_review_required')::boolean,false) = false
+         AND COALESCE((to_jsonb(prospects)->>'ao_outreach_review_required')::boolean,false) = false AND ${anchorOutreachReviewSql('prospects')}
          AND COALESCE(do_not_contact, false) = false
        RETURNING id`,
       [row.id, CLIENT_ID]

@@ -1,10 +1,12 @@
 'use strict';
 const { loadRecoveryState, assertRecoveryLeaf } = require('../services/anchorEmailRecovery');
+const { anchorOutreachReviewRequired, assertAnchorOutreachReviewCleared } = require('./anchorOutreachReview');
 
 // Channel-specific restriction. Never use this guard for email eligibility or
 // clear it when a prospect changes stage, phone number, owner, or import source.
 function callProhibited(prospect) {
-  return !prospect || Boolean(prospect.do_not_contact || prospect.is_synthetic || prospect.ao_call_suppressed || prospect.ao_outreach_review_required);
+  return !prospect || Boolean(prospect.do_not_contact || prospect.is_synthetic || prospect.ao_call_suppressed || prospect.ao_outreach_review_required)
+    || anchorOutreachReviewRequired(prospect);
 }
 
 function callSuppressionError() {
@@ -25,10 +27,11 @@ async function assertCallAllowed(db, prospectId, clientId, { channel = 'call' } 
     [prospectId, Number(clientId)]
   );
   if (channel === 'email') {
-    if (!rows[0] || rows[0].do_not_contact || rows[0].is_synthetic || rows[0].ao_outreach_review_required) {
+    if (!rows[0] || rows[0].do_not_contact || rows[0].is_synthetic || rows[0].ao_outreach_review_required
+      || anchorOutreachReviewRequired(rows[0], clientId)) {
       throw Object.assign(new Error('Separate outreach review or valid contact permission is required'), { code: 'outreach_review_required', status: 409, providerBoundaryCrossed: false });
     }
-  } else if (callProhibited(rows[0])) throw callSuppressionError();
+  } else if (callProhibited(rows[0]) || anchorOutreachReviewRequired(rows[0], clientId)) throw callSuppressionError();
   return rows[0];
 }
 
@@ -63,7 +66,10 @@ async function withCallAuthorization(pool, identities, dispatch, { channel = 'ca
     const isOutreach = channel === 'email' && allAnchor;
     const initialState = isOutreach ? await loadRecoveryState({ query }) : { mode: 'legacy' };
     transactionStarted = true;
-    await query(initialState.mode === 'legacy' ? 'BEGIN READ ONLY' : 'BEGIN');
+    // Anchor also locks current CRM/company rows through the provider handoff.
+    // PostgreSQL row locks require a read-write transaction; this path still
+    // performs no CRM writes. Other tenants retain the original transaction.
+    await query(initialState.mode === 'legacy' && !hasAnchor ? 'BEGIN READ ONLY' : 'BEGIN');
     await query(`SELECT set_config('lock_timeout', '5s', true),
       set_config('statement_timeout', '5s', true),
       set_config('idle_in_transaction_session_timeout', '0', true)`);
@@ -95,6 +101,7 @@ async function withCallAuthorization(pool, identities, dispatch, { channel = 'ca
     for (const [, identity] of ordered) {
       if (recovery.legacy) await assertCallAllowed({ query }, identity.prospectId, identity.clientId,
         { channel: channel === 'sms' ? 'email' : channel });
+      await assertAnchorOutreachReviewCleared({ query }, identity.prospectId, identity.clientId, { lock: true });
     }
     if (!recovery.legacy) await require('../services/anchorEmailRecoveryIntegration').consumeRecoveryDispatch(pool, recovery);
     const result = await dispatch();

@@ -71,6 +71,8 @@
       "public/signal-positions",
       "test/signalDashboard",
       "test/signalOpportunity",
+      "test/signalHistorical",
+      "test/signalPaperAccount.test.js",
       "migrations/*signal-dashboard*",
       "routes/signalDistribution",
       "public/signal-distribution.html",
