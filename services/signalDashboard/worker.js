@@ -4,7 +4,7 @@ const {feedEvents}=require('./events');
 const {INTERVALS}=require('./market');
 const {evaluate}=require('../signalDistribution/risk');
 function createDashboardWorker({store,marketProvider,walletProvider,candleProvider=null,quoteProvider=null,
-  feed=null,researchReader=null,registry={},now=()=>new Date(),maxActive=3,maxHistoryPages=50,includeCurrentMark=true}) {
+  feed=null,researchReader=null,registry={},now=()=>new Date(),maxActive=3,maxHistoryPages=50,includeCurrentMark=true,processFeed=true}) {
   if(!Number.isInteger(maxHistoryPages)||maxHistoryPages<1||maxHistoryPages>1000)throw new Error('invalid_history_page_limit');
   let running=false;
   const status=async(component,state,reason=null)=>{const at=now().toISOString();await store.put('status','*',component,{component,state,reason,occurredAt:at,knownAt:at},{mutable:true});};
@@ -39,7 +39,7 @@ function createDashboardWorker({store,marketProvider,walletProvider,candleProvid
     if(researchReader){try{for(const e of await researchReader())await store.put('event',e.tokenAddress,e.id,e);}catch{await status('research-bridge','UNKNOWN','EXISTING_EMPIRICAL_EVIDENCE_UNAVAILABLE');}}
     if(!feed)return status('feed','UNKNOWN','EMPIRICAL_FEED_NOT_CONFIGURED');
     const calls=await feed();
-    if(!Array.isArray(calls)||calls.length>2000)throw new Error('invalid_caller_feed');
+    if(!Array.isArray(calls)||calls.length>10000)throw new Error('invalid_caller_feed');
     const watched=new Set((await store.list('watch',null)).map(w=>w.tokenAddress));
     for(const call of calls)for(const e of feedEvents(call,{now:now(),registry}))if(watched.has(e.tokenAddress))await store.put('event',e.tokenAddress,e.id,e);
     await status('feed','PARTIAL','Only retained empirical messages with explicit CA; completeness is unknown');
@@ -127,7 +127,7 @@ function createDashboardWorker({store,marketProvider,walletProvider,candleProvid
       if(walletProvider){await attempt('wallet-history',historyTick);await attempt('wallet-head',headTick);}
       await attempt('quotes',quoteTick);
       const lastFeed=(await store.list('status','*')).find(s=>s.component==='feed');
-      if(!lastFeed||+now()-Date.parse(lastFeed.knownAt)>=30000)await attempt('feed',feedTick);
+      if(processFeed&&(!lastFeed||+now()-Date.parse(lastFeed.knownAt)>=30000))await attempt('feed',feedTick);
       return {observed:true};
     });}finally{running=false;}
   }

@@ -15,13 +15,17 @@ function loadConfiguredSources() {
   try {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) throw new Error('TELEGRAM_CALLER_SOURCES_JSON must be a JSON array');
-    return parsed.map(row => ({
+    const configured=parsed.map(row => ({
       ...row,
       platform: row.platform || 'telegram',
       sourceRole: row.sourceRole || 'CALLER',
       clusterRelationshipStatus: row.clusterRelationshipStatus || CLUSTER_RELATIONSHIP.UNKNOWN,
       collector: row.collector || 'telegram-caller-feed',
     }));
+    if(process.env.TELEGRAM_CALLER_EXPANSION_VERSION==='source-universe-v1.0.0'){
+      for(const row of require('../signalOpportunities/sourceUniverse').candidateSources())if(row.username&&!configured.some(s=>s.sourceId===row.sourceId||s.username?.toLowerCase()===row.username.toLowerCase()))configured.push(row);
+    }
+    return configured;
   } catch (err) {
     throw new Error(`Invalid TELEGRAM_CALLER_SOURCES_JSON: ${err.message}`);
   }

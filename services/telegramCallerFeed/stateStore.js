@@ -84,6 +84,7 @@ function buildHealth(state, meta = {}) {
     errors: meta.errors || (state.lastError ? [state.lastError] : []),
     medianIngestionLatencyMs: percentile(state.latencyMs, 50),
     p95IngestionLatencyMs: percentile(state.latencyMs, 95),
+    expansionHealth:meta.expansionHealth||null,
   };
 }
 

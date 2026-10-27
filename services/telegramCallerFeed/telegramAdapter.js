@@ -41,7 +41,7 @@ async function getLatestMessageId(client, entity) {
 
 async function fetchNewMessages(client, entity, afterMessageId) {
   const minId = afterMessageId || 0;
-  const batch = await client.getMessages(entity, { minId, limit: 100 });
+  const batch = await client.getMessages(entity, { minId, limit: 100, reverse:true });
   const rows = (batch || [])
     .map(m => mapGramMessage(m, entity))
     .filter(Boolean)
@@ -65,7 +65,7 @@ function mapGramMessage(message, entity) {
     forwardedFrom = fwd.fromName || (fwd.channelPost != null ? String(fwd.channelPost) : null);
     forwarding = {
       fromName: fwd.fromName || null,
-      fromId: fwd.fromId ? String(fwd.fromId) : null,
+      fromId: fwd.fromId ? String(fwd.fromId.channelId||fwd.fromId.userId||fwd.fromId.chatId||fwd.fromId) : null,
       channelPost: fwd.channelPost != null ? String(fwd.channelPost) : null,
       date: fwd.date ? new Date(fwd.date * 1000).toISOString() : null,
     };

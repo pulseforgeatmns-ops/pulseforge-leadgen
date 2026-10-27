@@ -1,0 +1,8 @@
+'use strict';
+const test=require('node:test');const assert=require('node:assert/strict');
+const {decide,desiredAction,CONFIG}=require('../services/signalOpportunities/paperAccount');
+const obs={priceUsd:1,liquidityUsd:50000,observedAt:'2026-10-26T12:00:00Z',knownAt:'2026-10-26T12:00:01Z'};
+test('paper account enters prospectively only on OPPORTUNITY/HOT',{concurrency:false},()=>{const d=decide({decision:{id:'d1',tokenAddress:'ca',opportunityState:'HOT',knowledgeAt:'2026-10-26T12:00:00Z'},observation:obs,account:{cashUsd:10000},position:null,asOf:'2026-10-26T12:00:02Z'});assert.equal(d.action,'ENTER');assert.equal(d.notionalUsd,1000);assert.ok(d.fillPrice>1);assert.equal(d.evidence.marketKnownAt,obs.knownAt);});
+test('paper account exits held position on AVOID and does not rewrite fill economics',()=>{const d=decide({decision:{id:'d2',tokenAddress:'ca',opportunityState:'AVOID',knowledgeAt:'2026-10-26T13:00:00Z'},observation:{...obs,priceUsd:2,knownAt:'2026-10-26T13:00:01Z'},account:{cashUsd:9000},position:{tokens:1000,costUsd:1015},asOf:'2026-10-26T13:00:02Z'});assert.equal(d.action,'EXIT');assert.equal(d.tokens,1000);assert.ok(d.fillPrice<2);});
+test('paper account passes without a finite positive observable price',()=>{for(const observation of [null,...[null,'',0,-1,NaN,Infinity,-Infinity].map(priceUsd=>({...obs,priceUsd}))]){const d=decide({decision:{id:'d3',opportunityState:'HOT'},observation,account:{cashUsd:10000},position:null});assert.equal(d.action,'PASS');assert.match(d.reason,/OBSERVATION/);}});
+test('paper sizing is capped at ten percent of starting bankroll',()=>{assert.equal(CONFIG.maxPositionPct,.10);assert.equal(desiredAction({opportunityState:'WATCH',position:null}),'PASS');});

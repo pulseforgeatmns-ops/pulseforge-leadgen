@@ -29,7 +29,13 @@ test('annotations append separately, never change empirical evidence; subresourc
  await assert.rejects(()=>service.annotate(CA,'','1'),/invalid_annotation/);
 });
 test('read cache coalesces concurrent mobile requests without provider calls',async()=>{
- const s=new MemoryStore();await seed(s);let reads=0;const original=s.list.bind(s);s.list=(...args)=>{reads++;return original(...args);};const service=new DashboardService(s,{now:()=>new Date(later(3000))});await Promise.all(Array.from({length:10},()=>service.detail(CA)));assert.equal(reads,9);
+ const s=new MemoryStore();await seed(s);const reads=new Map(),original=s.list.bind(s);
+ s.list=(kind,...args)=>{reads.set(kind,(reads.get(kind)||0)+1);return original(kind,...args);};
+ const service=new DashboardService(s,{now:()=>new Date(later(3000))});
+ const results=await Promise.all(Array.from({length:10},()=>service.detail(CA)));
+ assert.ok(reads.size>0);for(const [kind,count]of reads)assert.equal(count,1,kind+' must be loaded once across concurrent requests');
+ assert.ok(results.every(result=>result===results[0]));const firstReads=[...reads];
+ await service.detail(CA);assert.deepEqual([...reads],firstReads,'a cached read must not query storage again');
 });
 test('history pagination, overlapping polls and retries dedupe signatures without losing head pages',async()=>{
  const s=new MemoryStore();await seed(s);let requests=0;

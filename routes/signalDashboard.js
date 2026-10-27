@@ -21,6 +21,10 @@ function createDashboardRouter({Router,requireAuth,requireRole,getService,getCon
   };
   for(const route of ['/signal-v1/positions','/signal-v1/positions/:ca'])router.get(route,...guard,handle((_req,res)=>res.sendFile(path.resolve(__dirname,'../public/signal-positions.html'))));
   router.get('/api/v1/signal/positions',...guard,handle(async(_req,res)=>res.json(await getService().positions())));
+  router.get('/api/v1/signal/opportunities',...guard,handle(async(_req,res)=>res.json(await getService().discovery())));
+  router.get('/api/v1/signal/opportunities/:ca/history',...guard,handle(async(req,res)=>{
+    const service=getService();return res.json({decisions:service.opportunities?await service.opportunities.history(req.params.ca):[],readOnly:true});
+  }));
   router.get('/api/v1/signal/positions/:ca',...guard,handle(async(req,res)=>{
     const p=await getService().detail(req.params.ca);return p?res.json(p):res.status(404).json({error:'position_not_found'});
   }));
@@ -31,6 +35,12 @@ function createDashboardRouter({Router,requireAuth,requireRole,getService,getCon
     const service=getService();if(!/^[a-f0-9]{64}$/.test(req.params.zoneId))return res.status(400).json({error:'invalid_zone_id'});
     if(!await service.detail(req.params.ca))return res.status(404).json({error:'position_not_found'});
     const events=service.zoneStore?await service.zoneStore.history(req.params.ca,req.params.zoneId):[];return events.length?res.json({events,mode:'PAPER_OBSERVATION',validated:false}):res.status(404).json({error:'zone_not_found'});
+  }));
+  router.post('/api/v1/signal/positions/:ca/zones/:zoneId/override',...guard,handle(async(req,res)=>{
+    const origin=req.get('origin');if(!origin||origin!==`${req.protocol}://${req.get('host')}`||!req.is('application/json'))return res.status(403).json({error:'zone_override_origin_denied'});
+    if(!/^[a-f0-9]{64}$/.test(req.params.zoneId)||!req.body||Object.keys(req.body).some(k=>!['lower','upper'].includes(k)))return res.status(400).json({error:'invalid_zone_override'});
+    const lower=Number(req.body.lower),upper=Number(req.body.upper);if(!Number.isFinite(lower)||!Number.isFinite(upper)||lower<=0||upper<=lower)return res.status(400).json({error:'invalid_zone_bounds'});
+    try{return res.status(201).json({zone:await getService().overrideZone(req.params.ca,req.params.zoneId,{lower,upper},req.session.user.id)});}catch(e){return res.status(e.message==='zone_not_found'?404:400).json({error:e.message});}
   }));
   for(const kind of ['candles','events','transactions','risk'])router.get(`/api/v1/signal/positions/:ca/${kind}`,...guard,handle(async(req,res)=>{
     const service=getService(),p=await service.detail(req.params.ca);if(!p)return res.status(404).json({error:'position_not_found'});

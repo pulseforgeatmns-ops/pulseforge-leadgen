@@ -1,6 +1,6 @@
 'use strict';
 const {createHash}=require('node:crypto');
-const VERSION='pullback-watch-v1';
+const VERSION='structure-reentry-v2';
 const RULES=Object.freeze({intervalSeconds:300,lookbackBars:24,pivotSeparation:3,lowTolerance:.015,minimumBounce:.03,approachDistance:.05,invalidationDistance:.015,expiresMinutes:120,cooldownMinutes:30,liquidityInvalidation:.2,liquidityConfirmation:.1,maxObservationAgeMs:30000,maxBarAgeMs:600000});
 const empirical=x=>x?.provenance?.dataClass==='EMPIRICAL'&&!x.provenance.synthetic&&!x.provenance.testOnly;
 const stamp=x=>Date.parse(x),valid=x=>typeof x==='number'&&Number.isFinite(x),hash=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
@@ -33,22 +33,34 @@ function discover({tokenAddress,pairId,candles,observations,risk,transactions=[]
  if(missing.length||['HIGH','CRITICAL'].includes(risk))return {zone:null,missing:[...missing,...(['HIGH','CRITICAL'].includes(risk)?['Elevated distribution risk blocks new watch zones.']:[])]};
  if(bars.some((c,i)=>i&&c.time-bars[i-1].time!==300))return {zone:null,missing:['This method needs consecutive completed five-minute candles; a recent interval is missing.']};
  const pivots=[];for(let i=1;i<bars.length-1;i++)if(bars[i].low<bars[i-1].low&&bars[i].low<=bars[i+1].low)pivots.push(i);
+ const candidates=[];
  for(let b=pivots.length-1;b>0;b--)for(let a=b-1;a>=0;a--){const i=pivots[a],j=pivots[b],one=bars[i],two=bars[j];
   if(j-i<RULES.pivotSeparation||Math.abs(one.low-two.low)/Math.min(one.low,two.low)>RULES.lowTolerance)continue;
   const lower=Math.min(one.low,two.low),upper=Math.max(one.low,two.low)*(1+RULES.lowTolerance),invalidBelow=lower*(1-RULES.invalidationDistance);
-  if(!bars.slice(i+1,j).some(c=>c.high>=upper*(1+RULES.minimumBounce)))continue;
-  if(bars.slice(j+1).some(c=>c.close<invalidBelow)||observation.priceUsd<lower||observation.priceUsd>upper*(1+RULES.approachDistance))continue;
+  const bounce=bars.slice(i+1,j).some(c=>c.high>=upper*(1+RULES.minimumBounce));
+  if(!bounce||bars.slice(j+1).some(c=>c.close<invalidBelow)||observation.priceUsd<lower||observation.priceUsd>upper*(1+RULES.approachDistance))continue;
+  const post=bars.slice(j+1),defended=post.filter(c=>c.low<=upper&&c.close>=upper).length;
+  const latest=bars.at(-1),recency=Math.max(0,1-(latest.time-two.time)/(RULES.lookbackBars*RULES.intervalSeconds));
+  const proximity=Math.max(0,1-Math.abs(observation.priceUsd-upper)/(upper*RULES.approachDistance));
+  const impulseHigh=Math.max(...bars.slice(j).map(c=>c.high)),impulse=(impulseHigh-upper)/upper;
+  const score=recency*.35+proximity*.30+Math.min(1,defended/3)*.20+Math.min(1,impulse/.10)*.15;
+  candidates.push({i,j,one,two,lower,upper,invalidBelow,defended,recency,proximity,impulse,score});
+ }
+ candidates.sort((a,b)=>b.score-a.score||b.j-a.j||b.upper-a.upper);
+ const best=candidates[0];
+ if(best){const {one,two,lower,upper,invalidBelow,defended,score}=best;
   const id=hash([VERSION,tokenAddress,pairId,one.time,two.time]),kind=transactions.some(t=>t.type==='SELL'&&stamp(t.blockTime)<=stamp(asOf)&&stamp(t.knownAt)<=stamp(asOf))?'RE_ENTRY':'ENTRY';
-  return {missing:[],zone:{id,version:VERSION,rules:RULES,tokenAddress,pairId,kind,state:'WATCHING',createdAt:asOf,knownAt:asOf,occurredAt:asOf,expiresAt:new Date(stamp(asOf)+RULES.expiresMinutes*60000).toISOString(),lower,upper,invalidBelow,
-   why:['Two separated lows appeared in a similar price area.','A completed candle between those lows showed a rebound of at least 3%.','The latest observed price is close to that area.'],
+  const confidence=Math.max(0,Math.min(1,score));
+  return {missing:[],zone:{id,version:VERSION,rules:RULES,tokenAddress,pairId,kind,tier:'PRIMARY',confidence,state:'WATCHING',createdAt:asOf,knownAt:asOf,occurredAt:asOf,expiresAt:new Date(stamp(asOf)+RULES.expiresMinutes*60000).toISOString(),lower,upper,invalidBelow,
+   why:['Recent defended support is ranked ahead of older/deeper structures.',`${defended} completed post-structure candle${defended===1?'':'s'} defended this area.`,'The area is close enough to the latest observed price to be actionable as a watch rather than a deep retracement.'],
    waiting:['Two new, completed five-minute candles must test and then close above the watch area.','Trading-pool value must remain within 10% of the starting observation.','Recent price and distribution observations must remain available.'],
    unknown:['Provider update timing is not independently verified.','Dollar buy/sell volume, large-holder history and developer identity may be unavailable.','This method has no demonstrated predictive edge.'],
    baseline:{liquidityUsd:observation.liquidityUsd,priceUsd:observation.priceUsd,observedAt:observation.observedAt,knownAt:observation.knownAt,provider:observation.provider},
-   inputSnapshot:{candles:bars.map(c=>({time:c.time,open:c.open,high:c.high,low:c.low,close:c.close,volume:c.volume,knownAt:c.knownAt,provider:c.provider,coverage:c.coverage})),risk,hash:hash(bars)},
+   inputSnapshot:{candles:bars.map(c=>({time:c.time,open:c.open,high:c.high,low:c.low,close:c.close,volume:c.volume,knownAt:c.knownAt,provider:c.provider,coverage:c.coverage})),risk,candidateCount:candidates.length,score,hash:hash(bars)},
    provenance:{dataClass:'DERIVED_RESEARCH',namespace:'signal-dashboard-zone-research',methodVersion:VERSION},
    paper:{...researchOnly,checkpoints:[]},lastCheckedAt:asOf}};
  }
- return {zone:null,missing:[],reason:'No qualifying pullback pattern in the available completed candles.'};
+ return {zone:null,missing:[],reason:'No reliable primary re-entry structure in the available completed candles.'};
 }
 function evolve(zone,{candles,observations,risk,pairId,asOf}){
  if(!Number.isFinite(stamp(asOf)))throw Error('invalid_zone_time');

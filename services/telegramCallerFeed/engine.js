@@ -31,8 +31,9 @@ function createTelegramCallerFeedEngine(options = {}) {
   const pilotGate=options.pilotGate || (process.env.SIGNAL_OPERATION_MODE ? operationFromEnv() : null);
 
   const channelRuntime = new Map();
+  let bootstrapAt=0;
   let sourceStatuses = [];
-  const maxRecentCalls = options.maxRecentCalls ?? 500;
+  const maxRecentCalls = options.maxRecentCalls ?? Math.max(500,Math.min(10000,Number(process.env.TELEGRAM_CALLER_MAX_RETAINED_CALLS)||500));
   const recentCalls = (state.recentCalls || []).slice(-maxRecentCalls);
   state.recentCalls = recentCalls;
 
@@ -63,6 +64,7 @@ function createTelegramCallerFeedEngine(options = {}) {
   }
 
   async function bootstrapChannels(activeClient) {
+    if(channelRuntime.size&&+now()-bootstrapAt<3600000)return sourceStatuses;
     const sources = loadConfiguredSources();
     channelRuntime.clear();
     const results = [];
@@ -83,15 +85,27 @@ function createTelegramCallerFeedEngine(options = {}) {
         available: false,
         channelId: null,
         reason: null,
+        identityStatus:'UNVERIFIED',universeVersion:src.universeVersion||null,identityEvidence:src.identityEvidence||null,
       };
       try {
         const entity = await resolvePublicChannel(activeClient, src.username);
+        if(src.universeVersion&&(!entity.broadcast||!entity.username||entity.username.toLowerCase()!==src.username.toLowerCase()||!new RegExp(src.titlePattern,'i').test(entity.title||'')))throw Error('public_channel_identity_not_verified');
         entry.channelId = String(entity.id);
         if (src.expectedChannelId && entry.channelId !== String(src.expectedChannelId)) {
           throw new Error('configured_channel_identity_mismatch');
         }
         entry.available = true;
         entry.active = true;
+        // Pin authenticated numeric identities durably. Renamed/reassigned
+        // usernames cannot silently switch the monitored publisher.
+        state.verifiedSources=state.verifiedSources||{};
+        const pinned=state.verifiedSources[src.sourceId];
+        if(pinned&&pinned.channelId!==entry.channelId)throw Error('pinned_channel_identity_mismatch');
+        await getLatestMessageId(activeClient,entity); // A resolve alone is not evidence of read access.
+        entry.identityStatus='VERIFIED';
+        entry.verifiedAt=pinned?.verifiedAt||now().toISOString();
+        entry.verifiedTitle=entity.title||null;
+        state.verifiedSources[src.sourceId]={channelId:entry.channelId,username:src.username,verifiedAt:entry.verifiedAt,title:entry.verifiedTitle};
         const cursorKey = entry.channelId;
         if (state.channels[cursorKey] == null) {
           const maxId = await getLatestMessageId(activeClient, entity);
@@ -108,6 +122,7 @@ function createTelegramCallerFeedEngine(options = {}) {
       results.push(entry);
     }
     sourceStatuses = results;
+    bootstrapAt=+now();
     saveState(state, statePath);
     return results;
   }
@@ -142,13 +157,23 @@ function createTelegramCallerFeedEngine(options = {}) {
 
     const call = toFeedCall({
       ...msg,
+      clusterId:sourceMeta.clusterId||null,sourceRole:sourceMeta.sourceRole||'UNKNOWN',
+      clusterRelationshipStatus:sourceMeta.clusterRelationshipStatus||'UNKNOWN',
+      universeVersion:sourceMeta.universeVersion||null,
       sourceId: sourceMeta.sourceId,
       ingestedAt,
     });
     if (!call) return null;
 
     state.stats.callsEmitted += 1;
-    if (SOLANA_CA_RE.test(call.text || '')) {
+    state.sourceStats=state.sourceStats||{};
+    const counts=state.sourceStats[sourceMeta.sourceId]||(state.sourceStats[sourceMeta.sourceId]={messages:0,caBearing:0});counts.messages++;
+    const addresses=require('../../packages/signal-v1/prospective/caExtraction').extractSolanaContractAddresses(call.text||'');
+    if(addresses.length)counts.caBearing++;
+    state.dailyCalls=state.dailyCalls||[];
+    state.dailyCalls.push({sourceId:call.sourceId,at:call.ingestedAt,addresses});
+    state.dailyCalls=state.dailyCalls.filter(c=>+ingestedAt-Date.parse(c.at)<86400000).slice(-50000);
+    if (addresses.length) {
       state.stats.caBearingMessages += 1;
     }
     recordLatency(state, call.occurredAt, call.ingestedAt);
@@ -187,6 +212,7 @@ function createTelegramCallerFeedEngine(options = {}) {
         const afterId = state.channels[src.channelId]?.lastMessageId || 0;
         try {
           const messages = await fetchNewMessages(activeClient, runtime.entity, afterId);
+          src.available=true;src.active=true;src.reason=null;src.lastSuccessfulReadAt=now().toISOString();
           for (const msg of messages) {
             if(pilotGate && !pilotGate().ok)break;
             if (msg.messageId < afterId) continue;
@@ -227,6 +253,13 @@ function createTelegramCallerFeedEngine(options = {}) {
       activeChannels: sources.filter(s => s.active).map(s => s.sourceId),
       sources,
       errors: meta.errors,
+      expansionHealth:{windowHours:24,callsPerDay:(state.dailyCalls||[]).filter(c=>+now()-Date.parse(c.at)<86400000&&c.addresses.length).length,
+        uniqueTokensPerDay:new Set((state.dailyCalls||[]).filter(c=>+now()-Date.parse(c.at)<86400000).flatMap(c=>c.addresses)).size,
+        caParseSuccess:state.stats.messagesObserved?state.stats.caBearingMessages/state.stats.messagesObserved:null,
+        caParseSuccessBasis:'CA-bearing messages / all observed text messages; non-CA conversation included',
+        clusterUnknownRate:sources.length?sources.filter(s=>s.relationshipStatus==='UNKNOWN').length/sources.length:null,
+        unavailableSources:sources.filter(s=>!s.active).length,activeSources:sources.filter(s=>s.active).length,
+        sourceStats:state.sourceStats||{},retainedCallLimit:maxRecentCalls},
     });
   }
 

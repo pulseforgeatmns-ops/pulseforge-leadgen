@@ -1,0 +1,5 @@
+'use strict';
+const test=require('node:test');const assert=require('node:assert/strict');const {reconstructMarket,attentionSequence}=require('../services/signalOpportunities/historicalReconstruction');
+const ca='11111111111111111111111111111111';const base={dataClass:'HISTORICAL_BACKFILL',sourceId:'madapes-gambles',occurredAt:'2026-01-01T00:00:00Z',addresses:[ca],partition:'HISTORICAL_DISCOVERY'};
+test('reconstructs MFE MAE and time-to-2x from post-call observations only',()=>{const obs=[['23:59',9],['00:01',10],['00:03',8],['00:10',21]].map(([t,p])=>({tokenAddress:ca,occurredAt:'2026-01-01T'+t+':00Z',priceUsd:p,provider:'x'}));const r=reconstructMarket(base,obs);assert.equal(r.entry.priceUsd,10);assert.equal(r.outcomes.find(x=>x.minutes===15).timeTo2xMinutes,9);assert.ok(Math.abs(r.outcomes.find(x=>x.minutes===15).maePct-(-20))<1e-12);});
+test('attention sequence uses only later observations',()=>{const rows=[{...base,sourceId:'spider',occurredAt:'2025-12-31T23:59:00Z'},{...base,sourceId:'pow',occurredAt:'2026-01-01T00:12:00Z'}];const s=attentionSequence(base,rows);assert.deepEqual(s.map(x=>x.sourceId),['pow']);assert.equal(s[0].lagMinutes,12);});

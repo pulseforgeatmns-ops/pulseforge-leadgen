@@ -1,5 +1,5 @@
 'use strict';
-const KINDS = new Set(['watch','transaction','observation','candle','event','annotation','balance','cursor','quote','status']);
+const KINDS = new Set(['watch','transaction','observation','candle','event','annotation','balance','cursor','quote','status','paper']);
 const MUTABLE = new Set(['watch','balance','cursor','status']);
 class DashboardStore {
   constructor(pool,{tenantId,wallet}) {

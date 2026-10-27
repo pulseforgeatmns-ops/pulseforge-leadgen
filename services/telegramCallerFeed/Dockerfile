@@ -1,9 +1,15 @@
 FROM node:22-bookworm-slim
+# Historical worker image includes isolated archive dependencies.
 WORKDIR /app
 ENV NODE_ENV=production PORT=3099 PUPPETEER_SKIP_DOWNLOAD=true PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
 COPY services/telegramCallerFeed ./services/telegramCallerFeed
+COPY services/signalOpportunities/historicalDataset.js ./services/signalOpportunities/historicalDataset.js
+COPY scripts/signalHistoricalBackfill.js ./scripts/signalHistoricalBackfill.js
+COPY scripts/signalTelegramAuth.js ./scripts/signalTelegramAuth.js
+COPY scripts/signalTelegramAuthProbe.js ./scripts/signalTelegramAuthProbe.js
+COPY services/signalOpportunities/sourceUniverse.js ./services/signalOpportunities/sourceUniverse.js
 COPY packages/signal-v1/prospective/constants.js ./packages/signal-v1/prospective/constants.js
 COPY packages/signal-v1/prospective/caExtraction.js ./packages/signal-v1/prospective/caExtraction.js
 COPY packages/signal-v1/acquisition/solanaAddress.js ./packages/signal-v1/acquisition/solanaAddress.js

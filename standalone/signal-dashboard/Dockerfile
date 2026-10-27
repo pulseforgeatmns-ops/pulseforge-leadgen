@@ -4,6 +4,7 @@ ENV NODE_ENV=production PUPPETEER_SKIP_DOWNLOAD=true PLAYWRIGHT_SKIP_BROWSER_DOW
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
 COPY services/signalDashboard ./services/signalDashboard
+COPY services/signalOpportunities ./services/signalOpportunities
 COPY services/signalDistribution/risk.js services/signalDistribution/marketProvider.js services/signalDistribution/requestBudget.js ./services/signalDistribution/
 COPY packages/signal-v1/acquisition/solanaAddress.js ./packages/signal-v1/acquisition/
 COPY packages/signal-v1/prospective/caExtraction.js ./packages/signal-v1/prospective/
