@@ -266,8 +266,9 @@ test('AO routing respects disposition_status independently of generic status', {
     assert.equal(callHeld.ao_outreach_review_required, false, 'call-only suppression must not imply a general outreach hold');
     await db.query('UPDATE prospects SET ao_call_suppressed=false,ao_outreach_review_required=true WHERE id=$1', [ids.p2]);
     const admissionHeld = (await taskService.listOpenTasks({ clientId: 10, db })).find(row => row.prospect_id === ids.p2);
-    assert.equal(admissionHeld.outreach_review_required, true);
-    assert.match(admissionHeld.first_action, /Separate outreach review/);
+    assert.equal(admissionHeld, undefined, 'review-held accounts must not remain in the active follow-up queue');
+    assert.equal((await db.query('SELECT ao_outreach_review_required FROM prospects WHERE id=$1', [ids.p2])).rows[0].ao_outreach_review_required, true,
+      'reading the filtered queue must not clear the stored hold');
     await db.query('UPDATE prospects SET ao_outreach_review_required=false WHERE id=$1', [ids.p2]);
 
     await db.query(
