@@ -1008,6 +1008,7 @@ async function defaultScoutRampResearchScoped({
   createBusinessEvidenceCursorStore = null,
   createCandidateTicketStore = null,
   createPageCheckpointStore = null,
+  createTenantDiscoveryMemory = null,
   now = new Date(),
 } = {}) {
   const governed = governedContext || createGovernedOutboundContext({ program });
@@ -1076,6 +1077,7 @@ async function defaultScoutRampResearchScoped({
     let tickets = null;
     let dispatcher = null;
     let pages = null;
+    let tenantMemory = null;
     let coverageEpochBlocked = false;
     if (durableEnabled) {
       tickets = (createCandidateTicketStore || require('./scoutCandidateTickets').createCandidateTicketStore)({
@@ -1095,6 +1097,12 @@ async function defaultScoutRampResearchScoped({
         db: pool, tenantId: tenant.tenantId, fingerprint, coverageEpoch,
       });
       if (typeof pages.assertReady === 'function') await pages.assertReady();
+      if (require('./scoutTenantDiscoveryMemory').ENABLED_TENANTS.has(tenant.tenantId)) {
+        tenantMemory=(createTenantDiscoveryMemory || require('./scoutTenantDiscoveryMemory').createTenantDiscoveryMemory)({
+          pool,tenantId:tenant.tenantId,fingerprint,
+        });
+        await tenantMemory.assertReady();
+      }
       const dependencyKey = ticketDispatch.candidateTicketDependencyKey({ tenantId: tenant.tenantId, program, source });
       dispatcher = ticketDispatch.createCandidateTicketDispatcher({ ticketStore: tickets,
         tenantId: tenant.tenantId, dependencyKey, persist: persistPass });
@@ -1135,12 +1143,12 @@ async function defaultScoutRampResearchScoped({
         || ((input, opts) => require('./scoutAcquisitionIntelligence').runAcquisitionIntelligenceLoop(input, opts));
       const checkpoints = require('./scoutQueryCheckpoints');
       const checkpointSession = createQueryCheckpointSession
-        ? createQueryCheckpointSession({ pool, tenantId: tenant.tenantId, fingerprint, ticketStore: tickets, pageStore: pages })
+        ? createQueryCheckpointSession({ pool, tenantId: tenant.tenantId, fingerprint, ticketStore: tickets, pageStore: pages, tenantMemory })
         : checkpoints.createCheckpointSession({ store: checkpoints.createCheckpointStore({
           db: pool, tenantId: tenant.tenantId, fingerprint,
-        }), ticketStore: tickets, pageStore: pages });
+        }), ticketStore: tickets, pageStore: pages, tenantMemory });
       const placesProvider = require('../packages/capabilities/discovery/providers/PlacesProvider')
-        .createPlacesProvider({ queryCheckpointSession: checkpointSession });
+        .createPlacesProvider({ queryCheckpointSession: checkpointSession, tenantDiscoveryMemory:tenantMemory });
       discoveryAttempted = true;
       try { discovery = await discover(
         scoutInput({ ...program, tenant_id: tenant.tenantId }, source, plan, tenant, searchGeneration),
@@ -1175,6 +1183,7 @@ async function defaultScoutRampResearchScoped({
         await store.event('scout_query_progression', [cycleId || fingerprint, searchGeneration], {
           programId: program.id,
           ...queryProgression,
+          ...(tenantMemory ? { newQueueAdmissionsThisCycle:Number(persisted.inserted || 0) } : {}),
           evidenceProgression,
         });
       }

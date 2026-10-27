@@ -29,6 +29,7 @@ async function run({ tenantId = '13', durable = true } = {}) {
     enrichment: { run: async () => ({ considered: 0 }) }, recoverExistingInventory: async () => ({}),
     loadDiscoveryBackoff: async () => null,
     ...(durable ? { createCandidateTicketStore: () => tickets } : {}),
+    createTenantDiscoveryMemory: input => ({ tenantId:input.tenantId,fingerprint:input.fingerprint,assertReady:async()=>{} }),
     createPageCheckpointStore: input => { calls.pageInputs.push(input); return { assertReady: async () => {} }; },
     createQueryCheckpointSession: () => ({ acknowledge: async () => {}, snapshot: () => ({ status: 'not_observed' }) }),
     runDiscovery: async (_input, options) => { calls.discovery++; await options.persistCompanies({ companies: [] }); return { kind: 'investigated' }; },
