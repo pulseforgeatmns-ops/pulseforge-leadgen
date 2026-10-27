@@ -58,7 +58,7 @@ test('tenant-wide query and detail memory uses durable native PostgreSQL across 
   });
   await t.test('pre-migration checkpoints remain authoritative and missing detail age is never fabricated',async()=>{
     const raw={placeId:'legacy-place',source:'google_places',companyName:'Legacy office',website:'legacy.example',address:'Bedford NH'};
-    await db.query("INSERT INTO scout_query_checkpoints(tenant_id,search_fingerprint,query_key,plan_version,state,candidates) VALUES('10','legacy-source',$1,'places-market-query-v1','handled',$2)",
+    await db.query("INSERT INTO scout_query_checkpoints(tenant_id,search_fingerprint,query_key,plan_version,state,candidates,handled_at) VALUES('10','legacy-source',$1,'places-market-query-v1','handled',$2,clock_timestamp())",
       [queryIdentity('Legacy Realty Bedford NH',false),JSON.stringify([raw])]);
     const before=calls.length;
     await fixture('new-source','Legacy Realty',['legacy-place']).run();assert.equal(calls.length,before);
@@ -96,6 +96,20 @@ test('tenant-wide query and detail memory uses durable native PostgreSQL across 
     const later=fixture('commit-b','Commit Lost Realty',['commit-place']);await later.run();
     assert.equal(calls.length,before);assert.equal(later.session.snapshot().continuation.statuses.tenant_query_outcome_unconfirmed,1);
   });
+  await t.test('lost observation acknowledgement retains the actual body and never refetches its details',async()=>{
+    let injected=false;const uncertain={connect:db.connect.bind(db),query:async(sql,p)=>{
+      const result=await db.query(sql,p);
+      if(!injected && /^UPDATE scout_tenant_place_observations/.test(sql)) {injected=true;throw Error('synthetic lost observation acknowledgement');}
+      return result;
+    }};
+    const before=calls.length;
+    await assert.rejects(fixture('body-a','Lost Body Realty',['lost-body-place'],{pool:uncertain}).run(),/lost observation acknowledgement/);
+    const next=fixture('body-b','Different Lost Body Realty',['lost-body-place']);
+    const result=await next.run();await next.session.acknowledge();
+    assert.equal(result[0].detailsReused,true);
+    assert.equal(calls.slice(before).filter(x=>x.kind==='detail').length,1);
+    assert.equal((await db.query("SELECT state FROM scout_tenant_place_observations WHERE place_id='lost-body-place'")).rows[0].state,'observed');
+  });
   await t.test('cross-tenant bindings and resetting consumed memory fail closed',async()=>{
     assert.throws(()=>createTenantDiscoveryMemory({pool:db,tenantId:'13',fingerprint:'source-a'}),/binding_required/);
     await assert.rejects(db.query("UPDATE scout_tenant_query_owners SET search_fingerprint='reset'"),/permanent/);
@@ -110,7 +124,7 @@ test('tenant-wide query and detail memory uses durable native PostgreSQL across 
     plan.reservationId=await pageStore.reserve(plan);
     const candidates=Array.from({length:5},(_,i)=>({placeId:`novelty-${i}`,source:'google_places',companyName:`Novelty ${i}`,detailsReused:i<4}));
     await pageStore.stage(plan,candidates,{nextPageToken:'private-continuation',rawResults:[]});
-    await db.query("UPDATE scout_query_checkpoints SET state='handled' WHERE tenant_id='10' AND search_fingerprint=$1 AND query_key=$2",[fp,key]);
+    await db.query("UPDATE scout_query_checkpoints SET state='handled',handled_at=clock_timestamp() WHERE tenant_id='10' AND search_fingerprint=$1 AND query_key=$2",[fp,key]);
     const m=memory(fp);assert.equal(await m.continuationStatus(key),'tenant_query_low_novelty');
     assert.equal(m.snapshot().lowNoveltyQueriesDeferred,1);
     assert.equal(await memory('different-source').continuationStatus(key),null,'another source cannot adopt continuation authority');
@@ -147,7 +161,7 @@ test('tenant-wide query and detail memory uses durable native PostgreSQL across 
       const changed=await run('pipeline-mission-b');assert.equal(changed.discoveredQueued,0);assert.equal(transport.length,2);
       assert.equal(changed.queryProgression.tenantMemory.queriesSkipped,1);
       assert.equal((await db.query('SELECT count(*)::int AS n FROM scout_unenriched')).rows[0].n,1);
-      assert.ok(events.some(e=>e[0]==='scout_query_progression'&&e[2].newQueueAdmissionsThisCycle===1));
+      assert.ok(events.some(e=>e[0]==='scout_tenant_search_yield'&&e[2].admissionsConfirmed&&e[2].newQueueAdmissionsThisCycle===1));
     } finally {
       require.cache[providerPath].exports=previous;
       if(oldFlag==null)delete process.env.SCOUT_DURABLE_CANDIDATES_ENABLED;else process.env.SCOUT_DURABLE_CANDIDATES_ENABLED=oldFlag;

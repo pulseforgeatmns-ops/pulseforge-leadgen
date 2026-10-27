@@ -1183,7 +1183,6 @@ async function defaultScoutRampResearchScoped({
         await store.event('scout_query_progression', [cycleId || fingerprint, searchGeneration], {
           programId: program.id,
           ...queryProgression,
-          ...(tenantMemory ? { newQueueAdmissionsThisCycle:Number(persisted.inserted || 0) } : {}),
           evidenceProgression,
         });
       }
@@ -1206,6 +1205,9 @@ async function defaultScoutRampResearchScoped({
       if (typeof store.event === 'function') await store.event('scout_candidate_work_progression', [tenant.tenantId, cycleId || fingerprint],
         { programId: program.id, ...candidateWork });
     }
+    if (tenantMemory && typeof store.event==='function') await store.event('scout_tenant_search_yield',
+      [tenant.tenantId,cycleId || fingerprint],{programId:program.id,...tenantMemory.snapshot(),
+        admissionsConfirmed:admissionMeasured,newQueueAdmissionsThisCycle:admissionMeasured ? Number(persisted.inserted || 0) : null});
     if (persisted.inserted > 0 && promoted < plan.deficit) {
       const second = await runEnrichmentBatches(enricher, pool, plan.deficit - promoted, tenantBinding);
       promoted += second.promoted + second.recovered;

@@ -159,7 +159,7 @@ function createTenantDiscoveryMemory({ pool, tenantId, fingerprint }) {
     const result=await pool.query(`UPDATE scout_tenant_place_observations
       SET state=$5,candidate=$6::jsonb,observed_at=CASE WHEN $5='observed' THEN clock_timestamp() ELSE NULL END
       WHERE tenant_id=$1 AND place_id=$2 AND search_fingerprint=$3 AND reservation_id=$4 AND state='reserved'
-      RETURNING place_id`,[tenant,claim.placeId,fingerprint,claim.reservationId,candidate?'observed':'uncertain',JSON.stringify(candidate)]);
+      RETURNING place_id`,[tenant,claim.placeId,fingerprint,claim.reservationId,candidate?'observed':'uncertain',candidate ? JSON.stringify(candidate) : null]);
     if (result.rows.length!==1) throw fail('scout_tenant_memory_observation_unconfirmed');
   }
   return { tenantId:tenant, fingerprint, assertReady, checkQuery, reserveQuery, continuationStatus, claimPlace, finishPlace,

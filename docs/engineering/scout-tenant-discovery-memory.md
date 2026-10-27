@@ -52,10 +52,11 @@ deferred in favor of fresh approved roots. This conservative prioritization rule
 is explicit and tested, not an estimate of whole-market exhaustion. Max receives
 `tenant_query_low_novelty` as a remaining-coverage review dependency.
 
-Query progression exposes only numeric history/reuse/reservation counters. Its
-event also records `newQueueAdmissionsThisCycle`, which is the actual queue-write
+Query progression exposes only numeric history/reuse/reservation counters. After
+candidate work drains, `scout_tenant_search_yield` records `newQueueAdmissionsThisCycle`, the actual queue-write
 count for the cycle, including any previously owned backlog. It is not a claim
-of per-query historical yield or verified contact inventory. Admission,
+of per-query historical yield or verified contact inventory. An unconfirmed
+admission pass reports a null count rather than claiming zero. Admission,
 ownership, deduplication and downstream controls remain authoritative.
 
 ## Installation and acceptance
