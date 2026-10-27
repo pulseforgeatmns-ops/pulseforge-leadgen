@@ -4,6 +4,47 @@ const assert = require('node:assert/strict');
 const { describe, it } = require('node:test');
 const { buildPlan, pathMatchesPattern } = require('../.github/scripts/ci-plan-pr.js');
 
+it('Max operational principal and tenant boundaries retain strict and full regression coverage', () => {
+  for (const file of ['utils/maxOperationalAuthorization.js', 'utils/maxAttentionAuthorization.js',
+    'routes/maxDecisionExecution.js', 'routes/maxStateIngestion.js', 'test/maxOperationalAuthorization.test.js']) {
+    assert.ok(buildPlan([file]).suites.includes('max'), file);
+  }
+  assert.match(require('../package.json').scripts['test:max'], /test\/maxOperationalAuthorization\.test\.js/);
+});
+
+it('legacy prepared-history isolation and its native regression retain the Anchor safety gate', () => {
+  for (const file of ['services/anchorCrmPreparationLegacyHistory.js', 'services/acquisitionMissionRuntime.js',
+    'services/anchorScopedResumeCrmPreparation.js', 'test/anchorScopedResumeLegacyHistoryPostgres.test.js']) {
+    assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
+  }
+  assert.match(require('../package.json').scripts['test:anchor-outbound'], /test\/anchorScopedResume\*\.test\.js/);
+});
+
+it('preparation phase diagnostics and real historical-data regressions retain the Anchor gate', () => {
+  for (const file of ['services/anchorCrmPreparationDiagnostics.js', 'services/anchorScopedResumeCrmPreparation.js',
+    'test/anchorScopedResumePreparationDiagnostics.test.js', 'test/anchorScopedResumePreparationDiagnosticsPostgres.test.js']) {
+    assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
+  }
+  assert.match(require('../package.json').scripts['test:anchor-outbound'], /test\/anchorScopedResume\*\.test\.js/);
+});
+
+it('native Anchor approval UI and identity changes retain real browser/SQL safety gates', () => {
+  for (const file of ['routes/anchorPreparationApprovalPage.js', 'public/anchor-preparation-approval.html',
+    'public/anchor-preparation-approval.js', 'public/anchor-preparation-approval.css',
+    'services/anchorCrmPreparationApproval.js', 'services/anchorCrmPreparationReceipt.js',
+    'test/anchorScopedResumePreparationReceiptPostgres.test.js', 'test/browser/anchorPreparationApprovalBrowser.test.js',
+    'test/helpers/anchorPreparationApprovalBrowserHarness.js', 'public/shared/tokens.css',
+    'routes/identityTenantSelection.js', 'services/identityTenantSelection.js', 'test/helpers/loginIdentityHarness.js']) {
+    assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
+  }
+  const fs = require('node:fs'), path = require('node:path');
+  for (const file of ['pr-ci-lean.yml', 'anchor-governed-outbound-tests.yml', 'full-regression.yml']) {
+    const workflow = fs.readFileSync(path.join(__dirname, '../.github/workflows', file), 'utf8');
+    assert.match(workflow, /browser-actions\/setup-chrome@v1/);
+    assert.match(workflow, /node --require \.\/test\/helpers\/denyExternalProviders\.cjs --test test\/browser\/anchorPreparationApprovalBrowser\.test\.js/);
+  }
+});
+
 describe('CI plan PR selector (SPEC-CI-LEAN-001)', () => {
   it('opportunity engine and acceptance tests select the Signal domain',()=>{
     for(const file of ['services/signalOpportunities/worker.js','test/signalOpportunity.test.js','test/signalOpportunityPostgres.test.js','test/signalOpportunityBrowser.test.js'])assert.deepEqual(buildPlan([file]).suites,['global','signal-v1']);
@@ -358,4 +399,30 @@ it('Clarity files always select Max with non-skipping PostgreSQL and browser val
  }
  const fs=require('node:fs');const workflow=fs.readFileSync(require('node:path').join(__dirname,'../.github/workflows/pr-ci-lean.yml'),'utf8');
  assert.match(workflow,/npm run test:clarity/);assert.match(workflow,/npm run test:clarity:browser/);
+});
+
+
+it('bounded research authority selects native Scout and executes both new isolated suites', () => {
+  for (const file of ['services/scoutBoundedResearchAuthority.js',
+    'migrations/2026-10-26-scout-bounded-research-authority.sql', 'test/helpers/scoutBoundedResearchFixture.js',
+    'test/helpers/denyAcquisitionHydration.cjs',
+    'test/scoutBoundedResearchAuthorityPostgres.test.js', 'test/scoutBoundedResearchCli.test.js',
+    'scripts/scout-bounded/run.cjs']) {
+    assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
+  }
+  for (const file of ['pr-ci-lean.yml', 'full-regression.yml']) {
+    const workflow = require('node:fs').readFileSync(require('node:path').join(__dirname, '../.github/workflows', file), 'utf8');
+    assert.match(workflow, /test\/scoutBoundedResearchAuthorityPostgres\.test\.js/);
+    assert.match(workflow, /test\/scoutBoundedResearchCli\.test\.js/);
+  }
+});
+
+
+it('native login persistence is covered by identity and Anchor CI with PostgreSQL', () => {
+  assert.ok(buildPlan(['test/loginSessionPersistencePostgres.test.js']).suites.includes('anchor-outbound'));
+  for (const file of ['identity-workflow.yml', 'pr-ci-lean.yml', 'anchor-governed-outbound-tests.yml', 'full-regression.yml']) {
+    const workflow = require('node:fs').readFileSync(require('node:path').join(__dirname, '../.github/workflows', file), 'utf8');
+    assert.match(workflow, /test\/loginSessionPersistencePostgres\.test\.js/);
+    assert.match(workflow, /setup-postgres-environment/);
+  }
 });

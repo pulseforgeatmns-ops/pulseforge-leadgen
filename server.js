@@ -124,6 +124,8 @@ app.use(session({
 
 // Own the bounded form parser before global parsers and legacy session normalization.
 app.use('/', require('./routes/identityTenantSelection').createIdentityTenantSelectionRouter({ Router: express.Router, pool }));
+// Detached, display-only approval shell owns its requests before session normalization/static handling.
+app.use(require('./routes/anchorPreparationApprovalPage').createAnchorPreparationApprovalPageRouter({ pool }));
 
 // Stripe signature verification needs the untouched request Buffer. This is
 // deliberately mounted before express.json() (raw-body Pattern A).
@@ -454,6 +456,21 @@ app.post('/login', async (req, res) => {
   const failedLogin = error => res.redirect(
     `/login?error=${error}${identityCheck ? '&workflow=identity-check' : ''}`
   );
+  const persistLoginSession = async () => {
+    try {
+      // express-session can emit redirect headers before its implicit save
+      // completes. Persist identity first so the next request cannot outrun it.
+      await new Promise((resolve, reject) => req.session.save(error => error ? reject(error) : resolve()));
+      return true;
+    } catch {
+      // A failed save acknowledgement is not authentication success. Detach
+      // to prevent an implicit retry or cookie emission while ending the reply.
+      req.session = null;
+      res.set('Cache-Control', 'no-store');
+      res.status(503).send('Sign-in is temporarily unavailable. Please try again.');
+      return false;
+    }
+  };
   await initAuth();
   const userCount = await getUserCount();
 
@@ -485,6 +502,7 @@ app.post('/login', async (req, res) => {
       ? Number(user.client_id)
       : (user.client_id || 1);
     await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
+    if (!await persistLoginSession()) return;
     if (user.password_change_required) return res.redirect('/change-password');
     if (identityCheck) return res.redirect('/api/me');
     if (user.role === 'setter') return res.redirect('/setter');
@@ -502,6 +520,7 @@ app.post('/login', async (req, res) => {
     req.session.user = { id: null, name: 'Legacy Admin', email: email || 'legacy@pulseforge.local', role: 'admin' };
     req.session.authenticated = true;
     req.session.active_client_id = 1;
+    if (!await persistLoginSession()) return;
     return res.redirect('/command-deck');
   }
 

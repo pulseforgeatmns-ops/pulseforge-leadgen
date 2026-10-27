@@ -90,7 +90,7 @@ test('actual evaluate and scan API routes preserve failure receipts and existing
   const { input } = fixture(true); const failed = await evaluateOperationalDecision(input);
   const routes = new Map(); const router = { post: (p, ...h) => routes.set(p, h.at(-1)), get: () => {} };
   const module = { exports: {} };
-  const deps = { express: { Router: () => router }, '../middleware/auth': { requireAuth: () => {}, requireRole: () => () => {} }, '../utils/clientContext': { normalizeClientId: v => v == null ? null : Number(v) }, '../services/maxDecisionExecutionService': { evaluateDecision: async () => failed, runExpectationDecisionScan: async () => [failed] } };
+  const deps = { express: { Router: () => router }, '../middleware/auth': { requireAuth: () => {}, requireRole: () => () => {} }, '../db': {}, '../utils/maxOperationalAuthorization': { resolveMaxOperationalScope: async () => ({ clientId: 1 }) }, '../services/maxDecisionExecutionService': { evaluateDecision: async () => failed, runExpectationDecisionScan: async () => [failed] } };
   vm.compileFunction(fs.readFileSync(path.join(__dirname, '../routes/maxDecisionExecution.js'), 'utf8'), ['module', 'require', 'console'], { filename: 'routes/maxDecisionExecution.js' })(module, name => { assert.ok(Object.hasOwn(deps, name), name); return deps[name]; }, console);
   for (const route of ['/api/v1/max/decisions/evaluate', '/api/v1/max/decisions/scan-expectations']) {
     const res = { json(body) { this.body = body; return this; }, status(code) { this.code = code; return this; } };

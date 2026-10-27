@@ -4,7 +4,7 @@ const express = require('express');
 const multer = require('multer');
 const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
-const { normalizeClientId } = require('../utils/clientContext');
+const { resolveMaxOperationalScope } = require('../utils/maxOperationalAuthorization');
 const {
   ingestOperationalEvidence,
   listOverdueExpectationPrompts,
@@ -19,7 +19,7 @@ const {
 const { createMaxAttachment } = require('../packages/max/composer');
 const { LIMITS } = require('../packages/max/composer/limits');
 const pool = require('../db');
-const { getEffectiveActor, impersonationProvenance } = require('../utils/requestIdentity');
+const { impersonationProvenance } = require('../utils/requestIdentity');
 const { logImpersonationAction } = require('../services/aoImpersonationService');
 const { resolveSpreadsheetScope } = require('../utils/maxSpreadsheetAuthorization');
 const spreadsheetService = require('../services/maxSpreadsheetService');
@@ -48,10 +48,9 @@ const requireComposerWrite = [
   requireRole('admin', 'manager', 'ao'),
 ];
 
-function resolveClientId(req) {
-  const fromBody = normalizeClientId(req.body?.client_id ?? req.body?.clientId);
-  if (fromBody != null) return fromBody;
-  return normalizeClientId(req.session?.active_client_id);
+async function resolveClientId(req, options) {
+  req.maxOperationalScope = await resolveMaxOperationalScope(req, pool, options);
+  return req.maxOperationalScope.clientId;
 }
 
 router.post('/api/v1/max/understand', requireIngestWrite, async (req, res) => {
@@ -60,7 +59,7 @@ router.post('/api/v1/max/understand', requireIngestWrite, async (req, res) => {
     if (!text || !String(text).trim()) {
       return res.status(400).json({ error: 'text_required' });
     }
-    const clientId = resolveClientId(req);
+    const clientId = await resolveClientId(req);
     const conversationId = req.body?.conversation_id || req.body?.conversationId || null;
     const actor = actorFromSession(req);
     const baseInput = {
@@ -94,21 +93,24 @@ router.post('/api/v1/max/understand', requireIngestWrite, async (req, res) => {
       conversation_memory_telemetry: interpreted.conversationMemoryTelemetry || null,
     });
   } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ error: error.code });
     console.error('[max-understanding]', error);
     return res.status(500).json({ error: 'understanding_failed', message: error.message });
   }
 });
 
 function actorFromSession(req) {
-  const effective = getEffectiveActor(req);
+  const scope = req.maxOperationalScope;
+  if (!scope) throw Object.assign(new Error('authenticated_actor_required'), { code: 'authenticated_actor_required', statusCode: 403 });
   const provenance = impersonationProvenance(req);
   return {
-    userId: effective?.id,
-    role: effective?.role,
-    aoId: effective?.role === 'ao' ? effective.id : undefined,
-    authenticatedUserId: provenance?.authenticated_user_id ?? undefined,
-    impersonated: Boolean(provenance),
-    impersonation: provenance || undefined,
+    userId: scope.actorId,
+    role: scope.actorRole,
+    aoId: scope.actorRole === 'ao' ? scope.actorId : undefined,
+    authenticatedUserId: scope.authenticatedUserId,
+    impersonated: scope.impersonated,
+    impersonation: provenance ? { ...provenance, authenticated_user_id: scope.authenticatedUserId,
+      effective_user_id: scope.actorId, tenant_id: scope.clientId } : undefined,
   };
 }
 
@@ -147,7 +149,7 @@ function parseComposerJsonBody(body = {}) {
 
 async function handleComposerSubmit(req, res) {
   try {
-    const clientId = resolveClientId(req);
+    const clientId = await resolveClientId(req, { allowAo: true });
     if (clientId == null) {
       return res.status(400).json({ error: 'client_id_required' });
     }
@@ -312,7 +314,7 @@ router.get('/api/v1/max/spreadsheet/proposals', requireComposerWrite, async (req
 
 async function handleVoiceUpload(req, res) {
   try {
-    const clientId = resolveClientId(req);
+    const clientId = await resolveClientId(req, { allowAo: true });
     if (clientId == null) {
       return res.status(400).json({ error: 'client_id_required' });
     }
@@ -342,6 +344,7 @@ async function handleVoiceUpload(req, res) {
       telemetry: result.telemetry,
     });
   } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ error: error.code });
     const code = error.code || 'voice_upload_failed';
     const status = code === 'unsupported_audio_type' ? 415
       : code === 'empty_transcript' ? 422
@@ -369,7 +372,7 @@ router.post(
 
 router.post('/api/v1/max/voice/recordings/:id/transcribe', requireComposerWrite, async (req, res) => {
   try {
-    const clientId = resolveClientId(req);
+    const clientId = await resolveClientId(req, { allowAo: true });
     if (clientId == null) {
       return res.status(400).json({ error: 'client_id_required' });
     }
@@ -390,6 +393,7 @@ router.post('/api/v1/max/voice/recordings/:id/transcribe', requireComposerWrite,
       telemetry: result.telemetry,
     });
   } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ error: error.code });
     const code = error.code || 'transcription_failed';
     const status = code === 'recording_not_found' ? 404 : code === 'empty_transcript' ? 422 : 500;
     return res.status(status).json({ error: code, message: error.message });
@@ -398,11 +402,13 @@ router.post('/api/v1/max/voice/recordings/:id/transcribe', requireComposerWrite,
 
 router.post('/api/v1/max/ingest', requireIngestWrite, async (req, res) => {
   try {
-    const clientId = resolveClientId(req);
+    const clientId = await resolveClientId(req);
     if (clientId == null) {
       return res.status(400).json({ error: 'client_id_required' });
     }
-    const result = await ingestOperationalEvidence(clientId, req.body || {});
+    const actor = actorFromSession(req);
+    const result = await ingestOperationalEvidence(clientId, { ...req.body, actor,
+      source_actor: actor.userId, sourceActor: actor.userId });
     let decisionFollowUp = null;
     if (!result.commit_blocked) {
       try {
@@ -432,6 +438,7 @@ router.post('/api/v1/max/ingest', requireIngestWrite, async (req, res) => {
         : null,
     });
   } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ error: error.code });
     console.error('[max-state-ingestion]', error);
     return res.status(500).json({ error: 'ingestion_failed', message: error.message });
   }
@@ -444,13 +451,14 @@ router.post('/api/v1/max/ingest/spreadsheet', requireIngestWrite, async (req, re
 
 router.get('/api/v1/max/ingest/expectations/overdue', requireIngestWrite, async (req, res) => {
   try {
-    const clientId = normalizeClientId(req.query.client_id) ?? resolveClientId(req);
+    const clientId = await resolveClientId(req);
     if (clientId == null) {
       return res.status(400).json({ error: 'client_id_required' });
     }
     const prompts = await listOverdueExpectationPrompts(clientId);
     return res.json({ ok: true, prompts });
   } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ error: error.code });
     return res.status(500).json({ error: 'expectation_scan_failed', message: error.message });
   }
 });

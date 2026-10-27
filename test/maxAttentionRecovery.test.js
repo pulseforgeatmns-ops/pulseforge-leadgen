@@ -301,6 +301,65 @@ test('successfully released transaction rejects late queries too', async () => {
   await assert.rejects(lateDb.query('INSERT late_effect'), { code: 'ATTENTION_TRANSACTION_CLOSED' });
 });
 
+for (const shutdownFails of [false, true]) {
+  test(`terminated attention client is discarded before physical closure; fixture ${shutdownFails ? 'surfaces later errors' : 'waits before stopping PostgreSQL'}`, async () => {
+    const { EventEmitter } = require('node:events');
+    const { setImmediate: nextTurn } = require('node:timers/promises');
+    const { createTrackedPostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
+    const failure = Object.assign(new Error('terminating connection due to administrator command'), { code: '57P01' });
+    const queries = [];
+    let client, discardedWith, lateDb;
+    class DeferredClient extends EventEmitter {
+      constructor() { super(); client = this; this._queryable = true; this._ending = false; }
+      connect(callback) { queueMicrotask(() => callback(null)); }
+      async query(sql) {
+        queries.push(sql);
+        if (!this._queryable) throw failure;
+        return { rows: /SELECT \*/.test(sql) ? [item()] : [] };
+      }
+      end(callback) {
+        this._ending = true;
+        this.finishClose = () => { callback(); this.emit('end'); };
+      }
+    }
+    const pool = createTrackedPostgresPool({ Client: DeferredClient, idleTimeoutMillis: 0 });
+    pool.on('release', error => { discardedWith = error; });
+    const store = new PostgresAttentionStore(pool, { clientId: 1 });
+    await assert.rejects(store.withClaim('attention-1', { clientId: 1, claimToken: 'owner' }, async ({ db }) => {
+      lateDb = db;
+      setImmediate(() => { client._queryable = false; client.emit('error', failure); });
+      await new Promise(() => {});
+    }), error => error === failure);
+    assert.equal(discardedWith, failure, 'transaction failure must reject and discard, not be swallowed');
+    assert.equal(pool.totalCount, 0, 'pg-pool has already removed the still-closing client');
+    assert.equal(client.listenerCount('error'), 1, 'release restored only pg-pool idle error ownership');
+    assert.equal(queries.includes('COMMIT'), false);
+    assert.equal(queries.at(-1), 'ROLLBACK');
+    const count = queries.length;
+    await assert.rejects(lateDb.query('INSERT late_effect'), error => error === failure);
+    assert.equal(queries.length, count);
+    let stops = 0;
+    const shutdown = closePostgresFixture(pool, { stop: async () => {
+      stops += 1;
+      if (shutdownFails) client.finishClose();
+    } });
+    await nextTurn();
+    assert.equal(pool.ended, true);
+    assert.equal(stops, 0, 'bookkeeping completion is not physical socket completion');
+    if (shutdownFails) {
+      const shutdownError = new Error('unexpected socket error during shutdown');
+      const rejection = assert.rejects(shutdown, error => error === shutdownError);
+      client.emit('error', shutdownError);
+      await rejection;
+    } else {
+      client.finishClose();
+      await shutdown;
+    }
+    assert.equal(stops, 1);
+    assert.equal(pool.listenerCount('error'), 0, 'temporary error listener must not leak');
+  });
+}
+
 for (const { offsetMs, expectedStatus } of [
   { offsetMs: 0, expectedStatus: 'ACTIVE' },
   { offsetMs: -1, expectedStatus: 'OVERDUE' },

@@ -32,3 +32,19 @@ Schema helper: `utils/maxDecisionExecutionSchema.js` (lazy on first Postgres dec
 Acceptance scenarios: `test/maxDecisionExecution.test.js` (`npm run test:max` includes this file).
 
 Depends on: `docs/SPEC-MAX-RELIABILITY-001.md` (`packages/max/stateIngestion`).
+
+## Authenticated API boundary
+
+Evaluate, expectation scan and receipt reads use the same current-principal and
+tenant-selection policy as Max attention through
+`utils/maxOperationalAuthorization.js`. A body/query selector cannot override
+the authorized workspace; omitted selectors no longer silently choose tenant 1.
+Every supplied alias must be a valid matching positive integer. Revoked users,
+stale role/tenant bindings, legacy unverified actors and inactive tenants are
+rejected before business-service dispatch or schema initialization. Impersonated
+AOs do not inherit the authenticating admin's decision-write authority. Existing
+decision policy, idempotency, approvals and verification are unchanged.
+
+Actual-route regressions are in `test/maxOperationalAuthorization.test.js` and
+included in the full and strict Max suites. Passing these synthetic-service
+tests does not establish live execution, production routing accuracy or recovery.

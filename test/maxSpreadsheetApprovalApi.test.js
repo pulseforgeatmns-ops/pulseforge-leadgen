@@ -50,6 +50,9 @@ test('authenticated spreadsheet API safety gate with actual workbook and disposa
     }
   });
   await db.query(schema);
+  // The real Max ingress now verifies the current active tenant before parsing
+  // or dispatch. Preserve that production prerequisite in this isolated schema.
+  await db.query('ALTER TABLE clients ADD COLUMN active boolean NOT NULL DEFAULT true');
   await db.query(fs.readFileSync(path.join(__dirname, '../migrations/2026-10-07-max-spreadsheet-reliability.sql'), 'utf8'));
   await db.query(`INSERT INTO clients VALUES(1),(2);
     INSERT INTO users(id,client_id,name,role) VALUES

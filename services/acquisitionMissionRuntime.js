@@ -9,6 +9,7 @@
 const crypto = require('crypto');
 const amo = require('../packages/acquisition-mission');
 const { MISSION_STATE_INCONSISTENT } = amo;
+const { validAnchorPreparationContext, mayOmitLegacyPreparedHistory, assertNoCachedLegacyPreparedHistory } = require('./anchorCrmPreparationLegacyHistory');
 const {
   persistLearning,
   persistPrediction,
@@ -157,12 +158,18 @@ function createAcquisitionMissionRuntime(opts = {}) {
     },
 
     async hydrate(tenantId, hydrateOpts = {}) {
+      const anchorContext = hydrateOpts.anchorCrmPreparation;
+      if (anchorContext !== undefined
+        && !validAnchorPreparationContext(anchorContext, tenantId, hydrateOpts.preinitializedSchema)) {
+        throw runtimeError('ANCHOR_CRM_PREPARATION_HYDRATION_CONTEXT_INVALID', 'Invalid internal Anchor preparation hydration context.');
+      }
       if (tenantId == null || tenantId === '') return state.engine;
       const { persist: effectivePersist, pool: effectivePool } = this.persistOpts(hydrateOpts);
       if (effectivePersist === false || !effectivePool) return state.engine;
 
       try {
         const loaded = await loadTenantMissions(tenantId, effectivePool, { skipEnsure: hydrateOpts.preinitializedSchema === true });
+        if (anchorContext) assertNoCachedLegacyPreparedHistory(loaded, state.engine.store, anchorContext);
         // Contributions must hydrate before missions: putMission runs SPEC-136
         // consistency checks (e.g. execution_approval requires Paige + Emmett rows).
         for (const row of loaded.contributions) if (row) state.engine.store.addContribution(row);
@@ -170,6 +177,10 @@ function createAcquisitionMissionRuntime(opts = {}) {
           try {
             state.engine.store.putMission(mission);
           } catch (putErr) {
+            if (anchorContext && mayOmitLegacyPreparedHistory({
+              mission, contributions: state.engine.store.listContributions(mission.id), error: putErr,
+              context: anchorContext, cachedMission: state.engine.store.getMission(mission.id),
+            })) continue;
             if (hydrateOpts.preinitializedSchema === true) throw putErr;
             if (putErr && putErr.code === MISSION_STATE_INCONSISTENT) {
               console.error('[amo] hydrate skip inconsistent mission', mission && mission.id, putErr.message);

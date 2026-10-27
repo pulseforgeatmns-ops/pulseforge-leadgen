@@ -136,6 +136,7 @@
         maxlength="100000"
         placeholder="Ask Max — what needs my attention today?"
       ></textarea>
+      <button type="button" id="cdAskUpload" class="mx-composer-plus" aria-label="Upload spreadsheet to Max" title="Upload spreadsheet to Max">+</button>
       <button type="submit" class="cd-ask-submit" aria-label="Open Ask Max">Ask</button>
     </form>
   </div>
@@ -168,6 +169,7 @@
         <div id="mxSuggestions" class="mx-suggestions" aria-label="Suggested investigations"></div>
         <div id="mxSpreadsheetScope"></div><div id="mxSpreadsheetProposal"></div>
         <div id="mxComposerChips" class="mx-composer-chips" hidden></div>
+        <button type="button" id="mxReviewSpreadsheet" hidden>Review spreadsheet</button>
         <form id="mxAskForm" class="mx-ask-form" autocomplete="off">
           <button type="button" class="mx-composer-plus" id="mxComposerPlus" aria-label="Add attachment" title="Add attachment">+</button>
           <div class="mx-composer-menu" id="mxComposerMenu" hidden>

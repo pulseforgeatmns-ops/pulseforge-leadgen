@@ -12,13 +12,16 @@ function normalize(value) {
 }
 function reject(code) { const error = new Error(code); error.code = code; throw error; }
 function hasResearchProviderScope() { return Boolean(authority.getStore()); }
-function assertResearchProviderAllowed(_provider, explicitTenant) {
+function assertResearchProviderAllowed(provider, explicitTenant) {
   if (!armed()) return;
   const values = [...(authority.getStore()?.tenants || []), ...(explicitTenant == null ? [] : [explicitTenant])];
   const tenants = values.map(normalize);
   if (!tenants.length || tenants.some(value => value === null)) reject('research_provider_tenant_required');
   if (new Set(tenants).size !== 1) reject('research_provider_tenant_mismatch');
-  if (tenants[0] === '10') reject('anchor_research_provider_paused');
+  if (tenants[0] === '10'
+    && !require('../services/scoutBoundedResearchAuthority').allowsBoundedPlacesResearch(provider, tenants[0])) {
+    reject('anchor_research_provider_paused');
+  }
 }
 function withResearchProviderScope(tenantId, fn) {
   const parent = authority.getStore();
