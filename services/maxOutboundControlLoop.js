@@ -1,6 +1,7 @@
 'use strict';
 const { anchorOutreachReviewSql } = require('../utils/anchorOutreachReview');
-const { withResearchProviderScope, assertResearchProviderAllowed, rethrowResearchProviderControl } = require('../utils/anchorResearchProviderPause');
+const { withResearchProviderScope, assertResearchProviderAllowed, rethrowResearchProviderControl, isResearchProviderControlError } = require('../utils/anchorResearchProviderPause');
+function rethrowUnlessResearchControl(error) { if (!isResearchProviderControlError(error)) throw error; }
 
 const { loadRecoveryState } = require('./anchorEmailRecovery');
 const { assertLegacyPreparation } = require('./anchorEmailRecoveryIntegration');
@@ -1376,6 +1377,33 @@ async function applyPreparationRefill({
   });
 }
 
+// Anchor replenishment holds were stdout-only, so a governed halt looked the
+// same as a healthy idle cycle. Keep one pending operator item per reason; it
+// grants nothing and is skipped while an identical item awaits review.
+async function recordReplenishmentHold(pool, { tenantId, clientId, programId, reason, detail = null, logger = console }) {
+  if (String(tenantId) !== '10' || !reason || !pool?.query) return;
+  try {
+    await pool.query(`
+      INSERT INTO agent_actions (created_by, action_type, title, description, payload, status, client_id)
+      SELECT 'max', 'scout_replenishment_blocked', $1, $2, $3::jsonb, 'pending', $4
+      WHERE NOT EXISTS (
+        SELECT 1 FROM agent_actions
+         WHERE client_id = $4 AND action_type = 'scout_replenishment_blocked'
+           AND status = 'pending' AND payload->>'reason' = $5
+      )
+    `, [
+      'Anchor Scout replenishment is blocked',
+      `Scout discovery, enrichment and inventory replenishment are not running: ${reason}${detail ? ` (${detail})` : ''}. `
+        + 'This is a governance hold, not an empty result. Restoring it needs the matching operator approval.',
+      JSON.stringify({ tenantId: String(tenantId), programId: programId || null, reason, detail }),
+      clientId,
+      reason,
+    ]);
+  } catch (error) {
+    logger.warn?.('[max-outbound-control] replenishment hold record failed', error.message || error);
+  }
+}
+
 async function runMaxOutboundControlLoop(options = {}) {
   const cycleId = options.cycleId || require('node:crypto').randomUUID();
   const cycleStartedAt = new Date().toISOString();
@@ -1406,6 +1434,9 @@ async function runMaxOutboundControlLoop(options = {}) {
   const recoveryState = governed.tenantId === '10'
     ? await loadRecoveryState(pool, { now: controlNow }) : { mode: 'legacy' };
   if (!['legacy', 'scoped_resume'].includes(recoveryState.mode) && options.execute !== false) {
+    await recordReplenishmentHold(pool, { tenantId: governed.tenantId, clientId: store.clientId, programId: program.id,
+      reason: 'anchor_recovery_separate_preparation_approval_required',
+      detail: [recoveryState.mode, recoveryState.reason].filter(Boolean).join(':'), logger });
     return { halted: 'anchor_recovery_separate_preparation_approval_required', programId: program.id, recoveryMode: recoveryState.mode };
   }
 
@@ -1466,6 +1497,19 @@ async function runMaxOutboundControlLoop(options = {}) {
   if (recoveryState.mode === 'scoped_resume' && options.execute !== false && plan.shouldReplenish && !discoveryBlockedReason) {
     try { scopedResearch = await researchAuthority(pool, program, governed.tenantId, controlNow); }
     catch (error) { discoveryBlockedReason = error.code || 'anchor_scoped_resume_research_unavailable'; }
+  }
+  // A research pause is a governed block, not a failed cycle: check it before
+  // consuming scoped research so the cycle still measures and records inventory.
+  if (plan.shouldReplenish && options.execute !== false && !discoveryBlockedReason) {
+    try { assertResearchProviderAllowed('research', governed.tenantId); }
+    catch (error) {
+      rethrowUnlessResearchControl(error);
+      discoveryBlockedReason = error.code;
+    }
+  }
+  if (plan.shouldReplenish && options.execute !== false && discoveryBlockedReason) {
+    await recordReplenishmentHold(pool, { tenantId: governed.tenantId, clientId: store.clientId, programId: program.id,
+      reason: discoveryBlockedReason, logger });
   }
   const searchFingerprint = scoutSearchFingerprint(program, source);
   if (plan.shouldReplenish && options.execute !== false && !discoveryBlockedReason) {
@@ -1786,6 +1830,7 @@ module.exports = {
   scoutSearchFingerprint,
   loadScoutDiscoveryBackoff,
   _test: {
+    recordReplenishmentHold,
     scoutInput,
     mapReuseCompanyRows,
     loadReuseCompanies,
