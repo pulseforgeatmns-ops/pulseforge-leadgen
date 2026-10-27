@@ -4,7 +4,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const { createRequire } = require('node:module');
-const { Pool } = require('pg');
+const { createTrackedPostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
 const deny = require('./helpers/denyExternalProviders.cjs');
 const amo = require('../packages/acquisition-mission');
@@ -125,8 +125,8 @@ async function assertNoWrites(pool, action, expected) {
 
 test('separate finite preparation authority cannot renew expired outbound authority', { timeout: 240000 }, async t => {
   const pg = await startDisposablePostgres('anchor-prep-authority-');
-  const pool = new Pool({ connectionString: pg.connectionString, max: 14 });
-  t.after(async () => { resetAcquisitionMissionRuntime(); await pool.end(); await pg.stop(); });
+  const pool = createTrackedPostgresPool({ connectionString: pg.connectionString, max: 14 });
+  t.after(async () => { resetAcquisitionMissionRuntime(); await closePostgresFixture(pool, pg); });
   const keys = ['ANCHOR_EMAIL_SCOPED_RESUME_ID', 'ANCHOR_EMAIL_RECOVERY_MANIFEST_ID', 'ANCHOR_EMAIL_RECOVERY_MAINTENANCE',
     'ANCHOR_GOVERNED_OUTBOUND_ENABLED', 'ANCHOR_RESEARCH_PROVIDERS_PAUSED', 'RAILWAY_GIT_COMMIT_SHA'];
   const old = Object.fromEntries(keys.map(k => [k, process.env[k]]));
