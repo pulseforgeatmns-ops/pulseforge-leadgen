@@ -1,3 +1,4 @@
+const { anchorOutreachReviewValueSql, anchorOutreachReviewRequired } = require('./utils/anchorOutreachReview');
 const pool = require('./db');
 const { getRuntimeClientId } = require('./utils/clientContext');
 const { deriveBusinessNameShort, ensureBusinessNameShortColumns } = require('./utils/businessNameShort');
@@ -24,16 +25,16 @@ async function checkDNC(prospectId, options = {}) {
   const db = options.pool || pool;
   if (await isPhase3dSetterSchemaPresent(db)) {
     const res = await db.query(
-      `SELECT do_not_contact, is_synthetic, COALESCE((to_jsonb(prospects)->>'ao_outreach_review_required')::boolean,false) AS ao_outreach_review_required FROM prospects WHERE id = $1 AND client_id = $2`,
+      `SELECT do_not_contact, is_synthetic, ${anchorOutreachReviewValueSql('prospects')} AS ao_outreach_review_required FROM prospects WHERE id = $1 AND client_id = $2`,
       [prospectId, clientId]
     );
-    return res.rows[0] ? Boolean(res.rows[0].do_not_contact || res.rows[0].is_synthetic || res.rows[0].ao_outreach_review_required) : true;
+    return res.rows[0] ? Boolean(res.rows[0].do_not_contact || res.rows[0].is_synthetic || res.rows[0].ao_outreach_review_required || anchorOutreachReviewRequired(res.rows[0], clientId)) : true;
   }
   const res = await db.query(
-    `SELECT do_not_contact, COALESCE((to_jsonb(prospects)->>'ao_outreach_review_required')::boolean,false) AS ao_outreach_review_required FROM prospects WHERE id = $1 AND client_id = $2`,
+    `SELECT do_not_contact, ${anchorOutreachReviewValueSql('prospects')} AS ao_outreach_review_required FROM prospects WHERE id = $1 AND client_id = $2`,
     [prospectId, clientId]
   );
-  return res.rows[0] ? Boolean(res.rows[0].do_not_contact || res.rows[0].ao_outreach_review_required) : true;
+  return res.rows[0] ? Boolean(res.rows[0].do_not_contact || res.rows[0].ao_outreach_review_required || anchorOutreachReviewRequired(res.rows[0], clientId)) : true;
 }
 
 // Get full prospect record

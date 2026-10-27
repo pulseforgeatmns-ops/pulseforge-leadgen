@@ -2,6 +2,7 @@ require('dotenv').config();
 const axios = require('axios');
 const pool  = require('./db');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
+const { anchorOutreachReviewSql, withAnchorOutreachReview } = require('./utils/anchorOutreachReview');
 
 const AGENT_NAME = 'warm_signal';
 const SHEET_ID   = '1DPVhzWGCHrAInxPDqeU5_Br208bPAf6qIgUy3wIp7QE';
@@ -55,7 +56,7 @@ async function updateSetterNotes(token, rowIndex, value) {
 async function prospectExists(prospectId, clientId = CLIENT_ID) {
   if (!prospectId) return false;
   const res = await pool.query(
-    'SELECT 1 FROM prospects WHERE id = $1 AND client_id = $2 LIMIT 1',
+    `SELECT 1 FROM prospects p WHERE id = $1 AND client_id = $2 AND ${anchorOutreachReviewSql('p')} LIMIT 1`,
     [prospectId, clientId]
   );
   return res.rows.length > 0;
@@ -98,6 +99,7 @@ async function run() {
     JOIN touchpoints t ON t.prospect_id = p.id AND t.client_id = p.client_id
     WHERE t.action_type = 'email_opened'
       AND p.client_id = $1
+      AND ${anchorOutreachReviewSql('p')}
       AND t.created_at > NOW() - INTERVAL '7 days'
       AND p.do_not_contact = false
     GROUP BY p.id
@@ -163,7 +165,7 @@ async function run() {
     });
     const flagValue = `🔥 2ND OPEN — ${dateStr}`;
 
-    await updateSetterNotes(token, rowIndex, flagValue);
+    await withAnchorOutreachReview(pool, prospect.id, CLIENT_ID, () => updateSetterNotes(token, rowIndex, flagValue));
     console.log(`  [flagged] ${bizName} → "${flagValue}" (row ${rowIndex + 1})`);
 
     await pool.query(

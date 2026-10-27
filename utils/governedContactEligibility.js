@@ -2,6 +2,7 @@
 const { canonicalOutboundEmailIneligibilityReason, normalizeDomain, emailDomain,
   isPersonalEmailProviderDomain, isContaminatedEmailDomain } = require('./canonicalEmailEligibility');
 const { createGovernedOutboundTenantContext } = require('../services/governedOutboundTenant');
+const { anchorOutreachReviewRequired } = require('./anchorOutreachReview');
 const SENDABLE_CLASSES = Object.freeze(['VERIFIED_FOUNDER_EMAIL', 'VERIFIED_ROLE_EMAIL']);
 function contactEvidence(row = {}) {
   const resolution = row.acquisition_metadata?.contactResolution || {};
@@ -9,6 +10,12 @@ function contactEvidence(row = {}) {
     email: resolution.bestEmail || null, resolution };
 }
 function governedContactReason(row, policy = {}) {
+  if (row && anchorOutreachReviewRequired(row, policy.tenantId ?? row.client_id ?? row.tenant_id)) return 'outreach_review_required';
+  return governedContactDataReason(row, policy);
+}
+// Validates a prospective address before a CRM row exists. This is not outreach
+// authorization; persisted contacts must pass governedContactReason and the leaf.
+function governedContactDataReason(row, policy = {}) {
   const base = canonicalOutboundEmailIneligibilityReason(row);
   if (base) return base;
   const evidence = contactEvidence(row);
@@ -45,4 +52,4 @@ function founderFirst(a, b) {
   const rank = row => contactEvidence(row).classification === 'VERIFIED_FOUNDER_EMAIL' ? 0 : 1;
   return rank(a) - rank(b);
 }
-module.exports = { SENDABLE_CLASSES, contactEvidence, governedContactReason, companyRecipientReason, founderFirst };
+module.exports = { SENDABLE_CLASSES, contactEvidence, governedContactReason, governedContactDataReason, companyRecipientReason, founderFirst };

@@ -1,3 +1,4 @@
+const { anchorOutreachReviewSql } = require('../utils/anchorOutreachReview');
 const axios = require('axios');
 const pool = require('../db');
 const { assertCallAllowed } = require('../utils/callEligibility');
@@ -80,7 +81,7 @@ async function listQueue({ aoOwnerId, clientId, filter = 'today' }) {
     AND (t.next_action IS DISTINCT FROM 'phone_follow_up' OR EXISTS (
       SELECT 1 FROM prospects p WHERE p.id = l.crm_prospect_id AND p.client_id = l.client_id
         AND COALESCE(p.ao_call_suppressed, false) = false
-        AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
+        AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false AND ${anchorOutreachReviewSql('p')}
         AND COALESCE(p.do_not_contact, false) = false AND COALESCE(p.is_synthetic, false) = false
     ))`;
 
@@ -111,7 +112,7 @@ async function listQueue({ aoOwnerId, clientId, filter = 'today' }) {
       l.crm_prospect_id,
       EXISTS (SELECT 1 FROM prospects p WHERE p.id = l.crm_prospect_id AND p.client_id = l.client_id
         AND COALESCE(p.ao_call_suppressed, false) = false
-        AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
+        AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false AND ${anchorOutreachReviewSql('p')}
         AND COALESCE(p.do_not_contact, false) = false AND COALESCE(p.is_synthetic, false) = false) AS call_allowed,
       c.contact_name, c.phone AS contact_phone
     FROM ao_follow_up_tasks t
@@ -1156,7 +1157,7 @@ async function getNextPhoneFollowUp({ aoOwnerId, clientId }) {
       AND EXISTS (SELECT 1 FROM prospects p
         WHERE p.id = l.crm_prospect_id AND p.client_id = l.client_id
           AND COALESCE(p.ao_call_suppressed, false) = false
-        AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
+        AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false AND ${anchorOutreachReviewSql('p')}
           AND COALESCE(p.do_not_contact, false) = false AND COALESCE(p.is_synthetic, false) = false)
     ORDER BY t.priority DESC, t.due_date ASC, t.created_at ASC
     LIMIT 1

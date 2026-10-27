@@ -618,6 +618,7 @@ test('adversarial: real governed Brevo serialization sends only the exact approv
       }, release() {},
     }; } };
     const guard = load('utils/callEligibility.js', id => {
+      if (id === './anchorOutreachReview') return require('../utils/anchorOutreachReview');
       if (id === '../services/anchorEmailRecovery') return {
         loadRecoveryState: db => recovery.loadRecoveryState(db, { now: f.now, env: f.env }),
         assertRecoveryLeaf: (db, input) => recovery.assertRecoveryLeaf(db, input, { now: f.now, env: f.env }),

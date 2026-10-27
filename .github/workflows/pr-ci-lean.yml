@@ -140,6 +140,11 @@ jobs:
       - uses: ./.github/actions/setup-postgres-environment
       - run: npm ci --ignore-scripts
       - run: npm run test:anchor-outbound
+      - name: Anchor account review admission and native PostgreSQL locking
+        env:
+          DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
+          DATABASE_SSL: 'false'
+        run: node --require ./test/helpers/denyExternalProviders.cjs --test test/anchorOutreachReview.test.js test/anchorAccountHoldAdmission.test.js test/anchorOutreachReviewPostgres.test.js
       - name: Native login persistence before redirect (synthetic PostgreSQL)
         run: node --require ./test/helpers/denyExternalProviders.cjs --test test/loginSessionPersistencePostgres.test.js
       - uses: browser-actions/setup-chrome@v1
