@@ -57,6 +57,9 @@ async function runGovernedOutboundPollCycle(options = {}) {
 function startGovernedOutboundExecutionClock(options = {}) {
   if (!executionClockEnabled(options)) return null;
   const durable = require('./governedOutboundStageScheduler');
+  // Validate before either timer implementation; global mode must not hide an
+  // invalid scoped rollout value that the external dispatcher would reject.
+  durable.scopedDurableControlTenantIds(resolveTickTenantIds(options));
   if (durable.durableSchedulingEnabled()) return durable.startDurableClock({ ...options, tenantIds: resolveTickTenantIds(options), maxControlEnabled: options.maxControlEnabled ?? process.env.ANCHOR_MAX_OUTBOUND_CONTROL_ENABLED === 'true' });
   const cron = options.cron || require('../anchorDailyOutboundCron');
   const logger = options.logger || console;
@@ -70,13 +73,33 @@ function startGovernedOutboundExecutionClock(options = {}) {
   let busy = false;
   let stopped = false;
   let cycles = 0;
+  let scopedAdmission = null;
 
   async function cycle() {
+    if (stopped) return;
+    let tenantIds, scoped;
+    try {
+      tenantIds = resolveTickTenantIds(options);
+      scoped = maxControlEnabled ? durable.scopedDurableControlTenantIds(tenantIds) : [];
+      if (scoped.length && options.maxControl) throw Object.assign(Error('scoped_control_override_not_allowed'), { code: 'scoped_control_override_not_allowed' });
+      // Scan durable control each minute, even if an earlier poll is hung. This
+      // only requests bounded admission; PostgreSQL due_at owns the 15m cadence.
+      // One outstanding admission acknowledgement per clock prevents unbounded
+      // promise growth, and the stage runner separately bounds child ownership.
+      if (scoped.length && !scopedAdmission) {
+        scopedAdmission = Promise.resolve(dispatchControl({ pool, logger, execute: true, tenantIds: scoped }))
+          .then(result => logger.log?.('[governed-outbound-clock] durable-control-request', JSON.stringify(result)))
+          .catch(error => logger.error?.('[governed-outbound-clock]', error.code || error.message))
+          .finally(() => { scopedAdmission = null; });
+      }
+    } catch (error) {
+      logger.error?.('[governed-outbound-clock]', error.code || error.message);
+      return; // Invalid scoped configuration never admits legacy control.
+    }
     if (busy || stopped) return;
     busy = true;
     const current = cycles++;
     try {
-      const tenantIds = resolveTickTenantIds(options);
       await runGovernedOutboundPollCycle({ ...options, pool, cron, tenantIds });
       if (current % 5 === 0) {
         const tick = await runGovernedOutboundTickCycle({
@@ -88,10 +111,11 @@ function startGovernedOutboundExecutionClock(options = {}) {
         });
         logger.log?.('[governed-outbound-clock] tick', JSON.stringify(tick));
       }
-      if (maxControlEnabled && current % 15 === 0) {
+      const legacyControlTenants = tenantIds.filter(tenantId => !scoped.includes(tenantId));
+      if (maxControlEnabled && current % 15 === 0 && legacyControlTenants.length) {
         const control = options.maxControl
           ? await options.maxControl()
-          : await dispatchControl({ pool, logger, execute: true, tenantIds });
+          : await dispatchControl({ pool, logger, execute: true, tenantIds: legacyControlTenants });
         logger.log?.('[governed-outbound-clock] max-control', JSON.stringify(control));
       }
     } catch (error) {

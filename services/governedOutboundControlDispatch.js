@@ -150,16 +150,31 @@ function launchControlCycle({
 
 async function dispatchGovernedOutboundControl(options = {}) {
   const durable = require('./governedOutboundStageScheduler');
-  if (durable.durableSchedulingEnabled() && options.execute !== false) return durable.dispatchStages({ ...options, tenantIds: resolveTenantIds(options), stages: ['control'] });
+  const tenantIds = resolveTenantIds(options);
+  const scoped = options.execute !== false ? durable.scopedDurableControlTenantIds(tenantIds) : [];
+  // API `execute` is a boolean, whereas runStage's injection option is a
+  // function. Never forward that boolean (or the legacy handler override) to
+  // the durable runner: real execution must use its contained native worker.
+  const { execute: _execute, runControl: _runControl, ...stageOptions } = options;
+  if (durable.durableSchedulingEnabled() && options.execute !== false) return durable.dispatchStages({ ...stageOptions, tenantIds, stages: ['control'] });
   const pool = options.pool || require('../db');
   const logger = options.logger || console;
   const execute = options.execute !== false;
   const runControl = options.runControl || defaultRunControl;
-  const tenantIds = resolveTenantIds(options);
   const dispatchedAt = new Date().toISOString();
   const tenants = {};
 
-  await Promise.all(tenantIds.map(async (tenantId) => {
+  if (scoped.length) {
+    const receipt = durable.dispatchStages({ ...stageOptions, pool, tenantIds: scoped, stages: ['control'] });
+    for (const tenantId of scoped) {
+      const request = receipt.requests.find(row => row.tenantId === tenantId);
+      tenants[tenantId] = { ...publicTenantStatus({ tenantId,
+        status: request?.status || receipt.status, cycleId: null,
+        reason: receipt.reason || null, timestamp: dispatchedAt }), durable: true, stage: 'control' };
+    }
+  }
+
+  await Promise.all(tenantIds.filter(tenantId => !scoped.includes(tenantId)).map(async (tenantId) => {
     const timestamp = new Date().toISOString();
     try {
       const admission = await admitControlCycle(pool, tenantId);

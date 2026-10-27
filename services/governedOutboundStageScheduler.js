@@ -31,6 +31,14 @@ function enqueue(state,key,task) {
   pump();return promise;
 }
 function durableSchedulingEnabled() { return process.env.GOVERNED_OUTBOUND_DURABLE_SCHEDULING_ENABLED === 'true'; }
+// First scoped rollout is control-only and tenant 10 only. An invalid value must
+// never fall back to legacy execution or silently broaden to configured tenants.
+function scopedDurableControlTenantIds(tenantIds, env = process.env) {
+  const raw = env.GOVERNED_OUTBOUND_DURABLE_CONTROL_TENANT_IDS;
+  if (raw == null || raw === '') return [];
+  if (raw !== '10') throw Object.assign(Error('invalid_durable_control_tenant_scope'), { code: 'invalid_durable_control_tenant_scope' });
+  return tenantIds.map(String).includes('10') ? ['10'] : [];
+}
 function classify(result, stage, tenantId) {
   const unknown = { status:'uncertain',reason:'missing_terminal_evidence' };
   if (!result || typeof result !== 'object') return unknown;
@@ -157,4 +165,4 @@ function startDurableClock(options={}) {
     for(const state of admissionStates){for(const job of state.queue.splice(0)){state.keys.delete(job.key);job.resolve({status:'held',reason:'shutdown_before_claim'});}}
     await require('./governedOutboundStageSupervisor').shutdownStageWorkers();return whenStagesSettled();}};
 }
-module.exports={durableSchedulingEnabled,runStage,dispatchStages,startDurableClock,whenStagesSettled,classify,evidenceReferences};
+module.exports={durableSchedulingEnabled,scopedDurableControlTenantIds,runStage,dispatchStages,startDurableClock,whenStagesSettled,classify,evidenceReferences};
