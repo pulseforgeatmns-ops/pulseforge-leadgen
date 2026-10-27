@@ -74,6 +74,8 @@
 
   function renderMxComposerChips() {
     const host = document.getElementById('mxComposerChips');
+    const reviewButton = document.getElementById?.('mxReviewSpreadsheet');
+    if (reviewButton) reviewButton.hidden = !mxPendingComposerFiles.some(entry => inferMxAttachmentType(entry.file) === 'spreadsheet');
     if (!host) return;
     if (!mxPendingComposerFiles.length) {
       host.hidden = true;
@@ -110,7 +112,11 @@
     }
     const form = new FormData();
     const isSpreadsheet = mxPendingComposerFiles.some(entry => inferMxAttachmentType(entry.file) === 'spreadsheet');
-    if (isSpreadsheet) await spreadsheetReview.appendScope(form);
+    if (isSpreadsheet) {
+      const destination = String(question || '').match(/\b(?:add|assign|import|upload)\b[\s\S]{0,160}?\b(?:to|for)\s+([A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*)?)\s*(?:'s)?\s+(?:account|portfolio)\b/i);
+      if (destination) await spreadsheetReview.selectAoByName(destination[1]);
+      await spreadsheetReview.appendScope(form);
+    }
     const reviewEpoch = spreadsheetReview.token();
     form.append('text', question || '');
     form.append('conversation_id', mxComposerConversationId);
@@ -5297,6 +5303,11 @@
     }
   }
 
+  document.getElementById?.('cdAskUpload')?.addEventListener('click', () => {
+    openWorkspaceFromAction({ page: 'command-deck', context: 'spreadsheet_upload' });
+    document.getElementById('mxFileSpreadsheet')?.click();
+  });
+
   els.askForm.addEventListener('submit', (event) => {
     event.preventDefault();
     const question = (els.askInput.value || '').trim();
@@ -5354,11 +5365,14 @@
       if (input.files?.[0]) {
         mxPendingComposerFiles.push({ file: input.files[0], type: inferMxAttachmentType(input.files[0]) });
         renderMxComposerChips();
+        // The Review spreadsheet action submits without requiring a chat message.
       }
       input.value = '';
     });
   });
   loadMxComposerMemory();
+
+  document.getElementById?.('mxReviewSpreadsheet')?.addEventListener('click', () => { void askWorkspace(''); });
 
   // Enter sends; Shift+Enter keeps a newline so multi-row ProspectList pastes survive.
   els.mxAskInput?.addEventListener('keydown', (event) => {

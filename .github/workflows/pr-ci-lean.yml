@@ -75,6 +75,7 @@ jobs:
     timeout-minutes: 20
     env:
       PUPPETEER_SKIP_DOWNLOAD: 'true'
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/google-chrome
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
     steps:
       - uses: actions/checkout@v4
@@ -138,7 +139,14 @@ jobs:
           cache: npm
       - uses: ./.github/actions/setup-postgres-environment
       - run: npm ci --ignore-scripts
+      - name: Anchor account review admission and native PostgreSQL locking
+        env:
+          DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
+          DATABASE_SSL: 'false'
+        run: node --require ./test/helpers/denyExternalProviders.cjs --test test/anchorOutreachReview.test.js test/anchorAccountHoldAdmission.test.js test/anchorOutreachReviewPostgres.test.js
       - run: npm run test:anchor-outbound
+      - name: Native login persistence before redirect (synthetic PostgreSQL)
+        run: node --require ./test/helpers/denyExternalProviders.cjs --test test/loginSessionPersistencePostgres.test.js
       - uses: browser-actions/setup-chrome@v1
         id: anchor-chrome
       - name: Native Anchor approval tablet journey (synthetic, no providers)
@@ -181,7 +189,7 @@ jobs:
           DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
           DATABASE_SSL: 'false'
           SCOUT_CANDIDATE_REQUIRE_POSTGRES: 'true'
-        run: node --test test/scoutCandidateTicketsPostgres.test.js test/scoutCandidateTicketDispatchPostgres.test.js test/scoutDurablePipelinePostgres.test.js test/scoutDurableCleanInventory.test.js test/scoutDurableEpochPipelinePostgres.test.js test/scoutBoundedAcquisitionPostgres.test.js test/scoutBoundedTransport.test.js
+        run: node --test test/scoutCandidateTicketsPostgres.test.js test/scoutCandidateTicketDispatchPostgres.test.js test/scoutDurablePipelinePostgres.test.js test/scoutDurableCleanInventory.test.js test/scoutDurableEpochPipelinePostgres.test.js test/scoutBoundedAcquisitionPostgres.test.js test/scoutBoundedTransport.test.js test/scoutBoundedResearchAuthorityPostgres.test.js test/scoutBoundedResearchCli.test.js
       - name: Scout evidence cursor progression and crash regressions (network denied)
         env:
           DATABASE_URL: postgresql://localhost:1/pulseforge_test_only

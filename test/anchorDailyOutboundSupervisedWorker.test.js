@@ -2,6 +2,16 @@
 const test=require('node:test');const assert=require('node:assert/strict');const path=require('node:path');const {randomUUID}=require('node:crypto');
 const {superviseStage}=require('../services/governedOutboundStageSupervisor');
 const workerPath=path.join(__dirname,'fixtures/durable-stage/supervisedWorker.js');
+function workerTerminated(pid,readStat=require('node:fs').readFileSync){
+ try{return readStat(`/proc/${pid}/stat`,'utf8').split(') ')[1].startsWith('Z');}
+ catch(error){if(error.code==='ENOENT'||error.code==='ESRCH')return true;throw error;}
+}
+test('orphan inspection recognizes both Linux process-disappearance errors without hiding other failures',()=>{
+ for(const code of ['ENOENT','ESRCH'])assert.equal(workerTerminated(123,()=>{throw Object.assign(new Error('gone'),{code});}),true);
+ assert.equal(workerTerminated(123,()=> '123 (worker) Z 1'),true);
+ for(const state of ['R','S','D'])assert.equal(workerTerminated(123,()=>`123 (worker) ${state} 1`),false);
+ assert.throws(()=>workerTerminated(123,()=>{throw Object.assign(new Error('denied'),{code:'EACCES'});}),{code:'EACCES'});
+});
 function args(tenantId,onUncertain=async()=>{}){return{tenantId,stage:'poll',runId:randomUUID(),fence:1,workerPath,deadlineMs:200,graceMs:20,persistenceMs:50,onUncertain};}
 test('actual supervisor contains two hangs, confirms exit, then admits healthy tenant',{timeout:5000},async()=>{
  const q=[];const results=await Promise.allSettled([superviseStage(args('10',async()=>q.push('10'))),superviseStage(args('13',async()=>q.push('13')))]);
@@ -20,9 +30,9 @@ test('actual default runStage wiring supervises handler and records canonical re
  assert.equal(result.status,'completed');assert.deepEqual(writes,['start','completed']);
 });
 test('Linux launcher kills orphan worker when its parent dies',{timeout:5000},async()=>{
- const {fork}=require('node:child_process');const fs=require('node:fs');const parent=fork(path.join(__dirname,'fixtures/durable-stage/orphanParent.js'),[],{stdio:['ignore','ignore','ignore','ipc']});
+ const {fork}=require('node:child_process');const parent=fork(path.join(__dirname,'fixtures/durable-stage/orphanParent.js'),[],{stdio:['ignore','ignore','ignore','ipc']});
  let pid;try{pid=await new Promise((resolve,reject)=>{parent.once('message',m=>resolve(m.pid));parent.once('error',reject);});parent.kill('SIGKILL');await new Promise(resolve=>parent.once('exit',resolve));
- let terminated=false;for(let i=0;i<50;i++){try{const stat=fs.readFileSync(`/proc/${pid}/stat`,'utf8');if(stat.split(') ')[1].startsWith('Z')){terminated=true;break;}}catch(error){if(error.code==='ENOENT'){terminated=true;break;}throw error;}await new Promise(resolve=>setTimeout(resolve,20));}assert.equal(terminated,true);
+ let terminated=false;for(let i=0;i<50;i++){if(workerTerminated(pid)){terminated=true;break;}await new Promise(resolve=>setTimeout(resolve,20));}assert.equal(terminated,true);
  }finally{parent.kill('SIGKILL');if(pid){try{process.kill(pid,'SIGKILL');}catch(_){}}}
 });
 test('actual supervisor rejects nonzero exit after receipt, stale fence, duplicate receipt',{timeout:5000},async()=>{

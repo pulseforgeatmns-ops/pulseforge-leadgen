@@ -20,7 +20,7 @@
     "knowledge:e2e": "node scripts/knowledgeE2EValidation.js",
     "test:reasoning-runtime": "node --test packages/reasoning-runtime/tests/*.test.js",
     "test:market-strategy": "node --test packages/market-strategy/tests/*.test.js",
-    "test:signal-v1": "node --test packages/signal-v1/tests/*.test.js test/signalDistribution*.test.js test/signalInitialSms.test.js",
+    "test:signal-v1": "node --test packages/signal-v1/tests/*.test.js test/signalDistribution*.test.js test/signalInitialSms.test.js test/signalDashboard*.test.js",
     "test:signal-distribution": "node --test test/signalDistribution*.test.js",
     "signal:telegram-caller-feed": "node services/telegramCallerFeed/server.js",
     "signal:telegram-auth": "node scripts/signalTelegramAuth.js",
@@ -169,7 +169,9 @@
     "test:anchor-portal:standalone": "node --test test/anchorPortalStandalone.test.js test/anchorPortalProvisioning.test.js test/anchorPortalTls.test.js",
     "test:anchor-portal:standalone:browser": "node --test test/browser/anchorPortalStandaloneBrowser.test.js",
     "test:clarity": "node --test test/clarity*.test.js",
-    "test:clarity:browser": "node --test test/browser/clarityReviewUi.test.js"
+    "test:clarity:browser": "node --test test/browser/clarityReviewUi.test.js",
+    "test:signal-dashboard": "node --test test/signalDashboard*.test.js",
+    "signal:dashboard-worker": "node scripts/signalDashboardWorker.js"
   },
   "repository": {
     "type": "git",

@@ -1,0 +1,66 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),express=require('express'),path=require('node:path'),fs=require('node:fs');
+const {DashboardService}=require('../services/signalDashboard/service');
+const {MemoryStore,seed,tx,observation,CA,at,later}=require('./helpers/signalDashboardFixtures');
+test('mobile/desktop candles, marker taps, notes, intervals, offline poll recovery and session expiry',{timeout:30000},async t=>{
+ const s=new MemoryStore();await seed(s);await s.put('transaction',CA,'t',tx(1,'BUY',{quoteAsset:require('../services/signalDashboard/wallet').USDC,quoteAmount:'10',quoteCashBasis:'NET_WALLET_DELTA',walletLamportDelta:'0',feesLamports:'0'}));for(let i=0;i<40;i++)await s.put('observation',CA,String(i),observation(i*60000,{priceUsd:1+i*.01,symbol:'SYNTHETIC QA'}));
+ await s.put('balance',CA,'b',{tokens:'10',slot:5,observedAt:later(2400000),knownAt:later(2400000)});
+ const zone=require('./helpers/signalDashboardZoneFixtures').researchFixture().zone;assert.ok(zone);
+ for(const key of ['history','head'])await s.put('cursor','*',key,{key,exhausted:true,caughtUp:true,knownAt:later(2400000),occurredAt:later(2400000)});
+ const service=new DashboardService(s,{now:()=>new Date(later(2400000)),zoneStore:{latest:async()=>[zone]}});let offline=false,expired=false,polls=0,headChecking=false;
+ const app=express();app.use(express.json());app.use(express.static(path.resolve(__dirname,'../public')));
+ app.get('/signal-v1/positions',(_req,res)=>res.sendFile(path.resolve(__dirname,'../public/signal-positions.html')));
+ app.get('/api/v1/signal/positions',async(_req,res)=>res.json(await service.positions()));
+ app.get('/signal-v1/positions/:ca',(_req,res)=>res.sendFile(path.resolve(__dirname,'../public/signal-positions.html')));
+ app.get('/api/v1/signal/stream/:ca',async(_req,res)=>{polls++;if(expired)return res.sendStatus(401);if(offline)return res.sendStatus(503);const p=structuredClone(await service.detail(CA));if(headChecking){p.coverage.headCaughtUp=false;for(const key of ['realizedCash','totalPnl']){p.accounting[key].value=null;p.quoteAccounting[key].value=null;}}return res.json(p);});
+ app.get('/api/v1/signal/positions/:ca/candles',async(req,res)=>res.json(await service.candles(CA,req.query.interval)));
+ app.get('/api/v1/signal/positions/:ca/zones/:zoneId',(_req,res)=>res.json({events:[zone],mode:'PAPER_OBSERVATION'}));
+ app.post('/api/v1/signal/positions/:ca/annotations',async(req,res)=>res.json({annotation:await service.annotate(CA,req.body.text,'7')}));
+ const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));t.after(()=>new Promise(r=>server.close(r)));
+ const executablePath=process.env.PUPPETEER_EXECUTABLE_PATH||undefined,restricted=executablePath?.includes('headless-shell');
+ const browser=await require('puppeteer').launch({executablePath,headless:true,pipe:Boolean(restricted),args:['--no-sandbox','--disable-dev-shm-usage','--disable-backgrounding-occluded-windows','--disable-background-timer-throttling','--disable-renderer-backgrounding',...(restricted?['--no-process-singleton','--disable-breakpad','--disable-crash-reporter','--single-process','--no-zygote']:[])]});t.after(()=>browser.close());
+ const page=await browser.newPage(),errors=[];page.setDefaultTimeout(5000);await page.emulateTimezone('America/New_York');page.on('pageerror',e=>{errors.push(e.message);t.diagnostic('Browser script error: '+e.message);});await page.setRequestInterception(true);page.on('request',r=>new URL(r.url()).hostname==='127.0.0.1'?r.continue():r.abort());
+ // Speed only the browser polling timer; providers are fixture-backed.
+ await page.evaluateOnNewDocument(()=>{const original=window.setTimeout;window.setTimeout=(fn,ms,...args)=>original(fn,ms===10000||ms===20000||ms===40000||ms===60000?250:ms,...args);});
+ await page.evaluateOnNewDocument(()=>{let Chart;Object.defineProperty(window,'SignalCandleChart',{get:()=>Chart,set:C=>{Chart=class extends C{constructor(...args){super(...args);window.__qaChart=this;}};}});});
+ await page.setViewport({width:375,height:812,isMobile:true,hasTouch:true});await page.goto(`http://127.0.0.1:${server.address().port}/signal-v1/positions/${CA}`);
+ await page.waitForFunction(()=>document.querySelector('#chartQuality').textContent.includes('PARTIAL'));
+ assert.equal(await page.$eval('body',e=>e.scrollWidth<=375),true);assert.match(await page.$eval('#summary',e=>e.textContent),/Still holding|Money received back|Total profit \/ loss|Below the highest seen/);assert.match(await page.$eval('#risk',e=>e.textContent),/DISTRIBUTION RISK|No alert does not mean safe/);
+ // Use the history view to include the initial buy, then check its exact time.
+ await page.click('#chartHistory');await page.waitForFunction(()=>window.__qaChart.interval===900&&window.__qaChart.candles.length>0,{polling:100});
+ await page.waitForSelector('.chart-event-marker[aria-label^="BUY"]');
+ assert.equal(await page.$eval('.chart-event-marker[aria-label^="BUY"]',e=>Number(e.dataset.timestamp)),Date.parse(later(1000))/1000);
+ assert.equal(await page.evaluate(()=>{const c=window.__qaChart,first=c.chart.timeScale().logicalToCoordinate(0);return c.timeCoordinate(c.times[0]+1)>first;}),true);
+ assert.equal(await page.evaluate(()=>window.signalChartTimeline([{time:0,open:1,high:1,low:1,close:1},{time:120,open:2,high:2,low:2,close:2}],60)[1].open===undefined),true);
+ await page.click('.chart-event-marker[aria-label^="BUY"]');
+ await page.waitForFunction(()=>!document.querySelector('#markerDetail').hidden);assert.match(await page.$eval('#markerDetail',e=>e.textContent),/Bought tokens/);
+ await page.evaluate(()=>{window.__qaMarker=document.querySelector('.chart-event-marker[aria-label^="BUY"]');window.__qaChart.drawOverlay();});assert.equal(await page.evaluate(()=>window.__qaMarker===document.querySelector('.chart-event-marker[aria-label^="BUY"]')),true);
+ await page.click('#chartModes button[data-mode="line"]');assert.equal(await page.$eval('#chartModes button[data-mode="line"]',e=>e.getAttribute('aria-pressed')),'true');await page.click('#chartModes button[data-mode="candles"]');
+ await page.click('#chartFullscreen');assert.equal(await page.$eval('#market-chart',e=>e.classList.contains('is-expanded')),true);await page.keyboard.press('Escape');assert.equal(await page.$eval('#market-chart',e=>e.classList.contains('is-expanded')),false);
+ assert.match(await page.$eval('#zoneCards',e=>e.textContent),/Entry watch|Why here|What would cancel/);await page.waitForSelector('.research-zone-band');
+ await page.click('#showZones');await page.waitForFunction(()=>!document.querySelector('.research-zone-band'));await page.click('#showZones');
+ await page.$eval('#zoneCards details',e=>e.open=true);await page.click('#zoneCards details button');await page.waitForSelector('#zoneCards details pre');const historyPoll=polls;await page.waitForFunction(n=>window.__qaChart&&document.querySelector('#zoneCards details pre')&&document.querySelector('#zoneCards details').open,{},historyPoll);await page.waitForFunction(()=>document.querySelector('#zoneCards details pre').textContent.includes('PAPER_OBSERVATION'));while(polls<=historyPoll)await new Promise(r=>setTimeout(r,50));assert.equal(await page.$eval('#zoneCards details',e=>e.open&&Boolean(e.querySelector('pre'))),true);
+ await page.type('#researchAmount','20');assert.match(await page.$eval('#exposureResult',e=>e.textContent),/30 USDC|30.00 USDC/);
+ headChecking=true;await page.waitForFunction(()=>document.querySelector('#summary').textContent.includes('LAST VERIFIED'));headChecking=false;await page.waitForFunction(()=>!document.querySelector('#summary').textContent.includes('LAST VERIFIED'));
+ await page.click('#intervals button:nth-child(3)');await page.waitForFunction(()=>document.querySelector('#intervals button:nth-child(3)').getAttribute('aria-pressed')==='true');
+ await page.click('#chartLayers button[data-layer="trades"]');assert.equal(await page.$eval('#chartLayers button[data-layer="trades"]',e=>e.getAttribute('aria-pressed')),'false');await page.click('#chartLayers button[data-layer="trades"]');
+ await page.click('#chartHistory');await page.waitForFunction(()=>document.querySelector('#intervals button:nth-child(3)').getAttribute('aria-pressed')==='true');await page.click('#chartReset');
+ await page.click('#eventFilters button[data-filter="trades"]');assert.match(await page.$eval('#timeline',e=>e.textContent),/Bought tokens/);assert.doesNotMatch(await page.$eval('#timeline',e=>e.textContent),/Risk changed to/);await page.click('#eventFilters button[data-filter="all"]');
+ await page.type('#note','Recovered principal <script>alert(1)</script>');await page.click('#noteForm button');await page.waitForFunction(()=>document.querySelector('#noteStatus').textContent.includes('saved'));assert.equal((await s.list('annotation',CA)).length,1);assert.equal(await page.$('#timeline script'),null);
+ const n=polls;offline=true;await page.waitForFunction(()=>document.querySelector('#connection').textContent.includes('unavailable'));offline=false;await page.waitForFunction(()=>document.querySelector('#connection').textContent.includes('Connected'));assert.ok(polls>n+1);
+ fs.mkdirSync('/tmp/signal-dashboard-qa',{recursive:true});await page.evaluate(()=>scrollTo({top:0,behavior:'instant'}));await page.screenshot({path:'/tmp/signal-dashboard-qa/mobile.png',fullPage:true});await page.screenshot({path:'/tmp/signal-dashboard-qa/mobile-top.png'});
+ await page.setViewport({width:1280,height:900});await page.waitForFunction(()=>!document.querySelector('#position').hidden&&document.querySelector('#summary .metric'));await page.evaluate(()=>scrollTo({top:0,behavior:'instant'}));assert.equal(await page.$eval('body',e=>e.scrollWidth<=1280),true);
+ // The chart applies autoSize through ResizeObserver after the viewport changes.
+ // Wait for the same required coordinate span, without forcing a chart resize.
+ await page.waitForFunction(()=>{const c=window.__qaChart;if(!c?.times.length)return false;const first=c.timeCoordinate(c.times[0]),last=c.timeCoordinate(c.times.at(-1));return first!==null&&last!==null&&last-first>c.container.clientWidth*.3;},{polling:'raf'});
+ assert.equal(await page.evaluate(()=>{const c=window.__qaChart;return c.timeCoordinate(c.times.at(-1))-c.timeCoordinate(c.times[0])>c.container.clientWidth*.3;}),true);await page.screenshot({path:'/tmp/signal-dashboard-qa/desktop.png',fullPage:true});await page.$eval('#market-chart',e=>e.scrollIntoView({behavior:'instant',block:'start'}));await (await page.$('#market-chart')).screenshot({path:'/tmp/signal-dashboard-qa/chart-desktop.png'});await page.screenshot({path:'/tmp/signal-dashboard-qa/desktop-top.png'});
+ expired=true;await page.waitForFunction(()=>document.querySelector('#connection').textContent.includes('Session expired'));expired=false;
+ await page.goto(`http://127.0.0.1:${server.address().port}/signal-v1/positions`);await page.waitForSelector('.position-card');
+ assert.match(await page.$eval('#portfolioSummary',e=>e.textContent),/Value still held|Money received back|Original money at risk/);
+ await page.type('#positionSearch','does-not-exist');await page.waitForFunction(()=>!document.querySelector('.position-card'));assert.match(await page.$eval('#positions',e=>e.textContent),/No positions match/);
+ await page.$eval('#positionSearch',e=>{e.value='';e.dispatchEvent(new Event('input'));});await page.waitForSelector('.position-card');
+ await page.click('#positionFilters button[data-filter="closed"]');assert.match(await page.$eval('#positions',e=>e.textContent),/No positions match/);
+ await page.click('#positionFilters button[data-filter="holding"]');await page.waitForSelector('.position-card');
+ await page.setViewport({width:375,height:812,isMobile:true,hasTouch:true});await page.waitForSelector('.position-card');await page.evaluate(()=>scrollTo({top:0,behavior:'instant'}));assert.equal(await page.$eval('body',e=>e.scrollWidth<=375),true);await page.screenshot({path:'/tmp/signal-dashboard-qa/home-mobile.png',fullPage:true});
+ await page.setViewport({width:1440,height:1000});await page.waitForSelector('.position-card');await page.evaluate(()=>scrollTo({top:0,behavior:'instant'}));await page.screenshot({path:'/tmp/signal-dashboard-qa/home-desktop.png',fullPage:true});assert.deepEqual(errors,[]);
+});

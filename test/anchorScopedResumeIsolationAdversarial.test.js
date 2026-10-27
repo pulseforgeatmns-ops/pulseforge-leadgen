@@ -22,6 +22,7 @@ function guardWithForbiddenRecovery() {
   } });
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../utils/callEligibility.js'), 'utf8'), {
     module, exports: module.exports, require(id) {
+      if (id === './anchorOutreachReview') return require('../utils/anchorOutreachReview');
       if (/anchor.*(?:Recovery|Quarantine|Resume)/i.test(id)) return forbidden;
       throw new Error(`unexpected guard import: ${id}`);
     },
@@ -41,7 +42,10 @@ function legacyPool({ error, row = { do_not_contact: false, is_synthetic: false,
       if (error) throw error;
       return { rows: row ? [row] : [] };
     }
-    assert.ok(['BEGIN READ ONLY', settings, lockSql, 'COMMIT', 'ROLLBACK'].includes(text), text);
+    if (text.startsWith('SELECT id, client_id, company_id') && /FROM prospects p WHERE id=\$1 AND client_id=\$2 FOR SHARE/.test(text)) {
+      return {rows:row?[{...row,id:values[0],client_id:values[1]}]:[]};
+    }
+    assert.ok(['BEGIN', 'BEGIN READ ONLY', settings, lockSql, 'COMMIT', 'ROLLBACK'].includes(text), text);
     return { rows: [] };
   }, release(discard) { trace.push({ release: Boolean(discard) }); } };
   return { trace, async connect() { return client; } };
@@ -49,7 +53,7 @@ function legacyPool({ error, row = { do_not_contact: false, is_synthetic: false,
 
 function expectedTrace(tenant, { failure = false } = {}) {
   return [
-    { text: 'BEGIN READ ONLY', values: [] },
+    { text: tenant===10?'BEGIN':'BEGIN READ ONLY', values: [] },
     { text: settings, values: [] },
     { text: lockSql, values: [`max:call:${tenant}:synthetic-contact`] },
     { text: legacySelect, values: ['synthetic-contact', tenant] },
@@ -79,13 +83,17 @@ for (const tenant of [1, 13, 17]) {
   });
 }
 
-test('isolation: calls and SMS retain their original guards, including tenant 10', async () => {
+test('isolation: non-Anchor calls/SMS retain original guards and Anchor also locks current review state', async () => {
   const guard = guardWithForbiddenRecovery();
   for (const tenant of [1, 10, 13, 17]) for (const method of ['withCallAuthorization', 'withSmsAuthorization']) {
     const pool = legacyPool(); let sends = 0;
     await guard[method](pool, [{ prospectId: 'synthetic-contact', clientId: tenant }], async () => { sends++; });
     assert.equal(sends, 1, `${tenant} ${method}`);
-    assert.deepEqual(JSON.parse(JSON.stringify(pool.trace)), expectedTrace(tenant));
+    if(tenant===10){
+      assert.equal(pool.trace[0].text,'BEGIN');
+      assert.ok(pool.trace.some(q=>q.text?.startsWith('SELECT id, client_id, company_id')&&q.text.endsWith('FOR SHARE')));
+      assert.equal(pool.trace.at(-2).text,'COMMIT');
+    }else assert.deepEqual(JSON.parse(JSON.stringify(pool.trace)), expectedTrace(tenant));
     const absent = legacyPool({ error: Object.assign(new Error('column ao_call_suppressed does not exist'), { code: '42703' }) });
     await assert.rejects(guard[method](absent, [{ prospectId: 'synthetic-contact', clientId: tenant }], async () => { sends++; }), { code: '42703' });
     assert.equal(sends, 1);

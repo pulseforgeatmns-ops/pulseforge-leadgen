@@ -1,4 +1,5 @@
 'use strict';
+const { anchorOutreachReviewSql } = require('../utils/anchorOutreachReview');
 
 /**
  * SPEC-117 — build an inbox intelligence snapshot from live client data.
@@ -261,7 +262,7 @@ async function loadQueueProspects(clientId, pool, limit = 80) {
       LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
       WHERE p.client_id = $1
         AND COALESCE(p.do_not_contact, FALSE) = FALSE
-        AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
+        AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false AND ${anchorOutreachReviewSql('p')}
         AND p.email IS NOT NULL AND p.email <> ''
         AND p.status IN ('cold','contacted','warm')
       ORDER BY p.icp_score DESC NULLS LAST

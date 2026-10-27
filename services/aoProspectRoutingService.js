@@ -12,6 +12,7 @@ const {
 } = require('../utils/aoProspectRoutingConstants');
 const { matchServiceAreaFromLocation } = require('../utils/serviceArea');
 const { distributeDueDates, todayISOInZone } = require('../utils/aoAssignment');
+const { anchorOutreachReviewRequired } = require('../utils/anchorOutreachReview');
 
 const REQUIRED_LOG_FIELDS = Object.freeze([
   'decision_maker',
@@ -148,6 +149,10 @@ function classifyMotion({ prospect, company, aoFitScore, touchpoints = [], servi
   const vertical = normalizeText(prospect?.vertical);
   const icp = Number(prospect?.icp_score || 0);
 
+  if (anchorOutreachReviewRequired(prospect)) {
+    return { recommended_motion: 'NURTURE', motion_reason: 'Separate outreach review required before routing or contact' };
+  }
+
   if (prospect?.do_not_contact) {
     return { recommended_motion: 'SUPPRESS', motion_reason: 'Marked do not contact' };
   }
@@ -279,7 +284,7 @@ function buildRecommendedAngle({ prospect, motion }) {
 }
 
 function buildFirstAction({ prospect, motion }) {
-  if (prospect?.ao_outreach_review_required) return 'Separate outreach review required before any contact.';
+  if (prospect?.ao_outreach_review_required || anchorOutreachReviewRequired(prospect)) return 'Separate outreach review required before any contact.';
   if (prospect?.ao_call_suppressed && motion !== 'SUPPRESS') return 'Calls suppressed. Review permitted non-call follow-up; do not call this prospect.';
   if (motion === 'SUPPRESS') return 'Stop outreach. Cancel active AO work and require an authorized suppression release before rerouting.';
   if (motion === 'EMAIL_LED') return 'Send intro email to identify who handles cleaning vendors.';
@@ -389,7 +394,7 @@ function routeProspect({
     existingAssignment,
   });
 
-  const recommended_ao = ['SUPPRESS', 'EMAIL_LED'].includes(recommended_motion) ? null : pickRecommendedAo({
+  const recommended_ao = anchorOutreachReviewRequired(prospect) || ['SUPPRESS', 'EMAIL_LED'].includes(recommended_motion) ? null : pickRecommendedAo({
     availableAos,
     assignmentCategory: assignment_category,
     prospect,

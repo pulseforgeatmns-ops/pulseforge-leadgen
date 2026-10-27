@@ -29,7 +29,7 @@ function fixture({ row = reviewed(), sqlError = null, commitError = null, postEr
       if (/FROM prospects/.test(sql)) {
         if (sqlError) throw sqlError;
         if (missingCallColumn && /ao_call_suppressed/.test(sql)) throw Object.assign(new Error('column "ao_call_suppressed" does not exist'), { code: '42703' });
-        return { rows: row == null ? [] : [row] };
+        return { rows: row == null ? [] : [{...row,id:config.values[0],client_id:config.values[1]}] };
       }
       if (sql === 'COMMIT' && commitError) throw commitError;
       return { rows: [] };

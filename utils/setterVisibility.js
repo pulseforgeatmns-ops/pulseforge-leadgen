@@ -3,6 +3,7 @@
 // Threshold authority moved to utils/qualificationThreshold.js (Phase A2 §11).
 // The re-export below keeps every existing consumer working unchanged.
 const { SETTER_VISIBILITY_THRESHOLD } = require('./qualificationThreshold');
+const { anchorOutreachReviewRequired, anchorOutreachReviewValueSql, anchorOutreachReviewSql } = require('./anchorOutreachReview');
 
 const SETTER_ICP_THRESHOLD = SETTER_VISIBILITY_THRESHOLD;
 const TERMINAL_PROSPECT_STATUSES = new Set(['dead', 'disqualified', 'bounced', 'do_not_email']);
@@ -26,6 +27,7 @@ function isHardExcluded(row, { stageStatus } = {}) {
   const status = String(row?.status || '').trim().toLowerCase();
   return TERMINAL_PROSPECT_STATUSES.has(status) ||
     Boolean(row?.do_not_contact) ||
+    anchorOutreachReviewRequired(row) ||
     (stageStatus != null && String(stageStatus).trim().toLowerCase() === 'dead');
 }
 
@@ -79,7 +81,8 @@ async function setSetterVisibility(db, prospectId, {
 
   const current = await db.query(`
     SELECT id, client_id, status, do_not_contact, icp_score,
-           service_area_match, setter_visible, setter_visibility_reason
+           service_area_match, setter_visible, setter_visibility_reason,
+           ${anchorOutreachReviewValueSql('prospects')} AS ao_outreach_review_required
     FROM prospects
     WHERE ${where}
     FOR UPDATE
@@ -130,6 +133,7 @@ async function recomputeSetterVisibility(db, {
         CASE
           WHEN COALESCE(status, '') IN ('dead', 'disqualified', 'bounced', 'do_not_email')
             OR COALESCE(do_not_contact, false) = true
+            OR NOT ${anchorOutreachReviewSql('prospects')}
             THEN false
           WHEN $2::boolean = true
             AND COALESCE(setter_visible, false) = true
@@ -141,6 +145,7 @@ async function recomputeSetterVisibility(db, {
         CASE
           WHEN COALESCE(status, '') IN ('dead', 'disqualified', 'bounced', 'do_not_email')
             OR COALESCE(do_not_contact, false) = true
+            OR NOT ${anchorOutreachReviewSql('prospects')}
             THEN 'hard_exclusion'
           WHEN $2::boolean = true
             AND COALESCE(setter_visible, false) = true

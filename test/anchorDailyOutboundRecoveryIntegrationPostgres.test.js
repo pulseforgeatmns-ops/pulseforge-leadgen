@@ -14,6 +14,7 @@ const {GovernedOutboundStore}=require('../services/governedOutboundStore');
 function guardAt(f) {
   const module={exports:{}};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../utils/callEligibility.js'),'utf8'),{module,exports:module.exports,require(id){
+    if(id==='./anchorOutreachReview')return require('../utils/anchorOutreachReview');
     if(id==='../services/anchorEmailRecovery') return {
       loadRecoveryState:(db)=>recovery.loadRecoveryState(db,{env:f.env,now:f.now}),
       assertRecoveryLeaf:(db,input)=>recovery.assertRecoveryLeaf(db,input,{env:f.env,now:f.now}),

@@ -21,7 +21,7 @@ function fixture(extra = {}, options = {}) {
     aoOwnerIds: [1], startsAt: '2026-10-01T04:00:00Z', expiresAt: '2026-10-08T04:00:00Z' }, now);
   const program = { id: 'program', tenant_id: '10', mode: 'active', policy: p, policy_hash: hash(p), scope_hash: hash(missionScope(source)), source_mission_id: 'source' };
   const crm = { id: 'p1', prospect_id: 'p1', company_id: 'co1', company_name: 'Harbor Property Management', company_domain: 'harbor.example',
-    domain: 'harbor.example', client_id: 10, email: 'office@harbor.example', email_verified: true, email_status: 'valid',
+    domain: 'harbor.example', client_id: 10, ao_outreach_review_required:false, email: 'office@harbor.example', email_verified: true, email_status: 'valid',
     service_area_match: true, vertical: 'property_management', enrichment_provenance: { email: { source: 'website_email', source_url: 'https://harbor.example/contact' } }, ...extra };
   const pool = { query: async sql => {
     if (/to_regclass/.test(sql)) return { rows: [{ control_table: null }] };

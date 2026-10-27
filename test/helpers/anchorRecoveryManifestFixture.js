@@ -104,6 +104,7 @@ function recoveryFixture() {
     else if (/FROM acquisition_outbound_envelopes/.test(sql)) rows = f.envelope ? [f.envelope] : [];
     else if (/FROM acquisition_mission_contributions/.test(sql)) rows = f.approval ? [f.approval] : [];
     else if (/FROM acquisition_outbound_items/.test(sql)) rows = f.item ? [f.item] : [];
+    else if (/^SELECT id, client_id FROM companies WHERE/.test(sql)) rows = f.companies.filter(c => String(c.id)===String(values[0]) && String(c.client_id)===String(values[1]));
     else if (/FROM prospects p/.test(sql)) rows = f.prospect ? [f.prospect] : [];
     else if (/FROM companies c/.test(sql)) rows = f.companies;
     else if (/FROM clients/.test(sql)) rows = f.client ? [f.client] : [];

@@ -42,6 +42,13 @@ async function ensureAoCrmSchemaOnce(db) {
   );
   await db.query(conversationFlagMigration);
   await ensureAoRosterSchema(db);
+  // Spreadsheet review reads these tables before it can create a proposal.
+  // Provision them with the other CRM migrations, never during ingestion.
+  const spreadsheetMigration = fs.readFileSync(
+    path.join(__dirname, '..', 'migrations', '2026-10-07-max-spreadsheet-reliability.sql'),
+    'utf8'
+  );
+  await db.query(spreadsheetMigration);
 }
 
 async function ensureAoCrmSchema(db = pool) {

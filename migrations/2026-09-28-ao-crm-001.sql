@@ -27,7 +27,7 @@ ALTER TABLE prospects ADD CONSTRAINT prospects_ao_current_status_check
     'researching', 'ready_to_call', 'call_attempted', 'contacted', 'gatekeeper_reached',
     'decision_maker_reached', 'follow_up_needed', 'warm', 'walkthrough_target',
     'walkthrough_booked', 'proposal_needed', 'proposal_sent', 'won', 'lost',
-    'not_a_fit', 'dead'
+    'not_a_fit', 'dead', 'application_in_progress'
   ));
 
 ALTER TABLE prospects DROP CONSTRAINT IF EXISTS prospects_opportunity_stage_check;
