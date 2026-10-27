@@ -75,7 +75,11 @@ const {
 const { runScoutExpansionCron } = require('../scoutExpansion');
 const { createMaxDecayCronHandler } = require('../utils/maxDecayCron');
 const { diagnoseScoutPlaces } = require('../services/scoutPlacesDiagnostic');
-const { withResearchProviderScope, isResearchProviderControlError } = require('../utils/anchorResearchProviderPause');
+const { withResearchProviderScope, assertResearchProviderAllowed, isResearchProviderControlError } = require('../utils/anchorResearchProviderPause');
+const { logResearchProviderBlock } = require('../utils/researchProviderBlockLog');
+// Research roots that run after the 200 response. A governed pause must not be
+// acknowledged as a started run; Railway cron and agent_log both see the block.
+const RESEARCH_ROOT_CRON_AGENTS = new Set(['scout', 'scout_unenriched_enrichment']);
 
 const anthropic = new Anthropic();
 
@@ -143,6 +147,16 @@ async function runCronAgent(agent, res, query = {}) {
       agent,
       client_id: clientId,
     });
+  }
+
+  if (RESEARCH_ROOT_CRON_AGENTS.has(agent)) {
+    try {
+      assertResearchProviderAllowed('research', clientId);
+    } catch (error) {
+      if (!isResearchProviderControlError(error)) throw error;
+      await logResearchProviderBlock({ agentName: agent, action: 'cron_dispatch', clientId, error, trigger: 'cron', db: pool });
+      return res.json({ success: false, skipped: true, reason: error.code, agent, client_id: clientId });
+    }
   }
 
   res.json({ success: true, agent, client_id: clientId });
@@ -844,3 +858,4 @@ module.exports.handleRecoverAnchorCanonicalOutboundCron = handleRecoverAnchorCan
 module.exports.isScoutPlacesDiagnosticAgent = isScoutPlacesDiagnosticAgent;
 module.exports.CRON_SPECIAL_HANDLERS = CRON_SPECIAL_HANDLERS;
 
+module.exports.runCronAgent = runCronAgent;

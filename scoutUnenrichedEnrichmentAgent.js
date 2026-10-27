@@ -1,5 +1,6 @@
 const pool = require('./db');
 const { withResearchProviderScope, isResearchProviderControlError } = require('./utils/anchorResearchProviderPause');
+const { logResearchProviderBlock } = require('./utils/researchProviderBlockLog');
 const { ensureScoutUnenrichedTable } = require('./utils/scoutUnenrichedSchema');
 const { ensureEmailVerificationColumns } = require('./utils/emailVerificationSchema');
 const { promoteRecord } = require('./scripts/promoteUnenriched');
@@ -52,9 +53,15 @@ async function logRun(clientId, payload, status = 'success', error = null, db = 
 
 async function run(params = {}) {
   const tenantId = params.client_id ?? params.clientId ?? ANCHOR_CLIENT_ID;
-  return withResearchProviderScope(tenantId, () => params.client_id != null && params.clientId != null
-    ? withResearchProviderScope(params.clientId, () => runScoped(params))
-    : runScoped(params));
+  try {
+    return await withResearchProviderScope(tenantId, () => params.client_id != null && params.clientId != null
+      ? withResearchProviderScope(params.clientId, () => runScoped(params))
+      : runScoped(params));
+  } catch (error) {
+    await logResearchProviderBlock({ agentName: AGENT_NAME, action: 'retry_unenriched', clientId: tenantId,
+      error, trigger: params.trigger || null, db: params.db || pool });
+    throw error;
+  }
 }
 
 async function runScoped(params = {}) {
@@ -135,7 +142,11 @@ async function runScoped(params = {}) {
     }
   }
 
-  await logRun(clientId, summary, summary.failed ? 'partial' : 'success', null, db);
+  // agent_log_status_check does not accept 'partial'. Per-row failures stay in
+  // summary.failed; a rejected log write must not discard completed promotions
+  // or abort the Max replenishment cycle that called this batch.
+  await logRun(clientId, summary, 'success', summary.failed ? `${summary.failed} row(s) failed` : null, db)
+    .catch(error => console.error(`[${AGENT_NAME}] run log failed: ${error.message}`));
   console.log(`[${AGENT_NAME}] ${JSON.stringify(summary)}`);
   return summary;
 }
@@ -148,7 +159,7 @@ function startAnchorUnenrichedEnrichmentScheduler() {
     if (!scheduledWindowOpen() || running || lastRunDate === local.date) return;
     running = true;
     lastRunDate = local.date;
-    return run({ client_id: ANCHOR_CLIENT_ID }).catch(error => {
+    return run({ client_id: ANCHOR_CLIENT_ID, trigger: 'weekday_scheduler' }).catch(error => {
       // A control rejection may retry after unpausing in the same daily window.
       // Ordinary failures retain the existing once-per-day scheduling behavior.
       if (isResearchProviderControlError(error)) lastRunDate = null;

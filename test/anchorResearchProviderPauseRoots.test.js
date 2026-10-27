@@ -64,7 +64,9 @@ test('armed scheduler stops before schema setup, reads, promotion and counters',
     './scripts/promoteUnenriched': { promoteRecord: async () => seen.push('provider') },
   });
   await rejectsPause(() => scheduler.run({ client_id: 10, db }));
-  assert.deepEqual(seen, []);
+  // Only the durable governed-block record is written; no schema, read or promotion.
+  assert.equal(seen.length, 1);
+  assert.match(seen[0], /INSERT INTO agent_log[\s\S]*'skipped'/);
 }));
 
 test('armed promotion rejects before configuration, enrichment, verification or writes', async () => withFlag('true', async () => {
@@ -238,13 +240,17 @@ test('promotion authority survives row mutation across configuration await', asy
 test('scheduler retries same-day pause after unarming and never overlaps ticks', async () => withFlag('true', async () => {
   const ticks = [];
   let queries = 0;
+  let blockRecords = 0;
   let release;
   const gate = new Promise(resolve => { release = resolve; });
   class ScheduledDate extends Date {
     constructor(...args) { super(...(args.length ? args : ['2026-10-19T22:00:00.000Z'])); }
   }
   const service = load('scoutUnenrichedEnrichmentAgent.js', {
-    './db': { query: async () => { queries++; await gate; return { rows: [] }; } },
+    './db': { query: async sql => {
+      if (/'skipped'/.test(sql)) { blockRecords++; return { rows: [] }; }
+      queries++; await gate; return { rows: [] };
+    } },
     './utils/scoutUnenrichedSchema': { ensureScoutUnenrichedTable: async () => {} },
     './utils/emailVerificationSchema': { ensureEmailVerificationColumns: async () => {} },
     './scripts/promoteUnenriched': {},
@@ -256,6 +262,7 @@ test('scheduler retries same-day pause after unarming and never overlaps ticks',
   service.startAnchorUnenrichedEnrichmentScheduler();
   await ticks[0]();
   assert.equal(queries, 0);
+  assert.equal(blockRecords, 1, 'paused tick leaves one durable governed-block record');
   delete process.env.ANCHOR_RESEARCH_PROVIDERS_PAUSED;
   const resumed = ticks[1]();
   assert.equal(ticks[1](), undefined, 'a running retry excludes duplicate ticks');

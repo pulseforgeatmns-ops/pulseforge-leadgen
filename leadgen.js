@@ -1,4 +1,5 @@
 const { withResearchProviderScope, assertResearchProviderAllowed, rethrowResearchProviderControl } = require('./utils/anchorResearchProviderPause');
+const { logResearchProviderBlock } = require('./utils/researchProviderBlockLog');
 /**
  * Pulseforge Lead Engine — Node.js CLI
  * =====================================
@@ -3364,10 +3365,17 @@ async function resolveScoutTarget({ clientId, industry, location, verticals, ver
 }
 
 async function run(params = {}) {
-  return withResearchProviderScope(params.client_id ?? params.clientId, () => {
-    if (params.client_id != null && params.clientId != null) assertResearchProviderAllowed('research', params.clientId);
-    return runResearchScoped(params);
-  });
+  try {
+    return await withResearchProviderScope(params.client_id ?? params.clientId, () => {
+      if (params.client_id != null && params.clientId != null) assertResearchProviderAllowed('research', params.clientId);
+      return runResearchScoped(params);
+    });
+  } catch (error) {
+    // The pause rejects before logScoutRun, so record the governed block here.
+    await logResearchProviderBlock({ agentName: 'scout', action: 'scrape', clientId: params.client_id ?? params.clientId,
+      error, trigger: params.trigger || null, db: pool });
+    throw error;
+  }
 }
 
 async function runResearchScoped(params = {}) {
