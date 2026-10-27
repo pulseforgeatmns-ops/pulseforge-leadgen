@@ -92,6 +92,17 @@
     if(risk.state==='NORMAL')return ['Normal · no elevated warning observed','The data we can see has not triggered a higher warning. This is not an all-clear.'];
     return ['Unknown · more information needed','Signal cannot yet make a useful assessment from the available evidence.'];
   }
+  function renderRecommendation(p) {
+    const target=$('signalRecommendation');if(!target)return;
+    target.replaceChildren();const r=p.recommendation;
+    if(!r){target.hidden=true;return;}target.hidden=false;target.dataset.action=r.action;
+    const top=el('div',undefined,'recommendation-top'),copy=el('div');
+    copy.append(el('p','SIGNAL RECOMMENDATION','eyebrow'),el('h2',r.headline),el('p',r.instruction,'recommendation-instruction'));
+    top.append(copy,el('span',r.evidenceQuality+' EVIDENCE','quiet-badge'));target.append(top);
+    if(r.conditional){const trigger=el('div',undefined,'recommendation-trigger');trigger.append(el('span','IF THIS HAPPENS','label'),el('strong',fmt(r.conditional.priceUsd,'price')+' · '+Math.abs(r.conditional.percentFromNow)+'% from current observed price'),el('p',r.conditional.instruction));target.append(trigger);}
+    const foot=el('div',undefined,'recommendation-foot'),link=el('a','See the evidence ↓');link.href='#signal-view';
+    foot.append(el('span','Current risk: '+title(r.riskState)),el('span','Decision '+r.version),link);target.append(foot);
+  }
   function renderRisk(p) {
     const risk=$('risk'),[headline,description]=riskMeaning(p.risk);risk.dataset.state=p.risk.state;risk.replaceChildren();
     const main=el('div',undefined,'risk-main'),icon=el('div',p.risk.state==='NORMAL'?'◇':'!','risk-icon');icon.setAttribute('aria-hidden','true');
