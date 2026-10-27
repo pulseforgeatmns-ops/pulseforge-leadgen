@@ -8,6 +8,39 @@ const {Pool}=require('pg');
 const {startDisposablePostgres}=require('./helpers/disposablePostgres');
 const {PostgresSpreadsheetProposalStore}=require('../packages/max/stateIngestion/spreadsheetProposalStore');
 const fixtureSchema=fs.readFileSync(path.join(__dirname,'fixtures/maxSpreadsheetBaseSchema.sql'),'utf8');
+test('production CRM bootstrap provisions spreadsheet review and preserves pending proposals on restart', {timeout:60000}, async t=>{
+ const instance=await startDisposablePostgres('spreadsheet-bootstrap-');
+ const db=new Pool({connectionString:instance.connectionString});
+ let restarted;
+ t.after(async()=>{if(restarted) await restarted.end();await db.end();await instance.stop();});
+ await db.query(fixtureSchema);
+ // Dependencies of the existing CRM startup chain, normally supplied by AO routing.
+ await db.query('CREATE TABLE ao_prospect_updates(outcome_type text); CREATE TABLE ao_max_conversation_reports(id uuid PRIMARY KEY)');
+ await db.query("INSERT INTO clients VALUES(10); INSERT INTO users(id,client_id,name,role) VALUES(24,10,'Test AO','ao'),(1,10,'Test approver','admin')");
+ const {ensureAoCrmSchema}=require('../utils/aoCrmSchema');
+ const {previewSpreadsheet}=require('../services/maxSpreadsheetService');
+ const scope={clientId:10,aoId:24,actorId:1,authenticatedUserId:1,canApprove:true};
+ const bytes=Buffer.from('Company,Phone,Notes\nExisting Institution,603-111-2222,Reviewed source note\nNew Institution,,Research candidate\n');
+ const input={conversation_id:randomUUID(),attachments:[{id:'file',type:'spreadsheet',filename:'institutions.csv'}],attachment_inputs:[{id:'file',buffer:bytes}]};
+ await assert.rejects(previewSpreadsheet(input,scope,{db}),error=>error.code==='42P01');
+ await ensureAoCrmSchema(db);
+ const company=(await db.query("INSERT INTO companies(client_id,name) VALUES(10,'Existing Institution') RETURNING id")).rows[0];
+ await db.query("INSERT INTO prospects(client_id,company_id,assigned_ao_id,phone,ao_current_status) VALUES(10,$1,24,'603-111-2222','application_in_progress')",[company.id]);
+ const result=await previewSpreadsheet(input,scope,{db});
+ assert.equal(result.ok,true);assert.equal(result.committed,false);
+ assert.equal(result.spreadsheet_proposal.plan.rows.length,2);
+ assert.equal(result.spreadsheet_proposal.plan.rows[0].accountResolution.status,'matched');
+ assert.equal(result.spreadsheet_proposal.plan.rows[1].accountResolution.status,'new_candidate');
+ assert.equal((await db.query('SELECT count(*) FROM prospects')).rows[0].count,'1');
+ const before=(await db.query('SELECT * FROM max_spreadsheet_proposals')).rows;
+ // A fresh Pool bypasses the in-process initialization cache, as a deploy does.
+ restarted=new Pool({connectionString:instance.connectionString});
+ await ensureAoCrmSchema(restarted);
+ assert.deepEqual((await db.query('SELECT * FROM max_spreadsheet_proposals')).rows,before);
+ assert.equal((await db.query('SELECT ao_current_status FROM prospects')).rows[0].ao_current_status,'application_in_progress');
+ assert.equal((await db.query("SELECT has_table_privilege(current_user,'max_spreadsheet_contacts','SELECT,INSERT') AS allowed")).rows[0].allowed,true);
+ await assert.rejects(db.query("UPDATE max_spreadsheet_proposals SET plan='{}' WHERE id=$1",[result.spreadsheet_proposal.id]),/immutable/);
+});
 function operation(id,accountId,type,after,extra={}) {return {id,type,target:{accountId},before:null,after,outreachReviewRequired:type==='SET_ACCOUNT_FIELD' && ['email','phone'].includes(extra.field),evidence:[{sheet:'Sheet1',row:3,cell:'L3',rawValue:'Evidence'}],blocked:false,...extra};}
 async function setup(t) {
  const instance=await startDisposablePostgres('spreadsheet-gate-');
