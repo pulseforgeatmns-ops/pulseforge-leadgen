@@ -1073,7 +1073,8 @@ async function defaultScoutRampResearchScoped({
     };
     const ticketDispatch = require('./scoutCandidateTicketDispatch');
     const durableEnabled = ticketDispatch.ENABLED_TENANTS.has(tenant.tenantId)
-      && (createCandidateTicketStore || process.env.SCOUT_DURABLE_CANDIDATES_ENABLED === 'true');
+      && (createCandidateTicketStore || process.env.SCOUT_DURABLE_CANDIDATES_ENABLED === 'true'
+        || require('./scoutTenantDiscoveryMemory').isTenantDiscoveryMemoryEnabled(tenant.tenantId));
     let tickets = null;
     let dispatcher = null;
     let pages = null;

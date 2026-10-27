@@ -5,10 +5,18 @@ const dbPath=require.resolve('../db');
 require.cache[dbPath]={id:dbPath,filename:dbPath,loaded:true,exports:{query:async()=>({rows:[]})}};
 const spendPath=require.resolve('../utils/apiSpendControl');
 require.cache[spendPath]={id:spendPath,filename:spendPath,loaded:true,exports:{reserveApiCall:async()=> 'synthetic',settleApiCall:async()=>{}}};
-const {businessObservation,createTenantDiscoveryMemory}=require('../services/scoutTenantDiscoveryMemory');
+const {businessObservation,createTenantDiscoveryMemory,isTenantDiscoveryMemoryEnabled}=require('../services/scoutTenantDiscoveryMemory');
 const {createCheckpointStore,createCheckpointSession,queryIdentity}=require('../services/scoutQueryCheckpoints');
 const {createPlacesProvider}=require('../packages/capabilities/discovery/providers/PlacesProvider');
 const {queryProgressionDiagnostic,observedQueryDependency}=require('../services/scoutCandidateTicketDispatch');
+
+test('the Anchor activation switch cannot activate another tenant or grant research authority',()=>{
+  const env={SCOUT_ANCHOR_DISCOVERY_MEMORY_ENABLED:'true'};
+  assert.equal(isTenantDiscoveryMemoryEnabled('10',env),true);
+  for(const tenant of ['13','11','',null])assert.equal(isTenantDiscoveryMemoryEnabled(tenant,env),false);
+  assert.equal(isTenantDiscoveryMemoryEnabled('10',{}),false);
+  assert.equal(isTenantDiscoveryMemoryEnabled('10',{SCOUT_ANCHOR_DISCOVERY_MEMORY_ENABLED:'false'}),false);
+});
 
 test('reused business facts exclude old query labels, ticket claims and arbitrary provider data',()=>{
   const raw={source:'google_places',placeId:'p1',companyName:'Fixture office',website:'office.example',industry:'Old query',

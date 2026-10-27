@@ -133,7 +133,10 @@ test('tenant-wide query and detail memory uses durable native PostgreSQL across 
     await db.query(`CREATE TABLE scout_unenriched(id serial PRIMARY KEY,client_id int,company text,website_url text,domain text,vertical text,
       location text,source text,enrichment_attempts int,last_attempt_at timestamptz,notes text);
       CREATE TABLE acquisition_outbound_events(id text PRIMARY KEY,tenant_id text,event_type text,payload jsonb,created_at timestamptz DEFAULT now());`);
-    const oldFlag=process.env.SCOUT_DURABLE_CANDIDATES_ENABLED;process.env.SCOUT_DURABLE_CANDIDATES_ENABLED='true';
+    const oldFlag=process.env.SCOUT_DURABLE_CANDIDATES_ENABLED;
+    const oldAnchorFlag=process.env.SCOUT_ANCHOR_DISCOVERY_MEMORY_ENABLED;
+    delete process.env.SCOUT_DURABLE_CANDIDATES_ENABLED;
+    process.env.SCOUT_ANCHOR_DISCOVERY_MEMORY_ENABLED='true';
     const providerPath=require.resolve('../packages/capabilities/discovery/providers/PlacesProvider'),previous=require.cache[providerPath].exports;
     const transport=[];require.cache[providerPath].exports={...previous,createPlacesProvider:options=>previous.createPlacesProvider({...options,
       apiKey:'synthetic',useCache:false,fetchImpl:async input=>{const u=new URL(input);transport.push(u.pathname);
@@ -165,6 +168,7 @@ test('tenant-wide query and detail memory uses durable native PostgreSQL across 
     } finally {
       require.cache[providerPath].exports=previous;
       if(oldFlag==null)delete process.env.SCOUT_DURABLE_CANDIDATES_ENABLED;else process.env.SCOUT_DURABLE_CANDIDATES_ENABLED=oldFlag;
+      if(oldAnchorFlag==null)delete process.env.SCOUT_ANCHOR_DISCOVERY_MEMORY_ENABLED;else process.env.SCOUT_ANCHOR_DISCOVERY_MEMORY_ENABLED=oldAnchorFlag;
     }
   });
 });

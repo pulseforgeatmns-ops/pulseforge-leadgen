@@ -67,9 +67,12 @@ single-completion observation guards and three read indexes. It is transactional
 and create-once; inspect an uncertain result rather than retrying blindly.
 Runtime readiness performs SELECTs only and fails closed without the schema.
 
-The existing `SCOUT_DURABLE_CANDIDATES_ENABLED=true` path is required. This change
-does not enable that flag, open recovery/research/send controls, alter other
-tenants, or change the separate explicitly approved bounded-refresh CLI.
+Set `SCOUT_ANCHOR_DISCOVERY_MEMORY_ENABLED=true` on the existing service to
+activate the durable discovery path for tenant 10 only. The existing global
+`SCOUT_DURABLE_CANDIDATES_ENABLED=true` path also uses this memory for Anchor;
+the global flag need not be enabled for this rollout. Neither flag opens
+recovery/research/send controls. This does not alter other tenants or change
+the separate explicitly approved bounded-refresh CLI.
 Keep those controls closed during deployment and catalog/readiness verification.
 Rollback keeps all memory/audit rows and holds research; do not delete ownership
 or reset an unfinished detail reservation to make another attempt possible.

@@ -5,6 +5,10 @@
 const { randomUUID } = require('node:crypto');
 const { PLAN_VERSION, queryIdentity } = require('./scoutQueryCheckpoints');
 const ENABLED_TENANTS = new Set(['10']);
+// Separate from the global durable-candidate flag: rollout must not opt other
+// tenants into a different discovery path. Neither flag grants provider access.
+const isTenantDiscoveryMemoryEnabled = (tenantId, env = process.env) =>
+  ENABLED_TENANTS.has(String(tenantId)) && env.SCOUT_ANCHOR_DISCOVERY_MEMORY_ENABLED === 'true';
 const fail = code => Object.assign(new Error(code), { code, retryAllowed:false });
 const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 512;
 
@@ -165,4 +169,4 @@ function createTenantDiscoveryMemory({ pool, tenantId, fingerprint }) {
   return { tenantId:tenant, fingerprint, assertReady, checkQuery, reserveQuery, continuationStatus, claimPlace, finishPlace,
     snapshot:()=>({...counts}) };
 }
-module.exports={ENABLED_TENANTS,businessObservation,createTenantDiscoveryMemory};
+module.exports={ENABLED_TENANTS,isTenantDiscoveryMemoryEnabled,businessObservation,createTenantDiscoveryMemory};
