@@ -54,6 +54,7 @@ async function frozen(pool,f){
 function authorize(pool,f,input,dispatch){
   const module={exports:{}};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../utils/callEligibility.js'),'utf8'),{module,exports:module.exports,require(id){
+    if(id==='./anchorOutreachReview')return require('../utils/anchorOutreachReview');
     if(id==='../services/anchorEmailRecovery')return{loadRecoveryState:db=>recovery.loadRecoveryState(db,options(f)),assertRecoveryLeaf:(db,i)=>recovery.assertRecoveryLeaf(db,i,options(f))};
     if(id==='../services/anchorEmailRecoveryIntegration')return{...integration,consumeRecoveryDispatch:(p,auth)=>integration.consumeRecoveryDispatch(p,auth,{now:()=>f.now,env:f.env})};
     if(id==='../services/anchorScopedResume')return require('../services/anchorScopedResume');
