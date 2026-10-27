@@ -77,8 +77,9 @@ class DashboardService {
     const paperMarkers=paperToken.map(e=>({id:'paper:'+e.id,category:e.side==='BUY'?'PAPER_BUY':'PAPER_SELL',occurredAt:e.occurredAt,knownAt:e.knownAt,source:'Signal paper account',evidence:{...e.evidence,fillPrice:e.fillPrice,notionalUsd:e.notionalUsd,tokens:e.tokens,action:e.action},provenance:e.provenance}));
     const timeline=[...events,...markers,...paperMarkers,...milestones,...annotations,...risk.transitions].sort((a,b)=>Date.parse(a.occurredAt)-Date.parse(b.occurredAt)||String(a.id).localeCompare(String(b.id)));
     const research=events.filter(e=>e.researchState).at(-1);
+    const recommendation=require('./recommendation').buildRecommendation({risk,current,accounting,asOf});
     return {tokenAddress:ca,symbol:current?.symbol||watch.symbol||ca.slice(0,8),walletConfigured:true,asOf,lastUpdated:current?.observedAt||balance?.observedAt||null,
-      market,accounting,quoteAccounting,peak,risk,signalState:metric(research?.researchState||null,{provider:'signal empirical events',partial:true,observedAt:research?.knownAt},at),
+      market,accounting,quoteAccounting,peak,risk,recommendation,signalState:metric(research?.researchState||null,{provider:'signal empirical events',partial:true,observedAt:research?.knownAt},at),
       lifecycle:quoteAccounting.totalPnl.value!==null?native.ledger.lifecycle:ledger.lifecycle,ledger:{...ledger,transactions:undefined,rawLots:undefined},
       coverage:{historyExhausted:history?.exhausted||false,headCaughtUp:caughtUp,indexerCoverage:'PARTIAL',reconciliation:ledger.reconciliation,
         walletObservedAt:balance?.observedAt||null,balanceSlot:balance?.slot||null,transactionLimitReached:transactions.length>=5000,
