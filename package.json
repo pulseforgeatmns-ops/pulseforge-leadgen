@@ -172,7 +172,8 @@
     "test:clarity:browser": "node --test test/browser/clarityReviewUi.test.js",
     "test:signal-dashboard": "node --test test/signalDashboard*.test.js test/signalOpportunity*.test.js test/signalHistorical*.test.js test/signalPaperAccount.test.js",
     "signal:dashboard-worker": "node scripts/signalDashboardWorker.js",
-    "signal:historical-backfill": "node scripts/signalHistoricalBackfill.js"
+    "signal:historical-backfill": "node scripts/signalHistoricalBackfill.js",
+    "signal:historical-reconstruct": "node scripts/signalHistoricalReconstruct.js"
   },
   "repository": {
     "type": "git",
