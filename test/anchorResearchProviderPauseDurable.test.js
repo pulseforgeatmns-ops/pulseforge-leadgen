@@ -143,6 +143,7 @@ function rampFixture(mode, { tenantId = '10', fail } = {}) {
     enrichment: { run: async () => ({ considered: 0 }) }, recoverExistingInventory: async () => ({}),
     loadDiscoveryBackoff: async () => mode === 'drain' ? { reason: 'synthetic-backoff' } : null,
     createCandidateTicketStore: () => tickets, createPageCheckpointStore: () => ({ assertReady: async () => {} }),
+    createTenantDiscoveryMemory: input => ({tenantId:input.tenantId,fingerprint:input.fingerprint,assertReady:async()=>{},snapshot:()=>({})}),
     createQueryCheckpointSession: () => ({ acknowledge: async () => assert.fail('Unexpected acknowledgement'),
       snapshot: () => { effects.querySnapshots++; return { status: 'not_observed' }; } }),
     runDiscovery: async () => { effects.discovery++; fail?.(); return { kind: 'investigated' }; },
