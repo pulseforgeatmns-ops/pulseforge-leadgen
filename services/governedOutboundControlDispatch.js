@@ -100,6 +100,22 @@ async function admitControlCycle(pool, tenantId) {
   }
 }
 
+// The dispatcher has already answered "started" for this tenant. Without a
+// durable row, a crashed cycle reads the same as one that never needed to run.
+async function recordControlCycleFailure(pool, { tenantId, cycleId, error, logger = console }) {
+  if (typeof pool?.query !== 'function') return;
+  try {
+    await pool.query(`
+      INSERT INTO agent_log (agent_name, action, payload, status, error_msg, ran_at, client_id)
+      VALUES ('max_outbound_control', 'control_cycle', $1::jsonb, 'failed', $2, NOW(), $3)
+    `, [JSON.stringify({ tenantId: String(tenantId), cycleId, replenishment: { status: 'failed' } }),
+      String(error?.code || error?.message || 'control_cycle_failed').slice(0, 200),
+      createGovernedOutboundTenantContext(tenantId).clientId]);
+  } catch (logError) {
+    logger.error?.('[max-outbound-control] cycle failure record failed', logError.code || logError.message);
+  }
+}
+
 function launchControlCycle({
   pool,
   tenantId,
@@ -124,6 +140,7 @@ function launchControlCycle({
         status: 'finished',
         halted: result?.halted || null,
         state: result?.plan?.state || null,
+        replenishment: result?.replenishment?.status || null,
       }));
       return result;
     } catch (error) {
@@ -132,6 +149,7 @@ function launchControlCycle({
         cycleId,
         reason: error.code || error.message,
       }));
+      await recordControlCycleFailure(pool, { tenantId, cycleId, error, logger });
       return null;
     } finally {
       try {
@@ -268,6 +286,7 @@ module.exports = {
   resetControlDispatchForTests,
   _test: {
     admitControlCycle,
+    recordControlCycleFailure,
     resolveTenantIds,
     publicTenantStatus,
   },

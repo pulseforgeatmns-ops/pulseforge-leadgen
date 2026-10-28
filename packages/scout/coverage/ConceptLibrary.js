@@ -68,15 +68,19 @@ const SEGMENT_CONCEPTS = Object.freeze({
 
 const SEGMENT_CONCEPT_ROTATIONS = Object.freeze({
   property_manager: Object.freeze([
-    Object.freeze(['Property Management', 'Property Manager']),
+    // Not "Property Manager": a pure synonym that rebuys the same Places
+    // businesses. Commercial intent reaches facility-purchasing managers.
+    Object.freeze(['Property Management', 'Commercial Property Management']),
     Object.freeze(['HOA Management', 'Condominium Management', 'Apartment Management']),
-    Object.freeze(['Residential Property Management', 'Commercial Property Management', 'Rental Management']),
+    Object.freeze(['Residential Property Management', 'Office Building Management', 'Rental Management']),
     Object.freeze(['Association Management', 'Multifamily Management', 'Leasing Office']),
   ]),
   property_management: Object.freeze([
-    Object.freeze(['Property Management', 'Property Manager']),
+    // Not "Property Manager": a pure synonym that rebuys the same Places
+    // businesses. Commercial intent reaches facility-purchasing managers.
+    Object.freeze(['Property Management', 'Commercial Property Management']),
     Object.freeze(['HOA Management', 'Condominium Management', 'Apartment Management']),
-    Object.freeze(['Residential Property Management', 'Commercial Property Management', 'Rental Management']),
+    Object.freeze(['Residential Property Management', 'Office Building Management', 'Rental Management']),
     Object.freeze(['Association Management', 'Multifamily Management', 'Leasing Office']),
   ]),
   str_manager: Object.freeze([

@@ -87,7 +87,46 @@ const MAX_ENRICHMENT_BATCHES_PER_CYCLE = 3;
 const SCOUT_DISCOVERY_BACKOFF_THRESHOLD = 3;
 const SCOUT_DISCOVERY_BACKOFF_MINUTES = 60;
 const SCOUT_DISCOVERY_MAX_GENERATION = 3;
+// With durable query memory a searched query is never bought again, so walking
+// an exhausted plan again only re-proves exhaustion. Re-observe it once a day.
+const SCOUT_SEARCH_PLAN_EXHAUSTED_RECHECK_MINUTES = 24 * 60;
 const REPLENISHMENT_TAXONOMY_VERSION = 3;
+
+// Anchor discovery must use durable tenant query/detail memory and the one-page
+// cycle budget. The non-durable path buys every unhandled query with full
+// pagination in one cycle and forgets coverage across missions.
+function anchorDurableDiscoveryEnabled(tenantId, env = process.env) {
+  if (String(tenantId) !== '10') return true;
+  return env.SCOUT_DURABLE_CANDIDATES_ENABLED === 'true'
+    || require('./scoutTenantDiscoveryMemory').isTenantDiscoveryMemoryEnabled(tenantId, env);
+}
+
+// No page was bought or replayed and nothing remains waiting on this cycle's
+// budget: the current generation of the approved plan has no searchable query.
+function searchGenerationExhausted(snapshot) {
+  if (!snapshot || !(snapshot.observedQueries > 0)) return false;
+  if (snapshot.fetchedQueries || snapshot.replayedQueries) return false;
+  const continuation = snapshot.continuation;
+  if (!continuation || continuation.newPagesReserved) return false;
+  const statuses = continuation.statuses || {};
+  return !['cycle_page_budget_reached', 'page_token_not_ready', 'page_fetch_in_progress']
+    .some(status => statuses[status]);
+}
+
+// One explicit answer per cycle to "did replenishment produce new qualified
+// inventory?". A completed control cycle is not, by itself, a replenishment.
+function replenishmentOutcome({ plan, execute, discoveryBlockedReason, scout, newCleanInventoryAdded }) {
+  if (!plan?.shouldReplenish) return { status: 'not_required', reason: null };
+  if (execute === false) return { status: 'not_executed', reason: 'observe_only' };
+  if (discoveryBlockedReason) return { status: 'blocked', reason: discoveryBlockedReason };
+  if (!scout) return { status: 'failed', reason: 'scout_ramp_not_run' };
+  if (newCleanInventoryAdded > 0) return { status: 'replenished', reason: null };
+  if (scout.discoveryBackoff?.reason === 'approved_search_plan_exhausted') {
+    return { status: 'search_plan_exhausted', reason: 'approved_search_plan_exhausted' };
+  }
+  if (scout.discovery?.kind === 'blocked') return { status: 'zero_yield', reason: scout.discovery.reason || 'discovery_blocked' };
+  return { status: 'zero_yield', reason: scout.discoveryAttempted ? 'no_new_qualified_inventory' : 'discovery_not_attempted' };
+}
 
 function boundedInt(value, fallback, min = 1, max = 100) {
   const n = Number(value);
@@ -399,7 +438,10 @@ async function loadCleanInventory(pool, store, source, clientId, policy = {}) {
     if (!reason) return;
     exclusionCounts[reason] = (exclusionCounts[reason] || 0) + 1;
   };
-  for (const row of rows.sort(founderFirst)) {
+  const ordered = cid === 10
+    ? require('../utils/anchorIcpPriority').sortByAnchorIcpPriority(rows.sort(founderFirst))
+    : rows.sort(founderFirst);
+  for (const row of ordered) {
     const knowledgeRow = knowledgeByProspectId.get(String(row.id));
     const scopedRow = knowledgeRow
       ? { ...row, knowledge_content: knowledgeRow.knowledge_content }
@@ -478,7 +520,10 @@ function scoutInput(program, source, plan, tenantContext = null, discoveryGenera
     });
   }
   const segment = firstPresent(scope.segment, scope.industry);
-  const segments = scope.eligibleSubsegments?.length ? scope.eligibleSubsegments : (segment ? [segment] : []);
+  const approvedSegments = scope.eligibleSubsegments?.length ? scope.eligibleSubsegments : (segment ? [segment] : []);
+  const segments = tenantId === '10'
+    ? require('../utils/anchorIcpPriority').sortSegmentsByAnchorIcpPriority(approvedSegments)
+    : approvedSegments;
   const commercialCapability = firstPresent(scope.commercialCapability);
   const businessType = firstPresent(scope.businessType, scope.commercialCapability, scope.industry, segment);
   const pulseforgeCashflow = scope.offerId
@@ -543,13 +588,37 @@ async function loadScoutDiscoveryBackoff(pool, tenantId, fingerprint, now = new 
        AND payload->>'scoutDiscoveryAttempted'='true'
      ORDER BY created_at DESC
      LIMIT $3`, [String(tenantId), fingerprint, threshold]);
-  if (rows.length < threshold) return null;
+  const latest = rows[0];
+  if (latest?.payload?.scoutSearchGenerationExhausted === true) {
+    // Advance through the approved rotation at no provider cost, then hold.
+    // Never silently restart from generation 0 and replay a handled plan.
+    const generation = Number(latest.payload.scoutSearchGeneration || 0);
+    if (generation < SCOUT_DISCOVERY_MAX_GENERATION) {
+      return { reason: 'search_generation_exhausted_advance', fingerprint, searchGeneration: generation + 1,
+        diversify: true, exhaustedGeneration: generation, lastAttemptAt: new Date(latest.created_at).toISOString() };
+    }
+    const retryAt = new Date(new Date(latest.created_at).getTime()
+      + Number(opts.exhaustedRecheckMinutes || SCOUT_SEARCH_PLAN_EXHAUSTED_RECHECK_MINUTES) * 60_000);
+    if (+retryAt > +now) {
+      return { reason: 'approved_search_plan_exhausted', fingerprint, searchGeneration: generation,
+        diversify: false, exhaustedGeneration: generation, lastAttemptAt: new Date(latest.created_at).toISOString(),
+        retryAt: retryAt.toISOString(), action: 'review_or_approve_a_revised_search_scope' };
+    }
+    return null;
+  }
+  // Anchor keeps a diversified generation once reached. Snapping back to an
+  // exhausted generation 0 would spend every other cycle re-proving exhaustion.
+  const stickyGeneration = String(tenantId) === '10' ? Number(latest?.payload?.scoutSearchGeneration || 0) : 0;
+  const continueGeneration = () => (stickyGeneration > 0
+    ? { reason: 'continue_search_generation', fingerprint, searchGeneration: stickyGeneration, diversify: true }
+    : null);
+  if (rows.length < threshold) return continueGeneration();
   const repeatedZeroYield = rows.every(row =>
     Number(row.payload?.newCleanInventoryAdded || 0) === 0
     && Number(row.payload?.newPromotions || 0) === 0
     && Number(row.payload?.recoveredExisting || 0) === 0
   );
-  if (!repeatedZeroYield) return null;
+  if (!repeatedZeroYield) return continueGeneration();
   const latestGeneration = rows.reduce((max, row) => Math.max(
     max,
     Number(row.payload?.scoutSearchGeneration || 0)
@@ -1042,6 +1111,7 @@ async function defaultScoutRampResearchScoped({
   let discoveryAttempted = false;
   let discoveryBackoff = null;
   let searchGeneration = 0;
+  let generationExhausted = false;
   let persisted = { inserted: 0, admission: createReplenishmentAdmissionCounters() };
   let admissionMeasured = false;
   let queryProgression = null;
@@ -1116,11 +1186,12 @@ async function defaultScoutRampResearchScoped({
     discoveryBackoff = await loadDiscoveryBackoff(pool, tenant.tenantId, fingerprint, now);
     if (discoveryBackoff?.diversify) {
       searchGeneration = Number(discoveryBackoff.searchGeneration || 1);
-      if (typeof store.event === 'function') {
+      if (typeof store.event === 'function' && discoveryBackoff.reason !== 'continue_search_generation') {
         await store.event('scout_replenishment_plan_reconsidered', [fingerprint, searchGeneration], {
           programId: program.id,
           ...discoveryBackoff,
-          reason: 'repeated_zero_yield_reconsider_plan',
+          reason: discoveryBackoff.reason === 'search_generation_exhausted_advance'
+            ? discoveryBackoff.reason : 'repeated_zero_yield_reconsider_plan',
         });
       }
     } else if (discoveryBackoff) {
@@ -1143,7 +1214,16 @@ async function defaultScoutRampResearchScoped({
         [tenant.tenantId, fingerprint, 'coverage_epoch_config_invalid'], { programId: program.id,
           reason: 'coverage_epoch_config_invalid', action: 'review_exact_coverage_epoch_permission' });
     }
-    if (!coverageEpochBlocked && (!discoveryBackoff || discoveryBackoff.diversify)) {
+    // An injected discovery seam is not a provider path; native Anchor discovery
+    // without durable memory is. Existing tickets/enrichment still run above.
+    const discoveryMemoryMissing = !runDiscovery && !durableEnabled && !anchorDurableDiscoveryEnabled(tenant.tenantId);
+    if (discoveryMemoryMissing && !coverageEpochBlocked && (!discoveryBackoff || discoveryBackoff.diversify)) {
+      discovery = { kind: 'blocked', reason: 'scout_discovery_memory_required' };
+      if (typeof store.event === 'function') await store.event('tick_blocked',
+        [tenant.tenantId, fingerprint, 'scout_discovery_memory_required'], { programId: program.id,
+          reason: 'scout_discovery_memory_required', action: 'enable_anchor_discovery_memory_before_research' });
+    }
+    if (!discoveryMemoryMissing && !coverageEpochBlocked && (!discoveryBackoff || discoveryBackoff.diversify)) {
       const discover = runDiscovery
         || ((input, opts) => require('./scoutAcquisitionIntelligence').runAcquisitionIntelligenceLoop(input, opts));
       const checkpoints = require('./scoutQueryCheckpoints');
@@ -1171,6 +1251,9 @@ async function defaultScoutRampResearchScoped({
       }
 
       const checkpointSnapshot = checkpointSession.snapshot();
+      // Only meaningful with the durable page/memory path, where a handled query
+      // is never repurchased; the legacy path has no continuation evidence.
+      generationExhausted = tenant.tenantId === '10' && Boolean(pages) && searchGenerationExhausted(checkpointSnapshot);
       queryProgression = ticketDispatch.queryProgressionDiagnostic(checkpointSnapshot);
       const queryDependency = dispatcher ? ticketDispatch.observedQueryDependency(queryProgression) : null;
       if (queryDependency) {
@@ -1264,6 +1347,7 @@ async function defaultScoutRampResearchScoped({
     candidateWork,
     searchFingerprint: searchFingerprint || scoutSearchFingerprint(program, source),
     searchGeneration,
+    searchGenerationExhausted: generationExhausted,
     verificationRetry,
   };
 }
@@ -1409,8 +1493,11 @@ async function recordReplenishmentHold(pool, { tenantId, clientId, programId, re
       )
     `, [
       'Anchor Scout replenishment is blocked',
-      `Scout discovery, enrichment and inventory replenishment are not running: ${reason}${detail ? ` (${detail})` : ''}. `
-        + 'This is a governance hold, not an empty result. Restoring it needs the matching operator approval.',
+      reason === 'scout_approved_search_plan_exhausted'
+        ? `Scout has no unsearched query left in the approved search plan${detail ? ` (${detail})` : ''}. `
+          + 'Searched queries are never bought again. New inventory needs a reviewed, revised search scope.'
+        : `Scout discovery, enrichment and inventory replenishment are not running: ${reason}${detail ? ` (${detail})` : ''}. `
+          + 'This is a governance hold, not an empty result. Restoring it needs the matching operator approval.',
       JSON.stringify({ tenantId: String(tenantId), programId: programId || null, reason, detail }),
       clientId,
       reason,
@@ -1599,6 +1686,23 @@ async function runMaxOutboundControlLoop(options = {}) {
     now: controlNow,
   });
 
+  const replenishment = {
+    ...replenishmentOutcome({ plan, execute: options.execute, discoveryBlockedReason, scout,
+      newCleanInventoryAdded: Number(inventoryGrowth.newCleanInventoryAdded || 0) }),
+    newQualifiedInventory: Number(inventoryGrowth.newCleanInventoryAdded || 0),
+    newQueueAdmissions: scout?.admissionMeasured ? Number(scout.discoveredQueued || 0) : null,
+    deficitBefore: Number(plan.deficit || 0),
+  };
+  // Discovery holds raised inside the ramp are as durable as the pre-ramp ones.
+  const rampHold = scout?.discovery?.kind === 'blocked' && scout.discovery.reason === 'scout_discovery_memory_required'
+    ? scout.discovery.reason
+    : (replenishment.status === 'search_plan_exhausted' ? 'scout_approved_search_plan_exhausted' : null);
+  if (rampHold) {
+    await recordReplenishmentHold(pool, { tenantId: governed.tenantId, clientId: store.clientId, programId: program.id,
+      reason: rampHold, detail: scout?.discoveryBackoff?.retryAt ? `recheck_after:${scout.discoveryBackoff.retryAt}` : null,
+      logger });
+  }
+
   const nowIso = new Date().toISOString();
   const netCleanInventoryDelta = inventoryGrowth.netCleanInventoryDelta;
   const newPromotions = Number(scout?.yield?.newPromotions || 0);
@@ -1715,7 +1819,9 @@ async function runMaxOutboundControlLoop(options = {}) {
     discoveryBlockedReason,
     scoutSearchFingerprint: searchFingerprint,
     scoutSearchGeneration: Number(scout?.searchGeneration || 0),
+    scoutSearchGenerationExhausted: scout?.searchGenerationExhausted === true,
     scoutDiscoveryAttempted: Boolean(scout?.discoveryAttempted),
+    replenishment,
     scoutProviderReceipt: providerReceiptDiagnostic(store.tenantId, cycleId, scout?.discovery),
     scoutAdmissionReceipt: admissionReceiptDiagnostic(store.tenantId, cycleId, scout?.admission, scout?.admissionMeasured),
     scoutEvidenceProgression: evidenceProgressionDiagnostic(scout?.evidenceProgression),
@@ -1801,6 +1907,7 @@ async function runMaxOutboundControlLoop(options = {}) {
     },
     scout,
     discoveryBlockedReason,
+    replenishment,
     aoRefill,
     funnel,
     yield: scout?.yield || null,
@@ -1845,8 +1952,11 @@ module.exports = {
   resolveScoutRampAllowedCities,
   scoutSearchFingerprint,
   loadScoutDiscoveryBackoff,
+  anchorDurableDiscoveryEnabled,
   _test: {
     recordReplenishmentHold,
+    searchGenerationExhausted,
+    replenishmentOutcome,
     scoutInput,
     mapReuseCompanyRows,
     loadReuseCompanies,

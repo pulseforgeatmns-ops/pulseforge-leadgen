@@ -23,7 +23,9 @@ test('the actual legacy buyer segment preserves commercial cleaning as the servi
   assert.equal(sourceScope(source).commercialCapability, 'commercial_cleaning');
   assert.equal(input.targetContext.businessType, 'commercial_cleaning');
   assert.equal(definition.businessNeed, 'commercial_cleaning');
-  assert.deepEqual(definition.segments, source.payload.structuredMission.market.eligibleSubsegments);
+  // Same approved membership; Anchor searches its ICP priorities first.
+  assert.deepEqual([...definition.segments].sort(), [...source.payload.structuredMission.market.eligibleSubsegments].sort());
+  assert.deepEqual(definition.segments, ['property_manager', 'commercial_office', 'str_manager', 'realtor']);
   assert.deepEqual(definition.geography.cities, source.payload.structuredMission.geography.cities);
   assert.equal(scoutSearchFingerprint(program, source), '22d50dc07f997a3a811368a7e8b1de5a3211df5bd555260c3d42c4e780a960b7');
   assert.equal(JSON.stringify(source), before);

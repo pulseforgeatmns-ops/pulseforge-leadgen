@@ -197,14 +197,16 @@ const MARKET_HYPOTHESES = Object.freeze({
       Object.freeze({
         source: SEARCH_SOURCES.GOOGLE_PLACES,
         priority: 1,
+        // Anchor priority order: one new page per cycle reaches institutions,
+        // commercial property managers and industrial sites before dealerships.
         queryTemplates: Object.freeze([
-          'auto dealership {city} {state}',
           'private school {city} {state}',
-          'academy {city} {state}',
           'college campus {city} {state}',
+          'academy {city} {state}',
+          'commercial property management {city} {state}',
           'manufacturing facility {city} {state}',
           'warehouse distribution center {city} {state}',
-          'commercial property management {city} {state}',
+          'auto dealership {city} {state}',
           'office park {city} {state}',
         ]),
         rationale: 'Managed facilities are discoverable through concrete facility and operator categories.',

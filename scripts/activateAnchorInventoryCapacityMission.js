@@ -65,7 +65,7 @@ function successorMission(row) {
   };
 }
 
-async function plan(db = pool) {
+async function plan(db = pool, build = successorMission) {
   const program = (await db.query(`SELECT * FROM acquisition_outbound_programs
     WHERE tenant_id=$1 AND mode='active' ORDER BY authorized_at DESC LIMIT 1`, [TENANT_ID])).rows[0];
   if (!program) throw new Error('active_anchor_program_not_found');
@@ -74,7 +74,7 @@ async function plan(db = pool) {
   const pending = (await db.query(`SELECT count(*)::int AS n FROM acquisition_outbound_items i
     JOIN acquisition_outbound_envelopes e ON e.id=i.envelope_id
     WHERE i.tenant_id=$1 AND e.program_id=$2 AND i.status IN ('pending','attempted','uncertain')`, [TENANT_ID, program.id])).rows[0]?.n || 0;
-  const mission = successorMission(source);
+  const mission = build(source);
   const policy = { ...(program.policy || {}), sourceMissionId: mission.id };
   return {
     program,
@@ -87,7 +87,7 @@ async function plan(db = pool) {
   };
 }
 
-async function apply(db = pool) {
+async function apply(db = pool, build = successorMission) {
   const { GovernedOutboundStore } = require('../services/governedOutboundStore');
   const store = new GovernedOutboundStore(db, TENANT_ID);
   const locked = await store.lock(async () => {
@@ -96,7 +96,7 @@ async function apply(db = pool) {
       await client.query('BEGIN');
       // Re-read the program and pending envelope while holding the same tenant
       // lock as preparation and dispatch. Scope can never change mid-envelope.
-      const review = await plan(client);
+      const review = await plan(client, build);
       if (review.pending > 0) throw new Error(`prepared_envelope_not_drained:${review.pending}`);
       await client.query(`INSERT INTO acquisition_missions (
       id,tenant_id,client_id,stage,status,objective,target_segment,campaign,title,priority,
