@@ -259,8 +259,9 @@ function sourceScope(source) {
   const market = structured.market || {};
   const geography = structured.geography || {};
   const offer = structured.offer || {};
+  const segment = normalizeVertical(market.segment || payload.targetSegment || source?.target_segment || '');
   return {
-    segment: normalizeVertical(market.segment || payload.targetSegment || source?.target_segment || ''),
+    segment,
     industry: normalizeVertical(market.industry || ''),
     eligibleSubsegments: Array.isArray(market.eligibleSubsegments) ? market.eligibleSubsegments.map(normalizeVertical).filter(Boolean) : [],
     region: geography.region || null,
@@ -271,6 +272,9 @@ function sourceScope(source) {
       market.commercialCapability,
       offer.capability,
       payload.commercialCapability,
+      // The legacy buyer contract already names the service. Its industry is
+      // the customer's industry, not the service Scout is finding buyers for.
+      segment === 'commercial_cleaning_buyers' ? 'commercial_cleaning' : null,
     ),
     businessType: firstPresent(market.businessType, payload.businessType),
     offerId: firstPresent(offer.id, offer.offerId, payload.offerId),
@@ -476,7 +480,7 @@ function scoutInput(program, source, plan, tenantContext = null, discoveryGenera
   const segment = firstPresent(scope.segment, scope.industry);
   const segments = scope.eligibleSubsegments?.length ? scope.eligibleSubsegments : (segment ? [segment] : []);
   const commercialCapability = firstPresent(scope.commercialCapability);
-  const businessType = firstPresent(scope.businessType, scope.industry, segment);
+  const businessType = firstPresent(scope.businessType, scope.commercialCapability, scope.industry, segment);
   const pulseforgeCashflow = scope.offerId
     === require('../utils/pulseforgeCashflowOffer').PULSEFORGE_CASHFLOW_OFFER_ID;
   return {
