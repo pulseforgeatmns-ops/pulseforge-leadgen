@@ -7,3 +7,5 @@ const msg={channelId:'1758611100',messageId:123,occurredAt:new Date('2026-01-01T
 test('historical evidence cannot masquerade as prospective knowledge',()=>{const r=canonicalize(historicalRecord(msg,source));assert.equal(r.dataClass,'HISTORICAL_BACKFILL');assert.equal(r.knowledgeAt,null);assert.equal(r.eligibleForLiveScoring,false);assert.doesNotThrow(()=>assertNoProspectiveLeak(r));});
 test('holdout assignment is deterministic',()=>{const r=historicalRecord(msg,source);assert.equal(assignPartition(r),assignPartition(r));});
 test('leak guard fails closed',()=>assert.throws(()=>assertNoProspectiveLeak({dataClass:'HISTORICAL_BACKFILL',knowledgeAt:'2026-01-01T00:00:00Z',eligibleForLiveScoring:false}),/historical_prospective_leak/));
+
+test('all mentions of the same token stay in one partition across sources',()=>{const a=historicalRecord(msg,source);const b={...a,sourceId:'other-source',channelId:'999',messageId:999};assert.equal(assignPartition(a),assignPartition(b));});
