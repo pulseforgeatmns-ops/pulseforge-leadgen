@@ -5,7 +5,7 @@ const {loadConfiguredSources}=require('../services/telegramCallerFeed/sources');
 const {createGramJsClient,resolvePublicChannel}=require('../services/telegramCallerFeed/telegramAdapter');
 const {backfillSource}=require('../services/telegramCallerFeed/historicalBackfill');
 const {canonicalize,assertNoProspectiveLeak}=require('../services/signalOpportunities/historicalDataset');
-async function main(){const creds=loadTelegramCredentials();if(!creds.ok)throw Error(creds.reason);const client=await createGramJsClient(creds);const root=process.env.SIGNAL_HISTORICAL_BACKFILL_PATH||'/data/historical';fs.mkdirSync(root,{recursive:true});
+async function main(){const sessionPath=process.env.TELEGRAM_SESSION_FILE;if(sessionPath){const session=fs.readFileSync(sessionPath,'utf8').trim();if(!session)throw Error('Telegram session file is empty');process.env.TELEGRAM_SESSION_STRING=session;}const creds=loadTelegramCredentials();if(!creds.ok)throw Error(creds.reason);const client=await createGramJsClient(creds);const root=process.env.SIGNAL_HISTORICAL_BACKFILL_PATH||'/data/historical';fs.mkdirSync(root,{recursive:true});
  const max=Math.max(100,Math.min(100000,Number(process.env.SIGNAL_HISTORICAL_MAX_MESSAGES_PER_SOURCE)||5000));const summary=[];
  try{for(const source of loadConfiguredSources()){let entity;try{entity=await resolvePublicChannel(client,source.username);}catch(e){summary.push({sourceId:source.sourceId,status:'UNAVAILABLE',reason:String(e.message||e)});continue;}
   const file=path.join(root,source.sourceId+'.jsonl'),seen=new Set();if(fs.existsSync(file))for(const line of fs.readFileSync(file,'utf8').split('\n')){if(!line)continue;try{const x=JSON.parse(line);seen.add(String(x.messageId));}catch{}}
