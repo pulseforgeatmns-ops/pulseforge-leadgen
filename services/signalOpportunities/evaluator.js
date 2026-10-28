@@ -52,6 +52,8 @@ function evaluateOpportunity({tokenAddress,calls=[],observations=[],events=[],so
  if(avoid)opportunityState='AVOID';
  const amplifierSources=sources.filter(s=>s.sourceRole==='AMPLIFIER'),seen=new Set(all.map(c=>c.sourceId));
  const amplifiers=amplifierSources.map(s=>({sourceId:s.sourceId,status:seen.has(s.sourceId)?'OBSERVED':s.active&&s.available?'NOT_YET_OBSERVED':'COVERAGE_UNKNOWN'}));
+ const firstCall=all[0]||null,observedAmplifiers=amplifiers.filter(a=>a.status==='OBSERVED').map(a=>a.sourceId),coverageUnknown=amplifiers.some(a=>a.status==='COVERAGE_UNKNOWN');
+ const discoveryProvenance={kind:firstCall?.sourceRole==='AMPLIFIER'?'AMPLIFIER_DISCOVERED':'SOURCE_DISCOVERED',firstSourceId:firstCall?.sourceId||null,firstSourceRole:firstCall?.sourceRole||null,firstObservedAt:firstCall?.knowledgeAt||null,amplifierConfirmation:observedAmplifiers.length?'OBSERVED':coverageUnknown?'COVERAGE_UNKNOWN':'NOT_YET_OBSERVED',observedAmplifiers};
  const front=all.find(c=>c.sourceId==='telegram-front-runners');
  const beforeFR=front?all.filter(c=>Date.parse(c.knowledgeAt)<Date.parse(front.knowledgeAt)&&Date.parse(c.occurredAt)<Date.parse(front.occurredAt)):[];
  const frCoverage=amplifiers.find(a=>a.sourceId==='telegram-front-runners')?.status;
@@ -59,7 +61,7 @@ function evaluateOpportunity({tokenAddress,calls=[],observations=[],events=[],so
  const callerSequence=sequence(all,rows,asOf).map(x=>({...x,tokenAddress}));
  const result={tokenAddress,symbol:current?.symbol||null,firstSeenAt:all[0].knowledgeAt,knowledgeAt:asOf,occurredAt:asOf,knownAt:asOf,
   definitionVersion:D.version,definitionHash:VERSION_HASH,sourceUniverseVersion:sources[0]?.universeVersion||null,
-  sources:[...new Set(all.map(c=>c.sourceId))],independentClusters:graph.independentClusters,sourceRoles:[...new Set(all.map(c=>c.sourceRole))],
+  sources:[...new Set(all.map(c=>c.sourceId))],discoveryProvenance,independentClusters:graph.independentClusters,sourceRoles:[...new Set(all.map(c=>c.sourceRole))],
   marketCap:num(current?.marketCapUsd),liquidity:num(current?.liquidityUsd),tokenAge:num(current?.tokenAgeSeconds),priceMomentum,volumeMomentum,
   buyers:num(current?.buyers5m),sellers:num(current?.sellers5m),promotionIntensity:promotion,distributionRisk:credibleRisk?.state||'UNKNOWN',
   evidence:{increases,decreases,market:current||null,momentumBaseline:base||null,risk:credibleRisk||null,relationshipEvidence:relationships.filter(r=>r.evidence&&(!r.knowledgeAt||Date.parse(r.knowledgeAt)<=end))},unknowns,opportunityState,opportunityScore,graph,callerSequence,amplifiers,
