@@ -72,6 +72,23 @@ const PROPERTY_MANAGER_EVIDENCE = [
   /\breal estate management\b/i,
 ];
 
+const BROKERAGE_EVIDENCE = [
+  /\brealty\b/i,
+  /\brealtors?\b/i,
+  // Not "agency": that is Google's shared place type, already in the haystack.
+  /\breal estate (?:agents?|brokerage|brokers?|group|team|company)\b/i,
+  /\bbrokerage\b/i,
+  /\bhomes? for sale\b/i,
+  /\blistings?\b/i,
+  /\bkeller williams\b/i,
+  /\bre\/?max\b/i,
+  /\bcoldwell banker\b/i,
+  /\bcentury 21\b/i,
+  /\bberkshire hathaway homeservices\b/i,
+  /\bexp realty\b/i,
+  /\bsotheby'?s international realty\b/i,
+];
+
 const COMMERCIAL_OFFICE_EVIDENCE = [
   /\bcommercial office\b/i,
   /\bcommercial_office\b/i,
@@ -178,12 +195,12 @@ function isSearchDerivedField(value, context = {}) {
   const discoveryCity = normalizeVertical(context.discoveryCity || '');
   if (discoveryCity && normalized.includes(discoveryCity)) return true;
 
-  if (/_nh$/.test(normalized) || /_(manchester|bedford|hooksett|goffstown|londonderry|auburn)_nh/.test(normalized)) {
+  if (/_nh$/.test(normalized) || /_(manchester|bedford|hooksett|goffstown|londonderry|auburn|nashua|merrimack)_nh/.test(normalized)) {
     return true;
   }
 
   const tokens = normalized.split('_').filter(Boolean);
-  const geoTokens = new Set(['manchester', 'bedford', 'hooksett', 'goffstown', 'londonderry', 'auburn', 'nh']);
+  const geoTokens = new Set(['manchester', 'bedford', 'hooksett', 'goffstown', 'londonderry', 'auburn', 'nashua', 'merrimack', 'nh']);
   const geoHits = tokens.filter(token => geoTokens.has(token));
   return geoHits.length >= 2 || (geoHits.length === 1 && tokens.length >= 4);
 }
@@ -281,9 +298,13 @@ function resolveReplenishmentVertical(candidate = {}, context = {}) {
   if (hasEvidence(text, STR_EVIDENCE) || (lodgingSignal && /\b(rental|vacation|property|host|str)\b/i.test(text))) {
     return 'str_manager';
   }
+  // Google files brokerages and property managers under the same place type.
+  // The word "property" is in nearly every brokerage listing, so the place type
+  // alone needs management-specific evidence, never just "property".
   if (
     hasEvidence(text, PROPERTY_MANAGER_EVIDENCE)
-    || (realtySignal && /\b(property|management|mgmt|leasing|multifamily|apartment)\b/i.test(text))
+    || (realtySignal && !hasEvidence(text, BROKERAGE_EVIDENCE)
+      && /\b(management|mgmt|leasing|multifamily|apartments?|property services)\b/i.test(text))
   ) {
     return 'property_manager';
   }
@@ -548,6 +569,7 @@ module.exports = {
   LEGACY_RECONCILIATION_REMOVE_REASONS,
   isLegacyReconciliationRemoveReason,
   resolveLegacyReconciliationOutcome,
+  BROKERAGE_EVIDENCE,
   _test: {
     classificationHaystack,
     isSearchDerivedField,

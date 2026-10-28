@@ -77,7 +77,9 @@ test('explicit approved subsegments admit real estate offices without widening l
  assert.deepEqual(sourceScope({mission}).eligibleSubsegments,approved.missionSegments);
  assert.equal(require('../services/maxOutboundControlLoop').missionCandidateReason({vertical:'realtor',service_area_match:'Manchester',company_location:'Manchester, NH'},sourceScope({mission})),null);
  const input=scoutInput({tenant_id:'10'},{mission},{deficit:5},{tenantId:'10'});
- assert.deepEqual(input.targetContext.segments,approved.missionSegments);
+ // Same approved membership; Anchor searches its ICP priorities before realtors.
+ assert.deepEqual([...input.targetContext.segments].sort(),[...approved.missionSegments].sort());
+ assert.deepEqual(input.targetContext.segments,['property_manager','commercial_office','realtor']);
 });
 
 test('shared profile domains cannot acquire or promote platform employees', async () => {

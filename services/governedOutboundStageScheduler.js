@@ -39,6 +39,13 @@ function scopedDurableControlTenantIds(tenantIds, env = process.env) {
   if (raw !== '10') throw Object.assign(Error('invalid_durable_control_tenant_scope'), { code: 'invalid_durable_control_tenant_scope' });
   return tenantIds.map(String).includes('10') ? ['10'] : [];
 }
+// A completed control cycle says the cycle ran, not that inventory grew. Carry
+// the cycle's own replenishment answer so zero yield never reads as success.
+const REPLENISHMENT_STATUSES=new Set(['not_required','not_executed','blocked','failed','replenished','zero_yield','search_plan_exhausted']);
+function replenishmentReason(result) {
+  const status=result?.replenishment?.status;
+  return REPLENISHMENT_STATUSES.has(status)?`replenishment_${status}`:null;
+}
 function classify(result, stage, tenantId) {
   const unknown = { status:'uncertain',reason:'missing_terminal_evidence' };
   if (!result || typeof result !== 'object') return unknown;
@@ -65,7 +72,7 @@ function classify(result, stage, tenantId) {
     return unknown;
   }
   if(stage==='control') {
-    if(typeof result.cycleId==='string' && typeof result.programId==='string' && result.plan && Number.isFinite(Date.parse(result.cycleStartedAt)) && Number.isFinite(Date.parse(result.cycleCompletedAt)) && Date.parse(result.cycleCompletedAt)>=Date.parse(result.cycleStartedAt)) return {status:'completed',reason:null};
+    if(typeof result.cycleId==='string' && typeof result.programId==='string' && result.plan && Number.isFinite(Date.parse(result.cycleStartedAt)) && Number.isFinite(Date.parse(result.cycleCompletedAt)) && Date.parse(result.cycleCompletedAt)>=Date.parse(result.cycleStartedAt)) return {status:'completed',reason:replenishmentReason(result)};
     return unknown;
   }
   return unknown;
@@ -75,6 +82,7 @@ function evidenceReferences(result, stage) {
   for(const key of ['cycleId','programId','envelopeId','itemId']) {
     if(typeof result?.[key]==='string' && result[key].length<=200) refs[key]=result[key];
   }
+  if(stage==='control' && replenishmentReason(result)) refs.replenishmentStatus=result.replenishment.status;
   if(stage==='poll' && Array.isArray(result?.results)) refs.integrationIds=[...new Set(result.results.map(r=>r?.integrationId).filter(id=>typeof id==='string'&&id.length<=200))].slice(0,50);
   return refs;
 }

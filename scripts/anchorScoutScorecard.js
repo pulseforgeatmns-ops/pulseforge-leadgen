@@ -31,7 +31,7 @@ const QUERIES = {
            count(*)::int AS runs, max(ran_at) AS last_ran_at
       FROM agent_log
      WHERE client_id = $1 AND ran_at > NOW() - ($2::int * INTERVAL '1 day')
-       AND agent_name IN ('scout', 'scout_unenriched_enrichment', 'setter_handoff', 'handoff_utility')
+       AND agent_name IN ('scout', 'scout_unenriched_enrichment', 'setter_handoff', 'handoff_utility', 'max_outbound_control')
      GROUP BY 1, 2, 3, 4 ORDER BY last_ran_at DESC`,
   // 2, 5, 10: per-day discovery output (empty runs report found=0)
   scoutDaily: `
@@ -60,6 +60,37 @@ const QUERIES = {
       FROM acquisition_outbound_events
      WHERE tenant_id = '10' AND created_at > NOW() - ($2::int * INTERVAL '1 day') AND $1::int = 10
      GROUP BY 1, 2 ORDER BY last_at DESC`,
+  // P0: per-day control-cycle answer to "did replenishment add qualified inventory?"
+  replenishmentDaily: `
+    SELECT date_trunc('day', created_at AT TIME ZONE 'America/New_York')::date AS day,
+           COALESCE(payload->'replenishment'->>'status', 'not_reported') AS status,
+           COALESCE(payload->'replenishment'->>'reason', '') AS reason,
+           count(*)::int AS cycles,
+           sum(COALESCE((payload->'replenishment'->>'newQualifiedInventory')::int, 0))::int AS new_qualified_inventory,
+           sum(COALESCE((payload->'replenishment'->>'newQueueAdmissions')::int, 0))::int AS new_queue_admissions,
+           count(*) FILTER (WHERE payload->>'scoutSearchGenerationExhausted' = 'true')::int AS exhausted_generations
+      FROM acquisition_outbound_events
+     WHERE tenant_id = '10' AND event_type = 'max_outbound_control' AND $1::int = 10
+       AND created_at > NOW() - ($2::int * INTERVAL '1 day')
+     GROUP BY 1, 2, 3 ORDER BY 1 DESC, 4 DESC`,
+  // P0: the approved targeting Scout is actually executing
+  sourceMission: `
+    SELECT m.id, m.payload->'structuredMission'->'market'->'eligibleSubsegments' AS eligible_subsegments,
+           m.payload->'structuredMission'->'geography'->'cities' AS cities, m.updated_at
+      FROM acquisition_outbound_programs p
+      JOIN acquisition_missions m ON m.tenant_id = p.tenant_id AND m.id = p.source_mission_id
+     WHERE p.tenant_id = '10' AND p.mode <> 'revoked' AND $1::int = 10 AND $2::int > 0
+     ORDER BY p.authorized_at DESC LIMIT 1`,
+  // P0: composition of raw queue and prospect inventory by vertical
+  compositionByVertical: `
+    SELECT 'raw_queue' AS stage, COALESCE(vertical, 'unknown') AS vertical, count(*)::int AS rows,
+           count(*) FILTER (WHERE last_attempt_at > NOW() - ($2::int * INTERVAL '1 day'))::int AS active_in_window
+      FROM scout_unenriched WHERE client_id = $1 GROUP BY 2
+    UNION ALL
+    SELECT 'prospects', COALESCE(vertical, 'unknown'), count(*)::int,
+           count(*) FILTER (WHERE created_at > NOW() - ($2::int * INTERVAL '1 day'))::int
+      FROM prospects WHERE client_id = $1 GROUP BY 2
+     ORDER BY 1, 3 DESC`,
   // 6, 7: verified sendable stock and prospects awaiting outreach
   inventory: `
     SELECT count(*)::int AS prospects,
