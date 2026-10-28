@@ -139,11 +139,11 @@ jobs:
           cache: npm
       - uses: ./.github/actions/setup-postgres-environment
       - run: npm ci --ignore-scripts
-      - name: Scout tenant search memory and native PostgreSQL contracts (no providers)
+      - name: Scout mission scope, search memory and native PostgreSQL contracts (no providers)
         env:
           DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
           DATABASE_SSL: 'false'
-        run: node --test test/scoutTenantDiscoveryMemory.test.js test/scoutTenantDiscoveryMemoryPostgres.test.js
+        run: node --test test/scoutMissionScopeContinuity.test.js test/scoutAcquisitionIntelligence.test.js test/scoutTenantDiscoveryMemory.test.js test/scoutTenantDiscoveryMemoryPostgres.test.js
       - name: Anchor account review admission and native PostgreSQL locking
         env:
           DATABASE_URL: postgresql://localhost:1/pulseforge_test_only

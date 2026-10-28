@@ -250,7 +250,9 @@ describe('SPEC-100 Max ↔ Scout acquisition intelligence loop', () => {
   let aoStore;
   let priorityCalls;
 
-  beforeEach(() => {
+  beforeEach(context => {
+    // These business and signal fixtures are dated July/August 2026.
+    context.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-08-01T12:00:00.000Z') });
     store = createMemoryStore();
     aoStore = createMemoryAcquisitionState();
     priorityCalls = [];
@@ -503,7 +505,8 @@ describe('SPEC-100 Max ↔ Scout acquisition intelligence loop', () => {
       })
     );
     assert.equal(result.result.status, 'completed');
-    assert.match(result.result.summary, /no sufficiently supported opportunities|meet the target profile/i);
+    assert.match(result.result.summary, /no buying-ready prospects/i);
+    assert.match(result.result.summary, /buying readiness is unknown/i);
     assert.equal(result.result.artifactRefs.length, 0);
     assert.ok((result.result.payload.fitCandidates || []).length >= 1);
     assert.equal(result.evaluation.materialChange, false);
