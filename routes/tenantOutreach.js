@@ -253,4 +253,37 @@ for (const [operation, method] of Object.entries({ preview: 'previewPreparationA
         writesMayHaveOccurred: operation !== 'preview', retryAllowed: false }); }
     });
 }
+// SPEC-SCOUT-P0-003 research-only grant. Same admin-session, same-origin gate as
+// preparation approval; these never run discovery, preparation or sends.
+for (const [operation, method] of Object.entries({ preview: 'previewResearchOnlyGrant', install: 'installResearchOnlyGrant',
+  revoke: 'revokeResearchOnlyGrant', inspect: 'inspectResearchOnlyGrant' })) {
+  router.post(`/api/v1/tenant-outreach/anchor-program/research-only-grant/${operation}`,
+    (req, res, next) => {
+      noStore(res);
+      try { require('../services/anchorCrmPreparationAction').actorFromRequest(req); }
+      catch {
+        const status = req.session?.user || req.session?.authenticated === true ? 403 : 401;
+        return res.status(status).json({ error: 'research_only_grant_forbidden', retryAllowed: false });
+      }
+      next();
+    }, requireAuth, requireRole('admin'), async (req, res) => {
+      noStore(res);
+      let actor;
+      try {
+        actor = require('../services/anchorCrmPreparationAction').actorFromRequest(req);
+        const expected = new URL(process.env.APP_URL);
+        if (!['http:', 'https:'].includes(expected.protocol) || req.get('origin') !== expected.origin
+          || req.get('sec-fetch-site') === 'cross-site' || !req.is('application/json')) throw new Error('forbidden');
+      } catch { return res.status(403).json({ error: 'research_only_grant_forbidden', retryAllowed: false }); }
+      const grants = require('../services/scoutResearchOnlyGrant');
+      try {
+        if (operation === 'inspect') return res.json(await grants.inspectResearchOnlyGrant(pool, req.body?.grantId));
+        return res.json(await grants[method](pool, req.body, actor));
+      } catch (error) {
+        return res.status(409).json({ error: 'research_only_grant_rejected', code: /^research_only_[a-z_]+$/.test(error.code || '') ? error.code : null,
+          status: ['preview', 'inspect'].includes(operation) ? 'rejected' : 'outcome_requires_readback',
+          writesMayHaveOccurred: !['preview', 'inspect'].includes(operation), retryAllowed: false });
+      }
+    });
+}
 module.exports = router;

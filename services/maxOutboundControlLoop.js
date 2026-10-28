@@ -613,10 +613,13 @@ async function loadScoutDiscoveryBackoff(pool, tenantId, fingerprint, now = new 
     ? { reason: 'continue_search_generation', fingerprint, searchGeneration: stickyGeneration, diversify: true }
     : null);
   if (rows.length < threshold) return continueGeneration();
+  // A research-only cycle (SPEC-SCOUT-P0-003) cannot enrich, so its only
+  // possible yield is new raw queue admissions; count those as yield.
   const repeatedZeroYield = rows.every(row =>
     Number(row.payload?.newCleanInventoryAdded || 0) === 0
     && Number(row.payload?.newPromotions || 0) === 0
     && Number(row.payload?.recoveredExisting || 0) === 0
+    && !(row.payload?.researchOnly === true && Number(row.payload?.scoutQueued || 0) > 0)
   );
   if (!repeatedZeroYield) return continueGeneration();
   const latestGeneration = rows.reduce((max, row) => Math.max(
@@ -1083,10 +1086,14 @@ async function defaultScoutRampResearchScoped({
   createPageCheckpointStore = null,
   createTenantDiscoveryMemory = null,
   now = new Date(),
+  researchOnly = false,
 } = {}) {
   const governed = governedContext || createGovernedOutboundContext({ program });
   const tenant = resolveReplenishmentTenantContext({ governedContext: governed, program });
-  const authority = await researchAuthority(pool, program, tenant.tenantId, now);
+  // Research-only discovery is authorized by the claimed grant cycle, not the
+  // recovery overlay: no enrichment, recovery, verification or preparation.
+  if (researchOnly) require('./scoutResearchOnlyGrant').assertResearchOnlyScope(tenant.tenantId);
+  const authority = researchOnly ? null : await researchAuthority(pool, program, tenant.tenantId, now);
   // Commit consumption before recovery, enrichment, discovery or injected work.
   await consumeResearch(pool, authority, now);
   const tenantBinding = { ...tenant, program, governedContext: governed, source };
@@ -1094,7 +1101,7 @@ async function defaultScoutRampResearchScoped({
   const recoverExisting = recoverExistingInventory
     || require('./existingInventoryRecovery').recoverExistingGovernedInventory;
   let existingRecovery = null;
-  try {
+  if (!researchOnly) try {
     existingRecovery = await recoverExisting({
       pool,
       program,
@@ -1105,7 +1112,9 @@ async function defaultScoutRampResearchScoped({
     rethrowResearchProviderControl(err);
     logger.warn?.('[max-outbound-control] existing inventory recovery failed', err.message || err);
   }
-  const first = await runEnrichmentBatches(enricher, pool, plan.deficit, tenantBinding);
+  const first = researchOnly
+    ? { promoted: 0, recovered: 0, emailResolved: 0, emailVerified: 0, considered: 0, summaries: [] }
+    : await runEnrichmentBatches(enricher, pool, plan.deficit, tenantBinding);
   let promoted = first.promoted + first.recovered;
   let discovery = null;
   let discoveryAttempted = false;
@@ -1128,7 +1137,7 @@ async function defaultScoutRampResearchScoped({
         ...input, tenantId: tenant.tenantId,
         scoutContext: { scope, source, allowedCities, serviceAreas: allowedCities,
           clientId: tenant.clientId, authorizedTenantId: tenant.tenantId, governedContext: governed,
-          program, investigateBusinessEvidence: true, evidenceCursor, ticketPass },
+          program, investigateBusinessEvidence: !researchOnly, evidenceCursor, ticketPass },
       });
       if (input.companies?.length) {
         const createCursor = createBusinessEvidenceCursorStore
@@ -1149,6 +1158,7 @@ async function defaultScoutRampResearchScoped({
     const durableEnabled = ticketDispatch.ENABLED_TENANTS.has(tenant.tenantId)
       && (createCandidateTicketStore || process.env.SCOUT_DURABLE_CANDIDATES_ENABLED === 'true'
         || require('./scoutTenantDiscoveryMemory').isTenantDiscoveryMemoryEnabled(tenant.tenantId));
+    if (researchOnly && !durableEnabled) fail('research_only_discovery_memory_required');
     let tickets = null;
     let dispatcher = null;
     let pages = null;
@@ -1296,7 +1306,7 @@ async function defaultScoutRampResearchScoped({
     if (tenantMemory && typeof store.event==='function') await store.event('scout_tenant_search_yield',
       [tenant.tenantId,cycleId || fingerprint],{programId:program.id,...tenantMemory.snapshot(),
         admissionsConfirmed:admissionMeasured,newQueueAdmissionsThisCycle:admissionMeasured ? Number(persisted.inserted || 0) : null});
-    if (persisted.inserted > 0 && promoted < plan.deficit) {
+    if (persisted.inserted > 0 && promoted < plan.deficit && !researchOnly) {
       const second = await runEnrichmentBatches(enricher, pool, plan.deficit - promoted, tenantBinding);
       promoted += second.promoted + second.recovered;
       first.promoted += second.promoted;
@@ -1320,7 +1330,7 @@ async function defaultScoutRampResearchScoped({
     admission: persisted.admission, enrichment: first, discovery,
   }));
   const recoveredExisting = first.recovered + Number(persisted.admission?.recovered || 0) + recoveredExistingCount;
-  const verificationRetry = skipVerificationRetry
+  const verificationRetry = skipVerificationRetry || researchOnly
     ? emptyVerificationRetryTelemetry()
     : await retryUnverifiedEmails(pool, { clientId: tenant.clientId });
   if (persisted.admission) mergeVerificationRetryTelemetry(persisted.admission, verificationRetry);
@@ -1520,6 +1530,16 @@ async function runMaxOutboundControlLoop(options = {}) {
   });
   const store = options.store || new GovernedOutboundStore(pool, governedContext.tenantId);
   const program = programEarly || await store.program();
+  // SPEC-SCOUT-P0-003: an installed research-only grant runs discovery alone
+  // while recovery maintenance holds everything else. Null = not applicable.
+  if (program && program.mode !== 'revoked' && options.execute !== false && String(governedContext.tenantId) === '10') {
+    const research = await require('./scoutResearchOnlyCycle').runResearchOnlyCycleIfGranted({
+      pool, store, program, governed: governedContext, cycleId, logger, ramp: options.scoutRamp || null,
+      now: options.now instanceof Date ? options.now : new Date(options.now || Date.now()),
+      recordHold: hold => recordReplenishmentHold(pool, { tenantId: '10', clientId: store.clientId, programId: program.id, ...hold, logger }),
+    });
+    if (research) return research;
+  }
   if (!program || ['paused', 'revoked'].includes(program.mode)) {
     return { halted: 'no_enabled_program' };
   }
@@ -1967,5 +1987,6 @@ module.exports = {
     resolveScoutRampAllowedCities,
     scoutSearchFingerprint,
     loadScoutDiscoveryBackoff,
+    loadSource,
   },
 };
