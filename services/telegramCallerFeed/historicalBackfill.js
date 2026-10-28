@@ -14,11 +14,11 @@ function historicalRecord(msg,source){
  return {dataClass:'HISTORICAL_BACKFILL',backfillVersion:VERSION,sourceId:source.sourceId,channelId:String(msg.channelId),messageId:msg.messageId,occurredAt:msg.occurredAt.toISOString(),historicalKnowledgeAt:null,knowledgeAtStatus:'UNOBSERVABLE_HISTORICALLY',addresses,text:msg.text,url:msg.url||null,forwarding:msg.forwarding||null,editAt:msg.editDate?msg.editDate.toISOString():null};
 }
 async function backfillSource(client,entity,source,{maxMessages=1000,startOffsetId=0,onRecord=async()=>{}}={}){
- let offsetId=startOffsetId||0,scanned=0,caBearing=0,oldestMessageId=null;
- while(scanned<maxMessages){const page=await fetchHistoricalPage(client,entity,{offsetId,limit:Math.min(100,maxMessages-scanned)});if(!page.length)break;
+ let offsetId=startOffsetId||0,scanned=0,caBearing=0,oldestMessageId=null,exhausted=false;
+ while(scanned<maxMessages){const page=await fetchHistoricalPage(client,entity,{offsetId,limit:Math.min(100,maxMessages-scanned)});if(!page.length){exhausted=true;break;}
   for(const msg of page){scanned++;oldestMessageId=msg.messageId;const record=historicalRecord(msg,source);if(record){caBearing++;await onRecord(record);}}
-  const next=Math.min(...page.map(x=>x.messageId));if(!Number.isFinite(next)||next<=1||next===offsetId)break;offsetId=next;
+  const next=Math.min(...page.map(x=>x.messageId));if(!Number.isFinite(next)||next===offsetId)break;if(next<=1){offsetId=next;exhausted=true;break;}offsetId=next;
  }
- return {sourceId:source.sourceId,dataClass:'HISTORICAL_BACKFILL',scanned,caBearing,oldestMessageId,nextOffsetId:offsetId,complete:scanned<maxMessages};
+ return {sourceId:source.sourceId,dataClass:'HISTORICAL_BACKFILL',scanned,caBearing,oldestMessageId,nextOffsetId:offsetId,complete:exhausted};
 }
 module.exports={VERSION,fetchHistoricalPage,historicalRecord,backfillSource};
