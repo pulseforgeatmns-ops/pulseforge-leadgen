@@ -194,7 +194,7 @@ jobs:
           DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
           DATABASE_SSL: 'false'
           SCOUT_CANDIDATE_REQUIRE_POSTGRES: 'true'
-        run: node --test test/scoutCandidateTicketsPostgres.test.js test/scoutCandidateTicketDispatchPostgres.test.js test/scoutDurablePipelinePostgres.test.js test/scoutDurableCleanInventory.test.js test/scoutDurableEpochPipelinePostgres.test.js test/scoutBoundedAcquisitionPostgres.test.js test/scoutBoundedTransport.test.js test/scoutBoundedResearchAuthorityPostgres.test.js test/scoutBoundedResearchCli.test.js
+        run: node --test test/scoutCandidateTicketsPostgres.test.js test/scoutCandidateTicketDispatchPostgres.test.js test/scoutDurablePipelinePostgres.test.js test/scoutDurableCleanInventory.test.js test/scoutDurableEpochPipelinePostgres.test.js test/scoutBoundedAcquisitionPostgres.test.js test/scoutBoundedTransport.test.js test/scoutBoundedResearchAuthorityPostgres.test.js test/scoutBoundedResearchCli.test.js test/scoutBacklogRecovery.test.js test/scoutBacklogRecoveryPostgres.test.js
       - name: Scout evidence cursor progression and crash regressions (network denied)
         env:
           DATABASE_URL: postgresql://localhost:1/pulseforge_test_only

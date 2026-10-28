@@ -237,19 +237,30 @@ function createCandidateTicketStore({ pool, tenantId, fingerprint, planVersion =
     }
     return rows;
   }
-  async function claimDue({ dependencyKey, limit = MAX_CLAIM, exclusiveQueryKey = null } = {}) {
+  // candidateKeys restricts the claim to an exact pre-approved set; db runs the
+  // claim inside a caller-owned transaction so it commits with caller records.
+  async function claimDue({ dependencyKey, limit = MAX_CLAIM, exclusiveQueryKey = null, candidateKeys = null, db = null } = {}) {
     if (exclusiveQueryKey != null && !HEX.test(exclusiveQueryKey)) throw fail('Invalid exclusive query key', 'invalid_input');
     text(dependencyKey, 'dependency key', 1024);
     if (!Number.isInteger(limit) || limit < 1 || limit > MAX_CLAIM) throw fail('Invalid Scout ticket claim limit', 'invalid_input');
-    return transaction(async db => {
+    if (candidateKeys != null && (!Array.isArray(candidateKeys) || !candidateKeys.length || candidateKeys.length > limit
+      || new Set(candidateKeys).size !== candidateKeys.length || !candidateKeys.every(key => HEX.test(key)))) {
+      throw fail('Invalid Scout ticket candidate key restriction', 'invalid_input');
+    }
+    if (db != null && (typeof db.query !== 'function')) throw fail('Invalid Scout ticket claim transaction', 'invalid_input');
+    const params = [...scope, dependencyKey, limit];
+    const exclusiveParam = exclusiveQueryKey == null ? null : `$${params.push(exclusiveQueryKey)}`;
+    const keysParam = candidateKeys == null ? null : `$${params.push(candidateKeys)}::text[]`;
+    const claim = async db => {
       const due = await db.query(`SELECT candidate_key FROM scout_candidate_work w
         WHERE ${SCOPE_SQL} AND (claim_token IS NULL OR lease_until <= clock_timestamp())
           AND (next_attempt_at IS NULL OR next_attempt_at <= clock_timestamp())
           AND (state IN ('pending','deferred') OR (state='blocked' AND dependency_key IS DISTINCT FROM $5))
-          ${exclusiveQueryKey == null ? '' : `AND EXISTS (SELECT 1 FROM scout_candidate_memberships m WHERE m.tenant_id=w.tenant_id AND m.search_fingerprint=w.search_fingerprint AND m.plan_version=w.plan_version AND m.ticket_version=w.ticket_version AND m.candidate_key=w.candidate_key AND m.query_key=$7)
-          AND NOT EXISTS (SELECT 1 FROM scout_candidate_memberships m WHERE m.tenant_id=w.tenant_id AND m.search_fingerprint=w.search_fingerprint AND m.plan_version=w.plan_version AND m.ticket_version=w.ticket_version AND m.candidate_key=w.candidate_key AND m.query_key<>$7)`}
+          ${exclusiveParam == null ? '' : `AND EXISTS (SELECT 1 FROM scout_candidate_memberships m WHERE m.tenant_id=w.tenant_id AND m.search_fingerprint=w.search_fingerprint AND m.plan_version=w.plan_version AND m.ticket_version=w.ticket_version AND m.candidate_key=w.candidate_key AND m.query_key=${exclusiveParam})
+          AND NOT EXISTS (SELECT 1 FROM scout_candidate_memberships m WHERE m.tenant_id=w.tenant_id AND m.search_fingerprint=w.search_fingerprint AND m.plan_version=w.plan_version AND m.ticket_version=w.ticket_version AND m.candidate_key=w.candidate_key AND m.query_key<>${exclusiveParam})`}
+          ${keysParam == null ? '' : `AND candidate_key=ANY(${keysParam})`}
         ORDER BY next_attempt_at NULLS FIRST,created_at,candidate_key
-        LIMIT $6 FOR UPDATE SKIP LOCKED`, [...scope, dependencyKey, limit, ...(exclusiveQueryKey == null ? [] : [exclusiveQueryKey])]);
+        LIMIT $6 FOR UPDATE SKIP LOCKED`, params);
       if (!due.rows.length) return [];
       const claims = [];
       for (const { candidate_key: key } of due.rows) {
@@ -278,7 +289,10 @@ function createCandidateTicketStore({ pool, tenantId, fingerprint, planVersion =
           claimToken: row.claim_token, leaseUntil: row.lease_until, state: row.state, reason: row.reason,
           members: own.map(member => decorate(member, row)), refs: own.map(member => memberRef(member, row)) };
       });
-    });
+    };
+    if (db == null) return transaction(claim);
+    await assertReady();
+    return claim(db);
   }
   return {
     tenantId: tenant, fingerprint: mission, planVersion: plan, ticketVersion: version, assertReady,
