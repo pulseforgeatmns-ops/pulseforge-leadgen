@@ -47,8 +47,10 @@ function createCheckpointStore({ db, tenantId, fingerprint }) {
 
 // One session per acquisition run. Not telemetry: fetched payloads are durable
 // replay units; only the ingestion acknowledgement advances them to handled.
-function createCheckpointSession({ store, ticketStore = null, pageStore = null }) {
+function createCheckpointSession({ store, ticketStore = null, pageStore = null, tenantMemory = null }) {
   if (!store) throw new Error('Checkpoint session requires a store');
+  if (tenantMemory && (!pageStore || tenantMemory.tenantId!==store.tenantId || tenantMemory.fingerprint!==store.fingerprint))
+    throw new Error('Scout tenant memory requires the exact checkpoint scope and page store');
   const pending = new Set();
   const observed = new Set();
   const handled = new Set();
@@ -72,7 +74,7 @@ function createCheckpointSession({ store, ticketStore = null, pageStore = null }
   }
   return {
     assertTenant(tenantId) {
-      for (const scopedStore of [store, pageStore, ticketStore].filter(Boolean)) {
+      for (const scopedStore of [store, pageStore, ticketStore, tenantMemory].filter(Boolean)) {
         if (scopedStore.tenantId && String(tenantId || '') !== scopedStore.tenantId) throw new Error('Checkpoint tenant mismatch');
       }
     },
@@ -80,9 +82,23 @@ function createCheckpointSession({ store, ticketStore = null, pageStore = null }
       const rootKey = queryIdentity(query, requireWebsite);
       let key = rootKey;
       let plan = null;
+      const sharedStatus = tenantMemory ? await tenantMemory.checkQuery(rootKey,query) : null;
+      if (sharedStatus) {
+        observed.add(rootKey); pageStatuses.set(rootKey,sharedStatus);
+        if (sharedStatus==='tenant_query_previously_searched') { handled.add(rootKey); skipped.add(rootKey); }
+        else unresolved.add(rootKey);
+        return { key:rootKey,handled:true,candidates:[],continuationStatus:sharedStatus };
+      }
       if (pageStore) {
         if (!rootPlans.has(rootKey)) rootPlans.set(rootKey, await pageStore.plan(rootKey));
         plan = rootPlans.get(rootKey);
+        if (tenantMemory && !plan.status && !plan.row && plan.index>0) {
+          const noveltyStatus=await tenantMemory.continuationStatus(plan.rootKey);
+          if (noveltyStatus) {
+            observed.add(rootKey); unresolved.add(rootKey); pageStatuses.set(rootKey,noveltyStatus);
+            return {key:rootKey,handled:true,candidates:[],continuationStatus:noveltyStatus};
+          }
+        }
         if (plan.status) {
           if (plan.status === 'legacy_continuation_unknown') observedCheckpointRoots.add(rootKey);
           observed.add(rootKey);
@@ -110,7 +126,16 @@ function createCheckpointSession({ store, ticketStore = null, pageStore = null }
           pageStatuses.set(rootKey, 'cycle_page_budget_reached');
           return { key, handled: true, candidates: [], continuationStatus: 'cycle_page_budget_reached' };
         }
+        // The tenant-wide claim is committed before the existing page claim.
+        // Concurrent missions cannot each purchase the same first-page search.
         newPagesReserved += 1;
+        const racedStatus = tenantMemory ? await tenantMemory.reserveQuery(rootKey,query) : null;
+        if (racedStatus) {
+          newPagesReserved -= 1;
+          pageStatuses.set(rootKey,racedStatus);
+          if (racedStatus==='tenant_query_previously_searched') { handled.add(key); unresolved.delete(key); skipped.add(key); }
+          return {key,handled:true,candidates:[],continuationStatus:racedStatus};
+        }
         const reservationId = await pageStore.reserve(plan);
         if (!reservationId) {
           newPagesReserved -= 1;
@@ -146,6 +171,7 @@ function createCheckpointSession({ store, ticketStore = null, pageStore = null }
         tenantId: store.tenantId, fingerprint: store.fingerprint, rootQueryKeys: [...observedCheckpointRoots],
       });
       return { observedQueries: observed.size, handledQueries: handled.size, skippedHandled: skipped.size,
+        ...(tenantMemory ? { tenantMemory:tenantMemory.snapshot() } : {}),
         ...(coverageApprovalManifest ? { coverageApprovalManifest } : {}),
         ...(pageStore ? { continuation: { enabled: true, maxNewPages: 1, newPagesReserved, statuses: [...pageStatuses.values()].reduce((counts, status) => {
           counts[status] = (counts[status] || 0) + 1; return counts;

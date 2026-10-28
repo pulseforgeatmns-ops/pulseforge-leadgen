@@ -139,6 +139,9 @@ function createPlacesProvider(deps = {}) {
       const checkpoint = !entity?.name && !businessName && evidenceRequest.scope !== 'entity'
         ? deps.queryCheckpointSession : null;
       if (checkpoint) checkpoint.assertTenant(evidenceRequest.tenantId);
+      const tenantMemory = checkpoint ? deps.tenantDiscoveryMemory : null;
+      if (tenantMemory && String(evidenceRequest.tenantId)!==tenantMemory.tenantId)
+        throw new Error('Scout tenant memory request tenant mismatch');
       let checkpointSkipped = 0;
       let checkpointReplayed = 0;
       let continuationStatus = null;
@@ -164,7 +167,7 @@ function createPlacesProvider(deps = {}) {
           fetchImpl,
           { requireWebsite, seenPlaceIds: querySeen, out: queryOut, knownHits: checkpoint ? knownHits : null,
             singlePage: prior?.singlePage === true, pageToken: prior?.pageToken || null,
-            apiDeps: deps.placesApiDeps, useCache: deps.useCache }
+            apiDeps: deps.placesApiDeps, useCache: deps.useCache, tenantMemory }
         );
         if (checkpoint) {
           const rows = !searchResult.error
@@ -383,13 +386,34 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
       }
       seenPlaceIds.add(hit.place_id);
       let detailResult;
+      let detailClaim = null;
+      if (opts.tenantMemory) {
+        detailClaim = await opts.tenantMemory.claimPlace(hit.place_id);
+        if (detailClaim.kind==='reuse') {
+          const raw = detailClaim.candidate;
+          if (!(requireWebsite && !raw.website)) {
+            const reused = { ...raw, industry:querySpec.industry || null, discoveryQuery:querySpec.industry || null,
+              detailsReused:true, detailObservedAt:detailClaim.observedAt };
+            out.push(reused); captured.add(hit.place_id); knownHits?.set(hit.place_id,reused);
+            pageAccepted++; acceptedForQuery++;
+          }
+          if (acceptedForQuery>=limit) break;
+          continue;
+        }
+      }
       try {
-        detailResult = await fetchPlaceDetails(hit.place_id, apiKey, fetchImpl, { requireWebsite, apiDeps: opts.apiDeps, useCache: opts.useCache });
+        detailResult = await fetchPlaceDetails(hit.place_id, apiKey, fetchImpl, { requireWebsite, apiDeps: opts.apiDeps,
+          useCache:detailClaim ? false : opts.useCache });
       } catch (failure) {
+        if (detailClaim) await opts.tenantMemory.finishPlace(detailClaim,null);
         rethrowResearchProviderControl(failure);
         if (!opts.singlePage) throw failure;
         error = { code: 'google_places_details_failed', message: 'Place details request failed', noNetwork: false };
         break;
+      }
+      if (detailResult.error && detailClaim) {
+        await opts.tenantMemory.finishPlace(detailClaim,null);
+        detailClaim = null;
       }
       if (detailResult.error && !error) error = detailResult.error;
       if (detailResult.error?.googleStatus === 'REQUEST_DENIED') {
@@ -397,9 +421,12 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
         break;
       }
       const details = detailResult.result;
+      if (detailClaim && (!details || details.place_id!==hit.place_id)) {
+        await opts.tenantMemory.finishPlace(detailClaim,null);
+        throw Object.assign(new Error('scout_tenant_memory_detail_identity_unconfirmed'),{retryAllowed:false});
+      }
       const website = details?.website || null;
       const accepted = !(requireWebsite && !website);
-      if (!accepted) continue;
 
       const acceptedHit = {
         companyName: details?.name || hit.name || 'Unknown',
@@ -414,6 +441,10 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
         discoveryQuery: querySpec.industry || null,
         snippet: '',
       };
+      // Persist the observed business immediately, before page/ticket admission.
+      // A later crash cannot authorize another paid detail request on a new query.
+      if (detailClaim) await opts.tenantMemory.finishPlace(detailClaim,acceptedHit);
+      if (!accepted) continue;
       out.push(acceptedHit);
       captured.add(hit.place_id);
       if (knownHits) knownHits.set(hit.place_id, acceptedHit);

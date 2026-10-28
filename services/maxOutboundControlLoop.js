@@ -1008,6 +1008,7 @@ async function defaultScoutRampResearchScoped({
   createBusinessEvidenceCursorStore = null,
   createCandidateTicketStore = null,
   createPageCheckpointStore = null,
+  createTenantDiscoveryMemory = null,
   now = new Date(),
 } = {}) {
   const governed = governedContext || createGovernedOutboundContext({ program });
@@ -1072,10 +1073,12 @@ async function defaultScoutRampResearchScoped({
     };
     const ticketDispatch = require('./scoutCandidateTicketDispatch');
     const durableEnabled = ticketDispatch.ENABLED_TENANTS.has(tenant.tenantId)
-      && (createCandidateTicketStore || process.env.SCOUT_DURABLE_CANDIDATES_ENABLED === 'true');
+      && (createCandidateTicketStore || process.env.SCOUT_DURABLE_CANDIDATES_ENABLED === 'true'
+        || require('./scoutTenantDiscoveryMemory').isTenantDiscoveryMemoryEnabled(tenant.tenantId));
     let tickets = null;
     let dispatcher = null;
     let pages = null;
+    let tenantMemory = null;
     let coverageEpochBlocked = false;
     if (durableEnabled) {
       tickets = (createCandidateTicketStore || require('./scoutCandidateTickets').createCandidateTicketStore)({
@@ -1095,6 +1098,12 @@ async function defaultScoutRampResearchScoped({
         db: pool, tenantId: tenant.tenantId, fingerprint, coverageEpoch,
       });
       if (typeof pages.assertReady === 'function') await pages.assertReady();
+      if (require('./scoutTenantDiscoveryMemory').ENABLED_TENANTS.has(tenant.tenantId)) {
+        tenantMemory=(createTenantDiscoveryMemory || require('./scoutTenantDiscoveryMemory').createTenantDiscoveryMemory)({
+          pool,tenantId:tenant.tenantId,fingerprint,
+        });
+        await tenantMemory.assertReady();
+      }
       const dependencyKey = ticketDispatch.candidateTicketDependencyKey({ tenantId: tenant.tenantId, program, source });
       dispatcher = ticketDispatch.createCandidateTicketDispatcher({ ticketStore: tickets,
         tenantId: tenant.tenantId, dependencyKey, persist: persistPass });
@@ -1135,12 +1144,12 @@ async function defaultScoutRampResearchScoped({
         || ((input, opts) => require('./scoutAcquisitionIntelligence').runAcquisitionIntelligenceLoop(input, opts));
       const checkpoints = require('./scoutQueryCheckpoints');
       const checkpointSession = createQueryCheckpointSession
-        ? createQueryCheckpointSession({ pool, tenantId: tenant.tenantId, fingerprint, ticketStore: tickets, pageStore: pages })
+        ? createQueryCheckpointSession({ pool, tenantId: tenant.tenantId, fingerprint, ticketStore: tickets, pageStore: pages, tenantMemory })
         : checkpoints.createCheckpointSession({ store: checkpoints.createCheckpointStore({
           db: pool, tenantId: tenant.tenantId, fingerprint,
-        }), ticketStore: tickets, pageStore: pages });
+        }), ticketStore: tickets, pageStore: pages, tenantMemory });
       const placesProvider = require('../packages/capabilities/discovery/providers/PlacesProvider')
-        .createPlacesProvider({ queryCheckpointSession: checkpointSession });
+        .createPlacesProvider({ queryCheckpointSession: checkpointSession, tenantDiscoveryMemory:tenantMemory });
       discoveryAttempted = true;
       try { discovery = await discover(
         scoutInput({ ...program, tenant_id: tenant.tenantId }, source, plan, tenant, searchGeneration),
@@ -1197,6 +1206,9 @@ async function defaultScoutRampResearchScoped({
       if (typeof store.event === 'function') await store.event('scout_candidate_work_progression', [tenant.tenantId, cycleId || fingerprint],
         { programId: program.id, ...candidateWork });
     }
+    if (tenantMemory && typeof store.event==='function') await store.event('scout_tenant_search_yield',
+      [tenant.tenantId,cycleId || fingerprint],{programId:program.id,...tenantMemory.snapshot(),
+        admissionsConfirmed:admissionMeasured,newQueueAdmissionsThisCycle:admissionMeasured ? Number(persisted.inserted || 0) : null});
     if (persisted.inserted > 0 && promoted < plan.deficit) {
       const second = await runEnrichmentBatches(enricher, pool, plan.deficit - promoted, tenantBinding);
       promoted += second.promoted + second.recovered;
