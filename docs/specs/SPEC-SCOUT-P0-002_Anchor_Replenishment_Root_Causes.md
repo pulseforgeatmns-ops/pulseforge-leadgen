@@ -128,6 +128,19 @@ Acceptance:
 
 **V4. Sustained observation (approval D).** Run five business days in legacy mode with the same spend policy and outbound still disabled. Acceptance: daily scorecard, `replenished` cycles on days with deficit, measured clean-inventory growth, and no stop conditions. The five-first-touches/day objective needs separate outbound authorization and is not claimed here.
 
+### V3 is structurally blocked by recovery governance (found Oct 28)
+
+"Lift maintenance to legacy mode" is not a flag change once the recovery control table exists:
+
+- `readState` (`services/anchorEmailRecovery.js`) returns `legacy` **only while `anchor_email_recovery_control` is absent**. With the table present, the singleton must stay `maintenance_armed`, and every state is `maintenance`, `active` (old canary) or `scoped_resume`.
+- `runMaxOutboundControlLoop` halts in `maintenance` and `active`.
+- `scoped_resume` manifests reject research outright (`resume_paid_research_unsupported`, `services/anchorScopedResume.js`).
+- The Oct 28 backlog recovery ran in, and required, `maintenance / recovery_kill_switch`, so the table exists in production.
+
+Scheduled Max Scout research therefore cannot run in production without removing a permanent recovery-control record or adding a reviewed research scope to scoped resume. Either is a recovery-governance change and needs its own spec and approval; neither is a validation step. Mission activation (V2) is independent of this and remains possible.
+
+Before any step, run `node scripts/anchorScoutValidationPreflight.js --expect-revision <sha>` (read-only). It reports a pass or block for each gate (revision, successor scope, drained envelope, installed manifest, memory flag and schema, Places spend policy within 8 cycles × 21 calls and $5, outbound off, recovery mode, research pause, Max scheduling), plus `mayApplyMission` and `mayStartWindow`.
+
 ## Readiness verdict
 
 **NOT YET VERIFIED.** The source defects are fixed and tested offline and on disposable PostgreSQL. Scheduled autonomous replenishment cannot run in the current governed state, and none of the production acceptance criteria has production evidence.

@@ -177,6 +177,8 @@
       "services/scoutTenantDiscoveryMemory.js",
       "test/scoutTenantDiscoveryMemory",
       "test/scoutAnchorP0Replenishment",
+      "test/anchorScoutValidationPreflight",
+      "scripts/anchorScoutValidationPreflight.js",
       "utils/anchorIcpPriority.js",
       "scripts/activateAnchorFacilityBuyerMission.js",
       "test/scoutMissionScopeContinuity.test.js",
