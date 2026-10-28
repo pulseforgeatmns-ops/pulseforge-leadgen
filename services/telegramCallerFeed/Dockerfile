@@ -6,6 +6,10 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
 COPY services/telegramCallerFeed ./services/telegramCallerFeed
 COPY services/signalOpportunities/historicalDataset.js ./services/signalOpportunities/historicalDataset.js
+COPY services/signalOpportunities/historicalReconstruction.js ./services/signalOpportunities/historicalReconstruction.js
+COPY services/signalOpportunities/historicalStats.js ./services/signalOpportunities/historicalStats.js
+COPY packages/signal-v1/providers/GeckoTerminalMarketDataProvider.js ./packages/signal-v1/providers/GeckoTerminalMarketDataProvider.js
+COPY scripts/signalHistoricalReconstruct.js ./scripts/signalHistoricalReconstruct.js
 COPY scripts/signalHistoricalBackfill.js ./scripts/signalHistoricalBackfill.js
 COPY scripts/signalTelegramAuth.js ./scripts/signalTelegramAuth.js
 COPY scripts/signalTelegramAuthProbe.js ./scripts/signalTelegramAuthProbe.js
