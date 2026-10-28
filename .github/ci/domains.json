@@ -176,6 +176,8 @@
       "services/scoutQueryCheckpoints.js",
       "services/scoutTenantDiscoveryMemory.js",
       "test/scoutTenantDiscoveryMemory",
+      "test/scoutMissionScopeContinuity.test.js",
+      "test/scoutAcquisitionIntelligence.test.js",
       "migrations/2026-10-27-scout-tenant-search-memory.sql",
       "services/scoutQueryContinuation.js",
       "services/scoutCoverageEpoch",

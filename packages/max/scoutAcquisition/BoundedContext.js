@@ -113,6 +113,11 @@ function buildBoundedScoutContext(input = {}) {
 
   const targetContext = {
     geography,
+    // These are existing search-definition boundaries, not new authority.
+    // Dropping them lets a regional label replace the mission's exact cities.
+    ...(rawTarget.missionBound === true ? { missionBound: true } : {}),
+    ...(Array.isArray(rawTarget.cities) ? { cities: asStringList(rawTarget.cities) } : {}),
+    ...(asText(rawTarget.geographyScope) ? { geographyScope: asText(rawTarget.geographyScope) } : {}),
     segments,
     businessType,
     desiredSignals,
@@ -155,6 +160,7 @@ function pickApprovedSlice(blueprint) {
 }
 
 function criteriaFingerprint(targetContext = {}, businessContext = {}) {
+  targetContext = targetContext || {};
   const geo = String(
     (targetContext && targetContext.geography) ||
       (businessContext && businessContext.serviceGeography) ||
@@ -172,7 +178,13 @@ function criteriaFingerprint(targetContext = {}, businessContext = {}) {
     .filter(Boolean)
     .sort();
   const seed = asText(targetContext && targetContext.seedCompanyId) || '';
-  return `${geo}|${segments.join(',')}|${seed}`;
+  const cities = [...new Set((Array.isArray(targetContext.cities) ? targetContext.cities : [])
+    .map(city => String(asText(city) || '').toLowerCase().replace(/\s+/g, ' ')).filter(Boolean))].sort();
+  const scope = String(asText(targetContext.geographyScope) || '').toLowerCase();
+  const missionBound = targetContext.missionBound === true;
+  const exactScope = cities.length || scope || missionBound
+    ? `|scope:${JSON.stringify([missionBound, scope, cities])}` : '';
+  return `${geo}|${segments.join(',')}|${seed}${exactScope}`;
 }
 
 module.exports = {

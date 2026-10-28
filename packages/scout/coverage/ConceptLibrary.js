@@ -8,6 +8,7 @@
 
 const { asText } = require('../../max/scoutAcquisition/Types');
 const { founderLedSmallBusinessSearchTerms, serviceTradeSearchTerms } = require('../../../utils/canonicalBusinessTaxonomy');
+const { resolveMarketHypothesisBySegmentKey, SEARCH_SOURCES } = require('../hypothesis/MarketHypothesisRegistry');
 
 const SEGMENT_CONCEPTS = Object.freeze({
   small_business_owners: Object.freeze(founderLedSmallBusinessSearchTerms()),
@@ -36,6 +37,11 @@ const SEGMENT_CONCEPTS = Object.freeze({
     'Commercial Property Manager',
     'Residential Property Manager',
   ]),
+  // The ordinary coverage path passes explicit concepts to Places, bypassing
+  // hypothesis expansion there. Reuse the existing facility categories here.
+  managed_facilities: Object.freeze(resolveMarketHypothesisBySegmentKey('managed_facilities').searchStrategies
+    .filter(strategy => strategy.source === SEARCH_SOURCES.GOOGLE_PLACES)
+    .flatMap(strategy => strategy.queryTemplates.map(template => template.replace(/\{(?:city|state)\}/g, '').trim()))),
   law_firm: Object.freeze(['Law Firm', 'Attorney', 'Legal Office', 'Law Practice']),
   accounting: Object.freeze(['Accounting Firm', 'CPA', 'Certified Public Accountant', 'Bookkeeping']),
   commercial_cleaning: Object.freeze([
