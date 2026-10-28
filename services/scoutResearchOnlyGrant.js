@@ -19,8 +19,10 @@ const MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const CYCLE_LEASE_MS = 30 * 60 * 1000;
 const PERMISSIONS = Object.freeze({ discovery: true, enrichment: false, verification: false, preparation: false, outbound: false });
 const PROVIDERS = Object.freeze(['google_places']);
+// missionId/sourceHash pin the unchanged outbound mission; discovery runs only
+// under the separately approved research mission (id + exact hash).
 const MANIFEST_KEYS = ['version', 'kind', 'approvalRef', 'tenantId', 'programId', 'missionId', 'programHash', 'sourceHash',
-  'fingerprint', 'expectedRevision', 'quarantineDecisionHash', 'recoveryControlHash', 'operator', 'authorizationEvidence',
+  'researchMissionId', 'researchMissionHash', 'fingerprint', 'expectedRevision', 'quarantineDecisionHash', 'recoveryControlHash', 'operator', 'authorizationEvidence',
   'maxCycles', 'dailyGoogleUsdMicros', 'notBefore', 'expiresAt', 'permissions', 'providers'];
 const OPERATOR_KEYS = ['id', 'role', 'accountClientId', 'sessionHash'];
 const PROGRAM_COLUMNS = 'id,tenant_id,source_mission_id,policy,policy_hash,scope_hash,authorized_by,authorized_at,mode';
@@ -50,10 +52,11 @@ function schedulerEnabled(env = process.env) { return env.SCOUT_RESEARCH_ONLY_GR
 function validateManifest(raw) {
   const invalid = reason => fail('research_only_manifest_invalid', reason);
   if (!exact(raw, MANIFEST_KEYS)) invalid('fields');
-  if (raw.version !== 1 || raw.kind !== 'scout_research_only' || raw.tenantId !== '10') invalid('scope');
+  if (raw.version !== 2 || raw.kind !== 'scout_research_only' || raw.tenantId !== '10') invalid('scope');
   if (!/^[a-zA-Z0-9_.:-]{1,120}$/.test(raw.approvalRef || '')) invalid('approval_ref');
   if (!text(raw.programId) || !text(raw.missionId)) invalid('program');
-  if (!['programHash', 'sourceHash', 'fingerprint', 'quarantineDecisionHash', 'recoveryControlHash']
+  if (!require('./scoutResearchMission').ID.test(raw.researchMissionId || '')) invalid('research_mission');
+  if (!['programHash', 'sourceHash', 'researchMissionHash', 'fingerprint', 'quarantineDecisionHash', 'recoveryControlHash']
     .every(key => HEX64.test(raw[key] || ''))) invalid('hash');
   if (!/^[a-f0-9]{40}$/.test(raw.expectedRevision || '')) invalid('revision');
   const operator = raw.operator;
@@ -88,7 +91,7 @@ function assertEnvironment(manifest, env = process.env) {
 
 async function assertSchema(db) {
   try {
-    await db.query(`SELECT grant_id,approval_ref,tenant_id,program_id,mission_id,search_fingerprint,manifest,operator_id,operator_role,
+    await db.query(`SELECT grant_id,approval_ref,tenant_id,program_id,mission_id,research_mission_id,search_fingerprint,manifest,operator_id,operator_role,
       approver_session_hash,max_cycles,daily_google_usd_micros,not_before,expires_at,installed_at,revoked_at,revoke_approval_ref,revoked_by
       FROM scout_research_only_grants LIMIT 0`);
     await db.query(`SELECT grant_id,cycle_number,tenant_id,cycle_id,execution_token,state,claimed_at,lease_expires_at,finished_at,result
@@ -103,6 +106,8 @@ async function assertSchema(db) {
   const indexes = (await db.query(`SELECT count(*)::int AS count FROM pg_index i WHERE i.indisunique AND i.indisvalid AND i.indisready
     AND i.indexrelid IN (to_regclass('public.scout_research_only_one_open_tenant'), to_regclass('public.scout_research_only_one_live_cycle'))`)).rows[0];
   if (guards?.count !== 6 || indexes?.count !== 2) fail('research_only_schema_guards_missing');
+  await require('./scoutResearchMission').assertSchema(db)
+    .catch(error => fail(error.code === 'research_mission_schema_guards_missing' ? 'research_only_schema_guards_missing' : 'research_only_schema_unavailable'));
 }
 
 async function one(db, sql, values, code) {
@@ -150,11 +155,16 @@ async function liveBindings(db, manifest, { lock = true } = {}) {
     [manifest.missionId], 'research_only_mission_changed');
   if (program.mode === 'revoked' || program.source_mission_id !== manifest.missionId || hash(program) !== manifest.programHash)
     fail('research_only_program_changed');
-  if (hash(source) !== manifest.sourceHash || source.payload?.id !== source.id
-    || source.payload?.structuredMission?.immutable !== true) fail('research_only_mission_changed');
+  if (hash(source) !== manifest.sourceHash || source.payload?.id !== source.id) fail('research_only_mission_changed');
+  // Discovery scope is the research mission, never the outbound mission.
+  const missions = require('./scoutResearchMission');
+  const research = await missions.loadResearchMission(db, { id: manifest.researchMissionId, missionHash: manifest.researchMissionHash,
+    program, lock }).catch(() => fail('research_only_research_mission_changed'));
+  const researchSource = missions.researchSource(research);
   const { scoutSearchFingerprint } = require('./maxOutboundControlLoop');
-  if (scoutSearchFingerprint(program, source) !== manifest.fingerprint) fail('research_only_mission_changed');
-  return { program, source };
+  if (scoutSearchFingerprint(missions.researchProgram(program, research), researchSource) !== manifest.fingerprint)
+    fail('research_only_research_mission_changed');
+  return { program, source, research, researchSource };
 }
 function assertWindow(manifest, now) {
   if (+now < Date.parse(manifest.notBefore) || +now >= Date.parse(manifest.expiresAt)) fail('research_only_grant_window_inactive');
@@ -182,6 +192,7 @@ function storedManifest(row) {
   const manifest = validateManifest(row.manifest);
   if (hash(manifest) !== row.grant_id || row.approval_ref !== manifest.approvalRef || row.tenant_id !== '10'
     || row.program_id !== manifest.programId || row.mission_id !== manifest.missionId || row.search_fingerprint !== manifest.fingerprint
+    || row.research_mission_id !== manifest.researchMissionId
     || row.operator_id !== manifest.operator.id || row.approver_session_hash !== manifest.operator.sessionHash
     || row.max_cycles !== manifest.maxCycles || row.daily_google_usd_micros !== manifest.dailyGoogleUsdMicros
     || +new Date(row.not_before) !== Date.parse(manifest.notBefore) || +new Date(row.expires_at) !== Date.parse(manifest.expiresAt))
@@ -191,7 +202,8 @@ function storedManifest(row) {
 
 function summary(manifest) {
   return { grantId: hash(manifest), approvalRef: manifest.approvalRef, tenantId: '10', programId: manifest.programId,
-    missionId: manifest.missionId, fingerprint: manifest.fingerprint, expectedRevision: manifest.expectedRevision,
+    missionId: manifest.missionId, researchMissionId: manifest.researchMissionId, researchMissionHash: manifest.researchMissionHash,
+    fingerprint: manifest.fingerprint, expectedRevision: manifest.expectedRevision,
     quarantineDecisionHash: manifest.quarantineDecisionHash, operatorId: manifest.operator.id,
     maxCycles: manifest.maxCycles, dailyGoogleUsdMicros: manifest.dailyGoogleUsdMicros,
     notBefore: manifest.notBefore, expiresAt: manifest.expiresAt, permissions: { ...PERMISSIONS }, providers: [...PROVIDERS],
@@ -201,7 +213,7 @@ function summary(manifest) {
 // Preview derives the exact manifest from live state for the signed-in admin.
 // It is read-only: no grant, cycle, spend, provider call or envelope change.
 async function previewResearchOnlyGrant(pool, input, actor, { env = process.env } = {}) {
-  if (!exact(input, ['approvalRef', 'expiresAt', 'statement']) || !/^[a-zA-Z0-9_.:-]{1,120}$/.test(input.approvalRef || '')
+  if (!exact(input, ['approvalRef', 'expiresAt', 'statement', 'researchMissionId']) || !/^[a-zA-Z0-9_.:-]{1,120}$/.test(input.approvalRef || '')
     || !isoTime(input.expiresAt) || !text(input.statement, 2000)) fail('research_only_preview_invalid');
   const identity = require('./anchorCrmPreparationIdentity');
   if (!actor || actor.role !== 'admin' || !/^[1-9][0-9]{0,18}$/.test(String(actor.id || ''))) fail('research_only_operator_invalid');
@@ -217,13 +229,17 @@ async function previewResearchOnlyGrant(pool, input, actor, { env = process.env 
     const source = await one(db, "SELECT id,objective,target_segment,payload FROM acquisition_missions WHERE tenant_id='10' AND id=$1",
       [program.source_mission_id], 'research_only_mission_changed');
     const control = (await db.query('SELECT singleton,maintenance_armed,manifest FROM anchor_email_recovery_control')).rows;
+    const missions = require('./scoutResearchMission');
+    const research = (await db.query("SELECT * FROM scout_research_missions WHERE tenant_id='10' AND id=$1", [input.researchMissionId])).rows[0];
+    if (!research) fail('research_only_research_mission_changed');
     const quarantines = (await db.query("SELECT decision_hash FROM anchor_email_quarantines WHERE tenant_id='10' ORDER BY decision_hash")).rows;
     if (quarantines.length !== 1) fail('research_only_quarantine_ambiguous');
     const now = await dbNow(db);
     const notBefore = new Date(Math.floor(+now / 1000) * 1000).toISOString();
-    const manifest = validateManifest({ version: 1, kind: 'scout_research_only', approvalRef: input.approvalRef, tenantId: '10',
+    const manifest = validateManifest({ version: 2, kind: 'scout_research_only', approvalRef: input.approvalRef, tenantId: '10',
       programId: program.id, missionId: source.id, programHash: hash(program), sourceHash: hash(source),
-      fingerprint: require('./maxOutboundControlLoop').scoutSearchFingerprint(program, source),
+      researchMissionId: research.id, researchMissionHash: research.mission_hash,
+      fingerprint: require('./maxOutboundControlLoop').scoutSearchFingerprint(missions.researchProgram(program, research), missions.researchSource(research)),
       expectedRevision: /^[a-f0-9]{40}$/.test(env.RAILWAY_GIT_COMMIT_SHA || '') ? env.RAILWAY_GIT_COMMIT_SHA : '0'.repeat(40),
       quarantineDecisionHash: quarantines[0].decision_hash, recoveryControlHash: hash(control[0] || null),
       operator: { id: String(user.id), role: 'admin', accountClientId: user.client_id == null ? null : Number(user.client_id),
@@ -269,12 +285,12 @@ async function installResearchOnlyGrant(pool, input, actor, { env = process.env 
     if ((await db.query("SELECT 1 FROM scout_research_only_grants WHERE tenant_id='10' AND revoked_at IS NULL")).rows.length)
       fail('research_only_other_grant_open');
     assertWindow(manifest, await dbNow(db));
-    await db.query(`INSERT INTO scout_research_only_grants(grant_id,approval_ref,tenant_id,program_id,mission_id,search_fingerprint,
+    await db.query(`INSERT INTO scout_research_only_grants(grant_id,approval_ref,tenant_id,program_id,mission_id,research_mission_id,search_fingerprint,
       manifest,operator_id,operator_role,approver_session_hash,max_cycles,daily_google_usd_micros,not_before,expires_at)
-      VALUES($1,$2,'10',$3,$4,$5,$6,$7,'admin',$8,$9,$10,$11,$12)`,
+      VALUES($1,$2,'10',$3,$4,$13,$5,$6,$7,'admin',$8,$9,$10,$11,$12)`,
     [hash(manifest), manifest.approvalRef, manifest.programId, manifest.missionId, manifest.fingerprint, JSON.stringify(manifest),
       manifest.operator.id, manifest.operator.sessionHash, manifest.maxCycles, manifest.dailyGoogleUsdMicros,
-      manifest.notBefore, manifest.expiresAt]);
+      manifest.notBefore, manifest.expiresAt, manifest.researchMissionId]);
     return { ...summary(manifest), status: 'installed', installed: true, idempotent: false };
   });
 }
@@ -342,7 +358,7 @@ async function claimResearchCycle(pool, { program, source, cycleId, env = proces
     if (program?.id !== manifest.programId || String(program?.tenant_id) !== '10' || source?.id !== manifest.missionId)
       fail('research_only_program_changed');
     await assertOperatorAccount(db, manifest.operator);
-    await liveBindings(db, manifest);
+    const bound = await liveBindings(db, manifest);
     const now = await dbNow(db);
     assertWindow(manifest, now);
     await db.query(`UPDATE scout_research_only_cycles SET state='abandoned',finished_at=clock_timestamp(),
@@ -359,7 +375,10 @@ async function claimResearchCycle(pool, { program, source, cycleId, env = proces
     const token = randomUUID(), cycleNumber = cycles.length + 1;
     await db.query(`INSERT INTO scout_research_only_cycles(grant_id,cycle_number,tenant_id,cycle_id,execution_token,lease_expires_at)
       VALUES($1,$2,'10',$3,$4,clock_timestamp()+$5::interval)`, [grant.grant_id, cycleNumber, cycleId, token, `${lease} milliseconds`]);
+    const missions = require('./scoutResearchMission');
     return Object.freeze({ grantId: grant.grant_id, cycleNumber, cycleId, token, manifest, maxCycles: grant.max_cycles,
+      researchMissionId: bound.research.id, researchSource: bound.researchSource,
+      researchProgram: missions.researchProgram(bound.program, bound.research),
       dailyCapMicros: Math.min(grant.daily_google_usd_micros, MAX_DAILY_USD_MICROS),
       leaseExpiresAt: +now + lease, expiresAt: Date.parse(manifest.expiresAt) });
   });

@@ -189,6 +189,7 @@
       "services/scoutBoundedResearchAuthority.js",
       "services/scoutResearchOnlyGrant.js",
       "services/scoutResearchOnlyCycle.js",
+      "services/scoutResearchMission.js",
       "test/helpers/scoutResearchOnlyFixture.js",
       "test/scoutResearchOnly",
       "scripts/scout-research-only/",

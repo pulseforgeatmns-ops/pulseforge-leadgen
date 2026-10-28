@@ -614,12 +614,12 @@ async function loadScoutDiscoveryBackoff(pool, tenantId, fingerprint, now = new 
     : null);
   if (rows.length < threshold) return continueGeneration();
   // A research-only cycle (SPEC-SCOUT-P0-003) cannot enrich, so its only
-  // possible yield is new raw queue admissions; count those as yield.
+  // possible yield is newly retained research candidates; count those.
   const repeatedZeroYield = rows.every(row =>
     Number(row.payload?.newCleanInventoryAdded || 0) === 0
     && Number(row.payload?.newPromotions || 0) === 0
     && Number(row.payload?.recoveredExisting || 0) === 0
-    && !(row.payload?.researchOnly === true && Number(row.payload?.scoutQueued || 0) > 0)
+    && !(row.payload?.researchOnly === true && Number(row.payload?.researchRetained || 0) > 0)
   );
   if (!repeatedZeroYield) return continueGeneration();
   const latestGeneration = rows.reduce((max, row) => Math.max(
@@ -850,6 +850,13 @@ async function persistDiscoveredCompanies(pool, store, {
         for (const key of [`${tenant.tenantId}:domain:${domain.toLowerCase()}`, `${tenant.tenantId}:name:${name.toLowerCase()}`].sort()) {
           await db.query('SELECT pg_advisory_xact_lock(261023,hashtext($1))', [key]);
         }
+      }
+      // Research-only discoveries are retained outside the enrichment queue.
+      if (scoutContext.researchCandidateSink) {
+        require('./scoutResearchOnlyGrant').assertResearchOnlyScope(tenant.tenantId);
+        return require('./scoutResearchMission').retainCandidate(db, scoutContext.researchCandidateSink, {
+          company: name, domain, websiteUrl: website || `https://${domain}`, vertical: admission.vertical,
+          location: company.location || admission.provenance?.discoveryCity || null, notes });
       }
       const insertedRow = await db.query(`
       INSERT INTO scout_unenriched (
@@ -1087,12 +1094,14 @@ async function defaultScoutRampResearchScoped({
   createTenantDiscoveryMemory = null,
   now = new Date(),
   researchOnly = false,
+  researchCandidateSink = null,
 } = {}) {
   const governed = governedContext || createGovernedOutboundContext({ program });
   const tenant = resolveReplenishmentTenantContext({ governedContext: governed, program });
   // Research-only discovery is authorized by the claimed grant cycle, not the
   // recovery overlay: no enrichment, recovery, verification or preparation.
   if (researchOnly) require('./scoutResearchOnlyGrant').assertResearchOnlyScope(tenant.tenantId);
+  if (Boolean(researchOnly) !== Boolean(researchCandidateSink)) fail('research_only_candidate_sink_required');
   const authority = researchOnly ? null : await researchAuthority(pool, program, tenant.tenantId, now);
   // Commit consumption before recovery, enrichment, discovery or injected work.
   await consumeResearch(pool, authority, now);
@@ -1137,7 +1146,7 @@ async function defaultScoutRampResearchScoped({
         ...input, tenantId: tenant.tenantId,
         scoutContext: { scope, source, allowedCities, serviceAreas: allowedCities,
           clientId: tenant.clientId, authorizedTenantId: tenant.tenantId, governedContext: governed,
-          program, investigateBusinessEvidence: !researchOnly, evidenceCursor, ticketPass },
+          program, investigateBusinessEvidence: !researchOnly, evidenceCursor, ticketPass, researchCandidateSink },
       });
       if (input.companies?.length) {
         const createCursor = createBusinessEvidenceCursorStore

@@ -1,7 +1,10 @@
 -- SPEC-SCOUT-P0-003 Governed research-only activation (Tenant 10).
 -- LOCAL PROPOSAL: separately approved operator migration only; never startup DDL.
 -- New tables only. No recovery/control/quarantine/envelope/mission/policy row is
--- read or changed here, and no grant, cycle or spend row is created.
+-- read or changed here, and no research mission, grant, cycle, candidate or spend
+-- row is created. acquisition_missions and acquisition_outbound_programs are not
+-- touched: a research mission lives only in scout_research_missions, which no
+-- mission-orchestration, preparation or outbound path reads.
 -- Gate production separately: exact reviewed revision, closed Tenant 10 recovery
 -- controls, catalog preflight and explicit schema approval.
 -- Create-once: an existing relation aborts the transaction instead of replacing
@@ -12,15 +15,37 @@ BEGIN;
 SET LOCAL lock_timeout='5s';
 SET LOCAL statement_timeout='30s';
 
+-- Immutable, separately approved research-only mission (facility-buyer ICP).
+-- It is discovery scope only and never an outbound/AMO mission.
+CREATE TABLE scout_research_missions (
+  id text PRIMARY KEY CHECK (id ~ '^mission_anchor_facility_research_[a-f0-9]{20}$'),
+  tenant_id text NOT NULL CHECK (tenant_id = '10'),
+  program_id text NOT NULL,
+  predecessor_mission_id text NOT NULL,
+  target_successor_mission_id text NOT NULL,
+  approval_ref text NOT NULL UNIQUE CHECK (approval_ref ~ '^[a-zA-Z0-9_.:-]{1,120}$'),
+  payload jsonb NOT NULL CHECK (coalesce(jsonb_typeof(payload) = 'object' AND payload->>'id' = id
+    AND payload->>'tenantId' = tenant_id AND payload->>'researchOnly' = 'true' AND payload->>'outboundEligible' = 'false'
+    AND payload->>'predecessorMissionId' = predecessor_mission_id
+    AND payload->'structuredMission'->>'immutable' = 'true', false)),
+  mission_hash text NOT NULL UNIQUE CHECK (mission_hash ~ '^[a-f0-9]{64}$'),
+  targeting_hash text NOT NULL CHECK (targeting_hash ~ '^[a-f0-9]{64}$'),
+  operator_id text NOT NULL CHECK (operator_id ~ '^[1-9][0-9]{0,18}$'),
+  approver_session_hash text NOT NULL CHECK (approver_session_hash ~ '^[a-f0-9]{64}$'),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
 CREATE TABLE scout_research_only_grants (
   grant_id text PRIMARY KEY CHECK (grant_id ~ '^[a-f0-9]{64}$'),
   approval_ref text NOT NULL UNIQUE CHECK (approval_ref ~ '^[a-zA-Z0-9_.:-]{1,120}$'),
   tenant_id text NOT NULL CHECK (tenant_id = '10'),
   program_id text NOT NULL,
   mission_id text NOT NULL,
+  research_mission_id text NOT NULL REFERENCES scout_research_missions(id),
   search_fingerprint text NOT NULL CHECK (search_fingerprint ~ '^[a-f0-9]{64}$'),
   manifest jsonb NOT NULL CHECK (coalesce(jsonb_typeof(manifest) = 'object'
-    AND manifest->>'version' = '1' AND manifest->>'kind' = 'scout_research_only'
+    AND manifest->>'version' = '2' AND manifest->>'kind' = 'scout_research_only'
+    AND manifest->>'researchMissionId' = research_mission_id
     AND manifest->>'tenantId' = tenant_id AND manifest->>'approvalRef' = approval_ref
     AND manifest->>'programId' = program_id AND manifest->>'missionId' = mission_id
     AND manifest->>'fingerprint' = search_fingerprint
@@ -85,6 +110,33 @@ CREATE TABLE scout_research_google_spend (
 );
 CREATE INDEX scout_research_google_spend_day ON scout_research_google_spend(tenant_id, usage_day);
 
+-- Research-only discoveries are retained here, never in scout_unenriched, so no
+-- enrichment, inventory, preparation or send path can see them. Reconciliation
+-- into an authorized mission's queue is a separate, one-time, explicit step.
+CREATE TABLE scout_research_candidates (
+  id bigserial PRIMARY KEY,
+  tenant_id text NOT NULL CHECK (tenant_id = '10'),
+  research_mission_id text NOT NULL REFERENCES scout_research_missions(id),
+  grant_id text NOT NULL,
+  cycle_number integer NOT NULL,
+  company text NOT NULL CHECK (length(btrim(company)) BETWEEN 1 AND 1024),
+  name_key text NOT NULL CHECK (length(name_key) BETWEEN 1 AND 1024),
+  domain text NOT NULL CHECK (length(domain) BETWEEN 1 AND 512),
+  website_url text,
+  vertical text,
+  location text,
+  notes text,
+  discovered_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  reconciled_at timestamptz,
+  reconciled_mission_id text,
+  reconciled_queue_id bigint,
+  reconcile_approval_ref text,
+  FOREIGN KEY (grant_id, cycle_number) REFERENCES scout_research_only_cycles(grant_id, cycle_number),
+  CHECK ((reconciled_at IS NULL) = (reconciled_mission_id IS NULL) AND (reconciled_at IS NULL) = (reconcile_approval_ref IS NULL))
+);
+CREATE UNIQUE INDEX scout_research_candidates_domain ON scout_research_candidates(tenant_id, lower(domain));
+CREATE UNIQUE INDEX scout_research_candidates_name ON scout_research_candidates(tenant_id, name_key);
+
 CREATE FUNCTION scout_research_only_permanent() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN RAISE EXCEPTION 'research_only_permanent_record'; END $$;
 CREATE FUNCTION scout_research_only_revoke_once() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -115,6 +167,28 @@ BEGIN
   RETURN NEW;
 END $$;
 
+-- A retained candidate keeps its identity; reconciliation is recorded once.
+CREATE FUNCTION scout_research_candidates_reconcile_once() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF (to_jsonb(NEW) - ARRAY['reconciled_at','reconciled_mission_id','reconciled_queue_id','reconcile_approval_ref'])
+      IS DISTINCT FROM (to_jsonb(OLD) - ARRAY['reconciled_at','reconciled_mission_id','reconciled_queue_id','reconcile_approval_ref'])
+    OR OLD.reconciled_at IS NOT NULL OR NEW.reconciled_at IS NULL
+  THEN RAISE EXCEPTION 'research_candidate_permanent'; END IF;
+  RETURN NEW;
+END $$;
+
+CREATE TRIGGER scout_research_missions_no_delete
+  BEFORE DELETE OR TRUNCATE ON scout_research_missions
+  FOR EACH STATEMENT EXECUTE FUNCTION scout_research_only_permanent();
+CREATE TRIGGER scout_research_missions_no_update
+  BEFORE UPDATE ON scout_research_missions
+  FOR EACH STATEMENT EXECUTE FUNCTION scout_research_only_permanent();
+CREATE TRIGGER scout_research_candidates_no_delete
+  BEFORE DELETE OR TRUNCATE ON scout_research_candidates
+  FOR EACH STATEMENT EXECUTE FUNCTION scout_research_only_permanent();
+CREATE TRIGGER scout_research_candidates_reconcile
+  BEFORE UPDATE ON scout_research_candidates
+  FOR EACH ROW EXECUTE FUNCTION scout_research_candidates_reconcile_once();
 CREATE TRIGGER scout_research_only_grants_no_delete
   BEFORE DELETE OR TRUNCATE ON scout_research_only_grants
   FOR EACH STATEMENT EXECUTE FUNCTION scout_research_only_permanent();

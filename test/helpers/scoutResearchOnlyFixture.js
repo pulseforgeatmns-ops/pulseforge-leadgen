@@ -23,8 +23,10 @@ const SESSION_ID = 'synthetic-research-admin-session';
 const ADMIN_ID = '71';
 const MISSION_ID = 'synthetic-anchor-research-mission';
 const PROGRAM_ID = 'synthetic-anchor-research-program';
-// Enough approved geography that eight one-page cycles never exhaust the plan.
-const CITIES = Object.freeze(['Concord', 'Bow', 'Pembroke', 'Hopkinton', 'Loudon', 'Canterbury', 'Boscawen', 'Penacook', 'Dunbarton', 'Chichester']);
+const OUTBOUND_CITIES = Object.freeze(['Manchester', 'Bedford', 'Londonderry', 'Hooksett', 'Auburn', 'Goffstown']);
+const OUTBOUND_SUBSEGMENTS = Object.freeze(['realtor', 'str_manager', 'property_manager']);
+// A business that Tenant 10 already owns; Places returns it for every query.
+const OWNED_DOMAIN = 'owned-anchor-customer.example';
 
 // Started before any application module that captures the shared pool.
 async function startResearchOnlyHarness() {
@@ -36,7 +38,12 @@ async function startResearchOnlyHarness() {
   const pool = createTrackedPostgresPool({ connectionString: postgres.connectionString, max: 10, connectionTimeoutMillis: 2000,
     statement_timeout: 30000, query_timeout: 30000, lock_timeout: 2000 });
   async function close() {
-    try { await require('../../db').end().catch(() => {}); await closePostgresFixture(pool, postgres); }
+    // The shared pool follows DATABASE_URL; a later harness must get a new one.
+    try {
+      const shared = require.resolve('../../db');
+      if (require.cache[shared]) { await require.cache[shared].exports.end().catch(() => {}); delete require.cache[shared]; }
+      await closePostgresFixture(pool, postgres);
+    }
     finally { for (const key of ENV_KEYS) previous[key] === undefined ? delete process.env[key] : process.env[key] = previous[key]; }
   }
   try {
@@ -57,15 +64,17 @@ async function startResearchOnlyHarness() {
     await pool.query('INSERT INTO "session"(sid,sess,expire) VALUES($1,$2,$3)', [SESSION_ID,
       { authenticated: true, active_client_id: 10, user: { id: ADMIN_ID, role: 'admin', client_id: 10, active: true,
         email_verified: true, password_change_required: false } }, '2099-01-01']);
-    // Each call approves a newer program + immutable mission (a fresh search
-    // fingerprint), the way an operator-approved successor would.
+    // Each call approves a newer outbound program + mission. The default shape
+    // mirrors Anchor's obsolete Oct 3 mission (realtor/STR/property manager over
+    // six cities), which research must never use as its discovery scope.
     let programs = 0;
-    async function approveProgram(cities = CITIES) {
+    async function approveProgram({ cities = OUTBOUND_CITIES, subsegments = OUTBOUND_SUBSEGMENTS } = {}) {
       const n = programs++, missionId = n ? `${MISSION_ID}-${n}` : MISSION_ID, programId = n ? `${PROGRAM_ID}-${n}` : PROGRAM_ID;
-      const payload = { id: missionId, tenantId: '10', stage: 'discover', structuredMission: { immutable: true,
-        market: { segment: 'commercial_cleaning_buyers', industry: 'property_and_office_operations', eligibleSubsegments: ['property_manager'] },
-        geography: { region: `${cities[0]} NH`, scope: 'local', cities: [...cities] } } };
-      await pool.query("INSERT INTO acquisition_missions(id,tenant_id,objective,target_segment,payload,stage,client_id) VALUES($1,'10','Synthetic property buyers','commercial_cleaning_buyers',$2,'discover',10)",
+      const payload = { id: missionId, tenantId: '10', stage: 'discover', objective: 'Anchor acquisition',
+        constraints: ['Synthetic Oct 3 constraint.'], structuredMission: { immutable: true,
+          market: { segment: 'commercial_cleaning_buyers', industry: 'property_and_office_operations', eligibleSubsegments: [...subsegments] },
+          geography: { region: 'Manchester NH', scope: 'local', cities: [...cities] } } };
+      await pool.query("INSERT INTO acquisition_missions(id,tenant_id,objective,target_segment,payload,stage,status,client_id) VALUES($1,'10','Anchor acquisition','commercial_cleaning_buyers',$2,'discover','active',10)",
         [missionId, payload]);
       await pool.query(`INSERT INTO acquisition_outbound_programs(id,tenant_id,source_mission_id,mode,policy,authorized_at,policy_hash,scope_hash,authorized_by)
         VALUES($1,'10',$2,'active',$3,now()+make_interval(mins => 1 + $4),'synthetic-policy','synthetic-scope','synthetic-operator')`,
@@ -73,32 +82,64 @@ async function startResearchOnlyHarness() {
       return { programId, missionId };
     }
     await approveProgram();
+    // As in production, the un-drained prepared envelope belongs to the active
+    // program, so the successor-activation guard sees prepared_envelope_not_drained:1.
+    await pool.query(`UPDATE acquisition_outbound_envelopes SET program_id=$1
+      WHERE id IN (SELECT envelope_id FROM acquisition_outbound_items WHERE tenant_id='10' AND status='pending')`, [PROGRAM_ID]);
+    // Tenant 10 already owns this business (AO-assigned, previously contacted).
+    await pool.query(`INSERT INTO companies(id,client_id,name,domain,website) VALUES('owned-company',10,'Owned Anchor Customer',$1,$2)`,
+      [OWNED_DOMAIN, `https://${OWNED_DOMAIN}`]);
+    await pool.query(`INSERT INTO prospects(id,client_id,company_id,email,do_not_contact,is_synthetic,ao_outreach_review_required,assigned_ao_id,last_contacted_at)
+      VALUES('owned-prospect',10,'owned-company',$1,false,false,false,7,now()-interval '3 days')`, [`owner@${OWNED_DOMAIN}`]);
     return { pool, postgres, legacy, close, approveProgram, actor: { id: ADMIN_ID, role: 'admin', sessionId: SESSION_ID } };
   } catch (error) { await close(); throw error; }
 }
 
-// Synthetic Google Places: each text search returns three new businesses for
-// its exact query; details echo the place id. Never a real network request.
+// Synthetic Google Places: each text search returns three businesses that look
+// like what the query names (plus, as result 0 of every page, one business
+// Tenant 10 already owns). Details echo the place. Never a real network request.
+function kindOf(query) {
+  const q = query.toLowerCase();
+  if (/campus|college|universit/.test(q)) return { label: 'College', types: ['university', 'point_of_interest'] };
+  if (/school|academy/.test(q)) return { label: 'Private School', types: ['school', 'point_of_interest'] };
+  if (/office park/.test(q)) return { label: 'Office Park', types: ['point_of_interest', 'establishment'] };
+  if (/restaurant|cafe|bistro|diner|grill|eatery|tavern/.test(q)) return { label: 'Restaurant', types: ['restaurant', 'food'] };
+  if (/warehouse|distribution|manufactur|industrial/.test(q)) return { label: 'Distribution Center', types: ['storage', 'point_of_interest'] };
+  if (/dealer/.test(q)) return { label: 'Auto Dealership', types: ['car_dealer'] };
+  if (/property management/.test(q)) return { label: 'Commercial Property Management', types: ['point_of_interest', 'establishment'] };
+  return { label: 'Facility', types: ['point_of_interest', 'establishment'] };
+}
 function placesFetch() {
-  const calls = [], cityByPlace = new Map();
+  const calls = [], places = new Map();
+  let serial = 0;
   const fetchImpl = async input => {
     const url = new URL(input);
     if (url.hostname !== 'maps.googleapis.com') throw new Error(`unexpected host ${url.hostname}`);
     calls.push({ path: url.pathname, query: url.searchParams.get('query'), placeId: url.searchParams.get('place_id') });
-    const slug = String(url.searchParams.get('query') || '').toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    const city = url.pathname.endsWith('/textsearch/json')
-      ? (/ ([A-Za-z]+) NH$/.exec(url.searchParams.get('query') || '')?.[1] || 'Concord')
-      : (cityByPlace.get(url.searchParams.get('place_id')) || 'Concord');
-    const data = url.pathname.endsWith('/textsearch/json')
-      ? { status: 'OK', results: [0, 1, 2].map(i => (cityByPlace.set(`${slug}-${i}`, city), { place_id: `${slug}-${i}`, name: `Concord Property Managers ${slug} ${i}`,
-        formatted_address: `1 Main St, ${city}, NH 03301`, types: ['real_estate_agency'] })) }
-      : { status: 'OK', result: { place_id: url.searchParams.get('place_id'), name: `Concord Property Managers ${url.searchParams.get('place_id')}`,
-        website: `https://${url.searchParams.get('place_id')}.example`, formatted_address: `1 Main St, ${city}, NH 03301`,
-        formatted_phone_number: '(603) 555-0100', types: ['real_estate_agency'], business_status: 'OPERATIONAL',
-        address_components: [{ long_name: city, types: ['locality'] }, { short_name: 'NH', types: ['administrative_area_level_1'] }] } };
+    let data;
+    if (url.pathname.endsWith('/textsearch/json')) {
+      const query = url.searchParams.get('query') || '';
+      const slug = query.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      const city = / ([A-Za-z]+) NH$/.exec(query)?.[1] || 'Manchester';
+      const kind = kindOf(query);
+      const results = [0, 1, 2].map(i => {
+        const place = i === 0 ? { place_id: `owned-${slug}`, name: 'Owned Anchor Customer', website: `https://${OWNED_DOMAIN}`, types: kind.types }
+          : { place_id: `${slug}-${i}`, name: `${city} ${kind.label} ${++serial}`, website: `https://${slug}-${i}.example`, types: kind.types };
+        places.set(place.place_id, { ...place, city });
+        return { place_id: place.place_id, name: place.name, formatted_address: `1 Main St, ${city}, NH 03101`, types: place.types };
+      });
+      data = { status: 'OK', results };
+    } else {
+      const place = places.get(url.searchParams.get('place_id')) || { place_id: url.searchParams.get('place_id'), name: 'Unknown', city: 'Manchester', types: [] };
+      data = { status: 'OK', result: { place_id: place.place_id, name: place.name, website: place.website,
+        formatted_address: `1 Main St, ${place.city}, NH 03101`, formatted_phone_number: '(603) 555-0100', types: place.types,
+        business_status: 'OPERATIONAL', address_components: [{ long_name: place.city, types: ['locality'] },
+          { short_name: 'NH', types: ['administrative_area_level_1'] }] } };
+    }
     return { ok: true, status: 200, json: async () => data, text: async () => JSON.stringify(data) };
   };
   return { calls, fetchImpl };
 }
 
-module.exports = { startResearchOnlyHarness, placesFetch, REVISION, ENV, SESSION_ID, ADMIN_ID, MISSION_ID, PROGRAM_ID };
+module.exports = { startResearchOnlyHarness, placesFetch, REVISION, ENV, SESSION_ID, ADMIN_ID, MISSION_ID, PROGRAM_ID, OWNED_DOMAIN,
+  OUTBOUND_CITIES, OUTBOUND_SUBSEGMENTS };

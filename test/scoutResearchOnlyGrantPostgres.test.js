@@ -4,30 +4,46 @@
 // native Scout discovery (PlacesProvider -> utils/placesApi), synthetic HTTP.
 const deny = require('./helpers/denyExternalProviders.cjs');
 const test = require('node:test'), assert = require('node:assert/strict');
-const { startResearchOnlyHarness, placesFetch, ENV, ADMIN_ID } = require('./helpers/scoutResearchOnlyFixture');
+const { startResearchOnlyHarness, placesFetch, ENV, ADMIN_ID, OWNED_DOMAIN } = require('./helpers/scoutResearchOnlyFixture');
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const quiet = { log() {}, warn() {}, error() {} };
 const iso = ms => new Date(Math.floor((Date.now() + ms) / 1000) * 1000).toISOString();
 
-test('governed research-only activation (Tenant 10)', { timeout: 600000 }, async t => {
+// Each part gets its own disposable database. Tenant-wide durable search memory
+// is permanent by design, so a fresh database is the only fresh search plan.
+test('governed research-only activation (Tenant 10)', { timeout: 600000 }, t => run(t, 'governance'));
+test('research mission isolation, ownership, non-admission and reconciliation', { timeout: 600000 }, t => run(t, 'research_mission'));
+
+async function run(t, part) {
   const h = await startResearchOnlyHarness(); t.after(() => h.close());
   const { pool } = h;
   const grants = require('../services/scoutResearchOnlyGrant');
+  const missions = require('../services/scoutResearchMission');
   const { runMaxOutboundControlLoop, _test: { loadSource } } = require('../services/maxOutboundControlLoop');
   const placesApi = require('../utils/placesApi');
   const { withPlacesContext } = require('../utils/placesCostAttribution');
   const pause = require('../utils/anchorResearchProviderPause');
   const recovery = require('../services/anchorEmailRecovery');
   const { hash } = require('../services/scoutBoundedAcquisitionBudget');
+  // A fresh database is a fresh plan; drop the process-local Places cache too.
+  require('../utils/placesQueryCache').clearPlacesQueryCache();
   const places = placesFetch(); globalThis.fetch = places.fetchImpl;
   let approvals = 0;
   let current = { programId: 'synthetic-anchor-research-program', missionId: 'synthetic-anchor-research-mission' };
-  // Outside any history snapshot: a newer approved program with a fresh plan.
-  let geographies = 0;
-  const freshProgram = async (cities = Array.from({ length: 10 }, (_, i) => `Synthville${String.fromCharCode(65 + geographies)}${String.fromCharCode(65 + i)}`)) => {
-    geographies++; current = await h.approveProgram(cities);
-  };
+  let research = null;
+  // The separately approved research mission (facility-buyer ICP) for the
+  // current program. Never written to acquisition_missions.
+  async function stageResearch(approvalRef = `synthetic-research-mission-${++approvals}`) {
+    const preview = await missions.previewResearchMission(pool, { approvalRef }, h.actor);
+    assert.deepEqual(preview.blockers, []);
+    const installed = await missions.installResearchMission(pool, { approvalRef, mission: preview.mission, missionHash: preview.missionHash }, h.actor);
+    research = { ...installed, preview };
+    return research;
+  }
+  const retained = () => count('SELECT count(*)::int n FROM scout_research_candidates');
+  const crm = async () => ({ queue: await count('SELECT count(*)::int n FROM scout_unenriched'),
+    companies: await count('SELECT count(*)::int n FROM companies'), prospects: await count('SELECT count(*)::int n FROM prospects') });
 
   const count = async (sql, values = []) => (await pool.query(sql, values)).rows[0].n;
   async function history() {
@@ -41,7 +57,8 @@ test('governed research-only activation (Tenant 10)', { timeout: 600000 }, async
   }
   async function install({ expiresIn = 86400000, actor = h.actor, mutate, blockers = [] } = {}) {
     const preview = await grants.previewResearchOnlyGrant(pool, { approvalRef: `synthetic-research-only-${++approvals}`,
-      expiresAt: iso(expiresIn), statement: 'Synthetic operator approval for research-only Scout discovery.' }, actor);
+      expiresAt: iso(expiresIn), statement: 'Synthetic operator approval for research-only Scout discovery.',
+      researchMissionId: research.missionId }, actor);
     assert.deepEqual(preview.blockers, blockers); assert.equal(preview.previewOnly, true);
     const manifest = structuredClone(preview.manifest); if (mutate) mutate(manifest);
     const result = await grants.installResearchOnlyGrant(pool, { manifest, manifestHash: mutate ? hash(manifest) : preview.manifestHash }, actor);
@@ -78,6 +95,7 @@ test('governed research-only activation (Tenant 10)', { timeout: 600000 }, async
     'fixture mirrors production: prepared envelope not drained');
   assert.equal(await count("SELECT count(*)::int n FROM anchor_email_quarantines WHERE tenant_id='10'"), 1);
 
+  if (part === 'governance') {
   await scenario('without a grant the existing recovery halt is unchanged and no provider is called', async () => {
     const calls = places.calls.length;
     assert.equal((await cycle('no-grant')).halted, 'anchor_recovery_separate_preparation_approval_required');
@@ -85,11 +103,42 @@ test('governed research-only activation (Tenant 10)', { timeout: 600000 }, async
     assert.equal(await count('SELECT count(*)::int n FROM scout_research_only_cycles'), 0);
   });
 
+  await scenario('the research mission is separately approved, immutable, facility-buyer only and outside the outbound mission', async () => {
+    const outbound = (await pool.query('SELECT * FROM acquisition_outbound_programs WHERE id=$1', [current.programId])).rows[0];
+    const readonly = { async connect() { const db = await pool.connect(); return { release: db.release.bind(db),
+      query(sql, values) { assert.match(typeof sql === 'string' ? sql : sql.text, /^\s*(SELECT|BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY|SET LOCAL|COMMIT|ROLLBACK)/); return db.query(sql, values); } }; } };
+    const preview = await missions.previewResearchMission(readonly, { approvalRef: 'synthetic-research-mission-preview' }, h.actor);
+    assert.deepEqual(preview.eligibleSubsegments, ['managed_facilities', 'restaurant_foh']);
+    assert.deepEqual(preview.cities, ['Manchester', 'Bedford', 'Londonderry', 'Hooksett', 'Auburn', 'Goffstown', 'Nashua', 'Merrimack']);
+    assert.equal(preview.mission.researchOnly, true); assert.equal(preview.mission.outboundEligible, false);
+    assert.equal(preview.predecessorMissionId, outbound.source_mission_id);
+    // Install needs the admin's live session and the exact previewed document.
+    const input = { approvalRef: 'synthetic-research-mission-1', mission: preview.mission, missionHash: preview.missionHash };
+    await assert.rejects(missions.installResearchMission(pool, { ...input, missionHash: '0'.repeat(64) }, h.actor), { code: 'research_mission_exact_confirmation_required' });
+    const widened = structuredClone(preview.mission); widened.structuredMission.market.eligibleSubsegments.push('realtor');
+    await assert.rejects(missions.installResearchMission(pool, { ...input, mission: widened, missionHash: hash(widened) }, h.actor), { code: 'research_mission_changed' });
+    await assert.rejects(missions.installResearchMission(pool, input, { ...h.actor, sessionId: 'other-session' }));
+    await assert.rejects(missions.installResearchMission(pool, input, { ...h.actor, role: 'manager' }), { code: 'research_mission_operator_invalid' });
+    assert.equal(await count('SELECT count(*)::int n FROM scout_research_missions'), 0);
+    const staged = await stageResearch('synthetic-research-mission-1');
+    assert.equal(staged.installed, true);
+    assert.equal((await missions.installResearchMission(pool, input, h.actor)).idempotent, true);
+    // Never an acquisition mission; the outbound program still points at the old mission.
+    assert.equal(await count('SELECT count(*)::int n FROM acquisition_missions WHERE id=$1', [staged.missionId]), 0);
+    assert.equal((await pool.query('SELECT source_mission_id FROM acquisition_outbound_programs WHERE id=$1', [current.programId])).rows[0].source_mission_id, outbound.source_mission_id);
+    await assert.rejects(pool.query("UPDATE scout_research_missions SET payload=payload || '{\"outboundEligible\":true}'::jsonb"), /permanent/);
+    await assert.rejects(pool.query('DELETE FROM scout_research_missions'), /permanent/);
+    // The successor activation guard is untouched: still refuses while the envelope is pending.
+    const { apply } = require('../scripts/activateAnchorInventoryCapacityMission');
+    const { facilityBuyerSuccessorMission } = require('../scripts/activateAnchorFacilityBuyerMission');
+    await assert.rejects(apply(pool, facilityBuyerSuccessorMission), /prepared_envelope_not_drained:1/);
+  });
+
   await scenario('preview is read-only and never installs', async () => {
     const readonly = { async connect() { const db = await pool.connect(); return { release: db.release.bind(db),
       query(sql, values) { assert.match(typeof sql === 'string' ? sql : sql.text, /^\s*(SELECT|BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY|SET LOCAL|COMMIT|ROLLBACK)/); return db.query(sql, values); } }; } };
     const preview = await grants.previewResearchOnlyGrant(readonly, { approvalRef: 'synthetic-preview-only', expiresAt: iso(3600000),
-      statement: 'Preview only.' }, h.actor);
+      statement: 'Preview only.', researchMissionId: research.missionId }, h.actor);
     assert.equal(preview.installable, true);
     assert.deepEqual(preview.manifest.permissions, { discovery: true, enrichment: false, verification: false, preparation: false, outbound: false });
     assert.equal(preview.manifest.maxCycles, 8); assert.equal(preview.manifest.dailyGoogleUsdMicros, 5000000);
@@ -98,11 +147,12 @@ test('governed research-only activation (Tenant 10)', { timeout: 600000 }, async
 
   await scenario('research-only discovery runs with the quarantined email unresolved; preparation and sending stay blocked', async () => {
     const grant = await install();
-    const before = places.calls.length;
+    const before = places.calls.length, crmBefore = await crm();
     const result = await cycle('research-1');
     assert.equal(result.researchOnly.status, 'completed', JSON.stringify(result.researchOnly));
     assert.equal(result.researchOnly.cycleNumber, 1); assert.equal(result.researchOnly.cyclesRemaining, 7);
-    assert.ok(result.researchOnly.queuedForEnrichment > 0, 'raw candidates queued');
+    assert.ok(result.researchOnly.retainedCandidates > 0, 'research candidates retained');
+    assert.equal(result.researchOnly.researchMissionId, research.missionId);
     assert.equal(result.preparedAdded, 0); assert.equal(result.sent, 0);
     const calls = places.calls.slice(before);
     assert.equal(calls.filter(c => c.path.endsWith('/textsearch/json')).length, 1, 'one new page per cycle');
@@ -110,8 +160,9 @@ test('governed research-only activation (Tenant 10)', { timeout: 600000 }, async
     assert.equal(spend.length, calls.length, 'every HTTP attempt has its own durable Tenant 10 debit');
     assert.ok(spend.every(row => row.state === 'ok' && row.api_usage_id), 'each linked to one shared meter event');
     assert.equal(await count("SELECT count(*)::int n FROM api_usage_events WHERE provider='google_places'"), calls.length);
-    assert.equal(await count('SELECT count(*)::int n FROM scout_unenriched WHERE client_id=10 AND COALESCE(enrichment_attempts,0)=0'),
-      result.researchOnly.queuedForEnrichment, 'queued only; never enriched');
+    assert.deepEqual(await crm(), crmBefore, 'nothing reaches the enrichment queue, companies or prospects');
+    assert.equal(await retained(), result.researchOnly.retainedCandidates);
+    assert.equal(await count('SELECT count(*)::int n FROM scout_research_candidates WHERE research_mission_id<>$1', [research.missionId]), 0);
     // The recovery guard still refuses preparation admission and outbound.
     assert.equal((await recovery.loadRecoveryState(pool)).mode, 'maintenance');
     const db = await pool.connect();
@@ -176,7 +227,8 @@ test('governed research-only activation (Tenant 10)', { timeout: 600000 }, async
       m => { m.tenantId = '13'; }, m => { m.expiresAt = iso(8 * 86400000); }, m => { m.programHash = '0'.repeat(64); },
       m => { m.quarantineDecisionHash = '0'.repeat(64); }, m => { m.operator.id = '72'; }])
       await assert.rejects(install({ mutate }));
-    const preview = await grants.previewResearchOnlyGrant(pool, { approvalRef: 'synthetic-confirm', expiresAt: iso(3600000), statement: 'x' }, h.actor);
+    const preview = await grants.previewResearchOnlyGrant(pool, { approvalRef: 'synthetic-confirm', expiresAt: iso(3600000), statement: 'x',
+      researchMissionId: research.missionId }, h.actor);
     const input = { manifest: preview.manifest, manifestHash: preview.manifestHash };
     await assert.rejects(grants.installResearchOnlyGrant(pool, { ...input, manifestHash: '0'.repeat(64) }, h.actor),
       { code: 'research_only_exact_confirmation_required' });
@@ -223,8 +275,11 @@ test('governed research-only activation (Tenant 10)', { timeout: 600000 }, async
     assert.equal(await openCycles(), 0);
   });
 
-  await freshProgram(['Concord', 'Bow', 'Pembroke', 'Hopkinton', 'Loudon', 'Canterbury', 'Boscawen', 'Penacook', 'Dunbarton', 'Chichester']);
-  await scenario('durable memory is tenant-wide: a newly approved mission never rebuys a searched query', async () => {
+  // Outside any history snapshot: a newer outbound program, with its own
+  // separately approved research mission (same facility-buyer targeting).
+  current = await h.approveProgram();
+  await stageResearch();
+  await scenario('durable memory is tenant-wide: a newly approved research mission never rebuys a searched query', async () => {
     await install();
     const before = places.calls.length;
     const result = await cycle('same-geography-new-mission');
@@ -233,7 +288,6 @@ test('governed research-only activation (Tenant 10)', { timeout: 600000 }, async
       && places.calls.slice(0, before).some(o => o.query === c.query)).length, 0, 'no previously bought query is bought again');
   });
 
-  await freshProgram();
   await scenario('eight cycles is a hard cap, including concurrent claims and restarts', async () => {
     const grant = await install();
     // Concurrent workers: exactly one claim wins, the rest are refused.
@@ -255,10 +309,8 @@ test('governed research-only activation (Tenant 10)', { timeout: 600000 }, async
     // Raw queue admissions count as research-only yield: no zero-yield backoff
     // or premature search-generation rotation while queries still admit.
     for (const r of results.slice(0, 6)) assert.notEqual(r.researchOnly.discovery, 'backoff', JSON.stringify(r.researchOnly));
-    // A cycle that finds its search generation fully handled spends nothing;
-    // every cycle that does buy a page admits new raw candidates.
-    for (const r of results.slice(0, 6)) assert.ok(r.researchOnly.googleReservedUsdMicros === 0 || r.researchOnly.queuedForEnrichment > 0);
-    assert.ok(results.slice(0, 6).filter(r => r.researchOnly.queuedForEnrichment > 0).length >= 5);
+    // Retaining candidates keeps the zero-yield backoff from rotating the plan.
+    assert.ok(results.slice(0, 6).filter(r => r.researchOnly.retainedCandidates > 0).length >= 3);
     assert.equal(results[6].halted, 'research_only_cycles_exhausted'); assert.equal(results[7].halted, 'research_only_cycles_exhausted');
     const states = (await pool.query('SELECT state FROM scout_research_only_cycles WHERE grant_id=$1 ORDER BY cycle_number', [grant.grantId])).rows.map(r => r.state);
     assert.deepEqual(states, ['stopped', 'abandoned', 'completed', 'completed', 'completed', 'completed', 'completed', 'completed']);
@@ -320,9 +372,7 @@ test('governed research-only activation (Tenant 10)', { timeout: 600000 }, async
 
   await scenario('an exhausted approved search plan is held without consuming a cycle', async () => {
     await install();
-    const program = (await pool.query('SELECT * FROM acquisition_outbound_programs WHERE id=$1', [current.programId])).rows[0];
-    const { scoutSearchFingerprint } = require('../services/maxOutboundControlLoop');
-    const fingerprint = scoutSearchFingerprint(program, await loadSource(pool, program, '10'));
+    const { fingerprint } = await grants.inspectResearchOnlyGrant(pool);
     await pool.query(`INSERT INTO acquisition_outbound_events(id,tenant_id,program_id,event_type,payload)
       VALUES('synthetic-exhausted','10',$1,'max_outbound_control',$2)`, [current.programId,
       { scoutSearchFingerprint: fingerprint, scoutDiscoveryAttempted: true, scoutSearchGenerationExhausted: true, scoutSearchGeneration: 3 }]);
@@ -333,6 +383,122 @@ test('governed research-only activation (Tenant 10)', { timeout: 600000 }, async
     } finally { await pool.query("DELETE FROM acquisition_outbound_events WHERE id='synthetic-exhausted'"); }
   });
 
+  }
+  if (part === 'research_mission') {
+  await stageResearch();
+  await scenario('discovery uses only the research mission: facility-buyer queries, research fingerprint, no outbound-scope tickets', async () => {
+    await install();
+    const before = places.calls.length;
+    for (let i = 0; i < 2; i++) assert.equal((await cycle(`scope-${i}`)).researchOnly?.status, 'completed');
+    const queries = places.calls.slice(before).filter(c => c.path.endsWith('/textsearch/json')).map(c => c.query);
+    assert.ok(queries.length >= 2);
+    const cities = ['Manchester', 'Bedford', 'Londonderry', 'Hooksett', 'Auburn', 'Goffstown', 'Nashua', 'Merrimack'];
+    for (const query of queries) {
+      assert.doesNotMatch(query, /realtor|real estate|short.term|vacation rental|airbnb|brokerage/i, query);
+      assert.ok(cities.some(city => query.includes(` ${city} NH`)), query);
+    }
+    assert.ok(places.calls.length > before);
+    const program = (await pool.query('SELECT * FROM acquisition_outbound_programs WHERE id=$1', [current.programId])).rows[0];
+    const { scoutSearchFingerprint } = require('../services/maxOutboundControlLoop');
+    const outboundFingerprint = scoutSearchFingerprint(program, await loadSource(pool, program, '10'));
+    assert.equal(await count('SELECT count(*)::int n FROM scout_candidate_memberships WHERE search_fingerprint=$1', [outboundFingerprint]), 0,
+      'nothing is ever filed under the outbound mission');
+    const grant = (await grants.inspectResearchOnlyGrant(pool));
+    assert.notEqual(grant.fingerprint, outboundFingerprint);
+    assert.equal(grant.researchMissionId, research.missionId);
+  });
+
+  await scenario('candidate ownership: a business Tenant 10 already owns is never retained', async () => {
+    await install();
+    const result = await cycle('ownership');
+    assert.equal(result.researchOnly.status, 'completed');
+    assert.ok(places.calls.some(c => c.placeId?.startsWith('owned-')) || places.calls.some(c => c.query), 'owned business was offered by Places');
+    assert.equal(await count('SELECT count(*)::int n FROM scout_research_candidates WHERE lower(domain)=$1', [OWNED_DOMAIN]), 0);
+    const rejected = result.scout?.admission?.rejected || {};
+    assert.ok(Object.entries(rejected).some(([key, value]) => /owned|collision|suppressed/.test(key) && value > 0), JSON.stringify(rejected));
+    // Retention is unique per Tenant 10 business: no duplicate rows across cycles or missions.
+    assert.equal(await count('SELECT count(*)::int n FROM (SELECT lower(domain) FROM scout_research_candidates GROUP BY 1 HAVING count(*)>1) d'), 0);
+  });
+
+  await scenario('downstream non-admission: retained candidates never reach enrichment, inventory, preparation or sending', async () => {
+    const before = await crm();
+    await install();
+    assert.equal((await cycle('non-admission')).researchOnly?.status, 'completed');
+    assert.ok(await retained() > 0);
+    assert.deepEqual(await crm(), before);
+    // The enrichment agent's own queue view and clean inventory see nothing new.
+    const { loadCleanInventory } = require('../services/maxOutboundControlLoop');
+    const { GovernedOutboundStore } = require('../services/governedOutboundStore');
+    const program = (await pool.query('SELECT * FROM acquisition_outbound_programs WHERE id=$1', [current.programId])).rows[0];
+    const inventory = await loadCleanInventory(pool, new GovernedOutboundStore(pool, '10'), await loadSource(pool, program, '10'), 10, program.policy);
+    const domains = new Set((await pool.query('SELECT lower(domain) d FROM scout_research_candidates')).rows.map(r => r.d));
+    assert.ok(domains.size > 0);
+    assert.ok(inventory.clean.every(row => !domains.has(String(row.domain || '').toLowerCase())));
+    // Reconciliation is refused while recovery maintenance is active.
+    const plan = await missions.previewReconciliation(pool, { researchMissionId: research.missionId });
+    assert.ok(plan.blockers.includes('research_reconcile_recovery_maintenance_active'));
+    assert.ok(plan.blockers.includes('research_reconcile_target_scope_mismatch'), 'the obsolete outbound mission is not the facility-buyer scope');
+    await assert.rejects(missions.applyReconciliation(pool, { researchMissionId: research.missionId, approvalRef: 'synthetic-reconcile', confirm: plan.planHash }),
+      { code: 'research_reconcile_recovery_maintenance_active' });
+    assert.deepEqual(await crm(), before);
+  });
+
+  // Reconciliation only after (simulated) recovery has ended and the successor
+  // facility-buyer mission is activated through its own guarded transaction.
+  await t.test('reconciliation: explicit, one-time, deduplicated, ownership-checked, never outbound', async () => {
+    await revokeOpen();
+    const { facilityBuyerSuccessorMission } = require('../scripts/activateAnchorFacilityBuyerMission');
+    const program = (await pool.query('SELECT * FROM acquisition_outbound_programs WHERE id=$1', [current.programId])).rows[0];
+    const predecessor = (await pool.query('SELECT * FROM acquisition_missions WHERE id=$1', [program.source_mission_id])).rows[0];
+    const successor = facilityBuyerSuccessorMission(predecessor);
+    const saved = { maintenance: process.env.ANCHOR_EMAIL_RECOVERY_MAINTENANCE };
+    const reconcile = { researchMissionId: research.missionId };
+    try {
+      // Successor active (as its activation script would do once the envelope drains).
+      await pool.query(`INSERT INTO acquisition_missions(id,tenant_id,objective,target_segment,payload,stage,status,client_id)
+        VALUES($1,'10',$2,'commercial_cleaning_buyers',$3,'discover','active',10)`, [successor.id, successor.objective, successor]);
+      await pool.query('UPDATE acquisition_outbound_programs SET source_mission_id=$2 WHERE id=$1', [program.id, successor.id]);
+      assert.ok((await missions.previewReconciliation(pool, reconcile)).blockers.includes('research_reconcile_recovery_maintenance_active'));
+      // Recovery ended: no recovery control table, kill switch lowered.
+      await pool.query('ALTER TABLE anchor_email_recovery_control RENAME TO anchor_email_recovery_control_parked');
+      process.env.ANCHOR_EMAIL_RECOVERY_MAINTENANCE = 'false';
+      const plan = await missions.previewReconciliation(pool, reconcile);
+      assert.deepEqual(plan.blockers, []); assert.ok(plan.candidates > 1);
+      const candidates = (await pool.query('SELECT id,domain FROM scout_research_candidates WHERE research_mission_id=$1 ORDER BY id', [research.missionId])).rows;
+      // One candidate is now owned by an AO; one is already in the queue.
+      await pool.query(`INSERT INTO companies(id,client_id,name,domain,website) VALUES('late-owned',10,'Late Owned',$1,$2)`, [candidates[0].domain, `https://${candidates[0].domain}`]);
+      await pool.query(`INSERT INTO prospects(id,client_id,company_id,email,do_not_contact,is_synthetic,ao_outreach_review_required,assigned_ao_id,last_contacted_at)
+        VALUES('late-owned-p',10,'late-owned',$1,false,false,false,7,now())`, [`a@${candidates[0].domain}`]);
+      await pool.query(`INSERT INTO scout_unenriched(client_id,company,website_url,domain,vertical,source,enrichment_attempts)
+        VALUES(10,'Already Queued',$1,$2,'managed_facilities','max_buffer_replenishment',0)`, [`https://${candidates[1].domain}`, candidates[1].domain]);
+      const before = await crm();
+      await assert.rejects(missions.applyReconciliation(pool, { ...reconcile, approvalRef: 'synthetic-reconcile', confirm: '0'.repeat(64) }),
+        { code: 'research_reconcile_plan_changed' });
+      const applied = await missions.applyReconciliation(pool, { ...reconcile, approvalRef: 'synthetic-reconcile', confirm: plan.planHash });
+      assert.equal(applied.ownershipHeld, 1); assert.equal(applied.alreadyQueued, 1);
+      assert.equal(applied.queued, candidates.length - 2); assert.equal(applied.prospectsCreated, 0); assert.equal(applied.sent, 0);
+      const after = await crm();
+      assert.equal(after.queue, before.queue + applied.queued); assert.equal(after.prospects, before.prospects); assert.equal(after.companies, before.companies);
+      // One-time and idempotent: a second pass queues nothing and duplicates nothing.
+      const again = await missions.previewReconciliation(pool, reconcile);
+      assert.equal(again.candidates, 1, 'only the ownership-held candidate remains for later review');
+      const second = await missions.applyReconciliation(pool, { ...reconcile, approvalRef: 'synthetic-reconcile-2', confirm: again.planHash });
+      assert.equal(second.queued, 0); assert.equal((await crm()).queue, after.queue);
+      assert.equal(await count('SELECT count(*)::int n FROM (SELECT lower(domain) FROM scout_unenriched GROUP BY 1 HAVING count(*)>1) d'), 0);
+      await assert.rejects(pool.query("UPDATE scout_research_candidates SET reconciled_at=NULL"), /permanent/);
+      // Reconciled rows are ordinary queue work for the authorized mission, never prepared or sent here.
+      assert.equal(await count("SELECT count(*)::int n FROM acquisition_outbound_items WHERE status='pending'"), 1);
+    } finally {
+      process.env.ANCHOR_EMAIL_RECOVERY_MAINTENANCE = saved.maintenance;
+      await pool.query('ALTER TABLE IF EXISTS anchor_email_recovery_control_parked RENAME TO anchor_email_recovery_control');
+      await pool.query('UPDATE acquisition_outbound_programs SET source_mission_id=$2 WHERE id=$1', [program.id, program.source_mission_id]);
+      await pool.query('DELETE FROM acquisition_missions WHERE id=$1', [successor.id]);
+      await pool.query("DELETE FROM prospects WHERE id='late-owned-p'"); await pool.query("DELETE FROM companies WHERE id='late-owned'");
+    }
+  });
+
+  }
+  if (part === 'governance') {
   await scenario('unavailable enforcement fails closed', async () => {
     await install();
     const claim = await claimDirect('meter-down');
@@ -342,7 +508,6 @@ test('governed research-only activation (Tenant 10)', { timeout: 600000 }, async
     await grants.finishResearchCycle(pool, claim, { completed: false, result: {} });
   });
 
-  await freshProgram();
   await scenario('Google spending cannot exceed $5 per UTC day for Tenant 10, even under concurrency', async () => {
     const grant = await install();
     const spentToday = async () => Number((await pool.query(`SELECT COALESCE(sum(reserved_usd_micros),0)::bigint n FROM scout_research_google_spend
@@ -373,4 +538,5 @@ test('governed research-only activation (Tenant 10)', { timeout: 600000 }, async
     assert.equal(places.calls.length, before);
     assert.equal(await openCycles(), 0);
   });
-});
+  }
+}

@@ -419,7 +419,7 @@ it('bounded research authority selects native Scout and executes both new isolat
 
 // SPEC-SCOUT-P0-003: research-only grant files must run their PostgreSQL suite.
 it('research-only grant files select native Scout and run the research-only suites', () => {
-  for (const file of ['services/scoutResearchOnlyGrant.js', 'services/scoutResearchOnlyCycle.js',
+  for (const file of ['services/scoutResearchOnlyGrant.js', 'services/scoutResearchOnlyCycle.js', 'services/scoutResearchMission.js',
     'migrations/2026-10-28-scout-research-only-grants.sql', 'test/helpers/scoutResearchOnlyFixture.js',
     'test/scoutResearchOnlyGrantPostgres.test.js', 'scripts/scout-research-only/run.cjs']) {
     assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);

@@ -10,10 +10,11 @@ const grants = require('./scoutResearchOnlyGrant');
 const RESEARCH_PLAN = Object.freeze({ shouldReplenish: true, deficit: 20, targetDays: 0, targetInventory: 0,
   cleanInventory: 0, planningDailyCapacity: 0, dispatchCapacityNow: 0, recommendedSafeDailyCapacity: 0 });
 
-async function hasOpenGrant(pool) {
-  const { rows } = await pool.query(`SELECT to_regclass('public.scout_research_only_grants') IS NOT NULL AS present`);
+async function openGrant(pool) {
+  const { rows } = await pool.query(`SELECT to_regclass('public.scout_research_only_grants') IS NOT NULL
+    AND to_regclass('public.scout_research_missions') IS NOT NULL AS present`);
   if (!rows[0]?.present) return 'schema_missing';
-  return (await pool.query("SELECT 1 FROM scout_research_only_grants WHERE tenant_id='10' AND revoked_at IS NULL LIMIT 1")).rows.length > 0;
+  return (await pool.query("SELECT search_fingerprint FROM scout_research_only_grants WHERE tenant_id='10' AND revoked_at IS NULL LIMIT 1")).rows[0] || null;
 }
 
 async function spendForCycle(pool, claim) {
@@ -31,7 +32,7 @@ async function runResearchOnlyCycleIfGranted({ pool, store, program, governed, c
   const { loadRecoveryState } = require('./anchorEmailRecovery');
   const recovery = await loadRecoveryState(pool, { now });
   if (recovery.mode !== 'maintenance') return null;
-  const open = await hasOpenGrant(pool);
+  const open = await openGrant(pool);
   const control = require('./maxOutboundControlLoop');
   const halt = async reason => {
     await recordHold({ reason, detail: 'research_only' });
@@ -41,8 +42,8 @@ async function runResearchOnlyCycleIfGranted({ pool, store, program, governed, c
   if (open === 'schema_missing') return halt('research_only_schema_unavailable');
   if (!open) return null;
   const source = await control._test.loadSource(pool, program, '10');
-  // An exhausted approved plan buys nothing; never spend a cycle observing it.
-  const backoff = source ? await control.loadScoutDiscoveryBackoff(pool, '10', control.scoutSearchFingerprint(program, source), now) : null;
+  // An exhausted approved research plan buys nothing; never spend a cycle observing it.
+  const backoff = await control.loadScoutDiscoveryBackoff(pool, '10', open.search_fingerprint, now);
   if (backoff?.reason === 'approved_search_plan_exhausted') return halt('scout_approved_search_plan_exhausted');
   let claim;
   try { claim = await grants.claimResearchCycle(pool, { program, source, cycleId, env }); }
@@ -55,16 +56,20 @@ async function runResearchOnlyCycleIfGranted({ pool, store, program, governed, c
 
   let scout = null, failure = null;
   try {
+    // Discovery sees only the research mission (program view with the research
+    // mission as its source). Candidates go to the retained-candidate ledger.
     scout = await grants.runInResearchScope(claim, () => (ramp || control.defaultScoutRamp)({
-      pool, store, program, source, plan: RESEARCH_PLAN, logger, governedContext: governed,
+      pool, store, program: claim.researchProgram, source: claim.researchSource, plan: RESEARCH_PLAN, logger, governedContext: governed,
       searchFingerprint: claim.manifest.fingerprint, now, cycleId, researchOnly: true, skipVerificationRetry: true,
+      researchCandidateSink: Object.freeze({ grantId: claim.grantId, cycleNumber: claim.cycleNumber, researchMissionId: claim.researchMissionId }),
     }), pool);
   } catch (error) { failure = error; }
   const spend = await spendForCycle(pool, claim);
   const result = {
     status: failure ? 'stopped' : 'completed', reason: failure ? (failure.reason || failure.code || 'research_cycle_failed') : null,
     discoveryAttempted: Boolean(scout?.discoveryAttempted), discovery: scout?.discovery?.kind || null,
-    discoveryReason: scout?.discovery?.reason || null, queuedForEnrichment: Number(scout?.discoveredQueued || 0),
+    discoveryReason: scout?.discovery?.reason || null, researchMissionId: claim.researchMissionId,
+    retainedCandidates: Number(scout?.discoveredQueued || 0), queuedForEnrichment: 0,
     searchGeneration: Number(scout?.searchGeneration || 0), searchGenerationExhausted: scout?.searchGenerationExhausted === true,
     googleReservedUsdMicros: spend.reservedUsdMicros, googleAttempts: spend.attempts,
     enrichment: false, verification: false, preparation: false, outbound: false,
@@ -80,7 +85,8 @@ async function runResearchOnlyCycleIfGranted({ pool, store, program, governed, c
       sendingEnabled: false, preparationEnabled: false, prepareRequested: false, preparedAdded: 0,
       scoutInvoked: true, scoutSearchFingerprint: claim.manifest.fingerprint,
       scoutSearchGeneration: result.searchGeneration, scoutSearchGenerationExhausted: result.searchGenerationExhausted,
-      scoutDiscoveryAttempted: result.discoveryAttempted, scoutQueued: result.queuedForEnrichment,
+      scoutDiscoveryAttempted: result.discoveryAttempted, scoutQueued: 0, researchRetained: result.retainedCandidates,
+      researchMissionId: claim.researchMissionId,
       netCleanInventoryDelta: 0, newCleanInventoryAdded: 0, newPromotions: 0, recoveredExisting: 0,
       googleReservedUsdMicros: spend.reservedUsdMicros, discoveryBlockedReason: result.discoveryReason,
     });
@@ -92,7 +98,7 @@ async function runResearchOnlyCycleIfGranted({ pool, store, program, governed, c
     return { halted: 'research_only_cycle_stopped', programId: program.id, researchOnly, prepareRequested: false, preparedAdded: 0, sent: 0 };
   }
   return { cycleId, programId: program.id, mode: program.mode, recoveryMode: recovery.mode, researchOnly, scout,
-    replenishment: { status: 'research_only', reason: null, newQueueAdmissions: result.queuedForEnrichment },
+    replenishment: { status: 'research_only', reason: null, newQueueAdmissions: 0, retainedCandidates: result.retainedCandidates },
     prepareRequested: false, preparedAdded: 0, sent: 0 };
 }
 
