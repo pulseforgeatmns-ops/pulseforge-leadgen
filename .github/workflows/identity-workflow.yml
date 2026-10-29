@@ -28,6 +28,7 @@ on:
       - 'test/sessionLifecycle.test.js'
       - 'test/scoutResearchApprovalPostgres.test.js'
       - 'test/browser/scoutResearchApprovalBrowser.test.js'
+      - 'test/browser/scoutResearchApprovalCandidatesBrowser.test.js'
       - 'test/helpers/scoutResearchApprovalHarness.js'
       - 'package*.json'
       - '.github/workflows/identity-workflow.yml'
@@ -59,6 +60,7 @@ on:
       - 'test/sessionLifecycle.test.js'
       - 'test/scoutResearchApprovalPostgres.test.js'
       - 'test/browser/scoutResearchApprovalBrowser.test.js'
+      - 'test/browser/scoutResearchApprovalCandidatesBrowser.test.js'
       - 'test/helpers/scoutResearchApprovalHarness.js'
       - 'package*.json'
       - '.github/workflows/identity-workflow.yml'
@@ -96,4 +98,4 @@ jobs:
       - name: Native identity login and tenant-selection forms
         env:
           CHROMIUM_PATH: ${{ steps.chrome.outputs.chrome-path }}
-        run: node --test test/browser/loginIdentityWorkflowBrowser.test.js test/browser/identityTenantSelectionBrowser.test.js test/browser/scoutResearchApprovalBrowser.test.js
+        run: node --test test/browser/loginIdentityWorkflowBrowser.test.js test/browser/identityTenantSelectionBrowser.test.js test/browser/scoutResearchApprovalBrowser.test.js test/browser/scoutResearchApprovalCandidatesBrowser.test.js

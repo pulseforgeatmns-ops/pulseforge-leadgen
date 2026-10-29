@@ -69,7 +69,12 @@ async function runResearchOnlyCycleIfGranted({ pool, store, program, governed, c
     status: failure ? 'stopped' : 'completed', reason: failure ? (failure.reason || failure.code || 'research_cycle_failed') : null,
     discoveryAttempted: Boolean(scout?.discoveryAttempted), discovery: scout?.discovery?.kind || null,
     discoveryReason: scout?.discovery?.reason || null, researchMissionId: claim.researchMissionId,
+    // Accepted = passed admission; retained = a new research ledger row. They
+    // differ when an accepted business is already retained or already queued.
+    acceptedCandidates: Number(scout?.admission?.fit || 0), evaluatedCandidates: Number(scout?.admission?.evaluated || 0),
     retainedCandidates: Number(scout?.discoveredQueued || 0), queuedForEnrichment: 0,
+    candidateLedger: scout?.candidateWork ? { total: scout.candidateWork.total, byState: scout.candidateWork.byState,
+      byReason: scout.candidateWork.byReason } : null,
     searchGeneration: Number(scout?.searchGeneration || 0), searchGenerationExhausted: scout?.searchGenerationExhausted === true,
     googleReservedUsdMicros: spend.reservedUsdMicros, googleAttempts: spend.attempts,
     enrichment: false, verification: false, preparation: false, outbound: false,

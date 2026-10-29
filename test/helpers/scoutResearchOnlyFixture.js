@@ -98,6 +98,8 @@ async function startResearchOnlyHarness() {
 // Synthetic Google Places: each text search returns three businesses that look
 // like what the query names (plus, as result 0 of every page, one business
 // Tenant 10 already owns). Details echo the place. Never a real network request.
+// unclassifiable:true appends one business whose name and Google types carry no
+// business-type evidence, so only its own website could classify it.
 function kindOf(query) {
   const q = query.toLowerCase();
   if (/campus|college|universit/.test(q)) return { label: 'College', types: ['university', 'point_of_interest'] };
@@ -109,7 +111,7 @@ function kindOf(query) {
   if (/property management/.test(q)) return { label: 'Commercial Property Management', types: ['point_of_interest', 'establishment'] };
   return { label: 'Facility', types: ['point_of_interest', 'establishment'] };
 }
-function placesFetch() {
+function placesFetch({ unclassifiable = false } = {}) {
   const calls = [], places = new Map();
   let serial = 0;
   const fetchImpl = async input => {
@@ -122,8 +124,10 @@ function placesFetch() {
       const slug = query.toLowerCase().replace(/[^a-z0-9]+/g, '-');
       const city = / ([A-Za-z]+) NH$/.exec(query)?.[1] || 'Manchester';
       const kind = kindOf(query);
-      const results = [0, 1, 2].map(i => {
+      const results = (unclassifiable ? [0, 1, 2, 3] : [0, 1, 2]).map(i => {
         const place = i === 0 ? { place_id: `owned-${slug}`, name: 'Owned Anchor Customer', website: `https://${OWNED_DOMAIN}`, types: kind.types }
+          : i === 3 ? { place_id: `${slug}-${i}`, name: `${city} Granite Works ${++serial}`, website: `https://${slug}-${i}.example`,
+            types: ['point_of_interest', 'establishment'] }
           : { place_id: `${slug}-${i}`, name: `${city} ${kind.label} ${++serial}`, website: `https://${slug}-${i}.example`, types: kind.types };
         places.set(place.place_id, { ...place, city });
         return { place_id: place.place_id, name: place.name, formatted_address: `1 Main St, ${city}, NH 03101`, types: place.types };
