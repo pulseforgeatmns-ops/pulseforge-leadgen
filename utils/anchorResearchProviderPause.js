@@ -2,7 +2,8 @@
 
 const { AsyncLocalStorage } = require('node:async_hooks');
 const authority = new AsyncLocalStorage();
-const CONTROL_CODES = new Set(['anchor_research_provider_paused', 'research_provider_tenant_required', 'research_provider_tenant_mismatch']);
+const CONTROL_CODES = new Set(['anchor_research_provider_paused', 'research_provider_tenant_required', 'research_provider_tenant_mismatch',
+  'research_only_google_spend_denied', 'research_only_scope_required']);
 
 function armed() { return process.env.ANCHOR_RESEARCH_PROVIDERS_PAUSED === 'true'; }
 function normalize(value) {
@@ -19,7 +20,8 @@ function assertResearchProviderAllowed(provider, explicitTenant) {
   if (!tenants.length || tenants.some(value => value === null)) reject('research_provider_tenant_required');
   if (new Set(tenants).size !== 1) reject('research_provider_tenant_mismatch');
   if (tenants[0] === '10'
-    && !require('../services/scoutBoundedResearchAuthority').allowsBoundedPlacesResearch(provider, tenants[0])) {
+    && !require('../services/scoutBoundedResearchAuthority').allowsBoundedPlacesResearch(provider, tenants[0])
+    && !require('../services/scoutResearchOnlyGrant').allowsResearchOnlyProvider(provider, tenants[0])) {
     reject('anchor_research_provider_paused');
   }
 }

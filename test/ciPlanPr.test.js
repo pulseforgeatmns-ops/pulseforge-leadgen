@@ -417,6 +417,20 @@ it('bounded research authority selects native Scout and executes both new isolat
   }
 });
 
+// SPEC-SCOUT-P0-003: research-only grant files must run their PostgreSQL suite.
+it('research-only grant files select native Scout and run the research-only suites', () => {
+  for (const file of ['services/scoutResearchOnlyGrant.js', 'services/scoutResearchOnlyCycle.js', 'services/scoutResearchMission.js',
+    'migrations/2026-10-28-scout-research-only-grants.sql', 'test/helpers/scoutResearchOnlyFixture.js',
+    'test/scoutResearchOnlyGrantPostgres.test.js', 'scripts/scout-research-only/run.cjs']) {
+    assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
+  }
+  for (const file of ['pr-ci-lean.yml', 'full-regression.yml']) {
+    const workflow = require('node:fs').readFileSync(require('node:path').join(__dirname, '../.github/workflows', file), 'utf8');
+    assert.match(workflow, /test\/scoutResearchOnlyGrantPostgres\.test\.js/);
+    assert.match(workflow, /test\/scoutResearchOnlyGrant\.test\.js/);
+  }
+});
+
 
 it('authorized Scout backlog recovery selects native Scout and executes its unit and PostgreSQL suites', () => {
   for (const file of ['services/scoutBacklogRecovery.js', 'migrations/2026-10-27-scout-backlog-recovery.sql',

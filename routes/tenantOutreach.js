@@ -253,4 +253,44 @@ for (const [operation, method] of Object.entries({ preview: 'previewPreparationA
         writesMayHaveOccurred: operation !== 'preview', retryAllowed: false }); }
     });
 }
+// SPEC-SCOUT-P0-003 research-only grant. Same admin-session, same-origin gate as
+// preparation approval; these never run discovery, preparation or sends.
+// The research mission is approved separately and first; it is discovery scope
+// only and is never written to acquisition_missions or the outbound program.
+for (const [resource, operation, service, method] of [
+  ['research-mission', 'preview', 'scoutResearchMission', 'previewResearchMission'],
+  ['research-mission', 'install', 'scoutResearchMission', 'installResearchMission'],
+  ['research-only-grant', 'preview', 'scoutResearchOnlyGrant', 'previewResearchOnlyGrant'],
+  ['research-only-grant', 'install', 'scoutResearchOnlyGrant', 'installResearchOnlyGrant'],
+  ['research-only-grant', 'revoke', 'scoutResearchOnlyGrant', 'revokeResearchOnlyGrant'],
+  ['research-only-grant', 'inspect', 'scoutResearchOnlyGrant', 'inspectResearchOnlyGrant']]) {
+  router.post(`/api/v1/tenant-outreach/anchor-program/${resource}/${operation}`,
+    (req, res, next) => {
+      noStore(res);
+      try { require('../services/anchorCrmPreparationAction').actorFromRequest(req); }
+      catch {
+        const status = req.session?.user || req.session?.authenticated === true ? 403 : 401;
+        return res.status(status).json({ error: 'research_only_grant_forbidden', retryAllowed: false });
+      }
+      next();
+    }, requireAuth, requireRole('admin'), async (req, res) => {
+      noStore(res);
+      let actor;
+      try {
+        actor = require('../services/anchorCrmPreparationAction').actorFromRequest(req);
+        const expected = new URL(process.env.APP_URL);
+        if (!['http:', 'https:'].includes(expected.protocol) || req.get('origin') !== expected.origin
+          || req.get('sec-fetch-site') === 'cross-site' || !req.is('application/json')) throw new Error('forbidden');
+      } catch { return res.status(403).json({ error: 'research_only_grant_forbidden', retryAllowed: false }); }
+      const handler = require(`../services/${service}`);
+      try {
+        if (operation === 'inspect') return res.json(await handler.inspectResearchOnlyGrant(pool, req.body?.grantId));
+        return res.json(await handler[method](pool, req.body, actor));
+      } catch (error) {
+        return res.status(409).json({ error: 'research_only_grant_rejected', code: /^research_(only|mission)_[a-z_]+$/.test(error.code || '') ? error.code : null,
+          status: ['preview', 'inspect'].includes(operation) ? 'rejected' : 'outcome_requires_readback',
+          writesMayHaveOccurred: !['preview', 'inspect'].includes(operation), retryAllowed: false });
+      }
+    });
+}
 module.exports = router;

@@ -270,7 +270,9 @@ function createPlacesProvider(deps = {}) {
       const tenants = [request.tenantId, request.clientId, request.client_id,
         deps.tenantId, deps.clientId, deps.client_id].filter(value => value != null);
       return withResearchProviderScope(tenants[0], () => {
-        for (const tenant of tenants) assertResearchProviderAllowed('google_places', tenant);
+        // Entry authority only. Each HTTP attempt re-checks 'google_places' in
+        // utils/placesApi, where a research-only cycle also holds its debit.
+        for (const tenant of tenants) assertResearchProviderAllowed('research', tenant);
         return execute.call(this, request);
       });
     };

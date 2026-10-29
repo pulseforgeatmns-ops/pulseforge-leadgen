@@ -28,13 +28,23 @@ const {
 
 async function guardedPlacesCall(recordBase, deps, execute) {
   const row = buildAttributionRow(recordBase, getPlacesContext());
-  const research = hasResearchProviderScope() || row.endpoint !== PLACES_ENDPOINTS.GEOCODE || ['Leadgen', 'Discovery', 'Diagnostic'].includes(row.feature);
+  // SPEC-SCOUT-P0-003: inside a claimed Tenant 10 research-only cycle each
+  // possible HTTP attempt first takes a durable Tenant 10 debit, and the paused
+  // Places provider opens only inside that debit. Outside one this is null.
+  const meter = require('../services/scoutResearchOnlyGrant').googleMeter();
+  if (!meter) return guardedAttempt(row, deps, execute, null);
+  const debit = await meter.reserve({ endpoint: row.endpoint, tenantId: row.tenantId });
+  return debit.run(() => guardedAttempt(row, deps, execute, debit));
+}
+
+async function guardedAttempt(row, deps, execute, debit) {
+  const research = Boolean(debit) || hasResearchProviderScope() || row.endpoint !== PLACES_ENDPOINTS.GEOCODE || ['Leadgen', 'Discovery', 'Diagnostic'].includes(row.feature);
   const checkResearch = () => {
     if (!research) return; // Field-route geocoding is outside this research pause.
     assertResearchProviderAllowed('google_places');
     if (row.tenantId != null) assertResearchProviderAllowed('google_places', row.tenantId);
   };
-  checkResearch();
+  try { checkResearch(); } catch (err) { await debit?.settle('error'); throw err; }
   const reserve = deps.reserveApiCall || reserveApiCall;
   const settle = deps.settleApiCall || settleApiCall;
   const estimate = PLACES_UPPER_BOUND[row.endpoint] ?? null;
@@ -43,16 +53,26 @@ async function guardedPlacesCall(recordBase, deps, execute) {
     tenantId: row.tenantId, missionId: row.missionId, operation: row.endpoint,
     estimatedUsd: estimate, pricingBasis: 'places_gross_upper_field_tier_2026_10_14' }, { db: deps.db });
   } catch (err) {
+    await debit?.settle('error');
     rethrowResearchProviderControl(err); err.apiUsageNoNetwork = true; throw err; }
+  if (debit) {
+    try { await debit.link(id); } catch (err) {
+      await settle(id, { status: 'error' }, { db: deps.db }).catch(() => {});
+      await debit.settle('error');
+      throw err;
+    }
+  }
   let result;
   try { checkResearch(); result = await execute(); }
   catch (err) {
+    await debit?.settle('uncertain', err.response?.status);
     rethrowResearchProviderControl(err);
     await settle(id, { status: 'uncertain', httpStatus: err.response?.status }, { db: deps.db })
       .catch(() => console.warn('[api-usage] Places attempt remains reserved.'));
     throw err;
   }
   const status = result.httpStatus ?? result.status;
+  await debit?.settle(status >= 200 && status < 300 ? 'ok' : 'error', status);
   await settle(id, { status: status >= 200 && status < 300 ? 'ok' : 'error',
     estimatedUsd: estimate, httpStatus: status }, { db: deps.db })
     .catch(() => console.warn('[api-usage] Places result remains reserved.'));
