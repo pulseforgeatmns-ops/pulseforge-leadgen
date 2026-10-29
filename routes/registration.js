@@ -68,6 +68,9 @@ router.get('/verify-email', async (req, res) => {
   try {
     const result = await verifyRegistrationToken({ pool, token });
     if (req.session) {
+      // Session-fixation defence: sign in only on a brand-new session ID.
+      try { await require('../utils/sessionLifecycle').rotateSession(req); }
+      catch { return res.redirect('/login?verified=1'); }
       establishRegisteredSession(req.session, result.user);
       return res.redirect('/dashboard');
     }
@@ -113,6 +116,8 @@ router.post('/api/register/verify', async (req, res) => {
       pool,
       token: req.body?.token || req.query.token,
     });
+    // Session-fixation defence: sign in only on a brand-new session ID.
+    await require('../utils/sessionLifecycle').rotateSession(req);
     const session = establishRegisteredSession(req.session, result.user);
     noStore(res);
     return res.json({

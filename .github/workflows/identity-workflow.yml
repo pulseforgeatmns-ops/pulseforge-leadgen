@@ -17,6 +17,18 @@ on:
       - 'test/loginSessionPersistencePostgres.test.js'
       - 'test/helpers/loginIdentityHarness.js'
       - 'test/helpers/disposablePostgres.js'
+      - 'utils/sessionLifecycle.js'
+      - 'routes/registration.js'
+      - 'routes/pilotOnboarding.js'
+      - 'utils/freshConfirmation.js'
+      - 'routes/scoutResearchApproval.js'
+      - 'routes/tenantOutreach.js'
+      - 'routes/users.js'
+      - 'public/scout-research-approval.*'
+      - 'test/sessionLifecycle.test.js'
+      - 'test/scoutResearchApprovalPostgres.test.js'
+      - 'test/browser/scoutResearchApprovalBrowser.test.js'
+      - 'test/helpers/scoutResearchApprovalHarness.js'
       - 'package*.json'
       - '.github/workflows/identity-workflow.yml'
   push:
@@ -36,6 +48,18 @@ on:
       - 'test/loginSessionPersistencePostgres.test.js'
       - 'test/helpers/loginIdentityHarness.js'
       - 'test/helpers/disposablePostgres.js'
+      - 'utils/sessionLifecycle.js'
+      - 'routes/registration.js'
+      - 'routes/pilotOnboarding.js'
+      - 'utils/freshConfirmation.js'
+      - 'routes/scoutResearchApproval.js'
+      - 'routes/tenantOutreach.js'
+      - 'routes/users.js'
+      - 'public/scout-research-approval.*'
+      - 'test/sessionLifecycle.test.js'
+      - 'test/scoutResearchApprovalPostgres.test.js'
+      - 'test/browser/scoutResearchApprovalBrowser.test.js'
+      - 'test/helpers/scoutResearchApprovalHarness.js'
       - 'package*.json'
       - '.github/workflows/identity-workflow.yml'
   workflow_dispatch:
@@ -65,9 +89,11 @@ jobs:
           node --test test/identityTenantSelection.test.js test/loginIdentityWorkflow.test.js test/loginSessionPersistencePostgres.test.js
           test/tenantSelectorSync.test.js test/tenantWorkspace.test.js
           test/maxAttentionAuthorization.test.js test/maxAoHelpReviewGuards.test.js
+      - name: Session rotation, revocation, Remember me, step-up and Scout research approval
+        run: node --test test/sessionLifecycle.test.js test/scoutResearchApprovalPostgres.test.js
       - uses: browser-actions/setup-chrome@v1
         id: chrome
       - name: Native identity login and tenant-selection forms
         env:
           CHROMIUM_PATH: ${{ steps.chrome.outputs.chrome-path }}
-        run: node --test test/browser/loginIdentityWorkflowBrowser.test.js test/browser/identityTenantSelectionBrowser.test.js
+        run: node --test test/browser/loginIdentityWorkflowBrowser.test.js test/browser/identityTenantSelectionBrowser.test.js test/browser/scoutResearchApprovalBrowser.test.js

@@ -76,6 +76,11 @@ router.post('/api/me/password', requireAuth, async (req, res) => {
     if (req.session && req.session.user) {
       req.session.user.password_change_required = false;
     }
+    // Keep this (just re-proven) session; every other session of the account
+    // was opened with the old password and ends now.
+    const sessions = require('../utils/sessionLifecycle');
+    if (req.session) req.session.credentialTag = sessions.credentialTag(userId, hash);
+    await sessions.revokeUserSessions(pool, userId, { exceptSid: req.sessionID || null });
     if (req.user) req.user.password_change_required = false;
     noStore(res);
     return res.json({

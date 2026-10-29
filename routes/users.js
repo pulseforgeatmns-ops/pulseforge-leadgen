@@ -93,6 +93,7 @@ td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.04); color
   <div><div class="title">USER MANAGEMENT</div><div class="sub">Admin only · Pulseforge Lead Engine</div></div>
   <a href="/dashboard">Back to dashboard</a>
   <a href="/admin/ao-impersonation" style="margin-left:12px">Act as AO</a>
+  <a href="/admin/scout-research-approval" style="margin-left:12px">Scout research approval</a>
 </div>
 <div class="msg" id="msg"></div>
 <div class="note">Use Client for external tenant access. Assign a tenant and a temporary password — the client must choose a new password on first login. Viewer is internal/admin-shared and is not tenant-locked.</div>
@@ -449,7 +450,14 @@ router.patch('/api/users/:id', ...adminOnly, async (req, res) => {
       RETURNING id, name, email, role, client_id, active, created_at, last_login_at, password_change_required
     `, values);
     if (!rows.length) return res.status(404).json({ error: 'User not found' });
-    res.json(publicUser(rows[0]));
+    // Authority changes end every existing session of the account (remembered
+    // or not); the session guard re-checks any session re-saved in flight.
+    const sessions = require('../utils/sessionLifecycle');
+    const updated = rows[0];
+    if (updated.active !== existing.active || updated.role !== existing.role
+      || String(updated.client_id ?? '') !== String(existing.client_id ?? '')) await sessions.revokeUserSessions(pool, updated.id);
+    else sessions.forgetUser(updated.id);
+    res.json(publicUser(updated));
   } catch (err) {
     if (err.code === '23505') {
       return res.status(409).json({ error: 'That email belongs to another user.' });
@@ -469,6 +477,8 @@ router.post('/api/users/:id/reset-password', ...adminOnly, async (req, res) => {
     [hash, req.params.id]
   );
   if (!rowCount) return res.status(404).json({ error: 'User not found' });
+  // A reset password ends every existing session of the account.
+  await require('../utils/sessionLifecycle').revokeUserSessions(pool, req.params.id);
   res.json({ success: true });
 });
 
@@ -476,6 +486,7 @@ router.delete('/api/users/:id', ...adminOnly, async (req, res) => {
   await initAuth();
   const { rowCount } = await pool.query('DELETE FROM users WHERE id = $1', [req.params.id]);
   if (!rowCount) return res.status(404).json({ error: 'User not found' });
+  await require('../utils/sessionLifecycle').revokeUserSessions(pool, req.params.id);
   res.json({ success: true });
 });
 

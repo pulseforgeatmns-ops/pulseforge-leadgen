@@ -276,7 +276,12 @@ existing transaction, retained research candidates can be reconciled into it.
    - `cities` must be the eight service cities;
    - `outboundEligible` must be `false` and `blockers` must be `[]`.
 
-   Then install it:
+   Then install it. Both install endpoints require a fresh, single-use password
+   confirmation on the same session (valid 2 minutes), whether or not the login
+   was remembered; send it immediately before each install:
+   `await fetch('/api/v1/auth/fresh-confirmation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ purpose: 'scout_research_approval', password: '<your password>' }) })`.
+   The admin page `/admin/scout-research-approval` performs steps 5–8 with
+   this confirmation built in and is the preferred surface.
    `await post('research-mission/install', { approvalRef: 'anchor-research-mission-2026-10-28', mission: mission.mission, missionHash: mission.missionHash })`.
 6. **Approve the grant** (authorization 2) from the same session:
    ```js
@@ -289,7 +294,7 @@ existing transaction, retained research candidates can be reconciled into it.
    - `manifest.researchMissionHash` must equal step 5's `missionHash`;
    - check the caps, the quarantine hash and the revision.
 
-   Then send back the exact object:
+   Then confirm your password again (see step 5) and send back the exact object:
    `await post('research-only-grant/install', { manifest: grant.manifest, manifestHash: grant.manifestHash })`.
 7. **Observe.** Each cycle writes one `scout_research_only_cycles` row, one debit
    per Places attempt, retained rows in `scout_research_candidates`, and a

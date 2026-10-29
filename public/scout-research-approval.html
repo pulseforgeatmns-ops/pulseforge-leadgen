@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="same-origin">
+  <title>Scout research approval · Pulseforge</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/admin/scout-research-approval/assets/tokens.css">
+  <link rel="stylesheet" href="/admin/scout-research-approval/assets/style.css">
+  <script src="/admin/scout-research-approval/assets/controller.js" defer></script>
+</head>
+<body>
+<main>
+  <header><a href="/admin/clients">← Admin</a><span class="eyebrow">Anchor · Scout · Administrator controls</span></header>
+  <h1>Scout research approval</h1>
+  <p class="lead">Review and approve the facility-buyer research mission and the research-only Google spending grant, check what the grant has used, or revoke it.</p>
+  <aside class="boundary"><strong>Approving here does not start research.</strong> Cycles only run from the existing Max control loop, inside the grant’s limits. This page never enables paid discovery by itself, never changes outbound eligibility, and never lifts recovery maintenance, the provider pause or the outbound restriction.</aside>
+
+  <section class="card" aria-labelledby="authorityHeading">
+    <h2 id="authorityHeading">Your current authority</h2>
+    <p id="authority" role="status">Checking your administrator session…</p>
+    <p id="authorityHelp" class="help" hidden>Approvals need a verified administrator signed in directly (not acting as another user) with <strong>Anchor (tenant 10)</strong> selected. <a href="/identity-check/tenant">Choose Anchor</a> · <a href="/login?workflow=identity-check">Sign in again</a></p>
+    <p class="help">Even with “Remember me”, each install asks for your password again. Revoking never does.</p>
+    <button id="reloadAuthority" type="button">Check again</button>
+  </section>
+
+  <p id="status" role="status" aria-live="polite" tabindex="-1"></p>
+
+  <section class="card" aria-labelledby="grantStatusHeading">
+    <div class="section-title"><span class="step" aria-hidden="true">✓</span><h2 id="grantStatusHeading">Current grant</h2></div>
+    <div id="grantStatus"><p class="help">Not loaded yet.</p></div>
+    <div class="actions">
+      <button id="refreshGrant" type="button">Refresh status</button>
+    </div>
+    <details>
+      <summary>Look up a specific grant (including revoked or expired)</summary>
+      <form id="lookupForm" autocomplete="off"><label>Grant ID — 64 lowercase hex characters<input id="lookupGrantId" pattern="[a-f0-9]{64}" maxlength="64" spellcheck="false" autocapitalize="none"></label>
+        <button type="submit">Look up grant</button></form>
+    </details>
+    <div id="revokeArea" hidden>
+      <h3>Revoke this grant</h3>
+      <p class="help">Revocation stops the next cycle claim and the next Google reservation. Recorded cycles, spend and retained candidates are kept. It does not need a password and cannot be undone.</p>
+      <label>Revocation reference<input id="revokeReference" maxlength="120" autocomplete="off" spellcheck="false" autocapitalize="none" placeholder="e.g. anchor-research-revoke-2026-10-29"></label>
+      <button id="revokeButton" class="danger" type="button" disabled>Revoke grant…</button>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="missionHeading">
+    <div class="section-title"><span class="step" aria-hidden="true">1</span><h2 id="missionHeading">Research mission</h2></div>
+    <p>The read-only copy of the approved facility-buyer targeting that discovery may search. It is never outbound-eligible.</p>
+    <form id="missionForm" autocomplete="off">
+      <label>Mission approval reference<input id="missionRef" required maxlength="120" pattern="[A-Za-z0-9_.:\-]{1,120}" spellcheck="false" autocapitalize="none" placeholder="e.g. anchor-research-mission-2026-10-29"></label>
+      <p class="help">Letters, numbers and <span class="mono">_ . : -</span> only.</p>
+      <button id="previewMission" type="submit" disabled>Preview mission — no changes</button>
+    </form>
+    <div id="missionResult" hidden></div>
+    <div id="missionApprove" hidden>
+      <label class="check"><input id="missionConfirm" type="checkbox"> I approve exactly this research mission: these segments, these eight cities and this mission hash. It is discovery scope only.</label>
+      <button id="approveMission" class="primary" type="button" disabled>Approve mission…</button>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="grantHeading">
+    <div class="section-title"><span class="step" aria-hidden="true">2</span><h2 id="grantHeading">Research-only grant</h2></div>
+    <p>Lets the Max control loop run Scout discovery only, under the research mission above, within a fixed cycle and Google spending limit.</p>
+    <form id="grantForm" autocomplete="off">
+      <div class="fields">
+        <label class="wide">Research mission ID<input id="grantMissionId" required maxlength="80" spellcheck="false" autocapitalize="none" placeholder="Filled in from step 1"></label>
+        <label>Grant approval reference<input id="grantRef" required maxlength="120" pattern="[A-Za-z0-9_.:\-]{1,120}" spellcheck="false" autocapitalize="none" placeholder="e.g. anchor-research-only-2026-10-29"></label>
+        <label>Expires at — UTC<input id="grantExpires" type="datetime-local" step="1" required></label>
+        <label class="wide">Authorization statement<textarea id="grantStatement" rows="3" required maxlength="2000" placeholder="Who approved this and why, in plain words."></textarea></label>
+      </div>
+      <p class="help">The expiry is in UTC, not your tablet’s time zone, and must be within 7 days. Nothing renews automatically.</p>
+      <button id="previewGrant" type="submit" disabled>Preview grant — no changes</button>
+    </form>
+    <div id="grantResult" hidden></div>
+    <div id="grantApprove" hidden>
+      <label class="check"><input id="grantConfirm" type="checkbox"> I authorize this exact research-only grant: at most 8 discovery cycles, at most the Google limit shown per UTC day, until the expiry shown, pinned to this revision. It does not permit enrichment, verification, preparation or sending.</label>
+      <button id="installGrant" class="primary" type="button" disabled>Install grant…</button>
+    </div>
+  </section>
+</main>
+
+<dialog id="confirmDialog" aria-labelledby="confirmTitle" aria-describedby="confirmDescription">
+  <form id="confirmForm" method="dialog">
+    <h2 id="confirmTitle"></h2>
+    <p id="confirmDescription"></p>
+    <dl id="confirmFacts" class="facts"></dl>
+    <div id="confirmPasswordArea">
+      <input type="text" name="username" id="confirmUsername" autocomplete="username" hidden>
+      <label>Your password — required for every install<input id="confirmPassword" type="password" autocomplete="current-password" maxlength="1024"></label>
+    </div>
+    <p id="confirmError" class="blocked" role="alert"></p>
+    <div class="actions"><button id="confirmSubmit" class="primary" type="submit" value="confirm">Confirm</button><button id="confirmCancel" type="button">Cancel</button></div>
+  </form>
+</dialog>
+</body>
+</html>

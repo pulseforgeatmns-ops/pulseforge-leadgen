@@ -87,7 +87,7 @@ function makeHarness(options = {}) {
     post(route, ...fns) { handlers[`POST ${route}`] = fns; },
   };
   vm.runInNewContext(between(serverSource, "app.get('/login'", "app.get('/logout'"), {
-    app, pool, bcrypt,
+    app, pool, bcrypt, sessionLifecycle: require('../../utils/sessionLifecycle'),
     process: { env: { DASHBOARD_PASSWORD: 'local-legacy-fixture' } },
     initAuth: async () => { initCalls++; if (options.initFailure) throw new Error('cached initializer failure'); },
     getUserCount: async () => options.userCount ?? 1,
@@ -122,6 +122,16 @@ async function login(harness, body = {}, currentSession = {}) {
   // save contract; HTTP/native PostgreSQL tests use the real session method.
   if (typeof currentSession.save !== 'function') {
     Object.defineProperty(currentSession, 'save', { value: callback => callback(), configurable: true });
+  }
+  // Mirror express-session regenerate(): a new, empty session (pre-login data
+  // dropped). `rotations` counts how many times sign-in rotated the session.
+  if (typeof currentSession.regenerate !== 'function') {
+    Object.defineProperty(currentSession, 'rotations', { value: 0, writable: true, configurable: true });
+    Object.defineProperty(currentSession, 'regenerate', { configurable: true, value(callback) {
+      for (const key of Object.keys(this)) delete this[key];
+      this.rotations += 1;
+      callback();
+    } });
   }
   const req = { body: { email: 'identity@example.test', password: fixturePassword, ...body }, session: currentSession };
   const res = response();

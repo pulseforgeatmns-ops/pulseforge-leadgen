@@ -87,16 +87,19 @@ test('admin without tenant remains tenant 1; workflow and query cannot select te
   assert.equal(result.res.location, '/api/me');
 });
 
-test('selected flow preserves current session handling, not a new CSRF or fixation defense', async () => {
+test('selected and ordinary sign-in rotate the session identically and drop pre-login state (fixation defence)', async () => {
   const current = { id: 'local-fixture-existing-session', marker: 'preserve', impersonation: { active: true, effectiveUser: { id: 5, role: 'ao' } } };
-  const selected = await login(makeHarness(), { workflow: 'identity-check', _csrf: 'untrusted-fixture', role: 'manager' }, structuredClone(current));
-  const normal = await login(makeHarness(), { _csrf: 'untrusted-fixture', role: 'manager' }, structuredClone(current));
+  const selectedSession = structuredClone(current), normalSession = structuredClone(current);
+  const selected = await login(makeHarness(), { workflow: 'identity-check', _csrf: 'untrusted-fixture', role: 'manager' }, selectedSession);
+  const normal = await login(makeHarness(), { _csrf: 'untrusted-fixture', role: 'manager' }, normalSession);
+  // The identity check stays a landing difference only: the authenticated session is identical.
   assert.deepEqual(JSON.parse(JSON.stringify(selected.req.session)), JSON.parse(JSON.stringify(normal.req.session)));
-  assert.equal(selected.req.session.id, current.id);
+  assert.equal(selectedSession.rotations, 1); assert.equal(normalSession.rotations, 1);
+  assert.equal(selected.req.session.id, undefined, 'the pre-login session identity is not carried over');
+  assert.equal(selected.req.session.marker, undefined);
+  assert.equal(selected.req.session.impersonation, undefined, 'pre-login impersonation state is dropped');
   assert.equal(selected.req.session.user.id, 73); assert.equal(selected.req.session.user.role, 'admin');
-  assert.deepEqual(selected.req.session.impersonation, current.impersonation);
-  // This is a regression comparison, not a claim that baseline login has CSRF
-  // validation or regenerates session IDs. Those remain separate security work.
+  // Login still has no CSRF token check; untrusted body fields never choose identity or role.
 });
 
 test('cached initializer failure prevents account lookup and authentication', async () => {

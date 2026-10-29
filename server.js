@@ -28,6 +28,7 @@ const pgSession = require('connect-pg-simple')(session);
 const pool     = require('./db');
 const { createObjectCsvWriter } = require('csv-writer');
 const { bcrypt, getUserCount, initAuth, requireAuth, requireRole } = require('./middleware/auth');
+const sessionLifecycle = require('./utils/sessionLifecycle');
 const { ensureClientArchitecture } = require('./utils/clientContext');
 const { resolveCieClientId } = require('./utils/cieAuth');
 const { armed, withResearchProviderScope, assertResearchProviderAllowed,
@@ -119,13 +120,22 @@ app.use(session({
   secret: process.env.SESSION_SECRET || 'pulseforge-secret-key',
   resave: false,
   saveUninitialized: false,
-  cookie: { maxAge: 24 * 60 * 60 * 1000 }
+  // Trust Railway's X-Forwarded-Proto for the Secure flag only (not req.ip).
+  proxy: true,
+  // Unremembered sessions keep the 24h policy; "Remember me" extends the same
+  // server-side session (utils/sessionLifecycle.js). Never readable by scripts.
+  cookie: { maxAge: sessionLifecycle.DEFAULT_MAX_AGE_MS, httpOnly: true, sameSite: 'lax', secure: 'auto' }
 }));
+// Every account-backed session is revalidated against users (active, role, password).
+app.use(sessionLifecycle.createSessionAccountGuard({ pool }));
 
 // Own the bounded form parser before global parsers and legacy session normalization.
 app.use('/', require('./routes/identityTenantSelection').createIdentityTenantSelectionRouter({ Router: express.Router, pool }));
 // Detached, display-only approval shell owns its requests before session normalization/static handling.
 app.use(require('./routes/anchorPreparationApprovalPage').createAnchorPreparationApprovalPageRouter({ pool }));
+// Scout research approval page + password step-up (display-only; the
+// tenant-outreach research endpoints remain the sole authority).
+app.use(require('./routes/scoutResearchApproval').createScoutResearchApprovalRouter({ pool }));
 
 // Stripe signature verification needs the untouched request Buffer. This is
 // deliberately mounted before express.json() (raw-body Pattern A).
@@ -381,6 +391,7 @@ app.get('/login', (req, res) => {
 <html>
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pulseforge — Login</title>
 <link rel="icon" href="/favicon.ico">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@400;500&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
@@ -407,6 +418,10 @@ button:hover { background:#7c3aed; box-shadow:0 0 20px rgba(139,92,246,0.4); }
 .ok { background:rgba(0,230,118,0.08); border:1px solid rgba(0,230,118,0.25); color:#00e676; font-family:'JetBrains Mono',monospace; font-size:0.7rem; padding:0.6rem 0.75rem; border-radius:6px; margin-bottom:1rem; letter-spacing:1px; }
 .signup-link { display:block; text-align:center; margin-top:1.1rem; color:#8b5cf6; font-family:'JetBrains Mono',monospace; font-size:0.62rem; letter-spacing:1px; text-decoration:none; text-transform:uppercase; }
 .signup-link:hover { color:#c4b5fd; }
+.remember { display:flex; align-items:center; gap:0.6rem; margin:-0.25rem 0 1.25rem; min-height:44px; cursor:pointer; font-family:'DM Sans',sans-serif; font-size:0.85rem; letter-spacing:0; text-transform:none; color:#c8d3ea; }
+.remember input { width:20px; height:20px; min-width:20px; margin:0; accent-color:#8b5cf6; }
+.remember-hint { display:block; font-size:0.7rem; color:#6b7fa0; }
+@media (max-width:440px) { .login-box { width:calc(100vw - 32px); padding:1.75rem; } }
 </style>
 </head>
 <body>
@@ -422,13 +437,14 @@ button:hover { background:#7c3aed; box-shadow:0 0 20px rgba(139,92,246,0.4); }
   ${identityCheck ? '<div class="ok">Identity check only — the dashboard will not open</div>' : ''}
   <form method="POST" action="/login">
     ${identityCheck ? '<input type="hidden" name="workflow" value="identity-check">' : ''}
-    <label>Email</label>
-    <input type="email" name="email" placeholder="you@pulseforge.com" autofocus>
-    <label>Password</label>
+    <label for="login-email">Email</label>
+    <input id="login-email" type="email" name="email" placeholder="you@pulseforge.com" autocomplete="username" autocapitalize="none" spellcheck="false" inputmode="email" autofocus>
+    <label for="login-password">Password</label>
     <div class="password-field">
-      <input id="login-password" type="password" name="password" placeholder="Enter password" required>
+      <input id="login-password" type="password" name="password" placeholder="Enter password" autocomplete="current-password" required>
       <button class="toggle-password" type="button" data-toggle-password="login-password" aria-label="Show password">Show</button>
     </div>
+    ${identityCheck ? '' : `<label class="remember" for="login-remember"><input id="login-remember" type="checkbox" name="remember" value="on"><span>Remember me for 30 days<span class="remember-hint">Only on a private device. Sign out to forget it.</span></span></label>`}
     <button type="submit">Access System →</button>
   </form>
   <div class="version">Pulseforge v0.6.0 · Phase 6</div>
@@ -456,6 +472,17 @@ app.post('/login', async (req, res) => {
   const failedLogin = error => res.redirect(
     `/login?error=${error}${identityCheck ? '&workflow=identity-check' : ''}`
   );
+  // Session-fixation defence: authenticate only a brand-new session ID. The
+  // pre-login row (and anything in it) is deleted; nothing is carried over.
+  const rotateLoginSession = async () => {
+    try { await sessionLifecycle.rotateSession(req); return true; }
+    catch {
+      req.session = null;
+      res.set('Cache-Control', 'no-store');
+      res.status(503).send('Sign-in is temporarily unavailable. Please try again.');
+      return false;
+    }
+  };
   const persistLoginSession = async () => {
     try {
       // express-session can emit redirect headers before its implicit save
@@ -487,6 +514,7 @@ app.post('/login', async (req, res) => {
     if (user.email_verified === false) return failedLogin('unverified');
     if (user.role === 'client' && !user.client_id) return failedLogin('no_workspace');
 
+    if (!await rotateLoginSession()) return;
     req.session.user = {
       id: user.id,
       name: user.name,
@@ -497,6 +525,8 @@ app.post('/login', async (req, res) => {
       password_change_required: Boolean(user.password_change_required),
     };
     req.session.authenticated = true;
+    // Opt-in only, never for the identity check; otherwise the 24h policy stands.
+    sessionLifecycle.applyLoginPersistence(req, user, !identityCheck && sessionLifecycle.wantsRemember(req.body));
     // Client-role users are locked to their workspace. Never default them to Pulseforge.
     req.session.active_client_id = user.role === 'client'
       ? Number(user.client_id)
@@ -516,10 +546,15 @@ app.post('/login', async (req, res) => {
   // The identity check requires an existing account, never the legacy fallback.
   if (identityCheck) return failedLogin('1');
 
-  if (password === process.env.DASHBOARD_PASSWORD) {
+  // Never match an unset fallback password (undefined === undefined).
+  if (typeof process.env.DASHBOARD_PASSWORD === 'string' && process.env.DASHBOARD_PASSWORD
+    && typeof password === 'string' && password === process.env.DASHBOARD_PASSWORD) {
+    if (!await rotateLoginSession()) return;
     req.session.user = { id: null, name: 'Legacy Admin', email: email || 'legacy@pulseforge.local', role: 'admin' };
     req.session.authenticated = true;
     req.session.active_client_id = 1;
+    // The env-password fallback has no account to revalidate: never remembered.
+    sessionLifecycle.applyLoginPersistence(req, null, false);
     if (!await persistLoginSession()) return;
     return res.redirect('/command-deck');
   }
@@ -528,8 +563,10 @@ app.post('/login', async (req, res) => {
 });
 
 app.get('/logout', (req, res) => {
-  req.session.destroy();
-  res.redirect('/login');
+  // Deleting the store row ends remembered and ordinary sessions alike.
+  const done = () => { res.clearCookie('connect.sid', { path: '/', httpOnly: true, sameSite: 'lax' }); res.redirect('/login'); };
+  if (!req.session) return done();
+  req.session.destroy(() => done());
 });
 
 // Health / API status check
