@@ -37,7 +37,10 @@ async function startApprovalHarness() {
     const login = makeHarness({ user: { id: ADMIN.id } });
     login.pool.query = (sql, params) => h.pool.query(sql, params);
     await h.pool.query(`ALTER TABLE users ADD COLUMN name text, ADD COLUMN email text, ADD COLUMN password_hash text,
-      ADD COLUMN last_login_at timestamptz`);
+      ADD COLUMN last_login_at timestamptz, ADD COLUMN created_at timestamptz DEFAULT now();
+      ALTER TABLE clients ADD COLUMN IF NOT EXISTS name text;
+      INSERT INTO clients(id,name,active) VALUES(1,'Synthetic home',true) ON CONFLICT (id) DO NOTHING;
+      UPDATE clients SET name='Anchor synthetic' WHERE id=10;`);
     await h.pool.query('UPDATE users SET name=$2,email=$3,password_hash=$4 WHERE id=$1', [ADMIN.id, ADMIN.name, ADMIN.email, login.user.password_hash]);
     await h.pool.query(`INSERT INTO users(id,client_id,role,active,name,email,password_hash) VALUES
       ($1,10,'ao',true,$2,$3,$4), ($5,NULL,'admin',true,$6,$7,$4)`,
@@ -53,18 +56,22 @@ async function startApprovalHarness() {
       require.cache[id] = { id, filename: id, loaded: true, exports };
       restores.push(() => { delete require.cache[id]; if (before) require.cache[id] = before; });
     }
-    for (const p of ['../../routes/tenantOutreach', '../../routes/scoutResearchApproval', '../../middleware/auth']) {
+    for (const p of ['../../routes/tenantOutreach', '../../routes/scoutResearchApproval', '../../middleware/auth',
+      '../../routes/users', '../../routes/pilotOnboarding']) {
       const id = require.resolve(p), before = require.cache[id]; delete require.cache[id];
       restores.push(() => { delete require.cache[id]; if (before) require.cache[id] = before; });
     }
-    const remembered = require('../../utils/rememberedSession');
+    const lifecycle = require('../../utils/sessionLifecycle');
     const app = express();
     const requests = [];
     app.use((req, _res, next) => { requests.push({ method: req.method, path: req.path }); next(); });
     store = new PgStore({ pool: h.pool, createTableIfMissing: false, pruneSessionInterval: false });
     app.use(session({ store, secret: SECRET, resave: false, saveUninitialized: false, proxy: true,
-      cookie: { maxAge: remembered.DEFAULT_MAX_AGE_MS, httpOnly: true, sameSite: 'lax', secure: 'auto' } }));
-    app.use(remembered.createRememberedSessionGuard({ pool: h.pool }));
+      cookie: { maxAge: lifecycle.DEFAULT_MAX_AGE_MS, httpOnly: true, sameSite: 'lax', secure: 'auto' } }));
+    app.use(lifecycle.createSessionAccountGuard({ pool: h.pool }));
+    // Same order as server.js: native tenant selection directly behind the guard.
+    app.use('/', require('../../routes/identityTenantSelection').createIdentityTenantSelectionRouter({ Router: express.Router, pool: h.pool,
+      appUrl: () => process.env.APP_URL }));
     app.use(require('../../routes/scoutResearchApproval').createScoutResearchApprovalRouter({ pool: h.pool }));
     app.use(express.json());
     app.use(express.urlencoded({ extended: true }));
@@ -78,6 +85,9 @@ async function startApprovalHarness() {
       req.session.destroy(() => done());
     });
     app.use(require('../../routes/tenantOutreach'));
+    // Real admin account management and self-service password change.
+    app.use(require('../../routes/users'));
+    app.use(require('../../routes/pilotOnboarding'));
     app.get(['/command-deck', '/ao', '/dashboard'], (req, res) => res.type('html').send(`<h1>Landing ${req.path}</h1>`));
     app.get('/favicon.ico', (_req, res) => res.status(204).end());
     app.use((error, _req, res, _next) => res.status(500).json({ error: 'synthetic_fixture_error', message: error.message }));
@@ -102,14 +112,16 @@ async function startApprovalHarness() {
       let json = null; try { json = JSON.parse(text); } catch { /* html */ }
       return { status: response.status, headers: response.headers, text, json, setCookie: response.headers.getSetCookie() };
     }
-    async function loginAs(user, { remember = false, headers } = {}) {
-      const response = await http('/login', { method: 'POST', headers,
-        form: { email: user.email, password: fixturePassword, ...(remember ? { remember: 'on' } : {}) } });
+    async function loginAs(user, { remember = false, headers, password = fixturePassword, cookie } = {}) {
+      const response = await http('/login', { method: 'POST', headers, cookie,
+        form: { email: user.email, password, ...(remember ? { remember: 'on' } : {}) } });
       const raw = response.setCookie.find(c => c.startsWith('connect.sid='));
       return { response, raw, cookie: raw ? raw.split(';')[0] : null };
     }
     const adminCookie = cookieFor('synthetic-research-admin-session');
-    return { ...h, origin, http, loginAs, seedSession, cookieFor, adminCookie, requests, close, fixturePassword,
+    const sidOf = cookie => decodeURIComponent(cookie.split('=')[1]).slice(2).split('.')[0];
+    const sessionRow = async cookie => (await h.pool.query('SELECT sess, expire FROM "session" WHERE sid=$1', [sidOf(cookie)])).rows[0] || null;
+    return { ...h, origin, http, loginAs, seedSession, cookieFor, adminCookie, sidOf, sessionRow, requests, close, fixturePassword,
       users: { ADMIN, AO, OTHER_ADMIN }, root };
   } catch (error) { await close(); throw error; }
 }

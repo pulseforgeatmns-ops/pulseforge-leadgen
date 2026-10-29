@@ -17,13 +17,15 @@ on:
       - 'test/loginSessionPersistencePostgres.test.js'
       - 'test/helpers/loginIdentityHarness.js'
       - 'test/helpers/disposablePostgres.js'
-      - 'utils/rememberedSession.js'
+      - 'utils/sessionLifecycle.js'
+      - 'routes/registration.js'
+      - 'routes/pilotOnboarding.js'
       - 'utils/freshConfirmation.js'
       - 'routes/scoutResearchApproval.js'
       - 'routes/tenantOutreach.js'
       - 'routes/users.js'
       - 'public/scout-research-approval.*'
-      - 'test/rememberedSession.test.js'
+      - 'test/sessionLifecycle.test.js'
       - 'test/scoutResearchApprovalPostgres.test.js'
       - 'test/browser/scoutResearchApprovalBrowser.test.js'
       - 'test/helpers/scoutResearchApprovalHarness.js'
@@ -46,13 +48,15 @@ on:
       - 'test/loginSessionPersistencePostgres.test.js'
       - 'test/helpers/loginIdentityHarness.js'
       - 'test/helpers/disposablePostgres.js'
-      - 'utils/rememberedSession.js'
+      - 'utils/sessionLifecycle.js'
+      - 'routes/registration.js'
+      - 'routes/pilotOnboarding.js'
       - 'utils/freshConfirmation.js'
       - 'routes/scoutResearchApproval.js'
       - 'routes/tenantOutreach.js'
       - 'routes/users.js'
       - 'public/scout-research-approval.*'
-      - 'test/rememberedSession.test.js'
+      - 'test/sessionLifecycle.test.js'
       - 'test/scoutResearchApprovalPostgres.test.js'
       - 'test/browser/scoutResearchApprovalBrowser.test.js'
       - 'test/helpers/scoutResearchApprovalHarness.js'
@@ -85,8 +89,8 @@ jobs:
           node --test test/identityTenantSelection.test.js test/loginIdentityWorkflow.test.js test/loginSessionPersistencePostgres.test.js
           test/tenantSelectorSync.test.js test/tenantWorkspace.test.js
           test/maxAttentionAuthorization.test.js test/maxAoHelpReviewGuards.test.js
-      - name: Remember me, step-up and Scout research approval
-        run: node --test test/rememberedSession.test.js test/scoutResearchApprovalPostgres.test.js
+      - name: Session rotation, revocation, Remember me, step-up and Scout research approval
+        run: node --test test/sessionLifecycle.test.js test/scoutResearchApprovalPostgres.test.js
       - uses: browser-actions/setup-chrome@v1
         id: chrome
       - name: Native identity login and tenant-selection forms

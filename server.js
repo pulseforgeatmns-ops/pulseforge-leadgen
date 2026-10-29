@@ -28,7 +28,7 @@ const pgSession = require('connect-pg-simple')(session);
 const pool     = require('./db');
 const { createObjectCsvWriter } = require('csv-writer');
 const { bcrypt, getUserCount, initAuth, requireAuth, requireRole } = require('./middleware/auth');
-const rememberedSession = require('./utils/rememberedSession');
+const sessionLifecycle = require('./utils/sessionLifecycle');
 const { ensureClientArchitecture } = require('./utils/clientContext');
 const { resolveCieClientId } = require('./utils/cieAuth');
 const { armed, withResearchProviderScope, assertResearchProviderAllowed,
@@ -123,11 +123,11 @@ app.use(session({
   // Trust Railway's X-Forwarded-Proto for the Secure flag only (not req.ip).
   proxy: true,
   // Unremembered sessions keep the 24h policy; "Remember me" extends the same
-  // server-side session (utils/rememberedSession.js). Never readable by scripts.
-  cookie: { maxAge: rememberedSession.DEFAULT_MAX_AGE_MS, httpOnly: true, sameSite: 'lax', secure: 'auto' }
+  // server-side session (utils/sessionLifecycle.js). Never readable by scripts.
+  cookie: { maxAge: sessionLifecycle.DEFAULT_MAX_AGE_MS, httpOnly: true, sameSite: 'lax', secure: 'auto' }
 }));
-// Remembered sessions are revalidated against users (active, role, password).
-app.use(rememberedSession.createRememberedSessionGuard({ pool }));
+// Every account-backed session is revalidated against users (active, role, password).
+app.use(sessionLifecycle.createSessionAccountGuard({ pool }));
 
 // Own the bounded form parser before global parsers and legacy session normalization.
 app.use('/', require('./routes/identityTenantSelection').createIdentityTenantSelectionRouter({ Router: express.Router, pool }));
@@ -472,6 +472,17 @@ app.post('/login', async (req, res) => {
   const failedLogin = error => res.redirect(
     `/login?error=${error}${identityCheck ? '&workflow=identity-check' : ''}`
   );
+  // Session-fixation defence: authenticate only a brand-new session ID. The
+  // pre-login row (and anything in it) is deleted; nothing is carried over.
+  const rotateLoginSession = async () => {
+    try { await sessionLifecycle.rotateSession(req); return true; }
+    catch {
+      req.session = null;
+      res.set('Cache-Control', 'no-store');
+      res.status(503).send('Sign-in is temporarily unavailable. Please try again.');
+      return false;
+    }
+  };
   const persistLoginSession = async () => {
     try {
       // express-session can emit redirect headers before its implicit save
@@ -503,6 +514,7 @@ app.post('/login', async (req, res) => {
     if (user.email_verified === false) return failedLogin('unverified');
     if (user.role === 'client' && !user.client_id) return failedLogin('no_workspace');
 
+    if (!await rotateLoginSession()) return;
     req.session.user = {
       id: user.id,
       name: user.name,
@@ -514,7 +526,7 @@ app.post('/login', async (req, res) => {
     };
     req.session.authenticated = true;
     // Opt-in only, never for the identity check; otherwise the 24h policy stands.
-    rememberedSession.applyLoginPersistence(req, user, !identityCheck && rememberedSession.wantsRemember(req.body));
+    sessionLifecycle.applyLoginPersistence(req, user, !identityCheck && sessionLifecycle.wantsRemember(req.body));
     // Client-role users are locked to their workspace. Never default them to Pulseforge.
     req.session.active_client_id = user.role === 'client'
       ? Number(user.client_id)
@@ -534,12 +546,15 @@ app.post('/login', async (req, res) => {
   // The identity check requires an existing account, never the legacy fallback.
   if (identityCheck) return failedLogin('1');
 
-  if (password === process.env.DASHBOARD_PASSWORD) {
+  // Never match an unset fallback password (undefined === undefined).
+  if (typeof process.env.DASHBOARD_PASSWORD === 'string' && process.env.DASHBOARD_PASSWORD
+    && typeof password === 'string' && password === process.env.DASHBOARD_PASSWORD) {
+    if (!await rotateLoginSession()) return;
     req.session.user = { id: null, name: 'Legacy Admin', email: email || 'legacy@pulseforge.local', role: 'admin' };
     req.session.authenticated = true;
     req.session.active_client_id = 1;
     // The env-password fallback has no account to revalidate: never remembered.
-    rememberedSession.applyLoginPersistence(req, null, false);
+    sessionLifecycle.applyLoginPersistence(req, null, false);
     if (!await persistLoginSession()) return;
     return res.redirect('/command-deck');
   }

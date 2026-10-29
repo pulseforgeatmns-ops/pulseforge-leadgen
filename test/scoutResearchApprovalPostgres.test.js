@@ -194,50 +194,206 @@ test('Scout research approval and Remember me (synthetic Tenant 10)', { timeout:
     assert.match(https.raw, /; Secure/);
   });
 
-  await t.test('Remember me still requires a fresh password for spending approvals', async () => {
+  const COOKIE = { originalMaxAge: DAY, expires: '2099-01-01T00:00:00.000Z', httpOnly: true, path: '/' };
+  const fresh = require('../utils/freshConfirmation');
+  const lifecycle = require('../utils/sessionLifecycle');
+  const signedIn = async cookie => (await http('/api/me', { cookie })).status === 200;
+
+  await t.test('sign-in rotates the session ID: a planted pre-login session never becomes authenticated', async () => {
+    const planted = await h.seedSession('attacker-planted-session', { cookie: COOKIE, marker: 'attacker',
+      freshConfirmation: fresh.marker(ADMIN.id, 'scout_research_approval') });
+    const victim = await h.loginAs(ADMIN, { cookie: planted });
+    assert.equal(victim.response.headers.get('location'), '/command-deck');
+    assert.notEqual(h.sidOf(victim.cookie), 'attacker-planted-session', 'a new session ID is issued');
+    assert.equal(await h.sessionRow(planted), null, 'the planted row is deleted');
+    assert.equal(await signedIn(planted), false, 'the attacker cookie is not signed in');
+    assert.equal(await signedIn(victim.cookie), true);
+    const row = await h.sessionRow(victim.cookie);
+    assert.equal(row.sess.marker, undefined); assert.equal(row.sess.freshConfirmation, undefined, 'no pre-login state carried over');
+
+    // Signing in again while signed in also rotates and ends the previous ID.
+    const again = await h.loginAs(ADMIN, { cookie: victim.cookie });
+    assert.notEqual(h.sidOf(again.cookie), h.sidOf(victim.cookie));
+    assert.equal(await signedIn(victim.cookie), false); assert.equal(await signedIn(again.cookie), true);
+
+    // A failed sign-in neither authenticates nor rotates the presented session.
+    const probe = await h.seedSession('attacker-probe-session', { cookie: COOKIE, marker: 'attacker' });
+    const failed = await h.loginAs(ADMIN, { cookie: probe, password: 'wrong-password' });
+    assert.equal(failed.response.headers.get('location'), '/login?error=1');
+    assert.equal(failed.cookie, null, 'no new cookie on failure');
+    assert.equal((await h.sessionRow(probe)).sess.authenticated, undefined);
+    assert.equal(await signedIn(probe), false);
+  });
+
+  await t.test('native tenant selection still works on a rotated session and enables approvals', async () => {
+    const other = await h.loginAs(OTHER_ADMIN);
+    assert.equal((await http(CONTEXT, { cookie: other.cookie })).json.anchorSelected, false);
+    const form = await http('/identity-check/tenant', { cookie: other.cookie });
+    assert.equal(form.status, 200, form.text);
+    const csrf = /name="csrf" value="([a-f0-9]{64})"/.exec(form.text)[1];
+    const selected = await http('/identity-check/tenant', { method: 'POST', cookie: other.cookie, headers: { origin: h.origin },
+      form: { workflow: /name="workflow" value="([^"]+)"/.exec(form.text)[1], client_id: '10', csrf, confirm: 'select-anchor' } });
+    assert.equal(selected.status, 303, 'selection: ' + selected.text);
+    const ctx = (await http(CONTEXT, { cookie: other.cookie })).json;
+    assert.equal(ctx.anchorSelected, true); assert.equal(ctx.approvalReady, true);
+    const preview = await http(API + 'research-mission/preview', { method: 'POST', cookie: other.cookie, body: { approvalRef: 'synthetic-ui-mission-1' } });
+    assert.equal(preview.status, 200); assert.equal(preview.json.status, 'already_installed');
+    // Signing in again starts a new session at the account's home tenant; the selection does not carry over.
+    const again = await h.loginAs(OTHER_ADMIN, { cookie: other.cookie });
+    assert.equal((await http(CONTEXT, { cookie: again.cookie })).json.anchorSelected, false);
+  });
+
+  await t.test('remembered and rotated sessions still need a fresh password; grants bind to the approving session', async () => {
     const remember = await h.loginAs(ADMIN, { remember: true });
     assert.equal((await http(CONTEXT, { cookie: remember.cookie })).json.rememberedSession, true);
     const preview = (await http(API + 'research-only-grant/preview', { method: 'POST', cookie: remember.cookie, body: grantBody('synthetic-ui-grant-remembered') })).json;
     assert.equal(preview.installable, true);
-    const res = await http(API + 'research-only-grant/install', { method: 'POST', cookie: remember.cookie,
-      body: { manifest: preview.manifest, manifestHash: preview.manifestHash } });
-    assert.equal(res.status, 403); assert.equal(res.json.code, 'fresh_confirmation_required');
+    const body = { manifest: preview.manifest, manifestHash: preview.manifestHash };
+    const refused = await http(API + 'research-only-grant/install', { method: 'POST', cookie: remember.cookie, body });
+    assert.equal(refused.status, 403); assert.equal(refused.json.code, 'fresh_confirmation_required');
+
+    // A preview made before signing in again cannot be installed from the new session.
+    const relogged = await h.loginAs(ADMIN, { remember: true, cookie: remember.cookie });
+    assert.equal((await confirm(relogged.cookie)).status, 200);
+    const stale = await http(API + 'research-only-grant/install', { method: 'POST', cookie: relogged.cookie, body });
+    assert.equal(stale.status, 409); assert.equal(stale.json.code, 'research_only_operator_invalid');
+    assert.equal(await count("SELECT count(*)::int n FROM scout_research_only_grants WHERE revoked_at IS NULL"), 0);
+
+    // The rotated session previews, confirms and installs normally, then revokes.
+    const current = (await http(API + 'research-only-grant/preview', { method: 'POST', cookie: relogged.cookie, body: grantBody('synthetic-ui-grant-rotated') })).json;
+    assert.equal(current.installable, true);
+    assert.equal((await confirm(relogged.cookie)).status, 200);
+    const installed = await http(API + 'research-only-grant/install', { method: 'POST', cookie: relogged.cookie,
+      body: { manifest: current.manifest, manifestHash: current.manifestHash } });
+    assert.equal(installed.status, 200); assert.equal(installed.json.installed, true);
+    const revoked = await http(API + 'research-only-grant/revoke', { method: 'POST', cookie: relogged.cookie,
+      body: { grantId: installed.json.grantId, approvalReference: 'synthetic-ui-revoke-rotated' } });
+    assert.equal(revoked.status, 200);
   });
 
-  await t.test('logout, deactivation, password change and the absolute cap end a remembered session', async () => {
-    const remembered = require('../utils/rememberedSession');
-    const sidOf = cookie => decodeURIComponent(cookie.split('=')[1]).slice(2).split('.')[0];
-    const exists = async cookie => (await pool.query('SELECT 1 FROM "session" WHERE sid=$1', [sidOf(cookie)])).rows.length === 1;
+  await t.test('password confirmation is single-use, expires at exactly two minutes and dies with logout or re-login', async () => {
+    assert.equal(fresh.VALID_MS, 120000);
+    const x = await h.loginAs(ADMIN);
+    const sid = h.sidOf(x.cookie), at = Date.now();
+    const plant = () => pool.query(`UPDATE "session" SET sess=jsonb_set(sess::jsonb,'{freshConfirmation}',$2::jsonb)::json WHERE sid=$1`,
+      [sid, JSON.stringify(fresh.marker(ADMIN.id, 'scout_research_approval', at))]);
+    const use = now => fresh.consume(pool, { sessionId: sid, userId: ADMIN.id, purpose: 'scout_research_approval', now });
+    await plant();
+    assert.equal(await use(at + 119999), true, 'valid just inside two minutes');
+    assert.equal(await use(at + 1000), false, 'single-use');
+    await plant();
+    assert.equal(await use(at + 120000), false, 'expired at two minutes');
+    await plant();
+    assert.equal(await fresh.consume(pool, { sessionId: sid, userId: OTHER_ADMIN.id, purpose: 'scout_research_approval', now: at }), false, 'bound to the user');
+    assert.equal(await fresh.consume(pool, { sessionId: 'another-session', userId: ADMIN.id, purpose: 'scout_research_approval', now: at }), false, 'bound to the session');
 
+    // Logout: the marker goes with the session row; the old cookie cannot use it.
+    assert.equal((await confirm(x.cookie)).status, 200);
+    await http('/logout', { cookie: x.cookie });
+    assert.equal(await h.sessionRow(x.cookie), null);
+    const body = { approvalRef: 'synthetic-ui-mission-1', mission: mission.mission, missionHash: mission.missionHash };
+    assert.equal((await http(API + 'research-mission/install', { method: 'POST', cookie: x.cookie, body })).status, 401);
+    const y = await h.loginAs(ADMIN);
+    const afterLogout = await http(API + 'research-mission/install', { method: 'POST', cookie: y.cookie, body });
+    assert.equal(afterLogout.status, 403); assert.equal(afterLogout.json.code, 'fresh_confirmation_required');
+
+    // Re-login on the same browser: the confirmation does not follow the rotated session.
+    assert.equal((await confirm(y.cookie)).status, 200);
+    const z = await h.loginAs(ADMIN, { cookie: y.cookie });
+    assert.equal((await http(API + 'research-mission/install', { method: 'POST', cookie: z.cookie, body })).json.code, 'fresh_confirmation_required');
+  });
+
+  await t.test('admin deactivation, role change, tenant change, password reset and deletion end every session', async () => {
+    await pool.query(`INSERT INTO users(id,client_id,role,active,name,email,password_hash,email_verified,password_change_required)
+      SELECT '74',10,'manager',true,'Synthetic Target','target@example.test',password_hash,true,false FROM users WHERE id=$1`, [ADMIN.id]);
+    const TARGET = { id: '74', email: 'target@example.test' };
+    const manager = (await h.loginAs(h.users.OTHER_ADMIN)).cookie;
+    const patch = body => http('/api/users/74', { method: 'PATCH', cookie: manager, body });
+    const both = async () => [(await h.loginAs(TARGET, { remember: true })).cookie, (await h.loginAs(TARGET)).cookie];
+    const alive = async cookies => Promise.all(cookies.map(signedIn));
+
+    let sessions = await both();
+    assert.deepEqual(await alive(sessions), [true, true]);
+    assert.equal((await patch({ name: 'Renamed Target' })).status, 200);
+    assert.deepEqual(await alive(sessions), [true, true], 'a name edit is not an authority change');
+
+    assert.equal((await patch({ active: false })).status, 200);
+    assert.deepEqual(await alive(sessions), [false, false], 'deactivation ends remembered AND ordinary sessions');
+    for (const cookie of sessions) assert.equal(await h.sessionRow(cookie), null);
+    assert.equal((await h.loginAs(TARGET)).response.headers.get('location'), '/login?error=1');
+    assert.equal((await patch({ active: true })).status, 200);
+
+    sessions = await both();
+    assert.equal((await patch({ role: 'viewer' })).status, 200);
+    assert.deepEqual(await alive(sessions), [false, false], 'role change');
+    assert.equal((await patch({ role: 'manager' })).status, 200);
+
+    sessions = await both();
+    await pool.query("INSERT INTO clients(id,active) VALUES(11,true) ON CONFLICT (id) DO NOTHING");
+    const moved = await patch({ client_id: 11 });
+    assert.equal(moved.status, 200, moved.text);
+    assert.deepEqual(await alive(sessions), [false, false], 'tenant change');
+    assert.equal((await patch({ client_id: 10 })).status, 200);
+
+    // A stale save that recreated a deleted row (a request in flight at the time) is still refused.
+    sessions = await both();
+    const stale = await h.sessionRow(sessions[1]);
+    assert.equal((await patch({ active: false })).status, 200);
+    await pool.query('INSERT INTO "session"(sid,sess,expire) VALUES($1,$2,$3)', [h.sidOf(sessions[1]), stale.sess, stale.expire]);
+    assert.equal(await signedIn(sessions[1]), false, 'the session guard re-checks the account');
+    assert.equal((await patch({ active: true })).status, 200);
+
+    sessions = await both();
+    assert.equal((await http('/api/users/74/reset-password', { method: 'POST', cookie: manager, body: { password: 'synthetic-reset-pass' } })).status, 200);
+    assert.deepEqual(await alive(sessions), [false, false], 'password reset');
+    assert.equal((await h.loginAs(TARGET)).response.headers.get('location'), '/login?error=1', 'old password refused');
+    assert.equal((await h.loginAs(TARGET, { password: 'synthetic-reset-pass' })).response.headers.get('location'), '/change-password');
+    await pool.query("UPDATE users SET password_hash=(SELECT password_hash FROM users WHERE id=$1), password_change_required=false WHERE id='74'", [ADMIN.id]);
+
+    // Self-service password change keeps the changing session and ends the others.
+    sessions = await both();
+    const changed = await http('/api/me/password', { method: 'POST', cookie: sessions[0], body: { password: 'synthetic-self-pass' } });
+    assert.equal(changed.status, 200, changed.text);
+    assert.deepEqual(await alive(sessions), [true, false], 'other sessions end; the changing session stays');
+    await pool.query("UPDATE users SET password_hash=(SELECT password_hash FROM users WHERE id=$1) WHERE id='74'", [ADMIN.id]);
+
+    sessions = await both();
+    assert.equal((await http('/api/users/74', { method: 'DELETE', cookie: manager })).status, 200);
+    assert.deepEqual(await alive(sessions), [false, false], 'deletion');
+  });
+
+  await t.test('logout, a change outside the app, the absolute cap and store revocation end sessions', async () => {
     const a = await h.loginAs(ADMIN, { remember: true });
     const out = await http('/logout', { cookie: a.cookie });
     assert.equal(out.status, 302); assert.match(out.setCookie.join(), /connect\.sid=;/);
-    assert.equal(await exists(a.cookie), false);
-    assert.equal((await http(CONTEXT, { cookie: a.cookie })).status, 401, 'old persistent cookie is dead');
+    assert.equal(await h.sessionRow(a.cookie), null);
+    assert.equal(await signedIn(a.cookie), false, 'old persistent cookie is dead');
 
-    const b = await h.loginAs(ADMIN, { remember: true });
-    assert.equal((await http(CONTEXT, { cookie: b.cookie })).status, 200);
-    await pool.query('UPDATE users SET active=false WHERE id=$1', [ADMIN.id]);
-    remembered.forgetUser(ADMIN.id); // what PATCH /api/users/:id does
-    assert.equal((await http(CONTEXT, { cookie: b.cookie })).status, 401);
-    assert.equal(await exists(b.cookie), false);
-    assert.equal((await h.loginAs(ADMIN, { remember: true })).response.headers.get('location'), '/login?error=1', 'inactive cannot sign in');
-    await pool.query('UPDATE users SET active=true WHERE id=$1', [ADMIN.id]);
+    // Changed directly in the database (another instance, a script): the guard
+    // catches it once its 30s cache lapses — forgetUser stands in for the lapse.
+    for (const remember of [true, false]) {
+      const b = await h.loginAs(ADMIN, { remember });
+      await pool.query('UPDATE users SET active=false WHERE id=$1', [ADMIN.id]);
+      lifecycle.forgetUser(ADMIN.id);
+      assert.equal(await signedIn(b.cookie), false, `direct deactivation (${remember ? 'remembered' : 'ordinary'})`);
+      assert.equal(await h.sessionRow(b.cookie), null);
+      await pool.query('UPDATE users SET active=true WHERE id=$1', [ADMIN.id]);
 
-    const c = await h.loginAs(ADMIN, { remember: true });
-    await pool.query("UPDATE users SET password_hash=password_hash||'x' WHERE id=$1", [ADMIN.id]);
-    remembered.forgetUser(ADMIN.id);
-    assert.equal((await http(CONTEXT, { cookie: c.cookie })).status, 401, 'password change ends remembered sessions');
-    await pool.query("UPDATE users SET password_hash=left(password_hash,length(password_hash)-1) WHERE id=$1", [ADMIN.id]);
+      const c = await h.loginAs(ADMIN, { remember });
+      await pool.query("UPDATE users SET password_hash=password_hash||'x' WHERE id=$1", [ADMIN.id]);
+      lifecycle.forgetUser(ADMIN.id);
+      assert.equal(await signedIn(c.cookie), false, `direct password change (${remember ? 'remembered' : 'ordinary'})`);
+      await pool.query("UPDATE users SET password_hash=left(password_hash,length(password_hash)-1) WHERE id=$1", [ADMIN.id]);
+    }
 
     const d = await h.loginAs(ADMIN, { remember: true });
     await pool.query(`UPDATE "session" SET sess=jsonb_set(sess::jsonb,'{remembered,expiresAt}',$2::jsonb)::json WHERE sid=$1`,
-      [sidOf(d.cookie), String(Date.now() - 1)]);
-    assert.equal((await http(CONTEXT, { cookie: d.cookie })).status, 401, 'absolute 30-day cap');
+      [h.sidOf(d.cookie), String(Date.now() - 1)]);
+    assert.equal(await signedIn(d.cookie), false, 'absolute 30-day cap');
 
     const e = await h.loginAs(ADMIN);
-    await pool.query('DELETE FROM "session" WHERE sid=$1', [sidOf(e.cookie)]);
-    assert.equal((await http(CONTEXT, { cookie: e.cookie })).status, 401, 'store-row revocation still works');
+    await pool.query('DELETE FROM "session" WHERE sid=$1', [h.sidOf(e.cookie)]);
+    assert.equal(await signedIn(e.cookie), false, 'store-row revocation still works');
   });
 
   await t.test('closed recovery state, outbound restriction and enrichment queue are untouched', async () => {

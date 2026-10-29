@@ -104,6 +104,22 @@ test('Scout research approval page and Remember me in Chrome', { timeout: 600000
     await signIn(page, h, ADMIN, { remember: false });
     const plain = (await page.cookies()).find(c => c.name === 'connect.sid');
     assert.ok(Math.abs(plain.expires * 1000 - (Date.now() + DAY)) < 60000, 'unremembered keeps the 24h policy');
+    // Signing in again in the same browser issues a new session ID and ends the old one.
+    await signIn(page, h, ADMIN, { remember: true });
+    const rotated = (await page.cookies()).find(c => c.name === 'connect.sid');
+    assert.notEqual(rotated.value, plain.value, 'session ID rotated on sign-in');
+    assert.equal((await h.http('/api/me', { cookie: `connect.sid=${plain.value}` })).status, 401, 'previous ID no longer signed in');
+    await browser.close();
+
+    // The rotated remembered session survives a restart, and ends when the account is deactivated.
+    browser = await launch(profile);
+    page = await newPage(browser);
+    assert.equal((await page.goto(h.origin + PAGE)).status(), 200, 'rotated remembered session survives restart');
+    await h.pool.query('UPDATE users SET active=false WHERE id=$1', [ADMIN.id]);
+    require('../../utils/sessionLifecycle').forgetUser(ADMIN.id);
+    await page.goto(h.origin + PAGE);
+    assert.equal(new URL(page.url()).pathname, '/login', 'deactivation signs the browser out');
+    await h.pool.query('UPDATE users SET active=true WHERE id=$1', [ADMIN.id]);
     await browser.close();
   });
 
