@@ -282,6 +282,17 @@ for (const [resource, operation, service, method] of [
         if (!['http:', 'https:'].includes(expected.protocol) || req.get('origin') !== expected.origin
           || req.get('sec-fetch-site') === 'cross-site' || !req.is('application/json')) throw new Error('forbidden');
       } catch { return res.status(403).json({ error: 'research_only_grant_forbidden', retryAllowed: false }); }
+      // Installing commits Google spend authority: require a fresh, single-use
+      // password confirmation on this exact session, however long-lived the
+      // login is. Nothing is written when it is missing. Revoke never needs it.
+      if (operation === 'install') {
+        const confirmed = await require('../utils/freshConfirmation').consume(pool, { sessionId: req.sessionID,
+          userId: actor.id, purpose: 'scout_research_approval' }).catch(() => false);
+        if (!confirmed) return res.status(403).json({ error: 'fresh_confirmation_required', code: 'fresh_confirmation_required',
+          status: 'rejected', writesMayHaveOccurred: false, retryAllowed: true });
+        // The marker was consumed in SQL; never re-save this request's stale snapshot.
+        req.session = null;
+      }
       const handler = require(`../services/${service}`);
       try {
         if (operation === 'inspect') return res.json(await handler.inspectResearchOnlyGrant(pool, req.body?.grantId));

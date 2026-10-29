@@ -76,6 +76,11 @@ router.post('/api/me/password', requireAuth, async (req, res) => {
     if (req.session && req.session.user) {
       req.session.user.password_change_required = false;
     }
+    // Keep this (just re-proven) remembered session; other remembered
+    // sessions of this account were bound to the old password and now end.
+    const rememberedSession = require('../utils/rememberedSession');
+    if (req.session && req.session.remembered) req.session.remembered.tag = rememberedSession.credentialTag(userId, hash);
+    rememberedSession.forgetUser(userId);
     if (req.user) req.user.password_change_required = false;
     noStore(res);
     return res.json({

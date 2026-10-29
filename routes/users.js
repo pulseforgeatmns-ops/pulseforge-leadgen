@@ -93,6 +93,7 @@ td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.04); color
   <div><div class="title">USER MANAGEMENT</div><div class="sub">Admin only · Pulseforge Lead Engine</div></div>
   <a href="/dashboard">Back to dashboard</a>
   <a href="/admin/ao-impersonation" style="margin-left:12px">Act as AO</a>
+  <a href="/admin/scout-research-approval" style="margin-left:12px">Scout research approval</a>
 </div>
 <div class="msg" id="msg"></div>
 <div class="note">Use Client for external tenant access. Assign a tenant and a temporary password — the client must choose a new password on first login. Viewer is internal/admin-shared and is not tenant-locked.</div>
@@ -449,6 +450,8 @@ router.patch('/api/users/:id', ...adminOnly, async (req, res) => {
       RETURNING id, name, email, role, client_id, active, created_at, last_login_at, password_change_required
     `, values);
     if (!rows.length) return res.status(404).json({ error: 'User not found' });
+    // Remembered sessions re-check this account on their next request.
+    require('../utils/rememberedSession').forgetUser(rows[0].id);
     res.json(publicUser(rows[0]));
   } catch (err) {
     if (err.code === '23505') {
@@ -469,6 +472,7 @@ router.post('/api/users/:id/reset-password', ...adminOnly, async (req, res) => {
     [hash, req.params.id]
   );
   if (!rowCount) return res.status(404).json({ error: 'User not found' });
+  require('../utils/rememberedSession').forgetUser(req.params.id);
   res.json({ success: true });
 });
 
@@ -476,6 +480,7 @@ router.delete('/api/users/:id', ...adminOnly, async (req, res) => {
   await initAuth();
   const { rowCount } = await pool.query('DELETE FROM users WHERE id = $1', [req.params.id]);
   if (!rowCount) return res.status(404).json({ error: 'User not found' });
+  require('../utils/rememberedSession').forgetUser(req.params.id);
   res.json({ success: true });
 });
 

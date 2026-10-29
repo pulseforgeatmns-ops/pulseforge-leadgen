@@ -87,7 +87,7 @@ function makeHarness(options = {}) {
     post(route, ...fns) { handlers[`POST ${route}`] = fns; },
   };
   vm.runInNewContext(between(serverSource, "app.get('/login'", "app.get('/logout'"), {
-    app, pool, bcrypt,
+    app, pool, bcrypt, rememberedSession: require('../../utils/rememberedSession'),
     process: { env: { DASHBOARD_PASSWORD: 'local-legacy-fixture' } },
     initAuth: async () => { initCalls++; if (options.initFailure) throw new Error('cached initializer failure'); },
     getUserCount: async () => options.userCount ?? 1,

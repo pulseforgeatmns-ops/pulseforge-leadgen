@@ -1,0 +1,30 @@
+*{box-sizing:border-box} [hidden]{display:none!important}
+body{margin:0;background:var(--pf-bg);color:var(--pf-text);font:16px/1.55 var(--pf-font-body)}
+main{max-width:960px;width:calc(100% - 40px);margin:0 auto;padding:28px 0 72px;overflow-wrap:anywhere}
+header,.section-title,.actions{display:flex;align-items:center;gap:14px;flex-wrap:wrap}header{justify-content:space-between;margin-bottom:28px}
+a{color:var(--pf-teal);text-underline-offset:4px;display:inline-flex;align-items:center;min-height:44px;padding:8px 4px}.eyebrow{color:var(--pf-text-dim);font-size:13px}
+h1{font-size:clamp(28px,5vw,42px);line-height:1.15;letter-spacing:-.035em;margin:0 0 14px}h2{font-size:21px;margin:0}h3{font-size:17px;margin:22px 0 10px}p{margin:12px 0}.lead{font-size:18px;max-width:760px}
+.card{margin:22px 0;background:var(--pf-bg-card);border:1px solid var(--pf-border);border-radius:18px;padding:26px}
+.boundary{border-left:4px solid var(--pf-gold);background:var(--pf-gold-glow);padding:18px 20px;border-radius:0 12px 12px 0;margin:22px 0}.boundary strong{display:block;margin-bottom:4px}
+.step{display:grid;place-items:center;min-width:32px;height:32px;border-radius:50%;background:var(--pf-bg-raised);font-weight:700}.section-title{margin-bottom:16px}
+.fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.wide{grid-column:1/-1}
+label{display:block;font-weight:600;font-size:14px;margin:10px 0}
+input:not([type=checkbox]),textarea{display:block;width:100%;min-width:0;margin-top:6px;min-height:48px;padding:10px 12px;border:1px solid var(--pf-border-strong);border-radius:8px;background:var(--pf-bg-card);color:var(--pf-text);font:16px/1.4 var(--pf-font-body)}
+input[type=checkbox]{width:24px;height:24px;min-width:24px;margin:0;accent-color:var(--pf-navy)}
+.check{display:flex;align-items:flex-start;gap:12px;font-weight:400;font-size:15px;margin:16px 0;min-height:44px;padding:10px 0;cursor:pointer}
+.help{color:var(--pf-text-dim);font-size:14px}
+button{min-height:48px;padding:11px 18px;margin:8px 0;border:1px solid var(--pf-border-strong);border-radius:9px;background:var(--pf-bg-card);color:var(--pf-text);font:600 15px/1.4 var(--pf-font-body);cursor:pointer;touch-action:manipulation}
+.primary{background:var(--pf-navy);color:var(--pf-bg-card)}.danger{color:var(--pf-red);border-color:var(--pf-red)}button:disabled{opacity:.5;cursor:not-allowed}
+button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,summary:focus-visible{outline:3px solid var(--pf-violet);outline-offset:3px}
+#status{min-height:28px;font-weight:700}#status[data-tone=error],.blocked{color:var(--pf-red)}#status[data-tone=success],.ok{color:var(--pf-green)}
+.badge{display:inline-block;padding:4px 10px;margin:0 8px 8px 0;border-radius:16px;background:var(--pf-bg-raised);font-size:13px}
+.badge.warn{background:var(--pf-gold-glow);color:var(--pf-gold-strong)}.badge.bad{color:var(--pf-red)}.badge.good{color:var(--pf-green)}
+.facts{display:grid;grid-template-columns:minmax(150px,1fr) minmax(0,2fr);gap:8px 18px;margin:16px 0}.facts dt{color:var(--pf-text-dim);font-size:14px}.facts dd{margin:0;overflow-wrap:anywhere}
+.mono{font-family:var(--pf-font-mono);font-size:13px}
+.list{margin:8px 0 16px;padding-left:22px}.list li{margin:4px 0}
+.blockers{border:1px solid var(--pf-red);border-radius:12px;padding:12px 16px;margin:14px 0}.blockers h3{margin:0 0 6px;color:var(--pf-red)}
+.error-box{border:1px solid var(--pf-red);border-radius:12px;padding:12px 16px;margin:14px 0}.error-box strong{color:var(--pf-red)}
+.meter{height:10px;border-radius:6px;background:var(--pf-bg-raised);overflow:hidden;margin:6px 0 2px}.meter span{display:block;height:100%;background:var(--pf-navy)}
+details{margin:14px 0}summary{cursor:pointer;min-height:44px;padding:10px 0}
+dialog{width:min(600px,calc(100% - 32px));max-height:calc(100% - 40px);overflow:auto;border:1px solid var(--pf-border-strong);border-radius:18px;padding:26px;background:var(--pf-bg-card);color:var(--pf-text);box-shadow:var(--pf-shadow)}dialog::backdrop{background:#10203c99}dialog .actions{margin-top:12px}
+@media(max-width:640px){main{width:calc(100% - 32px);padding-top:18px}.card{padding:18px}.fields{grid-template-columns:1fr}.facts{grid-template-columns:1fr;gap:2px}.facts dd{margin-bottom:10px}header{align-items:flex-start;flex-direction:column;margin-bottom:20px}.actions button,#approveMission,#installGrant,#revokeButton,form button[type=submit]{width:100%}dialog{padding:20px}.boundary{padding:16px}}
