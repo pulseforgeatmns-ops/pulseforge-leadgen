@@ -1,27 +1,21 @@
 'use strict';
-// checkpoint runner v2: resumable market-history reconstruction.
 const fs=require('node:fs');const path=require('node:path');
 const {canonicalize,assertNoProspectiveLeak}=require('../services/signalOpportunities/historicalDataset');
 const {attentionSequence,reconstructMarket}=require('../services/signalOpportunities/historicalReconstruction');
 const {sourceStats,sequenceStats,amplifierStats}=require('../services/signalOpportunities/historicalStats');
 const {SOURCES}=require('../services/signalOpportunities/sourceUniverse');
 const {GeckoTerminalMarketDataProvider}=require('../packages/signal-v1/providers/GeckoTerminalMarketDataProvider');
-function readJsonl(file){return fs.existsSync(file)?fs.readFileSync(file,'utf8').split('
-').filter(Boolean).flatMap(line=>{try{return [JSON.parse(line)]}catch{return []}}):[];}
+function readJsonl(file){return fs.existsSync(file)?fs.readFileSync(file,'utf8').split('\n').filter(Boolean).flatMap(line=>{try{return [JSON.parse(line)]}catch{return []}}):[];}
 function earliestCalls(rows){const map=new Map();for(const r of rows){for(const token of r.addresses||[]){const key=r.sourceId+'|'+token,prev=map.get(key);if(!prev||Date.parse(r.occurredAt)<Date.parse(prev.occurredAt))map.set(key,{...r,addresses:[token]});}}return [...map.values()];}
 async function main(){const root=process.env.SIGNAL_HISTORICAL_BACKFILL_PATH||'/data/historical',out=path.join(root,'analysis');fs.mkdirSync(out,{recursive:true});
  const raw=SOURCES.flatMap(s=>readJsonl(path.join(root,s.sourceId+'.jsonl'))),rows=earliestCalls(raw.map(r=>canonicalize(r)));rows.forEach(assertNoProspectiveLeak);
  const discovery=rows.filter(r=>r.partition==='HISTORICAL_DISCOVERY'),holdout=rows.filter(r=>r.partition==='HISTORICAL_HOLDOUT');const meta=Object.fromEntries(SOURCES.map(s=>[s.sourceId,s]));
  const maxTokens=Math.max(1,Math.min(500,Number(process.env.SIGNAL_HISTORICAL_RECONSTRUCT_MAX_TOKENS)||50));const provider=new GeckoTerminalMarketDataProvider({rateLimitMs:Number(process.env.SIGNAL_HISTORICAL_MARKET_RATE_LIMIT_MS)||1400});
  const tokenFirst=new Map();for(const r of discovery){const token=r.addresses[0],prev=tokenFirst.get(token);if(!prev||Date.parse(r.occurredAt)<Date.parse(prev.occurredAt))tokenFirst.set(token,r);}
- const selected=[...tokenFirst.values()].sort((a,b)=>Date.parse(b.occurredAt)-Date.parse(a.occurredAt)).slice(0,maxTokens),marketByToken=new Map(),errors=[];
- const checkpointFile=path.join(out,'market-checkpoint.jsonl');for(const x of readJsonl(checkpointFile)){if(x&&x.token&&Array.isArray(x.observations))marketByToken.set(x.token,x.observations);}
- for(const r of selected){const token=r.addresses[0];if(marketByToken.has(token)){console.log('[signal-historical-market-checkpoint]',JSON.stringify({token,observations:marketByToken.get(token).length}));continue;}const start=new Date(r.occurredAt),end=new Date(start.getTime()+1441*60000);try{const obs=await provider.getHistoricalPrices(token,start,end,{resolutionSeconds:60});marketByToken.set(token,obs);fs.appendFileSync(checkpointFile,JSON.stringify({token,occurredAt:r.occurredAt,observations:obs})+'\
-');console.log('[signal-historical-market]',JSON.stringify({token,observations:obs.length,occurredAt:r.occurredAt}));}catch(e){errors.push({token,error:String(e.message||e)});console.warn('[signal-historical-market-error]',JSON.stringify(errors.at(-1)));}}
+ const selected=[...tokenFirst.values()].sort((a,b)=>Date.parse(b.occurredAt)-Date.parse(a.occurredAt)).slice(0,maxTokens),marketByToken=new Map(),errors=[];\n const checkpointFile=path.join(out,'market-checkpoint.jsonl');for(const x of readJsonl(checkpointFile)){if(x&&x.token&&Array.isArray(x.observations))marketByToken.set(x.token,x.observations);}
+ for(const r of selected){const token=r.addresses[0];if(marketByToken.has(token)){console.log('[signal-historical-market-checkpoint]',JSON.stringify({token,observations:marketByToken.get(token).length}));continue;}const start=new Date(r.occurredAt),end=new Date(start.getTime()+1441*60000);try{const obs=await provider.getHistoricalPrices(token,start,end,{resolutionSeconds:60});marketByToken.set(token,obs);fs.appendFileSync(checkpointFile,JSON.stringify({token,occurredAt:r.occurredAt,observations:obs})+'\\n');console.log('[signal-historical-market]',JSON.stringify({token,observations:obs.length,occurredAt:r.occurredAt}));}catch(e){errors.push({token,error:String(e.message||e)});console.warn('[signal-historical-market-error]',JSON.stringify(errors.at(-1)));}}
  const enriched=discovery.filter(r=>marketByToken.has(r.addresses[0])).map(r=>({...r,attention:attentionSequence(r,discovery,meta),market:reconstructMarket(r,marketByToken.get(r.addresses[0]))}));
  const report={version:'signal-historical-analysis-v1.0.0',generatedAt:new Date().toISOString(),partitionPolicy:'TOKEN_LEVEL',holdoutInspected:false,counts:{raw:raw.length,earliestSourceTokenCalls:rows.length,discovery:discovery.length,holdoutSealed:holdout.length,selectedTokens:selected.length,enrichedCalls:enriched.length,marketErrors:errors.length},source60m:sourceStats(enriched,{horizonMinutes:60}),sequence60m:sequenceStats(enriched,{horizonMinutes:60}),amplifier60m:amplifierStats(enriched,{horizonMinutes:60}),errors};
- fs.writeFileSync(path.join(out,'discovery-report.json'),JSON.stringify(report,null,2));fs.writeFileSync(path.join(out,'discovery-enriched.jsonl'),enriched.map(x=>JSON.stringify(x)).join('
-')+(enriched.length?'
-':''));
+ fs.writeFileSync(path.join(out,'discovery-report.json'),JSON.stringify(report,null,2));fs.writeFileSync(path.join(out,'discovery-enriched.jsonl'),enriched.map(x=>JSON.stringify(x)).join('\n')+(enriched.length?'\n':''));
  console.log('[signal-historical-analysis-summary]',JSON.stringify(report.counts));console.log('[signal-historical-amplifier-60m]',JSON.stringify(report.amplifier60m));}
 main().catch(e=>{console.error('[signal-historical-analysis-error]',e);process.exitCode=1;});
