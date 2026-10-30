@@ -81,3 +81,22 @@ No SQL migration, historical rewrite or production action in this PR. Leave the 
 ## Future work
 
 Secure website investigation, verified procurement relationships, review/repair of historical admissions, and production rollout are separate approvals.
+## Read-only cohort access follow-up
+
+The deployed admin receipt lists the 18 retained and 34 deferred businesses, but
+shows only aggregate outcomes for the remaining 27 of 79. A full retrospective
+therefore needs an exact-grant download of the existing raw membership evidence.
+
+Expose the existing read-only exporter through the Scout research approval page.
+Require the same verified, direct Anchor administrator session and same-origin
+JSON request as inspection. Require an explicit grant ID; a revoked or exhausted
+grant remains readable. Use a repeatable-read, read-only database transaction,
+bounded output, no-store responses and an attachment filename fixed by the server.
+Export all ticket outcomes and their existing observations without changing any
+record, recovering a deferred ticket, granting authority or contacting a provider.
+
+Tests must cover every outcome, incomplete/ambiguous evidence, tenant and session
+denials, cross-origin requests, explicit grant selection, output limits, native
+PostgreSQL immutability and the tablet download flow. Synthetic fixtures only may
+be committed. Deployment of this access improvement still requires review; it
+does not authorize activation of classification or scheduling.

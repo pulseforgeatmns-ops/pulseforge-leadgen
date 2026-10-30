@@ -259,3 +259,13 @@ When you finish a slice:
 2. Set **In Progress** / **Current Spec** / **Next Spec**.
 3. Refresh **Known Blockers** and **Upcoming Decisions**.
 4. Bump **Version** only when a release doc says so.
+# Scout P0-004 cohort access follow-up (2026-10-30)
+
+PR #1017 is deployed at `784f4e5`; its isolated facility-recovery flag remains
+absent. The live administrator receipt confirms 79 tickets, 18 retained, 34
+awaiting evidence, eight consumed cycles and no Google reservations today.
+Only 52 businesses have individual rows in the current admin view. Prepare an
+exact-grant read-only cohort download to finish the retrospective without database
+credential disclosure, paid calls, promotions or activation. Full-cohort review
+and separate production activation approval remain pending.
+
