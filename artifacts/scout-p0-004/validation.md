@@ -37,3 +37,10 @@ and phone browser regression verifies the complete JSON actually downloads.
 Those native/browser checks require the PR CI runner's PostgreSQL and Chrome;
 they cannot run locally because those binaries are absent. CI status is recorded
 on the follow-up PR. No full production cohort has yet been downloaded/evaluated.
+
+The native 79-ticket export and the desktop, touch-tablet and phone download
+checks passed in hosted CI. A later full run hung in `actions/setup-node` while
+restoring npm's optional cache: the provider reported an account egress limit.
+The PR and identity workflows now install directly with the unchanged `npm ci`
+commands. Node version, lockfile verification, provider denial and every required
+suite remain enforced; this is a cache fallback, not a skipped validation gate.
