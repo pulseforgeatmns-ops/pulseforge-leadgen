@@ -29,6 +29,16 @@ function entityKeys(record) {
 }
 
 function recordsMatch(a, b) {
+  if ((String(a.tenantId) === '10' && a.facilityResearchRecovery === true)
+    || (String(b.tenantId) === '10' && b.facilityResearchRecovery === true)) {
+    const placeA = asText(a.placeId || a.place_id), placeB = asText(b.placeId || b.place_id);
+    if (placeA && placeB) return placeA === placeB;
+    const exactAddress = row => String(row.address || row.location || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    // A domain and a street address describe possible relationships, not one
+    // physical facility. Keep suites and organizations distinct.
+    return Boolean(exactAddress(a) && exactAddress(a) === exactAddress(b)
+      && normalizeName(a.name || a.companyName) === normalizeName(b.name || b.companyName));
+  }
   const left = entityKeys(a);
   const right = entityKeys(b);
   if (left.id && right.id && left.id === right.id) return true;
@@ -53,7 +63,8 @@ function classificationObservations(record = {}) {
   const fields = ['name', 'company', 'description', 'businessType', 'snippet',
     'industry', 'vertical', 'segment', 'category', 'placeTypes', 'signals',
     'discoveryQuery', 'discoveryConcept', 'discoveryCity', 'discoverySource',
-    'source', 'location', 'website'];
+    'source', 'location', 'website', ...(record.facilityResearchRecovery === true
+      ? ['addressComponents', 'businessStatus', 'verifiedBusinessAttributes'] : [])];
   return [clone(Object.fromEntries(fields.filter(key => record[key] != null)
     .map(key => [key, record[key]])))];
 }
@@ -110,6 +121,8 @@ function resolveCandidate(candidate, existingCompanies = []) {
   return {
     company: {
       ...require('../../../utils/scoutTicketMembership').ticketFields(candidate),
+      ...(String(candidate.tenantId) === '10' && candidate.researchDeferredReviewRequired === true
+        ? { researchDeferredReviewRequired: true } : {}),
       id,
       tenantId: candidate.tenantId || null,
       name,
@@ -121,6 +134,9 @@ function resolveCandidate(candidate, existingCompanies = []) {
       // must see the same evidence as discovery, including contrary evidence.
       classificationObservations: classificationObservations(candidate),
       placeTypes: Array.isArray(candidate.placeTypes) ? candidate.placeTypes.slice() : [],
+      ...(candidate.facilityResearchRecovery === true ? { facilityResearchRecovery: true,
+        addressComponents: candidate.addressComponents || [], businessStatus: candidate.businessStatus || null,
+        verifiedBusinessAttributes: candidate.verifiedBusinessAttributes || null } : {}),
       businessType: asText(candidate.businessType),
       description: asText(candidate.description),
       snippet: asText(candidate.snippet),

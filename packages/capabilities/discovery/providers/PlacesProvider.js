@@ -116,7 +116,7 @@ function createPlacesProvider(deps = {}) {
         return [];
       }
 
-      const queries = buildQueriesForEvidence({
+      const ordinaryQueries = () => buildQueriesForEvidence({
         segment,
         evidenceType,
         cities,
@@ -125,6 +125,8 @@ function createPlacesProvider(deps = {}) {
         website: entity?.website || evidenceRequest.website || null,
         discoveryConcept: evidenceRequest.discoveryConcept || null,
       });
+      const queries = deps.facilityResearchCoverage
+        ? await deps.facilityResearchCoverage.plan(evidenceRequest, buildQueriesForEvidence) : ordinaryQueries();
       const requireWebsite = evidenceType !== INVESTIGATIVE_EVIDENCE.IDENTITY;
       const limit = DEFAULT_LIMIT;
       const out = [];
@@ -147,6 +149,7 @@ function createPlacesProvider(deps = {}) {
       let continuationStatus = null;
       for (const query of queries) {
         const prior = checkpoint ? await checkpoint.lookup(query, requireWebsite) : null;
+        deps.facilityResearchCoverage?.note(query, prior);
         if (prior?.handled) { checkpointSkipped += 1; continuationStatus ||= prior.continuationStatus; continue; }
         if (prior && Array.isArray(prior.candidates)) {
           checkpointReplayed += 1;
@@ -167,6 +170,7 @@ function createPlacesProvider(deps = {}) {
           fetchImpl,
           { requireWebsite, seenPlaceIds: querySeen, out: queryOut, knownHits: checkpoint ? knownHits : null,
             singlePage: prior?.singlePage === true, pageToken: prior?.pageToken || null,
+            facilityResearchRecovery: Boolean(deps.facilityResearchCoverage),
             apiDeps: deps.placesApiDeps, useCache: deps.useCache, tenantMemory }
         );
         if (checkpoint) {
@@ -395,7 +399,8 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
           const raw = detailClaim.candidate;
           if (!(requireWebsite && !raw.website)) {
             const reused = { ...raw, industry:querySpec.industry || null, discoveryQuery:querySpec.industry || null,
-              detailsReused:true, detailObservedAt:detailClaim.observedAt };
+              detailsReused:true, detailObservedAt:detailClaim.observedAt,
+              ...(opts.facilityResearchRecovery ? { facilityResearchRecovery: true } : {}) };
             out.push(reused); captured.add(hit.place_id); knownHits?.set(hit.place_id,reused);
             pageAccepted++; acceptedForQuery++;
           }
@@ -437,6 +442,8 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
         address: details?.formatted_address || hit.formatted_address || '',
         placeId: details?.place_id || hit.place_id,
         placeTypes: details?.types || hit.types || [],
+        ...(opts.facilityResearchRecovery ? { facilityResearchRecovery: true,
+          addressComponents: details?.address_components || [], businessStatus: details?.business_status || null } : {}),
         googleRating: details?.rating ?? hit.rating ?? null,
         source: 'google_places',
         industry: querySpec.industry || null,

@@ -6,6 +6,14 @@
 
 ## SCOUT (leadgen.js)
 
+### Proposed P0-004 facility research path (default off, not activated)
+- Only Tenant 10 native research-only discovery may use `SCOUT_ANCHOR_FACILITY_RECOVERY_ENABLED`.
+- Category recognition is not facility suitability, geography, purchasing authority or admission.
+- A city name alone never proves NH eligibility. Retain ambiguous geography as held evidence.
+- Preserve distinct facility IDs; a shared domain/address is only a relationship hint.
+- Never backfill/promote the 34 parked records or fetch websites through this change.
+- Query diversity never authorizes a new category, paid-history reset, extra page or grant.
+
 ### Data Sources
 - Primary: SerpAPI (`SERPAPI_KEY`) — good for service businesses, weak for retail/wellness/auto
 - Secondary: Google Places API (`GOOGLE_PLACES_KEY`) — Phase 4 addition, better for location-based brick-and-mortar

@@ -93,7 +93,8 @@ function candidateKey(raw, authoritativeText) {
 // the exact same facts; all original values remain immutable memberships.
 function businessFacts(raw) {
   const fields = ['name','companyName','company','website','url','domain','address','location','city','state','country',
-    'description','snippet','businessType','placeTypes','types','classificationObservations','vertical','segment','category'];
+    'description','snippet','businessType','placeTypes','types','classificationObservations','vertical','segment','category',
+    ...(raw.facilityResearchRecovery === true ? ['addressComponents','businessStatus','verifiedBusinessAttributes'] : [])];
   const facts = Object.fromEntries(fields.filter(key => raw[key] != null && raw[key] !== '').map(key => [key,raw[key]]));
   if (raw.source !== 'google_places' && raw.industry && ![raw.discoveryQuery,raw.discoveryConcept].includes(raw.industry)) facts.industry=raw.industry;
   return digest(facts);
@@ -348,11 +349,16 @@ function createCandidateTicketStore({ pool, tenantId, fingerprint, planVersion =
               throw fail('Scout ticket exact raw membership was not confirmed', 'invalid_membership');
             }
           }
+          const holdResearchDeferral = tenant === '10' && members.some(member => member.candidate_key === key
+            && member.raw_candidate?.facilityResearchRecovery === true);
           if (added) await db.query(`UPDATE scout_candidate_work SET membership_revision=membership_revision+$6::bigint,
-            next_attempt_at=CASE WHEN state IN ('handled','blocked') AND $7::boolean THEN clock_timestamp() ELSE next_attempt_at END,
-            reason=CASE WHEN state IN ('handled','blocked') AND $7::boolean THEN NULL ELSE reason END,
-            state=CASE WHEN state IN ('handled','blocked') AND $7::boolean THEN 'pending' ELSE state END,updated_at=clock_timestamp()
-            WHERE ${SCOPE_SQL} AND candidate_key=$5`, [...scope, key, added, materialChange]);
+            next_attempt_at=CASE WHEN state IN ('handled','blocked') AND $7::boolean
+              AND NOT ($8::boolean AND COALESCE(reason,'') IN ('business_evidence_not_authorized','evidence_budget_deferred')) THEN clock_timestamp() ELSE next_attempt_at END,
+            reason=CASE WHEN state IN ('handled','blocked') AND $7::boolean
+              AND NOT ($8::boolean AND COALESCE(reason,'') IN ('business_evidence_not_authorized','evidence_budget_deferred')) THEN NULL ELSE reason END,
+            state=CASE WHEN state IN ('handled','blocked') AND $7::boolean
+              AND NOT ($8::boolean AND COALESCE(reason,'') IN ('business_evidence_not_authorized','evidence_budget_deferred')) THEN 'pending' ELSE state END,updated_at=clock_timestamp()
+            WHERE ${SCOPE_SQL} AND candidate_key=$5`, [...scope, key, added, materialChange, holdResearchDeferral]);
         }
         await db.query(`UPDATE scout_query_checkpoints SET state='handled',handled_at=COALESCE(handled_at,clock_timestamp())
           WHERE tenant_id=$1 AND search_fingerprint=$2 AND query_key=$3 AND plan_version=$4`,

@@ -127,6 +127,8 @@ function candidateAddressText(row = {}) {
 }
 
 function candidateMatchKey(row) {
+  if (row.facilityResearchRecovery === true && String(row.tenantId) === '10')
+    return require('../../../utils/anchorFacilityResearch').facilityIdentity(row).facilityId;
   const normalized = normalizeCandidateRow(row);
   const identity = establishBusinessIdentity(normalized);
   if (identity.identityKey) return identity.identityKey;
@@ -162,7 +164,7 @@ function mergeIdentities(candidates = []) {
     } else {
       // Secondary match: try name+address against existing entries
       const nameAddrKey = `nameaddr:${lowerText(row.name || row.company)}|${lowerText(candidateAddressText(row))}`;
-      const byNameAddr = [...byKey.entries()].find(([k, v]) => {
+      const byNameAddr = row.facilityResearchRecovery === true && String(row.tenantId) === '10' ? null : [...byKey.entries()].find(([k, v]) => {
         const vKey = `nameaddr:${lowerText(v.name || v.company)}|${lowerText(candidateAddressText(v))}`;
         return vKey === nameAddrKey && nameAddrKey !== 'nameaddr:|';
       });

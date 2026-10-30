@@ -21,7 +21,13 @@ function businessObservation(raw) {
     phone:typeof raw.phone === 'string' ? raw.phone.slice(0,100) : null,
     address:typeof raw.address === 'string' ? raw.address.slice(0,2048) : '',
     placeTypes:Array.isArray(raw.placeTypes) ? raw.placeTypes.filter(x=>typeof x==='string').slice(0,30) : [],
-    googleRating:Number.isFinite(raw.googleRating) ? raw.googleRating : null, snippet:'' };
+    googleRating:Number.isFinite(raw.googleRating) ? raw.googleRating : null, snippet:'',
+    ...(raw.facilityResearchRecovery === true ? { facilityResearchRecovery: true,
+      addressComponents: Array.isArray(raw.addressComponents) ? raw.addressComponents.map(row => ({
+        long_name: typeof row.long_name === 'string' ? row.long_name : '',
+        short_name: typeof row.short_name === 'string' ? row.short_name : '',
+        types: Array.isArray(row.types) ? row.types.filter(x => typeof x === 'string') : [] })) : [],
+      businessStatus: typeof raw.businessStatus === 'string' ? raw.businessStatus : null } : {}) };
 }
 
 function createTenantDiscoveryMemory({ pool, tenantId, fingerprint }) {
