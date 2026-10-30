@@ -32,7 +32,9 @@
     <div id="grantStatus"><p class="help">Not loaded yet.</p></div>
     <div class="actions">
       <button id="refreshGrant" type="button">Refresh status</button>
+      <button id="exportCohort" type="button" disabled>Download all research records</button>
     </div>
+    <p class="help">The download includes every business outcome and its existing search evidence for offline review. It starts no research and changes no records.</p>
     <details>
       <summary>Look up a specific grant (including revoked or expired)</summary>
       <form id="lookupForm" autocomplete="off"><label>Grant ID — 64 lowercase hex characters<input id="lookupGrantId" pattern="[a-f0-9]{64}" maxlength="64" spellcheck="false" autocapitalize="none"></label>

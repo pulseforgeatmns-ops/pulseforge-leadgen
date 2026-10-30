@@ -263,7 +263,8 @@ for (const [resource, operation, service, method] of [
   ['research-only-grant', 'preview', 'scoutResearchOnlyGrant', 'previewResearchOnlyGrant'],
   ['research-only-grant', 'install', 'scoutResearchOnlyGrant', 'installResearchOnlyGrant'],
   ['research-only-grant', 'revoke', 'scoutResearchOnlyGrant', 'revokeResearchOnlyGrant'],
-  ['research-only-grant', 'inspect', 'scoutResearchOnlyGrant', 'inspectResearchOnlyGrant']]) {
+  ['research-only-grant', 'inspect', 'scoutResearchOnlyGrant', 'inspectResearchOnlyGrant'],
+  ['research-only-grant', 'export', 'scoutResearchRetrospective', 'exportForAdmin']]) {
   router.post(`/api/v1/tenant-outreach/anchor-program/${resource}/${operation}`,
     (req, res, next) => {
       noStore(res);
@@ -296,11 +297,17 @@ for (const [resource, operation, service, method] of [
       const handler = require(`../services/${service}`);
       try {
         if (operation === 'inspect') return res.json(await handler.inspectResearchOnlyGrant(pool, req.body?.grantId));
+        if (operation === 'export') {
+          const cohort = await handler.exportForAdmin(pool, req.body);
+          res.set('X-Content-Type-Options', 'nosniff');
+          res.attachment(`scout-research-cohort-${cohort.grantId.slice(0, 12)}.json`);
+          return res.json(cohort);
+        }
         return res.json(await handler[method](pool, req.body, actor));
       } catch (error) {
         return res.status(409).json({ error: 'research_only_grant_rejected', code: /^research_(only|mission)_[a-z_]+$/.test(error.code || '') ? error.code : null,
-          status: ['preview', 'inspect'].includes(operation) ? 'rejected' : 'outcome_requires_readback',
-          writesMayHaveOccurred: !['preview', 'inspect'].includes(operation), retryAllowed: false });
+          status: ['preview', 'inspect', 'export'].includes(operation) ? 'rejected' : 'outcome_requires_readback',
+          writesMayHaveOccurred: !['preview', 'inspect', 'export'].includes(operation), retryAllowed: false });
       }
     });
 }

@@ -25,3 +25,15 @@ and aggregate findings are included in the repository package.
 
 No production mutation, paid search/enrichment, website fetch, preparation or send
 was performed. The proposed runtime path remains default off.
+
+## Read-only export follow-up (2026-10-30)
+
+Local network-denied regression: **164 passed, 0 failed, 0 skipped**. New focused
+cases preserve contradictory evidence, exact prior outcomes, explicit grant and
+tenant scope, complete snapshots, size limits and ambiguous retention mapping.
+The native PostgreSQL test exercises 79 synthetic tickets through the real admin
+route, including authorization denials and unchanged protected tables. The tablet
+and phone browser regression verifies the complete JSON actually downloads.
+Those native/browser checks require the PR CI runner's PostgreSQL and Chrome;
+they cannot run locally because those binaries are absent. CI status is recorded
+on the follow-up PR. No full production cohort has yet been downloaded/evaluated.

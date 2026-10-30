@@ -189,6 +189,8 @@
       "services/scoutBoundedResearchAuthority.js",
       "services/scoutResearchOnlyGrant.js",
       "services/scoutResearchOnlyCycle.js",
+      "services/scoutResearchRetrospective.js",
+      "test/scoutResearchRetrospective",
       "services/scoutFacilityResearchCoverage.js",
       "utils/anchorFacilityResearch.js",
       "scripts/evaluateScoutFacilityResearch.cjs",
