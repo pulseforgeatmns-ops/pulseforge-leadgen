@@ -57,19 +57,22 @@ function evaluate(input, inputBytes = JSON.stringify(input)) {
 
 function markdown(report) {
   const escape = value => String(value ?? 'unknown').replace(/\|/g, '\\|').replace(/\n/g, ' ');
+  const rawExport = report.sourceKind === 'production_read_only_ledger_export';
   const lines = ['# SPEC-SCOUT-P0-004 offline retrospective', '',
     `Input SHA-256: \`${report.inputSha256}\`. Base revision: \`${report.baselineRevision}\`.`, '',
     `**Cohort: ${report.cohort.evaluated}/${report.cohort.expected} records evaluated; ${report.cohort.missing} unavailable. Complete raw-cohort acceptance: ${report.cohort.completeRawCohort ? 'passed' : 'PENDING'}.**`, '',
-    'The supplied screenshots are production observations, not a complete raw ledger export. No missing record, Google type, website, facility size, owner, purchasing authority or cleaning need was invented.', '',
+    rawExport ? 'The input is an exact-grant, read-only ledger snapshot. Original ticket outcomes and contradictory observations are preserved. Missing evidence remains explicit.'
+      : 'The supplied screenshots are production observations, not a complete raw ledger export. No missing record, Google type, website, facility size, owner, purchasing authority or cleaning need was invented.', '',
     ...report.limitations.map(x => `- ${x}`), '',
     '## Before / after', '',
-    `- Newly recognized among the 34 awaiting records: ${report.summary.newlyRecognizedAwaiting.length}. Recognition alone is not admission.`,
-    `- Awaiting records with suitable category and eligible geography: ${report.summary.awaitingWithSuitableCategoryAndGeography.length}; website values and ownership/suppression readback are still missing from the screenshots.`,
+    `- Newly recognized among the awaiting records: ${report.summary.newlyRecognizedAwaiting.length}. Recognition alone is not admission.`,
+    `- Awaiting records with suitable category and eligible geography: ${report.summary.awaitingWithSuitableCategoryAndGeography.length}. ${rawExport
+      ? 'Existing ownership, suppression and prior holds remain separate from proposed facility fit.' : 'Website values and ownership/suppression readback are still missing from the screenshots.'}`,
     `- Demonstrably unsuitable retained records: ${report.summary.demonstrablyUnsuitableRetained.join('; ') || 'none observed'}.`,
     `- Geographic corrections: ${report.summary.geographicCorrections.join('; ') || 'none observed'}.`,
     `- Still deferred in this evidence-limited evaluation: ${report.summary.remainingDeferred.length}.`,
     '- No automatic promotion, database write, paid call, website investigation, preparation or sending occurred.', '',
-    'False positives above are supported by observed business labels or the address. Structured school categories supply evidence for the previous classifier false negatives. A record deferred because a screenshot omits a field is not a measured model false negative. No whole-cohort precision/recall is claimed without a full raw export and verified suitability labels.', '',
+    'False positives above are supported by observed business labels or the address. Structured school categories supply evidence for the previous classifier false negatives. Missing evidence is not a measured model false negative. No whole-cohort precision/recall is claimed without verified suitability labels.', '',
     '| Observed business | Previous | Proposed category | Suitability | Geography | Research admission | Missing/held evidence |',
     '| --- | --- | --- | --- | --- | --- | --- |'];
   for (const row of report.rows) {
@@ -91,38 +94,7 @@ function markdown(report) {
   return lines.join('\n');
 }
 
-async function exportCohort(pool, grantId) {
-  if (!/^[a-f0-9]{64}$/.test(grantId || '')) throw Error('evaluation_exact_grant_id_required');
-  const db = await pool.connect();
-  try {
-    await db.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
-    await db.query("SET LOCAL statement_timeout='15s'");
-    const grant = (await db.query("SELECT grant_id,search_fingerprint,research_mission_id FROM scout_research_only_grants WHERE tenant_id='10' AND grant_id=$1", [grantId])).rows[0];
-    if (!grant) throw Error('evaluation_grant_not_found');
-    const mission = (await db.query("SELECT payload FROM scout_research_missions WHERE tenant_id='10' AND id=$1", [grant.research_mission_id])).rows[0];
-    const work = (await db.query(`SELECT w.candidate_key,w.state,w.reason,
-      (SELECT jsonb_agg(m.raw_candidate ORDER BY m.created_at,m.query_key,m.ordinal) FROM scout_candidate_memberships m
-        WHERE m.tenant_id=w.tenant_id AND m.search_fingerprint=w.search_fingerprint AND m.plan_version=w.plan_version
-          AND m.ticket_version=w.ticket_version AND m.candidate_key=w.candidate_key) AS observations
-      FROM scout_candidate_work w WHERE w.tenant_id='10' AND w.search_fingerprint=$1 ORDER BY w.candidate_key`, [grant.search_fingerprint])).rows;
-    const retained = (await db.query("SELECT company,domain,vertical,location FROM scout_research_candidates WHERE tenant_id='10' AND grant_id=$1", [grantId])).rows;
-    await db.query('COMMIT');
-    const records = work.map(row => {
-      const observations = row.observations || [], raw = observations[0] || {};
-      const domain = String(raw.website || raw.domain || '').replace(/^https?:\/\//, '').split('/')[0].toLowerCase();
-      const stored = retained.find(x => x.domain?.toLowerCase() === domain && x.company === (raw.name || raw.companyName || raw.company));
-      return { candidate: { ...raw, name: raw.name || raw.companyName || raw.company, location: raw.address || raw.location,
-        classificationObservations: observations.map(x => ({ ...x, name: x.name || x.companyName || x.company })) },
-      previous: { candidateKey: row.candidate_key, state: row.state, reason: row.reason, vertical: stored?.vertical || null,
-        status: stored ? 'retained' : ['business_evidence_not_authorized', 'evidence_budget_deferred'].includes(row.reason) ? 'awaiting_website_evidence'
-          : row.reason === 'queued' ? 'accepted_not_retained' : row.state }, missingEvidence: [] };
-    });
-    return { version: 1, tenantId: '10', cohortExpected: 79, authoritativeRawExport: true, sourceKind: 'production_read_only_ledger_export',
-      grantId, scope: { eligibleSubsegments: mission.payload.structuredMission.market.eligibleSubsegments,
-        cities: mission.payload.structuredMission.geography.cities }, records };
-  } catch (error) { await db.query('ROLLBACK').catch(() => {}); throw error; }
-  finally { db.release(); }
-}
+const { exportCohort } = require('../services/scoutResearchRetrospective');
 
 async function main(args = process.argv.slice(2)) {
   if (args.length === 3 && args[0] === 'export') {

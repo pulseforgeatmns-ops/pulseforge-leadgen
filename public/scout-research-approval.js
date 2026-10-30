@@ -46,6 +46,10 @@
     research_only_grant_conflict: 'This approval reference is already recorded for a different grant.',
     research_only_grant_revoked: 'This grant was revoked and cannot be reinstalled.',
     research_only_grant_not_found: 'No grant was found with that ID.',
+    research_only_retrospective_grant_required: 'Look up the exact grant before downloading its research records.',
+    research_only_retrospective_mission_unavailable: 'The recorded research mission is unavailable. No export was produced.',
+    research_only_retrospective_limit_exceeded: 'This cohort exceeds the bounded download size. An operator must review its size before export.',
+    research_only_retrospective_snapshot_incomplete: 'The complete cohort could not be read. No partial export was produced.',
     research_only_preview_invalid: 'Check the grant fields: reference, a UTC expiry and a statement are all required.',
     research_only_manifest_invalid: 'The grant terms are outside the allowed limits (for example an expiry more than 7 days away).',
     research_only_explicit_approval_required: 'The approval was not the exact previewed grant. Preview again.',
@@ -377,6 +381,7 @@
     $('installGrant').disabled = !ok || !grantInstallable() || !$('grantConfirm').checked;
     $('revokeButton').disabled = !ok || !state.grant?.grantId || state.grant.status === 'revoked' || !REF.test($('revokeReference').value.trim());
     $('refreshGrant').disabled = state.busy;
+    $('exportCohort').disabled = !ok || !HEX64.test(state.grant?.grantId || '');
   }
   async function busy(work) {
     if (state.busy) return;
@@ -533,6 +538,23 @@
     $('installGrant').addEventListener('click', installGrant);
     $('revokeButton').addEventListener('click', revokeGrant);
     $('refreshGrant').addEventListener('click', () => refreshGrant());
+    $('exportCohort').addEventListener('click', () => busy(async () => {
+      const grantId = state.grant?.grantId;
+      if (!state.context?.approvalReady || !HEX64.test(grantId || '')) return;
+      // Read-only export is valid even after exhaustion or revocation. The
+      // server still applies the direct Anchor admin and same-origin gates.
+      try {
+        const cohort = await call(API + 'research-only-grant/export', { grantId });
+        if (cohort.grantId !== grantId || cohort.tenantId !== '10' || !Array.isArray(cohort.records))
+          throw new ApiError(409, { code: 'research_only_retrospective_snapshot_incomplete' });
+        const url = URL.createObjectURL(new Blob([JSON.stringify(cohort)], { type: 'application/json' }));
+        const link = document.createElement('a');
+        link.href = url; link.download = `scout-research-cohort-${grantId.slice(0, 12)}.json`;
+        document.body.append(link); link.click(); link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        say(`Downloaded ${cohort.records.length} existing research records. No research was started.`);
+      } catch (error) { $('grantStatus').append(errorBox(error)); }
+    }));
     $('reloadAuthority').addEventListener('click', loadAuthority);
     $('lookupForm').addEventListener('submit', event => {
       event.preventDefault();

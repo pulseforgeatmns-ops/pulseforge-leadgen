@@ -13,6 +13,7 @@
 - Preserve distinct facility IDs; a shared domain/address is only a relationship hint.
 - Never backfill/promote the 34 parked records or fetch websites through this change.
 - Query diversity never authorizes a new category, paid-history reset, extra page or grant.
+- Full-cohort downloads require an exact grant and the direct verified Anchor admin gate. Keep raw exports private; never publish production fixtures or silently truncate a retrospective.
 
 ### Data Sources
 - Primary: SerpAPI (`SERPAPI_KEY`) — good for service businesses, weak for retail/wellness/auto

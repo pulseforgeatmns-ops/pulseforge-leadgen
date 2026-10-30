@@ -1,3 +1,5 @@
+# Direct npm ci avoids remote cache restores hanging on provider egress limits.
+# The pinned Node version, lockfile and every required safety suite remain mandatory.
 name: Identity workflow safety
 
 on:
@@ -83,7 +85,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
       - uses: ./.github/actions/setup-postgres-environment
       - run: npm ci --ignore-scripts
       - name: Existing login, tenant selection and fresh authorization regressions

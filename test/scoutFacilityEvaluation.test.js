@@ -29,8 +29,9 @@ test('export is exact-grant, Tenant 10 and transactionally read-only', async () 
     }
     if (/FROM scout_research_missions/.test(sql)) return { rows: [{ payload: { structuredMission: {
       market: { eligibleSubsegments: ['managed_facilities', 'restaurant_foh'] }, geography: { cities: ['Manchester'] } } } }] };
+    if (/AS tickets/.test(sql)) return { rows: [{ tickets: 1, observations: 1, raw_bytes: '500' }] };
     if (/FROM scout_candidate_work/.test(sql)) return { rows: [{ candidate_key: 'c', state: 'blocked', reason: 'business_evidence_not_authorized',
-      observations: [{ name: 'Synthetic Primary School', placeTypes: ['primary_school'], address: '101 Fixture Way, Manchester, NH 03101, USA', website: 'school.example' }] }] };
+      observations: [{ raw: { name: 'Synthetic Primary School', placeTypes: ['primary_school'], address: '101 Fixture Way, Manchester, NH 03101, USA', website: 'school.example' } }] }] };
     return { rows: [] };
   } };
   await assert.rejects(exportCohort({ connect: () => assert.fail('invalid grant cannot connect') }, 'invalid'));

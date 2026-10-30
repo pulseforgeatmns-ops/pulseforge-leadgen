@@ -43,3 +43,22 @@ research ledger's unique domain/name guard admits only one row.
   acceptance remains pending the read-only 79-record export and reviewed before/after.
 - Disabling the isolated flag restores the prior path. Evidence is retained; paid
   history and consumed grants/cycles must never be reset or refunded.
+
+## Complete-cohort access
+
+The initial production admin view exposes individual rows for 52 businesses and
+only aggregates for the other 27. Share the CLI exporter with a read-only admin
+download; keep the existing direct verified Tenant 10 administrator and same-origin
+JSON gates. Historical exhausted/revoked grants remain readable without fresh
+spending approval. An export cannot claim a cycle or authorize any activity.
+
+The snapshot is scoped to the exact grant's search fingerprint, with that shared
+scope stated explicitly. Preserve all ticket versions, membership observations
+and query provenance. Refuse more than 500 tickets, 5,000 observations or 10 MiB;
+never truncate. Retained rows have no ticket foreign key, so ambiguous same-name
+and domain matches remain unresolved rather than assigning a retained row to two
+physical locations. No migration or runtime DDL is needed.
+
+Rollback this access change by reverting the follow-up PR. Keep every research
+record and approval intact. The classification/coverage flag stays off until the
+full retrospective and separate activation approval are complete.

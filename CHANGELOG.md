@@ -1051,3 +1051,11 @@ Prior work lived without a versioned product changelog. Notable engineering stre
 - Revenue projection Phase 15–16B tooling and certification docs
 
 See individual files under `docs/` for stream-specific history.
+## Unreleased — Scout P0-004 complete-cohort read-only download (2026-10-30)
+
+- Add a guarded download to the existing Scout research approval page so the full
+  historical cohort can be evaluated on a tablet without exposing DB credentials.
+- Share the CLI's exporter with a bounded, repeatable-read read-only service;
+  preserve every ticket outcome and raw membership, including contradictory facts.
+- Keep all grant, revision, recovery, quarantine, provider and downstream controls
+  unchanged. No activation, paid calls or candidate promotion is authorized.

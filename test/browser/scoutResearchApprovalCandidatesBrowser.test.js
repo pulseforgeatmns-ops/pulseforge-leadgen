@@ -10,6 +10,7 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const { once } = require('node:events');
 const puppeteer = require('puppeteer');
 
@@ -51,7 +52,11 @@ function receipt() {
 
 test('Chromium: research approval page reports candidates and exact reserved spend', { timeout: 60000 }, async t => {
   const external = [];
+  const requests = [];
+  const cohort = { tenantId: '10', grantId: 'a'.repeat(64), records: Array.from({ length: 79 }, (_, i) => ({
+    candidate: { name: `Synthetic Raw Facility ${i}` }, previous: { reason: i < 34 ? 'evidence_budget_deferred' : 'ownership_policy_observed' } })) };
   const server = http.createServer((req, res) => {
+    requests.push({ method: req.method, path: req.url });
     res.setHeader('Content-Security-Policy', CSP); res.setHeader('Cache-Control', 'no-store');
     const asset = ASSETS[req.url];
     if (req.url === PAGE || asset) {
@@ -67,6 +72,11 @@ test('Chromium: research approval page reports candidates and exact reserved spe
     if (req.method === 'POST' && req.url === '/api/v1/tenant-outreach/anchor-program/research-only-grant/inspect') {
       res.end(JSON.stringify(receipt())); return;
     }
+    if (req.method === 'POST' && req.url === '/api/v1/tenant-outreach/anchor-program/research-only-grant/export') {
+      let body = ''; req.on('data', chunk => { body += chunk; });
+      req.on('end', () => { assert.deepEqual(JSON.parse(body), { grantId: 'a'.repeat(64) }); res.end(JSON.stringify(cohort)); });
+      return;
+    }
     res.statusCode = 404; res.end('{}');
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
@@ -78,8 +88,11 @@ test('Chromium: research approval page reports candidates and exact reserved spe
       '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1'] });
   t.after(() => browser.close());
   const shots = process.env.SCREENSHOT_DIR;
+  const downloads = fs.mkdtempSync(path.join(os.tmpdir(), 'scout-cohort-download-'));
+  t.after(() => fs.rmSync(downloads, { recursive: true, force: true }));
 
-  for (const [label, viewport] of [['desktop', { width: 1280, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
+  for (const [label, viewport] of [['desktop', { width: 1280, height: 900 }],
+    ['tablet', { width: 800, height: 1280, isMobile: true, hasTouch: true }], ['phone', { width: 390, height: 844 }]]) {
     const page = await browser.newPage();
     await page.setViewport(viewport);
     const errors = [];
@@ -88,6 +101,15 @@ test('Chromium: research approval page reports candidates and exact reserved spe
     page.on('request', request => { const url = request.url(); if (/^(https?|wss?):/.test(url) && !url.startsWith(origin)) external.push(url); });
     await page.goto(origin + PAGE, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#grantStatus .tally');
+    await page.waitForFunction(() => !document.querySelector('#exportCohort').disabled);
+    const downloadDirectory = path.join(downloads, label); fs.mkdirSync(downloadDirectory);
+    await (await page.createCDPSession()).send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: downloadDirectory });
+    await page.click('#exportCohort');
+    await page.waitForFunction(() => document.querySelector('#status').textContent.includes('Downloaded 79 existing research records'));
+    const filename = path.join(downloadDirectory, `scout-research-cohort-${'a'.repeat(12)}.json`);
+    const deadline = Date.now() + 5000;
+    while (!fs.existsSync(filename) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.deepEqual(JSON.parse(fs.readFileSync(filename, 'utf8')), cohort, 'the complete JSON actually downloaded');
     const text = await page.$eval('#grantStatus', node => node.innerText);
     assert.match(text, /\$1\.845 total/, 'exact reserved total, not the float-rounded $1.84');
     assert.doesNotMatch(text, /\$1\.84 /);
@@ -121,4 +143,6 @@ test('Chromium: research approval page reports candidates and exact reserved spe
     await page.close();
   }
   assert.deepEqual(external, [], 'no external requests');
+  assert.ok(requests.filter(r => r.method === 'POST').every(r => /research-only-grant\/(inspect|export)$/.test(r.path)),
+    'the download never requests approval, grant installation, revocation or discovery');
 });

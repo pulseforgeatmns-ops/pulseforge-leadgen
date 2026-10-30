@@ -1,3 +1,5 @@
+# Direct npm ci avoids remote cache restores hanging on provider egress limits.
+# The pinned Node version, lockfile and every required safety suite remain mandatory.
 name: PR CI (SPEC-CI-LEAN-001)
 
 on:
@@ -62,7 +64,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
       - run: npm ci
       - name: Global production startup smoke
         run: npm run test:global-smoke
@@ -82,7 +83,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
       - name: Install disposable PostgreSQL prerequisites
         run: |
           sudo apt-get update -qq
@@ -120,7 +120,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
       - uses: ./.github/actions/setup-postgres-environment
       - run: npm ci --ignore-scripts
       - run: npm run test:paige
@@ -136,7 +135,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
       - uses: ./.github/actions/setup-postgres-environment
       - run: npm ci --ignore-scripts
       - name: Scout mission scope, search memory and native PostgreSQL contracts (no providers)
@@ -188,7 +186,13 @@ jobs:
           SCOUT_CHECKPOINT_REQUIRE_POSTGRES: 'true'
         run: node --test test/scoutQueryCheckpoints.test.js test/scoutQueryCheckpointRamp.test.js test/scoutQueryCheckpointsPostgres.test.js test/scoutQueryContinuation.test.js test/scoutQueryContinuationPostgres.test.js test/scoutCoverageEpoch.test.js test/scoutCoverageEpochPostgres.test.js test/scoutCoverageEpochRamp.test.js test/scoutCoverageGrant.test.js test/scoutCoverageGrantPostgres.test.js
       - name: Scout facility classification and coverage (network denied)
-        run: node --require ./test/helpers/denyExternalProviders.cjs --test test/scoutFacilityClassification.test.js test/scoutFacilityResearchCoverage.test.js test/scoutFacilityEvaluation.test.js test/scoutFacilityProviderCoverage.test.js test/scoutFacilityResearchPostgres.test.js
+        run: node --require ./test/helpers/denyExternalProviders.cjs --test test/scoutFacilityClassification.test.js test/scoutFacilityResearchCoverage.test.js test/scoutFacilityEvaluation.test.js test/scoutFacilityProviderCoverage.test.js test/scoutFacilityResearchPostgres.test.js test/scoutResearchRetrospective.test.js
+      - name: Scout retrospective native admin and read-only PostgreSQL gate
+        run: node --test test/scoutResearchRetrospectivePostgres.test.js
+      - name: Scout complete-cohort download on tablet and phone (synthetic, no providers)
+        env:
+          CHROMIUM_PATH: ${{ steps.anchor-chrome.outputs.chrome-path }}
+        run: node --test test/browser/scoutResearchApprovalCandidatesBrowser.test.js
       - name: Scout durable candidate parking protocol (network denied)
         run: node --require ./test/helpers/denyWebsiteEvidenceNetwork.cjs --test test/scoutCandidateTickets.test.js test/scoutCandidateTicketDispatch.test.js test/scoutResearchEvidenceParking.test.js
       - name: Scout durable candidate and complete pipeline required PostgreSQL contracts (synthetic providers)
@@ -234,7 +238,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
       - uses: ./.github/actions/setup-postgres-environment
       - run: npm ci --ignore-scripts
       - run: npm run test:decision
@@ -257,7 +260,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
       - name: Environment — PostgreSQL and runner validation
         id: environment
         uses: ./.github/actions/setup-postgres-environment
@@ -294,7 +296,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
       - run: npm ci
       - name: Install disposable PostgreSQL binaries
         run: |
@@ -315,7 +316,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
       - uses: ./.github/actions/setup-postgres-environment
       - run: npm ci
         env:
@@ -338,7 +338,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
       - run: npm ci
       - uses: ./.github/actions/setup-postgres-environment
       - name: Canonical recovery and fail-closed reconciliation regressions
@@ -366,7 +365,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
       - run: npm ci --ignore-scripts
       - run: npm run test:substral-pf-001
 
@@ -384,7 +382,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
       - uses: ./.github/actions/setup-postgres-environment
       - run: npm ci --ignore-scripts
       - name: Verify bounded test-log summary
