@@ -1,4 +1,5 @@
-'use strict';\n// checkpoint runner v1: source-touch marker for Railway watch-path deployment.
+'use strict';
+// checkpoint runner v2: resumable market-history reconstruction.
 const fs=require('node:fs');const path=require('node:path');
 const {canonicalize,assertNoProspectiveLeak}=require('../services/signalOpportunities/historicalDataset');
 const {attentionSequence,reconstructMarket}=require('../services/signalOpportunities/historicalReconstruction');
