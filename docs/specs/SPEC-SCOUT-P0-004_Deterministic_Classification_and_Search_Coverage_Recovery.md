@@ -100,3 +100,13 @@ denials, cross-origin requests, explicit grant selection, output limits, native
 PostgreSQL immutability and the tablet download flow. Synthetic fixtures only may
 be committed. Deployment of this access improvement still requires review; it
 does not authorize activation of classification or scheduling.
+
+## Full-cohort regression: ordinal street names
+
+The read-only export contains all 79 tickets and 95 immutable observations. It
+exposed a valid structured school classification deferred solely because the
+street name begins with an ordinal number. Recognize a formatted street address
+such as the synthetic `101 3rd Fixture St` as premises evidence. Keep category,
+country/state/town, identity, procurement and prior-ticket holds independent.
+Do not accept bare city names, numeric fragments or postal-box-only evidence.
+Use synthetic positive and negative fixtures; do not commit the production row.

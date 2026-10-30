@@ -124,7 +124,7 @@ function assessFacilitySuitability(candidate, recognition) {
   if (recognition.category === 'education_authority' && verified.distinctServicePremises !== true) missing.push('distinct_service_premises');
   const address = text(candidate.address || candidate.location || candidate.formattedAddress || candidate.formatted_address);
   const components = candidate.addressComponents || candidate.address_components || [];
-  if (verified.physicalPremises !== true && !address.split(',').some(part => /^\s*\d+[A-Za-z]?\s+[A-Za-z]/.test(part))
+  if (verified.physicalPremises !== true && !address.split(',').some(part => /^\s*\d+[A-Za-z]?\s+(?:[A-Za-z]|\d+(?:st|nd|rd|th)\b)/i.test(part))
     && !(Array.isArray(components) && components.some(x => x.types?.includes('street_number')))) missing.push('physical_service_premises');
   if (recognition.vertical === 'property_manager' && !/\b(?:commercial|industrial|office|facilit(?:y|ies))\b/i.test(hay)
     && verified.commercialProcurement !== true) missing.push('commercial_facility_purchasing_responsibility');
