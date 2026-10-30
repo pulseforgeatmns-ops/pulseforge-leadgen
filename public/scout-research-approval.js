@@ -48,7 +48,7 @@
     research_only_grant_not_found: 'No grant was found with that ID.',
     research_only_retrospective_grant_required: 'Look up the exact grant before downloading its research records.',
     research_only_retrospective_mission_unavailable: 'The recorded research mission is unavailable. No export was produced.',
-    research_only_retrospective_limit_exceeded: 'This cohort exceeds the bounded download size. Use the operator read-only export.',
+    research_only_retrospective_limit_exceeded: 'This cohort exceeds the bounded download size. An operator must review its size before export.',
     research_only_retrospective_snapshot_incomplete: 'The complete cohort could not be read. No partial export was produced.',
     research_only_preview_invalid: 'Check the grant fields: reference, a UTC expiry and a statement are all required.',
     research_only_manifest_invalid: 'The grant terms are outside the allowed limits (for example an expiry more than 7 days away).',
@@ -547,7 +547,7 @@
         const cohort = await call(API + 'research-only-grant/export', { grantId });
         if (cohort.grantId !== grantId || cohort.tenantId !== '10' || !Array.isArray(cohort.records))
           throw new ApiError(409, { code: 'research_only_retrospective_snapshot_incomplete' });
-        const url = URL.createObjectURL(new Blob([JSON.stringify(cohort, null, 2) + '\n'], { type: 'application/json' }));
+        const url = URL.createObjectURL(new Blob([JSON.stringify(cohort)], { type: 'application/json' }));
         const link = document.createElement('a');
         link.href = url; link.download = `scout-research-cohort-${grantId.slice(0, 12)}.json`;
         document.body.append(link); link.click(); link.remove();
