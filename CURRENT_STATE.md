@@ -261,6 +261,14 @@ When you finish a slice:
 4. Bump **Version** only when a release doc says so.
 # Scout P0-004 cohort access follow-up (2026-10-30)
 
+PR #1020 is merged and deployed at `e8b9c164`. The authorized read-only download
+contains all 79 tickets and 95 raw observations, matching the 18 retained,
+19 accepted and 34 deferred totals. Offline review confirms three unsuitable
+retained records and two previously accepted foreign listings (one retained).
+A valid ordinal-street address exposed one conservative false negative in the
+default-off classifier; prepare its regression fix before activation approval.
+Existing research records, holds, grants and spending controls remain unchanged.
+
 PR #1017 is deployed at `784f4e5`; its isolated facility-recovery flag remains
 absent. The live administrator receipt confirms 79 tickets, 18 retained, 34
 awaiting evidence, eight consumed cycles and no Google reservations today.
