@@ -19,11 +19,13 @@
 # CURRENT_STATE
 
 [SPEC-SCOUT-P0-004](docs/specs/SPEC-SCOUT-P0-004_Deterministic_Classification_and_Search_Coverage_Recovery.md)
-has a local default-off implementation for deterministic facility classification,
-bounded category/town coverage and regression tests (159 local tests pass). Native
-PostgreSQL/CI and the full 79-row retrospective remain pending. Production evaluation is read-only;
-historical records, paid research, grants, recovery and outbound authority are unchanged.
-Production activation, merge and deployment require separate approval.
+is deployed with the facility-recovery flag still off. PR #1020's read-only admin
+export is live at `e8b9c164`; all 79 tickets and 95 observations were evaluated.
+The full-cohort review confirms three unsuitable retained records and two old
+accepted UK listings (one retained). An ordinal-street premises regression fix
+is prepared with 165 local tests passing; review/CI and deployment are pending.
+No historical record, prior hold or purchasing group was changed. Research
+activation and a new revision-pinned grant require separate explicit approval.
 
 [SPEC-SIGNAL-DASH-001](docs/specs/SPEC-SIGNAL-DASH-001_Trading_Dashboard.md) is an approved parallel Signal implementation. The public wallet and REMUS mint are verified; observed on-chain trades reconcile exactly to the finalized token balance. The isolated authenticated service uses public, read-only Solana RPC and independent market/wallet collectors. Live deployment verification and historical market coverage remain pending; no Pulseforge core orchestration/outbound changes.
 
@@ -269,11 +271,7 @@ A valid ordinal-street address exposed one conservative false negative in the
 default-off classifier; prepare its regression fix before activation approval.
 Existing research records, holds, grants and spending controls remain unchanged.
 
-PR #1017 is deployed at `784f4e5`; its isolated facility-recovery flag remains
-absent. The live administrator receipt confirms 79 tickets, 18 retained, 34
-awaiting evidence, eight consumed cycles and no Google reservations today.
-Only 52 businesses have individual rows in the current admin view. Prepare an
-exact-grant read-only cohort download to finish the retrospective without database
-credential disclosure, paid calls, promotions or activation. Full-cohort review
-and separate production activation approval remain pending.
+The previous 52/79 visibility gap is closed by the deployed read-only export.
+All research records and prior holds remain intact. The original eight-cycle
+grant is exhausted; no replacement or production activation has been approved.
 

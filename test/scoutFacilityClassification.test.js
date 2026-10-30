@@ -36,6 +36,24 @@ test('category recognition never overrides suitability exclusions', () => {
   assert.equal(decision({ name: 'Central High School', placeTypes: ['school'], description: 'A high school with a music program.' }).admitted, true);
 });
 
+test('ordinal street names establish premises without weakening geography or other decisions', () => {
+  for (const ordinal of ['1st', '2nd', '3rd', '4th', '22ND']) {
+    const result = decision({ name: 'Synthetic Numbered Street School', placeTypes: ['primary_school'],
+      address: `101 ${ordinal} Fixture St, Manchester, NH 03101, USA` });
+    assert.equal(result.admitted, true, ordinal);
+    assert.equal(result.facilityDecision.procurement.independentPurchasingAuthority, false);
+    assert.equal(result.facilityDecision.admission.downstreamAuthorized, false);
+  }
+  for (const address of ['Manchester, NH 03101, USA', '101 234, Manchester, NH 03101, USA', 'PO Box 101, Manchester, NH 03101, USA']) {
+    const result = decision({ placeTypes: ['primary_school'], address });
+    assert.equal(result.admitted, false, address);
+    assert.ok(result.facilityDecision.suitability.missingEvidence.includes('physical_service_premises'));
+  }
+  assert.equal(decision({ placeTypes: ['primary_school'], address: '101 3rd Fixture St, Manchester, England, UK' }).admitted, false);
+  assert.equal(decision({ name: 'Synthetic Beauty School', placeTypes: ['school'],
+    address: '101 3rd Fixture St, Manchester, NH 03101, USA' }).admitted, false);
+});
+
 test('ambiguous categories, operation and premises evidence remain explicit', () => {
   for (const extra of [{ name: 'Granite Works' }, { name: 'Granite Academy' },
     { name: 'University Administration', placeTypes: ['university'] },
