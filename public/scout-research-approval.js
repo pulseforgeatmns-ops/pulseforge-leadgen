@@ -71,7 +71,13 @@
     for (const [label, value, mono] of pairs) dl.append(el('dt', null, label), el('dd', mono ? { class: 'mono' } : null, value ?? '—'));
     return dl;
   }
-  function dollars(micros) { return `$${(Number(micros || 0) / 1e6).toFixed(2)}`; }
+  // Exact from integer micros: binary floats turn 1.845 into 1.84 under toFixed(2).
+  // At least two decimals, never rounded, so $1.845 stays $1.845 and $5 is $5.00.
+  function dollars(micros) {
+    const value = Math.max(0, Math.trunc(Number(micros) || 0));
+    const fraction = String(value % 1e6).padStart(6, '0').replace(/0+$/, '').padEnd(2, '0');
+    return `$${Math.floor(value / 1e6)}.${fraction}`;
+  }
   function utc(value) {
     if (!value) return '—';
     const date = new Date(value);
@@ -182,7 +188,7 @@
       facts([
         ['Grant ID', grant.grantId, true],
         ['Approval reference', grant.approvalRef, true],
-        ['Recorded Google spend', `${dollars(grant.reservedUsdMicros)} total · ${dollars(todaySpend)} today (UTC)`],
+        ['Reserved Google spend', `${dollars(grant.reservedUsdMicros)} total · ${dollars(todaySpend)} today (UTC) — upper-bound reservations, not Google’s invoice`],
         ['Google limit', `${dollars(grant.dailyGoogleUsdMicros)} per UTC day`],
         ['Cycles remaining', String(grant.cyclesRemaining ?? Math.max(0, max - used))],
         ['Window', `${utc(grant.notBefore)} → ${utc(grant.expiresAt)}`],
@@ -190,9 +196,77 @@
         ['Research mission', grant.researchMissionId, true],
         ['Installed', utc(grant.installedAt)],
         ['Checked', utc(grant.observedAt)],
-      ]));
+      ]),
+      ...renderCandidates(grant.candidates));
     $('revokeArea').hidden = grant.status === 'revoked';
     sync();
+  }
+
+  // ---------- candidates ----------
+  const OUTCOMES = {
+    queued: 'Accepted by admission',
+    policy_excluded: 'Excluded by mission policy',
+    business_evidence_not_authorized: 'Awaiting website evidence — parked (investigation not authorised)',
+    evidence_budget_deferred: 'Awaiting website evidence — re-checked every cycle (earlier behaviour)',
+    unresolved_business_evidence: 'Website gave no business-type evidence',
+    business_evidence_dependency: 'Website evidence unavailable',
+    transient_business_evidence_failure: 'Website fetch failed; retry later',
+    ownership_policy_observed: 'Already owned, contacted or assigned in Anchor',
+    ownership_unresolved: 'Ownership unresolved',
+    geography_unresolved: 'Outside the approved cities',
+    identity_incomplete: 'Missing business name or website',
+  };
+  const STATES = { handled: 'Done', deferred: 'Waiting', blocked: 'Parked', pending: 'In progress' };
+  const count = value => (Number.isSafeInteger(value) ? String(value) : '—');
+  function table(headings, rows) {
+    return el('div', { class: 'table-wrap' }, el('table', headings.length > 3 ? { class: 'wide-table' } : null,
+      el('thead', null, el('tr', null, headings.map(h => el('th', { scope: 'col' }, h)))),
+      el('tbody', null, rows.map(cells => el('tr', null, cells.map(cell => el('td', null, cell ?? '—')))))));
+  }
+  function tally(items) {
+    return el('div', { class: 'tally' }, items.map(([label, value, help]) =>
+      el('div', null, el('strong', null, value), el('span', null, label), help ? el('span', { class: 'help' }, help) : null)));
+  }
+  function renderCandidates(candidates) {
+    if (!candidates) return [];
+    const retained = candidates.retained || { total: 0, rows: [] };
+    const ledger = candidates.ledger;
+    const nodes = [el('h3', null, 'Candidates')];
+    nodes.push(tally([
+      ['Retained in the research ledger', count(retained.total), 'Records kept for later review. Not in enrichment.'],
+      ['Accepted by admission', ledger ? count(ledger.acceptedTickets) : '—', 'Passed the business-type, segment and city checks.'],
+      ['Accepted, not retained', ledger ? count(ledger.acceptedNotRetained) : '—', 'Already retained or already in Anchor’s queue.'],
+      ['Awaiting website evidence', ledger ? count(ledger.awaitingBusinessEvidence?.total) : '—', 'Business type not yet established. Kept, not rejected.'],
+    ]));
+    nodes.push(el('p', { class: 'help' }, 'Nothing on this list has been enriched, prepared or contacted. Moving a retained candidate into enrichment is a separate, explicit operator step.'));
+    const perCycle = candidates.perCycle || [];
+    if (perCycle.length) {
+      nodes.push(el('h3', null, 'By cycle'), table(['Cycle', 'Result', 'Evaluated', 'Accepted', 'Retained'],
+        perCycle.map(row => [String(row.cycleNumber), row.state, count(row.evaluatedCandidates), count(row.acceptedCandidates), count(row.retainedCandidates)])));
+      if (perCycle.some(row => row.acceptedCandidates == null))
+        nodes.push(el('p', { class: 'help' }, '“—” means that cycle ran before accepted and evaluated counts were recorded. The totals above come from the durable records.'));
+    }
+    if (ledger) {
+      const rows = Object.entries(ledger.byReason || {}).sort((a, b) => b[1] - a[1]);
+      nodes.push(el('h3', null, 'Outcome of every discovered business'),
+        el('p', { class: 'help' }, `${ledger.total} unique businesses for this search plan (fingerprint ${String(ledger.fingerprint || '').slice(0, 12)}…). Any other Scout pass on the same plan shares these counts.`),
+        table(['Outcome', 'Businesses'], rows.map(([reason, n]) => [OUTCOMES[reason] || reason, String(n)])));
+    }
+    if (retained.rows?.length) {
+      nodes.push(el('details', null, el('summary', null, `Retained businesses (${retained.total})`),
+        table(['Cycle', 'Business', 'Website', 'Type', 'Location'],
+          retained.rows.map(row => [String(row.cycleNumber), row.company, row.domain, row.vertical, row.location])),
+        retained.listed < retained.total ? el('p', { class: 'help' }, `Showing ${retained.listed} of ${retained.total}.`) : null));
+    }
+    const awaiting = ledger?.awaitingBusinessEvidence;
+    if (awaiting?.rows?.length) {
+      nodes.push(el('details', null, el('summary', null, `Businesses awaiting website evidence (${awaiting.total})`),
+        table(['Business', 'Location', 'Google place types', 'Found by query', 'Status'],
+          awaiting.rows.map(row => [row.name, row.location, (row.placeTypes || []).join(', ') || '—', row.discoveryQuery,
+            row.reason === 'business_evidence_not_authorized' ? 'Parked' : 'Re-checked each cycle'])),
+        awaiting.listed < awaiting.total ? el('p', { class: 'help' }, `Showing ${awaiting.listed} of ${awaiting.total}.`) : null));
+    }
+    return nodes;
   }
   async function refreshGrant(grantId) {
     const area = $('grantStatus');

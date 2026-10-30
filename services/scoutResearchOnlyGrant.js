@@ -338,8 +338,71 @@ async function inspectResearchOnlyGrant(pool, grantId) {
         : cycles.length >= grant.max_cycles ? 'exhausted' : 'installed',
       installedAt: grant.installed_at, revokedAt: grant.revoked_at, revokedBy: grant.revoked_by,
       cyclesConsumed: cycles.length, cyclesRemaining: Math.max(0, grant.max_cycles - cycles.length), cycles,
-      spend, reservedUsdMicros: spend.reduce((sum, row) => sum + row.micros, 0) };
+      // Reservations are priced at the highest public field tier before each
+      // attempt and never refunded: an upper bound, not Google's invoice.
+      spend, reservedUsdMicros: spend.reduce((sum, row) => sum + row.micros, 0), spendBasis: 'reserved_upper_bound',
+      candidates: await candidateAccounting(db, grant, cycles) };
   }, { readOnly: true });
+}
+
+// Ticket outcomes that still need first-party business-type evidence. The
+// legacy reason predates parking; both are preserved, never discarded.
+const AWAITING_EVIDENCE = Object.freeze(['business_evidence_not_authorized', 'evidence_budget_deferred']);
+const CANDIDATE_LIST_LIMIT = 200;
+
+// Read-only. Retained rows are this grant's own records. The ticket ledger is
+// keyed by search fingerprint, so it is reported with that scope stated: any
+// other Scout pass on the same fingerprint shares it.
+async function candidateAccounting(db, grant, cycles) {
+  const retainedRows = (await db.query(`SELECT cycle_number,company,domain,vertical,location,reconciled_at IS NOT NULL AS reconciled
+    FROM scout_research_candidates WHERE grant_id=$1 AND tenant_id='10' ORDER BY cycle_number,id LIMIT $2`,
+  [grant.grant_id, CANDIDATE_LIST_LIMIT])).rows;
+  const retainedTotal = (await db.query(`SELECT count(*)::int AS n, count(*) FILTER (WHERE reconciled_at IS NOT NULL)::int AS reconciled
+    FROM scout_research_candidates WHERE grant_id=$1 AND tenant_id='10'`, [grant.grant_id])).rows[0];
+  const perCycle = cycles.map(row => {
+    const result = row.result || {};
+    const recorded = key => (Number.isSafeInteger(result[key]) ? result[key] : null);
+    return { cycleNumber: row.cycle_number, state: row.state, acceptedCandidates: recorded('acceptedCandidates'),
+      retainedCandidates: recorded('retainedCandidates'), evaluatedCandidates: recorded('evaluatedCandidates') };
+  });
+  const out = { retained: { total: retainedTotal.n, reconciled: retainedTotal.reconciled, listed: retainedRows.length,
+    rows: retainedRows.map(row => ({ cycleNumber: row.cycle_number, company: row.company, domain: row.domain,
+      vertical: row.vertical, location: row.location, reconciled: row.reconciled })) },
+  perCycle, ledger: null };
+  const present = (await db.query(`SELECT to_regclass('public.scout_candidate_work') IS NOT NULL
+    AND to_regclass('public.scout_candidate_memberships') IS NOT NULL AS present`)).rows[0]?.present;
+  if (!present) return out;
+  const scope = ['10', grant.search_fingerprint];
+  const groups = (await db.query(`SELECT state,reason,count(*)::int AS count FROM scout_candidate_work
+    WHERE tenant_id=$1 AND search_fingerprint=$2 GROUP BY state,reason ORDER BY state,reason`, scope)).rows;
+  const byState = { pending: 0, deferred: 0, blocked: 0, handled: 0 }; const byReason = {};
+  for (const row of groups) {
+    byState[row.state] = (byState[row.state] || 0) + row.count;
+    const key = row.reason || 'unspecified';
+    byReason[key] = (byReason[key] || 0) + row.count;
+  }
+  const total = groups.reduce((sum, row) => sum + row.count, 0);
+  const acceptedTickets = groups.filter(row => row.state === 'handled' && row.reason === 'queued').reduce((s, r) => s + r.count, 0);
+  const awaiting = (await db.query(`SELECT w.state,w.reason,m.raw_candidate FROM scout_candidate_work w
+    JOIN LATERAL (SELECT raw_candidate FROM scout_candidate_memberships m WHERE m.tenant_id=w.tenant_id
+      AND m.search_fingerprint=w.search_fingerprint AND m.plan_version=w.plan_version AND m.ticket_version=w.ticket_version
+      AND m.candidate_key=w.candidate_key ORDER BY m.created_at,m.query_key,m.ordinal LIMIT 1) m ON true
+    WHERE w.tenant_id=$1 AND w.search_fingerprint=$2 AND w.reason=ANY($3::text[])
+    ORDER BY w.created_at,w.candidate_key LIMIT $4`, [...scope, AWAITING_EVIDENCE, CANDIDATE_LIST_LIMIT])).rows;
+  const awaitingTotal = AWAITING_EVIDENCE.reduce((sum, reason) => sum + (byReason[reason] || 0), 0);
+  out.ledger = { scope: 'search_fingerprint', fingerprint: grant.search_fingerprint, total, byState, byReason,
+    acceptedTickets, acceptedNotRetained: Math.max(0, acceptedTickets - retainedTotal.n),
+    awaitingBusinessEvidence: { total: awaitingTotal, listed: awaiting.length, rows: awaiting.map(row => awaitingRow(row)) } };
+  return out;
+}
+
+function awaitingRow({ state, reason, raw_candidate: stored }) {
+  const raw = stored && typeof stored === 'object' ? stored : {};
+  const textField = value => (typeof value === 'string' && value.trim() ? value.trim().slice(0, 300) : null);
+  const types = Array.isArray(raw.placeTypes) && raw.placeTypes.length ? raw.placeTypes : Array.isArray(raw.types) ? raw.types : [];
+  return { state, reason, name: textField(raw.companyName || raw.name || raw.company), location: textField(raw.location || raw.address),
+    website: textField(raw.website || raw.url || raw.domain), discoveryQuery: textField(raw.discoveryQuery),
+    placeTypes: types.filter(type => typeof type === 'string').slice(0, 12) };
 }
 
 // The scheduler claims one cycle. Consumption commits before any provider

@@ -776,8 +776,14 @@ async function persistDiscoveredCompanies(pool, store, {
       // a temporary fetch failure. Retain replay until this is resolved.
       if (admission.reason === 'unclassifiable_vertical') checkpointDeferred = true;
       reject(admission.reason);
+      // A pass that may not investigate websites (research-only) cannot resolve
+      // this ticket. Park it on this pass's dependency key instead of replaying
+      // it every cycle; a pass with different authority sees it due again.
       await finishTicket(company, admission.reason === 'unclassifiable_vertical'
-        ? !investigatedThisCandidate ? { state: 'deferred', reason: 'evidence_budget_deferred', retryAfterMs: 0 }
+        ? !investigatedThisCandidate && scoutContext.businessEvidenceNotAuthorized === true
+          ? { state: 'blocked', reason: 'business_evidence_not_authorized',
+            evidence: { admissionReason: admission.reason, websiteInvestigation: 'not_authorized' } }
+          : !investigatedThisCandidate ? { state: 'deferred', reason: 'evidence_budget_deferred', retryAfterMs: 0 }
           : evidenceOutcome?.outcome === 'fetch_failed' && evidenceOutcome.retryable === true
             ? { state: 'deferred', reason: 'transient_business_evidence_failure', retryAfterMs: 24 * 60 * 60_000 }
             : { state: 'blocked', reason: evidenceOutcome?.outcome === 'no_evidence'
@@ -1146,7 +1152,8 @@ async function defaultScoutRampResearchScoped({
         ...input, tenantId: tenant.tenantId,
         scoutContext: { scope, source, allowedCities, serviceAreas: allowedCities,
           clientId: tenant.clientId, authorizedTenantId: tenant.tenantId, governedContext: governed,
-          program, investigateBusinessEvidence: !researchOnly, evidenceCursor, ticketPass, researchCandidateSink },
+          program, investigateBusinessEvidence: !researchOnly, businessEvidenceNotAuthorized: Boolean(researchOnly),
+          evidenceCursor, ticketPass, researchCandidateSink },
       });
       if (input.companies?.length) {
         const createCursor = createBusinessEvidenceCursorStore
