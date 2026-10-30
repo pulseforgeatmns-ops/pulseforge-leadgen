@@ -73,6 +73,17 @@ Default-disabled Anchor-only Brevo boundary diagnostics; exact 42703 and post-HT
 
 # Changelog
 
+## Unreleased: SPEC-SCOUT-P0-004 (review only)
+
+- Add default-off Tenant 10 research-only facility decisions using structured Places
+  categories, premises evidence and country/state/town validation. Keep procurement
+  authority separate and preserve distinct facility listings through identity resolution.
+- Balance approved research queries by category/town using durable paid history;
+  preserve the one-page allocation, all spend/grant gates and skipped-query receipts.
+- Add deterministic regression/native PostgreSQL tests and an offline retrospective
+  over 52 accessible production screenshot observations. The remaining 27 raw records
+  and complete-cohort acceptance are pending; no production action or promotion.
+
 All notable changes to this project are documented here. Format inspired by [Keep a Changelog](https://keepachangelog.com/). Versions follow the release plans in `docs/releases/`.
 
 ## [Unreleased]

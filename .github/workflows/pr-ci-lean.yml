@@ -188,6 +188,8 @@ jobs:
           SCOUT_CHECKPOINT_REQUIRE_POSTGRES: 'true'
         run: node --test test/scoutQueryCheckpoints.test.js test/scoutQueryCheckpointRamp.test.js test/scoutQueryCheckpointsPostgres.test.js test/scoutQueryContinuation.test.js test/scoutQueryContinuationPostgres.test.js test/scoutCoverageEpoch.test.js test/scoutCoverageEpochPostgres.test.js test/scoutCoverageEpochRamp.test.js test/scoutCoverageGrant.test.js test/scoutCoverageGrantPostgres.test.js
       - name: Scout durable candidate protocol (network denied)
+        run: node --require ./test/helpers/denyExternalProviders.cjs --test test/scoutFacilityClassification.test.js test/scoutFacilityResearchCoverage.test.js test/scoutFacilityEvaluation.test.js test/scoutFacilityResearchPostgres.test.js
+      - name: Scout durable candidate parking protocol (network denied)
         run: node --require ./test/helpers/denyWebsiteEvidenceNetwork.cjs --test test/scoutCandidateTickets.test.js test/scoutCandidateTicketDispatch.test.js test/scoutResearchEvidenceParking.test.js
       - name: Scout durable candidate and complete pipeline required PostgreSQL contracts (synthetic providers)
         env:

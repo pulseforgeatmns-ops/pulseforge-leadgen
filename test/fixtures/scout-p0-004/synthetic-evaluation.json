@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "tenantId": "10",
+  "cohortExpected": 7,
+  "sourceKind": "synthetic_regression_fixture",
+  "authoritativeRawExport": false,
+  "scope": {"eligibleSubsegments": ["managed_facilities", "restaurant_foh"], "cities": ["Manchester", "Bedford", "Londonderry", "Hooksett", "Auburn", "Goffstown", "Nashua", "Merrimack"]},
+  "records": [
+    {"candidate": {"name": "Synthetic Primary School", "website": "school.example", "address": "101 Fixture Way, Manchester, NH 03101, USA", "placeTypes": ["primary_school", "school"]}, "previous": {"status": "awaiting_website_evidence", "vertical": null}},
+    {"candidate": {"name": "Synthetic Academy", "address": "102 Fixture Way, Manchester, NH 03101, USA"}, "previous": {"status": "awaiting_website_evidence", "vertical": null}},
+    {"candidate": {"name": "Synthetic Beauty Academy", "website": "beauty.example", "address": "103 Fixture Way, Manchester, NH 03101, USA", "placeTypes": ["school"]}, "previous": {"status": "retained", "vertical": "school"}},
+    {"candidate": {"name": "Synthetic Foreign School", "website": "foreign.example", "address": "1 Synthetic Road, Manchester, England, UK", "placeTypes": ["school"]}, "previous": {"status": "retained", "vertical": "school"}},
+    {"candidate": {"name": "Synthetic University", "website": "university.example", "address": "104 Fixture Way, Manchester, NH 03101, USA", "placeTypes": ["university"]}, "previous": {"status": "retained", "vertical": "campus"}},
+    {"candidate": {"name": "Synthetic University Administration", "website": "admin.example", "address": "105 Fixture Way, Manchester, NH 03101, USA", "placeTypes": ["university"]}, "previous": {"status": "retained", "vertical": "campus"}},
+    {"candidate": {"name": "Synthetic Warehouse", "website": "warehouse.example", "address": "106 Fixture Way, Manchester, NH 03101, USA"}, "previous": {"status": "awaiting_website_evidence", "vertical": null}}
+  ]
+}

@@ -17,7 +17,7 @@ Implement B (deterministic classification) and E (category-diverse search covera
 
 ## Problem and evidence
 
-The October 29 research-only grant reportedly discovered 79 unique businesses, accepted 19 tickets and retained 18 candidates; 34 awaited website evidence. Supplied production screenshots show structured school types deferred, beauty/martial-arts schools retained, and Manchester Academy at a UK address retained. District/campus procurement overlap and school-heavy query coverage require review. Actual source records must be used where accessible; missing raw data must remain explicitly missing.
+The October 29 research-only grant reportedly discovered 79 unique businesses, accepted 19 tickets and retained 18 candidates; 34 awaited website evidence. Supplied production screenshots show structured school types deferred, beauty/martial-arts schools retained, and a facility listing at a UK address retained. District/campus procurement overlap and school-heavy query coverage require review. Actual source records must be used where accessible; missing raw data must remain explicitly missing.
 
 ## Scope
 

@@ -93,7 +93,8 @@ function candidateKey(raw, authoritativeText) {
 // the exact same facts; all original values remain immutable memberships.
 function businessFacts(raw) {
   const fields = ['name','companyName','company','website','url','domain','address','location','city','state','country',
-    'description','snippet','businessType','placeTypes','types','classificationObservations','vertical','segment','category'];
+    'description','snippet','businessType','placeTypes','types','classificationObservations','vertical','segment','category',
+    ...(raw.facilityResearchRecovery === true ? ['addressComponents','businessStatus','verifiedBusinessAttributes'] : [])];
   const facts = Object.fromEntries(fields.filter(key => raw[key] != null && raw[key] !== '').map(key => [key,raw[key]]));
   if (raw.source !== 'google_places' && raw.industry && ![raw.discoveryQuery,raw.discoveryConcept].includes(raw.industry)) facts.industry=raw.industry;
   return digest(facts);

@@ -675,6 +675,8 @@ async function persistDiscoveredCompanies(pool, store, {
     discoveryConcept: scoutContext.discoveryConcept || null,
     discoveryCity: scoutContext.discoveryCity || null,
     discoverySource: scoutContext.discoverySource || null,
+    facilityResearchRecovery: Boolean(scoutContext.researchCandidateSink)
+      && require('../utils/anchorFacilityResearch').enabled(tenant.tenantId, true),
   };
 
   let websiteInvestigations = 0;
@@ -772,6 +774,12 @@ async function persistDiscoveredCompanies(pool, store, {
     }
     const admission = evaluateReplenishmentAdmission(company, admissionContext);
     if (!admission.admitted) {
+      if (admission.facilityDecision && admission.deferred && admission.reason === 'geography_ambiguous') {
+        checkpointDeferred = true; reject('outside_geography');
+        await finishTicket(company, { state: 'deferred', reason: 'unresolved_business_evidence', retryAfterMs: 24 * 60 * 60_000,
+          evidence: { admissionReason: admission.reason, facilityDecision: admission.facilityDecision } });
+        continue;
+      }
       // Missing website evidence may reflect the per-run investigation cap or
       // a temporary fetch failure. Retain replay until this is resolved.
       if (admission.reason === 'unclassifiable_vertical') checkpointDeferred = true;
@@ -782,7 +790,8 @@ async function persistDiscoveredCompanies(pool, store, {
       await finishTicket(company, admission.reason === 'unclassifiable_vertical'
         ? !investigatedThisCandidate && scoutContext.businessEvidenceNotAuthorized === true
           ? { state: 'blocked', reason: 'business_evidence_not_authorized',
-            evidence: { admissionReason: admission.reason, websiteInvestigation: 'not_authorized' } }
+            evidence: { admissionReason: admission.reason, websiteInvestigation: 'not_authorized',
+              ...(admission.facilityDecision ? { facilityDecision: admission.facilityDecision } : {}) } }
           : !investigatedThisCandidate ? { state: 'deferred', reason: 'evidence_budget_deferred', retryAfterMs: 0 }
           : evidenceOutcome?.outcome === 'fetch_failed' && evidenceOutcome.retryable === true
             ? { state: 'deferred', reason: 'transient_business_evidence_failure', retryAfterMs: 24 * 60 * 60_000 }
@@ -791,8 +800,10 @@ async function persistDiscoveredCompanies(pool, store, {
             evidence: { outcome: evidenceOutcome?.outcome || 'unknown', reason: evidenceOutcome?.reason || 'unreported_crawl_outcome' } }
         : ['contradictory_business_type', 'segment_mismatch'].includes(admission.reason)
           ? { state: 'handled', reason: 'policy_excluded', evidence: { admissionReason: admission.reason,
-            provenance: admission.provenance || null, tenantId: tenant.tenantId } }
-          : { state: 'blocked', reason: admission.reason === 'outside_geography' ? 'geography_unresolved' : 'identity_incomplete' });
+            provenance: admission.provenance || null, tenantId: tenant.tenantId,
+            ...(admission.facilityDecision ? { facilityDecision: admission.facilityDecision } : {}) } }
+          : { state: 'blocked', reason: admission.reason === 'outside_geography' ? 'geography_unresolved' : 'identity_incomplete',
+            ...(admission.facilityDecision ? { evidence: { facilityDecision: admission.facilityDecision } } : {}) });
       continue;
     }
     if (tenant.tenantId === '1') {
@@ -848,7 +859,8 @@ async function persistDiscoveredCompanies(pool, store, {
     const notes = formatProvenanceNotes(
       'Discovered by Max-directed Scout inventory replenishment; no contact performed.',
       admission.provenance
-    ) + (businessEvidence ? ` | business_evidence: ${JSON.stringify(businessEvidence)}` : '');
+    ) + (businessEvidence ? ` | business_evidence: ${JSON.stringify(businessEvidence)}` : '')
+      + (admission.facilityDecision ? ` | facility_decision: ${JSON.stringify(admission.facilityDecision)}` : '');
     const writeQueue = async db => {
       if (ticketPass) {
         // Different provider identities may resolve to the same canonical queue
@@ -921,7 +933,8 @@ async function persistDiscoveredCompanies(pool, store, {
       return insertedRow;
     };
     let handled;
-    try { handled = await finishTicket(company, { state: 'handled', reason: 'queued' }, writeQueue); }
+    try { handled = await finishTicket(company, { state: 'handled', reason: 'queued',
+      ...(admission.facilityDecision ? { evidence: { facilityDecision: admission.facilityDecision } } : {}) }, writeQueue); }
     catch (error) {
       if (!ticketPass || !error.scoutQueueHeld) throw error;
       counters.alreadyQueued += 1;
@@ -1141,6 +1154,7 @@ async function defaultScoutRampResearchScoped({
   let queryProgression = null;
   let evidenceProgression = evidenceProgressionDiagnostic(null);
   let candidateWork = null;
+  let facilityResearchCoverage = null;
 
   const recoveredExistingCount = Number(existingRecovery?.payload?.qualifiedCount || 0);
   if (promoted < plan.deficit && recoveredExistingCount <= 0) {
@@ -1258,8 +1272,13 @@ async function defaultScoutRampResearchScoped({
         : checkpoints.createCheckpointSession({ store: checkpoints.createCheckpointStore({
           db: pool, tenantId: tenant.tenantId, fingerprint,
         }), ticketStore: tickets, pageStore: pages, tenantMemory });
+      if (require('../utils/anchorFacilityResearch').enabled(tenant.tenantId, researchOnly)) {
+        facilityResearchCoverage = require('./scoutFacilityResearchCoverage').createFacilityResearchCoverage({
+          pool, tenantId: tenant.tenantId, scope, generation: searchGeneration });
+      }
       const placesProvider = require('../packages/capabilities/discovery/providers/PlacesProvider')
-        .createPlacesProvider({ queryCheckpointSession: checkpointSession, tenantDiscoveryMemory:tenantMemory });
+        .createPlacesProvider({ queryCheckpointSession: checkpointSession, tenantDiscoveryMemory:tenantMemory,
+          ...(facilityResearchCoverage ? { facilityResearchCoverage } : {}) });
       discoveryAttempted = true;
       try { discovery = await discover(
         scoutInput({ ...program, tenant_id: tenant.tenantId }, source, plan, tenant, searchGeneration),
@@ -1281,6 +1300,7 @@ async function defaultScoutRampResearchScoped({
       // is never repurchased; the legacy path has no continuation evidence.
       generationExhausted = tenant.tenantId === '10' && Boolean(pages) && searchGenerationExhausted(checkpointSnapshot);
       queryProgression = ticketDispatch.queryProgressionDiagnostic(checkpointSnapshot);
+      if (facilityResearchCoverage) queryProgression.researchCoverage = facilityResearchCoverage.snapshot();
       const queryDependency = dispatcher ? ticketDispatch.observedQueryDependency(queryProgression) : null;
       if (queryDependency) {
         // Per-query page checkpoints are durable provider backoff: no automatic

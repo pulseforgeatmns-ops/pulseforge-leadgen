@@ -77,6 +77,7 @@ async function runResearchOnlyCycleIfGranted({ pool, store, program, governed, c
       byReason: scout.candidateWork.byReason } : null,
     searchGeneration: Number(scout?.searchGeneration || 0), searchGenerationExhausted: scout?.searchGenerationExhausted === true,
     googleReservedUsdMicros: spend.reservedUsdMicros, googleAttempts: spend.attempts,
+    ...(scout?.queryProgression?.researchCoverage ? { researchCoverage: scout.queryProgression.researchCoverage } : {}),
     enrichment: false, verification: false, preparation: false, outbound: false,
   };
   await grants.finishResearchCycle(pool, claim, { completed: !failure, result });

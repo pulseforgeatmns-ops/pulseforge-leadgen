@@ -402,6 +402,10 @@ function restaurantBusinessScopeReason(candidate = {}, context = {}) {
 }
 
 function evaluateReplenishmentAdmission(candidate = {}, context = {}) {
+  if (String(context.tenantId) === '10' && context.facilityResearchRecovery === true) {
+    const result = require('./anchorFacilityResearch').evaluateFacilityResearch(candidate, context);
+    return { ...result, provenance: buildDiscoveryProvenance(candidate, context) };
+  }
   const name = asText(candidate.name || candidate.company);
   const website = asText(candidate.website || candidate.website_url || candidate.url);
   const domain = asText(candidate.domain);
