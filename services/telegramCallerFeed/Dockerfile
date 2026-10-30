@@ -8,6 +8,7 @@ COPY services/telegramCallerFeed ./services/telegramCallerFeed
 COPY services/signalOpportunities/historicalDataset.js ./services/signalOpportunities/historicalDataset.js
 COPY services/signalOpportunities/historicalReconstruction.js ./services/signalOpportunities/historicalReconstruction.js
 COPY services/signalOpportunities/historicalStats.js ./services/signalOpportunities/historicalStats.js
+COPY services/signalDistribution/requestBudget.js ./services/signalDistribution/requestBudget.js
 COPY packages/signal-v1/providers/GeckoTerminalMarketDataProvider.js ./packages/signal-v1/providers/GeckoTerminalMarketDataProvider.js
 COPY scripts/signalHistoricalReconstruct.js ./scripts/signalHistoricalReconstruct.js
 COPY scripts/signalHistoricalBackfill.js ./scripts/signalHistoricalBackfill.js
