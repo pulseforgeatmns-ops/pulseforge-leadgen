@@ -1,7 +1,9 @@
 'use strict';
+// Capture only the fixture's loopback HTTP client before denying all global
+// provider transports, matching the existing approval PostgreSQL harness.
+const { startApprovalHarness, AO, OTHER_ADMIN } = require('./helpers/scoutResearchApprovalHarness');
 const deny = require('./helpers/denyExternalProviders.cjs');
 const test = require('node:test'), assert = require('node:assert/strict');
-const { startApprovalHarness, AO, OTHER_ADMIN } = require('./helpers/scoutResearchApprovalHarness');
 
 test('native admin export reads all 79 synthetic tickets without changing research or downstream records', { timeout: 600000 }, async t => {
   const h = await startApprovalHarness(); t.after(() => h.close());

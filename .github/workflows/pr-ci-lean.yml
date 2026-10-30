@@ -188,7 +188,9 @@ jobs:
           SCOUT_CHECKPOINT_REQUIRE_POSTGRES: 'true'
         run: node --test test/scoutQueryCheckpoints.test.js test/scoutQueryCheckpointRamp.test.js test/scoutQueryCheckpointsPostgres.test.js test/scoutQueryContinuation.test.js test/scoutQueryContinuationPostgres.test.js test/scoutCoverageEpoch.test.js test/scoutCoverageEpochPostgres.test.js test/scoutCoverageEpochRamp.test.js test/scoutCoverageGrant.test.js test/scoutCoverageGrantPostgres.test.js
       - name: Scout facility classification and coverage (network denied)
-        run: node --require ./test/helpers/denyExternalProviders.cjs --test test/scoutFacilityClassification.test.js test/scoutFacilityResearchCoverage.test.js test/scoutFacilityEvaluation.test.js test/scoutFacilityProviderCoverage.test.js test/scoutFacilityResearchPostgres.test.js test/scoutResearchRetrospective.test.js test/scoutResearchRetrospectivePostgres.test.js
+        run: node --require ./test/helpers/denyExternalProviders.cjs --test test/scoutFacilityClassification.test.js test/scoutFacilityResearchCoverage.test.js test/scoutFacilityEvaluation.test.js test/scoutFacilityProviderCoverage.test.js test/scoutFacilityResearchPostgres.test.js test/scoutResearchRetrospective.test.js
+      - name: Scout retrospective native admin and read-only PostgreSQL gate
+        run: node --test test/scoutResearchRetrospectivePostgres.test.js
       - name: Scout complete-cohort download on tablet and phone (synthetic, no providers)
         env:
           CHROMIUM_PATH: ${{ steps.anchor-chrome.outputs.chrome-path }}
