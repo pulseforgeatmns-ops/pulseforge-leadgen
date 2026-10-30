@@ -19,8 +19,9 @@
 # CURRENT_STATE
 
 [SPEC-SCOUT-P0-004](docs/specs/SPEC-SCOUT-P0-004_Deterministic_Classification_and_Search_Coverage_Recovery.md)
-is approved and in progress for local investigation, deterministic facility classification,
-bounded category/town coverage and regression tests. Production evaluation is read-only;
+has a local default-off implementation for deterministic facility classification,
+bounded category/town coverage and regression tests (159 local tests pass). Native
+PostgreSQL/CI and the full 79-row retrospective remain pending. Production evaluation is read-only;
 historical records, paid research, grants, recovery and outbound authority are unchanged.
 Production activation, merge and deployment require separate approval.
 

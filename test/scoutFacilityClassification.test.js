@@ -99,3 +99,13 @@ test('district/campus relationships stay unverified and co-located organizations
   }
   assert.equal(facility.procurementDecision(rows[1]).independentPurchasingAuthority, false);
 });
+
+test('previously deferred research tickets need separate review even when now recognizable', () => {
+  const { claimedCompanies } = require('../services/scoutCandidateTicketDispatch');
+  const claim = { reason: 'business_evidence_not_authorized', members: [candidate({
+    name: 'Synthetic Primary School', placeId: 'synthetic-held', source: 'google_places', placeTypes: ['primary_school'] })] };
+  const held = claimedCompanies([claim], '10', [], { holdExistingResearchDeferrals: true });
+  assert.equal(held[0].researchDeferredReviewRequired, true);
+  assert.equal(claimedCompanies([claim], '10')[0].researchDeferredReviewRequired, undefined);
+  assert.equal(claimedCompanies([claim], '13', [], { holdExistingResearchDeferrals: true })[0].researchDeferredReviewRequired, undefined);
+});

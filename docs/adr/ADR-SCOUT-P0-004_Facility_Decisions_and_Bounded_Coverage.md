@@ -37,6 +37,8 @@ research ledger's unique domain/name guard admits only one row.
 - Procurement relationships are review hints until explicit verified evidence exists.
 - No migration, historical rewrite, grant-field change or parked dependency-key change.
 - No automatic promotion of the 34 records; the offline evaluator never writes back.
+  Rediscovered evidence cannot automatically rearm those research holds, and already
+  deferred tickets are parked for separate review before classification admission.
 - Historical screenshots lack raw IDs/types/websites in places. Full-cohort production
   acceptance remains pending the read-only 79-record export and reviewed before/after.
 - Disabling the isolated flag restores the prior path. Evidence is retained; paid

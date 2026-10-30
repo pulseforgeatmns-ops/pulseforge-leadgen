@@ -121,6 +121,8 @@ function resolveCandidate(candidate, existingCompanies = []) {
   return {
     company: {
       ...require('../../../utils/scoutTicketMembership').ticketFields(candidate),
+      ...(String(candidate.tenantId) === '10' && candidate.researchDeferredReviewRequired === true
+        ? { researchDeferredReviewRequired: true } : {}),
       id,
       tenantId: candidate.tenantId || null,
       name,

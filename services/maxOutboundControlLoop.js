@@ -719,6 +719,12 @@ async function persistDiscoveredCompanies(pool, store, {
       decisions.push({ name: company.name, domain: company.domain || company.website, location: company.location, reason });
     };
     counters.evaluated += 1;
+    if (admissionContext.facilityResearchRecovery && company.researchDeferredReviewRequired === true) {
+      checkpointDeferred = true; reject('unclassifiable_vertical');
+      await finishTicket(company, { state: 'blocked', reason: 'business_evidence_not_authorized',
+        evidence: { reviewRequired: true, reason: 'historical_research_deferral_requires_separate_review' } });
+      continue;
+    }
     const name = String(company.name || '').trim();
     const website = String(company.website || '').trim() || null;
     const domain = normalizeDomain(company.domain || website);
@@ -1220,7 +1226,8 @@ async function defaultScoutRampResearchScoped({
       }
       const dependencyKey = ticketDispatch.candidateTicketDependencyKey({ tenantId: tenant.tenantId, program, source });
       dispatcher = ticketDispatch.createCandidateTicketDispatcher({ ticketStore: tickets,
-        tenantId: tenant.tenantId, dependencyKey, persist: persistPass });
+        tenantId: tenant.tenantId, dependencyKey, persist: persistPass,
+        holdExistingResearchDeferrals: require('../utils/anchorFacilityResearch').enabled(tenant.tenantId, researchOnly) });
       candidateWork = await dispatcher.snapshot();
     }
     discoveryBackoff = await loadDiscoveryBackoff(pool, tenant.tenantId, fingerprint, now);

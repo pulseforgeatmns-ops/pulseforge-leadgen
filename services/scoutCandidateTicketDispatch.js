@@ -17,7 +17,7 @@ function candidateTicketDependencyKey({ tenantId, program, source }) {
     } })).digest('hex');
 }
 
-function claimedCompanies(claims, tenantId, observed = []) {
+function claimedCompanies(claims, tenantId, observed = [], { holdExistingResearchDeferrals = false } = {}) {
   const { normalizeDomain } = require('../utils/canonicalEmailEligibility');
   const complete = claims.map(work => {
     const rows = work.members.map(raw => {
@@ -33,7 +33,10 @@ function claimedCompanies(claims, tenantId, observed = []) {
     // A durable obligation cannot be split by mutable raw.id/name/domain. Carry
     // every actual member together; conflicting domains require identity repair.
     const domains = new Set(work.members.map(raw => normalizeDomain(raw.domain || raw.website || raw.url)).filter(Boolean));
-    company = { ...company, _scoutTicketRefs: mergeTicketRefs(...work.members) };
+    company = { ...company, _scoutTicketRefs: mergeTicketRefs(...work.members),
+      ...(holdExistingResearchDeferrals && String(tenantId) === '10'
+        && ['business_evidence_not_authorized', 'evidence_budget_deferred'].includes(work.reason)
+        ? { researchDeferredReviewRequired: true } : {}) };
     if (domains.size > 1) company.name = '';
     return company;
   });
@@ -61,7 +64,7 @@ function claimedCompanies(claims, tenantId, observed = []) {
   return companies;
 }
 
-function createCandidateTicketDispatcher({ ticketStore, tenantId, dependencyKey, persist }) {
+function createCandidateTicketDispatcher({ ticketStore, tenantId, dependencyKey, persist, holdExistingResearchDeferrals = false }) {
   if (!ENABLED_TENANTS.has(String(tenantId))) throw Error('Scout durable candidate dispatch is not enabled for this tenant');
   let attempted = false;
   let result = null;
@@ -86,7 +89,7 @@ function createCandidateTicketDispatcher({ ticketStore, tenantId, dependencyKey,
       attempted = true;
       try {
         const claims = await ticketStore.claimDue({ dependencyKey, limit: 100 });
-        const companies = claimedCompanies(claims, String(tenantId), input.companies || []);
+        const companies = claimedCompanies(claims, String(tenantId), input.companies || [], { holdExistingResearchDeferrals });
         result = await persist({ ...input, tenantId: String(tenantId), companies }, pass);
         return result;
       } catch (error) { failure = 'candidate_processing_failed'; throw error; }
