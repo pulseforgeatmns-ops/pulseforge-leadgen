@@ -91,7 +91,8 @@ test('Chromium: research approval page reports candidates and exact reserved spe
   const downloads = fs.mkdtempSync(path.join(os.tmpdir(), 'scout-cohort-download-'));
   t.after(() => fs.rmSync(downloads, { recursive: true, force: true }));
 
-  for (const [label, viewport] of [['desktop', { width: 1280, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
+  for (const [label, viewport] of [['desktop', { width: 1280, height: 900 }],
+    ['tablet', { width: 800, height: 1280, isMobile: true, hasTouch: true }], ['phone', { width: 390, height: 844 }]]) {
     const page = await browser.newPage();
     await page.setViewport(viewport);
     const errors = [];
