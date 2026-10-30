@@ -1,4 +1,4 @@
-'use strict';
+'use strict';\n// checkpoint runner v1: source-touch marker for Railway watch-path deployment.
 const fs=require('node:fs');const path=require('node:path');
 const {canonicalize,assertNoProspectiveLeak}=require('../services/signalOpportunities/historicalDataset');
 const {attentionSequence,reconstructMarket}=require('../services/signalOpportunities/historicalReconstruction');
