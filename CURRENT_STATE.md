@@ -18,6 +18,12 @@
 
 # CURRENT_STATE
 
+[SPEC-SCOUT-P0-004](docs/specs/SPEC-SCOUT-P0-004_Deterministic_Classification_and_Search_Coverage_Recovery.md)
+is approved and in progress for local investigation, deterministic facility classification,
+bounded category/town coverage and regression tests. Production evaluation is read-only;
+historical records, paid research, grants, recovery and outbound authority are unchanged.
+Production activation, merge and deployment require separate approval.
+
 [SPEC-SIGNAL-DASH-001](docs/specs/SPEC-SIGNAL-DASH-001_Trading_Dashboard.md) is an approved parallel Signal implementation. The public wallet and REMUS mint are verified; observed on-chain trades reconcile exactly to the finalized token balance. The isolated authenticated service uses public, read-only Solana RPC and independent market/wallet collectors. Live deployment verification and historical market coverage remain pending; no Pulseforge core orchestration/outbound changes.
 
 [SPEC-266](docs/specs/SPEC-266_Signal_Default_Off_Initial_SMS.md) records PR 980's
