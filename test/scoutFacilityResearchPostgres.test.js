@@ -50,7 +50,8 @@ test('eight native research cycles diversify without widening authority, paid pa
     assert.equal(result.scout.admission.retainedForResearch, result.researchOnly.retainedCandidates);
     assert.ok(result.researchOnly.retainedCandidates > 0, 'successful facility retention must still work');
     assert.equal(result.researchOnly.providerReceipt.reportsAvailable, true);
-    assert.notEqual(result.researchOnly.providerReceipt.discovery.blocker, 'provider_failed', 'synthetic HTTP succeeds; optional unavailability has a typed cause');
+    assert.notEqual(result.researchOnly.providerReceipt.discovery.blocker, 'provider_failed',
+      `synthetic HTTP succeeds; optional unavailability has a typed cause: ${JSON.stringify(result.researchOnly.providerReceipt)}`);
     assert.ok(result.researchOnly.providerReceipt.providers.some(row =>
       row.errors.some(error => error.code === 'adapter_unavailable')));
     assert.equal((await pool.query("SELECT count(*)::int AS n FROM scout_research_candidates WHERE company LIKE '%Historical Marker%'")).rows[0].n, 0);
