@@ -46,6 +46,14 @@
     research_only_grant_conflict: 'This approval reference is already recorded for a different grant.',
     research_only_grant_revoked: 'This grant was revoked and cannot be reinstalled.',
     research_only_grant_not_found: 'No grant was found with that ID.',
+    research_only_awaiting_cycle_release: 'The released allowance is used. A separate administrator approval is required for the next research cycle.',
+    research_only_release_initial_missing: 'This older grant has no initial cycle release. Revoke it and approve a new grant; no release is backfilled.',
+    research_only_release_not_due: 'An approved cycle is still unused or running. Review the next release after it finishes.',
+    research_only_release_allowance_changed: 'The allowance changed after this preview. Refresh status and review again.',
+    research_only_release_invalid: 'This must be an exact one-cycle release within the original grant ceiling.',
+    research_only_release_exact_confirmation_required: 'The release did not match the preview. Review again.',
+    research_only_release_conflict: 'This release reference is already recorded differently. Refresh status before trying again.',
+    research_only_cycles_exhausted: 'All eight authorized cycles are consumed. A release cannot extend the grant ceiling.',
     research_only_retrospective_grant_required: 'Look up the exact grant before downloading its research records.',
     research_only_retrospective_mission_unavailable: 'The recorded research mission is unavailable. No export was produced.',
     research_only_retrospective_limit_exceeded: 'This cohort exceeds the bounded download size. An operator must review its size before export.',
@@ -169,10 +177,11 @@
       area.replaceChildren(el('p', null, el('span', { class: 'badge' }, 'No open grant'),
         'No research-only grant is open. Research cycles cannot run.'), el('p', { class: 'help' }, `Checked ${utc(grant?.observedAt)}.`));
       $('revokeArea').hidden = true;
+      $('releaseArea').hidden = true;
       return sync();
     }
-    const tone = { installed: 'good', expired: 'warn', exhausted: 'warn', revoked: 'bad' }[grant.status] || '';
-    const label = { installed: 'Active', expired: 'Expired', exhausted: 'All cycles used', revoked: 'Revoked' }[grant.status] || grant.status;
+    const tone = { installed: 'good', awaiting_cycle_release: 'warn', expired: 'warn', exhausted: 'warn', revoked: 'bad' }[grant.status] || '';
+    const label = { installed: 'Active', awaiting_cycle_release: 'Awaiting cycle release', expired: 'Expired', exhausted: 'All cycles used', revoked: 'Revoked' }[grant.status] || grant.status;
     const max = Number(grant.maxCycles || 0), used = Number(grant.cyclesConsumed || 0);
     const fill = el('span');
     // CSSOM, not a style attribute: the page CSP forbids inline styles.
@@ -185,6 +194,8 @@
       exhausted: 'All 8 cycles are used. No further cycles can be claimed. Revoke it to close it before approving a new grant.',
       revoked: `Revoked ${utc(grant.revokedAt)}${grant.revokedBy ? ` by ${grant.revokedBy}` : ''}. Cycles and spend stay on record.`,
       installed: 'Cycles run only from the Max control loop, within these limits.',
+      awaiting_cycle_release: grant.releasedCycles ? 'No additional cycle can be claimed without a separate administrator release.'
+        : 'This older grant has no initial release. Revoke it and approve a new grant.',
     };
     area.replaceChildren(
       el('p', null, el('span', { class: `badge ${tone}` }, label), notes[grant.status] || ''),
@@ -195,14 +206,20 @@
         ['Reserved Google spend', `${dollars(grant.reservedUsdMicros)} total · ${dollars(todaySpend)} today (UTC) — upper-bound reservations, not Google’s invoice`],
         ['Google limit', `${dollars(grant.dailyGoogleUsdMicros)} per UTC day`],
         ['Cycles remaining', String(grant.cyclesRemaining ?? Math.max(0, max - used))],
+        ['Released cycles', String(grant.releasedCycles ?? 0)],
+        ['Released cycles remaining', String(grant.releasedCyclesRemaining ?? 0)],
         ['Window', `${utc(grant.notBefore)} → ${utc(grant.expiresAt)}`],
         ['Revision pin', grant.expectedRevision, true],
         ['Research mission', grant.researchMissionId, true],
         ['Installed', utc(grant.installedAt)],
         ['Checked', utc(grant.observedAt)],
       ]),
-      ...renderCandidates(grant.candidates));
+      ...renderCandidates(grant.candidates),
+      el('h3', null, 'Cycle release history'),
+      el('ul', { class: 'list' }, (grant.releases || []).map(r => el('li', null,
+        `${r.previous_allowance} → ${r.released_cycles} · administrator ${r.administrator_id} · ${utc(r.created_at)} · ${r.approval_reference}`))));
     $('revokeArea').hidden = grant.status === 'revoked';
+    $('releaseArea').hidden = grant.status !== 'awaiting_cycle_release' || !grant.releasedCycles || grant.cycleInProgress;
     sync();
   }
 
@@ -332,6 +349,7 @@
       el('h3', null, 'Limits'),
       facts([
         ['Maximum cycles', `${preview.maxCycles} discovery cycles`],
+        ['Initially released cycles', String(preview.initiallyReleasedCycles ?? 0)],
         ['Google limit', `${dollars(preview.dailyGoogleUsdMicros)} per UTC day (Google Places only)`],
         ['Starts', utc(preview.notBefore)],
         ['Expires', utc(preview.expiresAt)],
@@ -344,7 +362,7 @@
         el('li', null, 'Outbound stays off. Discoveries are kept apart and never queued for enrichment or email without a separate reconciliation.'),
         el('li', null, `Permitted: ${Object.entries(perms).filter(([, v]) => v).map(([k]) => k).join(', ') || 'none'}. ` +
           `Not permitted: ${Object.entries(perms).filter(([, v]) => !v).map(([k]) => k).join(', ') || 'none'}.`),
-        el('li', null, 'The grant stops on its own after 8 cycles, at expiry, on a revision change, or if any pinned state changes. You can revoke it at any time.')),
+        el('li', null, 'Only the first cycle is released. Each later cycle needs separate administrator approval. The grant also stops at its eight-cycle ceiling, at expiry, on a revision change, or if pinned state changes. You can revoke it at any time.')),
       facts([
         ['Grant ID', preview.grantId, true],
         ['Research mission', m.researchMissionId, true],
@@ -382,6 +400,8 @@
     $('revokeButton').disabled = !ok || !state.grant?.grantId || state.grant.status === 'revoked' || !REF.test($('revokeReference').value.trim());
     $('refreshGrant').disabled = state.busy;
     $('exportCohort').disabled = !ok || !HEX64.test(state.grant?.grantId || '');
+    $('previewRelease').disabled = !ok || state.grant?.status !== 'awaiting_cycle_release'
+      || !REF.test($('releaseReference').value.trim()) || !$('releaseStatement').value.trim();
   }
   async function busy(work) {
     if (state.busy) return;
@@ -421,8 +441,8 @@
       (password ? $('confirmPassword') : $('confirmSubmit')).focus();
     });
   }
-  async function stepUp(password) {
-    await call(CONFIRM, { purpose: PURPOSE, password });
+  async function stepUp(password, purpose = PURPOSE) {
+    await call(CONFIRM, { purpose, password });
   }
 
   // ---------- actions ----------
@@ -483,9 +503,9 @@
     const g = state.grantPreview;
     if (!grantInstallable() || !$('grantConfirm').checked) return;
     const answer = await confirmDialog({ title: 'Install research-only grant', action: 'Install grant',
-      description: 'This authorizes Google Places spending for Scout discovery only, within the limits below. It cannot be raised later; revoke and re-approve instead.',
+      description: 'This releases one Scout discovery cycle. Every later cycle needs separate approval. The ceiling, budget, expiry and revision stay fixed.',
       password: true,
-      pairs: [['Maximum cycles', String(g.maxCycles)], ['Google limit', `${dollars(g.dailyGoogleUsdMicros)} per UTC day`],
+      pairs: [['Maximum cycles', String(g.maxCycles)], ['Initially released cycles', String(g.initiallyReleasedCycles)], ['Google limit', `${dollars(g.dailyGoogleUsdMicros)} per UTC day`],
         ['Expires', utc(g.expiresAt)], ['Revision pin', g.expectedRevision, true], ['Grant ID', g.grantId, true]] });
     if (!answer) return say('Grant installation cancelled. Nothing was recorded.');
     await busy(async () => {
@@ -524,6 +544,37 @@
     });
   }
 
+  async function reviewCycleRelease(event) {
+    event.preventDefault();
+    const grantId = state.grant?.grantId;
+    if (!ready() || !HEX64.test(grantId || '')) return;
+    let preview;
+    await busy(async () => {
+      try {
+        preview = await call(API + 'research-cycle-release/preview', { grantId,
+          approvalReference: $('releaseReference').value.trim(), statement: $('releaseStatement').value.trim() });
+      } catch (error) { $('grantStatus').prepend(errorBox(error)); say('Cycle release preview failed.', 'error'); }
+    });
+    if (!preview?.releasable) return;
+    const r = preview.release;
+    const answer = await confirmDialog({ title: `Release research cycle ${r.newAllowance}`, action: 'Approve one cycle', password: true,
+      description: 'This permits one additional research-only cycle. The scheduler may claim it after approval. Every later cycle stays held.',
+      pairs: [['Grant ID', grantId, true], ['Released allowance', `${r.previousAllowance} → ${r.newAllowance}`],
+        ['Maximum cycles', String(preview.maxCycles)], ['Google limit', `${dollars(preview.dailyGoogleUsdMicros)} per UTC day`],
+        ['Expires', utc(preview.expiresAt)], ['Revision pin', r.expectedRevision, true],
+        ['Reference', r.approvalReference], ['Statement', r.statement]] });
+    if (!answer) return say('Cycle release cancelled. Nothing was recorded.');
+    await busy(async () => {
+      try {
+        await stepUp(answer.password, 'scout_research_cycle_release');
+        await call(API + 'research-cycle-release/release', { release: r, releaseHash: preview.releaseHash });
+        $('releaseReference').value = ''; $('releaseStatement').value = '';
+        await refreshGrant(grantId);
+        say(`Cycle ${r.newAllowance} released. Every later cycle still requires approval.`, 'success');
+      } catch (error) { $('grantStatus').prepend(errorBox(error, { mutation: true })); say('Cycle release did not complete.', 'error'); }
+    });
+  }
+
   function defaultExpiry() {
     const date = new Date(Date.now() + 72 * 3600 * 1000);
     date.setUTCMinutes(0, 0, 0);
@@ -534,6 +585,7 @@
     $('grantExpires').value = defaultExpiry();
     $('missionForm').addEventListener('submit', previewMission);
     $('grantForm').addEventListener('submit', previewGrant);
+    $('releaseForm').addEventListener('submit', reviewCycleRelease);
     $('approveMission').addEventListener('click', approveMission);
     $('installGrant').addEventListener('click', installGrant);
     $('revokeButton').addEventListener('click', revokeGrant);
@@ -567,7 +619,7 @@
       $(id).addEventListener('input', () => { if (state.grantPreview) { state.grantPreview = null; $('grantApprove').hidden = true; $('grantResult').hidden = true; } sync(); });
     }
     $('missionRef').addEventListener('input', () => { if (state.mission) { state.mission = null; $('missionApprove').hidden = true; $('missionResult').hidden = true; } sync(); });
-    for (const id of ['missionConfirm', 'grantConfirm', 'revokeReference']) $(id).addEventListener('input', sync);
+    for (const id of ['missionConfirm', 'grantConfirm', 'revokeReference', 'releaseReference', 'releaseStatement']) $(id).addEventListener('input', sync);
     for (const id of ['missionConfirm', 'grantConfirm']) $(id).addEventListener('change', sync);
     sync();
     loadAuthority().then(() => refreshGrant());

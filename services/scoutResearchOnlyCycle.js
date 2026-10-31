@@ -36,7 +36,8 @@ async function runResearchOnlyCycleIfGranted({ pool, store, program, governed, c
   const control = require('./maxOutboundControlLoop');
   const halt = async reason => {
     await recordHold({ reason, detail: 'research_only' });
-    return { halted: reason, programId: program.id, recoveryMode: recovery.mode, researchOnly: { status: 'blocked', reason },
+    return { halted: reason, programId: program.id, recoveryMode: recovery.mode,
+      researchOnly: { status: reason === 'research_only_awaiting_cycle_release' ? 'awaiting_cycle_release' : 'blocked', reason },
       prepareRequested: false, preparedAdded: 0, sent: 0 };
   };
   if (open === 'schema_missing') return halt('research_only_schema_unavailable');
@@ -82,6 +83,7 @@ async function runResearchOnlyCycleIfGranted({ pool, store, program, governed, c
   };
   await grants.finishResearchCycle(pool, claim, { completed: !failure, result });
   const researchOnly = { grantId: claim.grantId, cycleNumber: claim.cycleNumber, cyclesRemaining: claim.maxCycles - claim.cycleNumber,
+    releasedCycles: claim.releasedCycles, releasedCyclesRemaining: Math.max(0, claim.releasedCycles - claim.cycleNumber),
     ...result };
   if (scout) {
     // Same event the discovery backoff and search-generation rotation read, so

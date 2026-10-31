@@ -52,6 +52,7 @@ test('research candidate accounting and parked website-evidence tickets (Tenant 
     assert.ok(first.researchOnly.retainedCandidates > 0);
     assert.equal(first.researchOnly.evaluatedCandidates, rows.length);
 
+    await require('./helpers/releaseResearchCycle').releaseNextResearchCycle(pool, h.actor, grant.grantId, 'synthetic-accounting-release-2');
     const second = await cycle('accounting-2');
     assert.equal(second.researchOnly.status, 'completed', JSON.stringify(second.researchOnly));
     const after = await tickets();
@@ -80,6 +81,7 @@ test('research candidate accounting and parked website-evidence tickets (Tenant 
     const legacy = await grants.inspectResearchOnlyGrant(pool, grant.grantId);
     assert.equal(legacy.candidates.ledger.byReason.evidence_budget_deferred, 1);
     assert.ok(legacy.candidates.ledger.awaitingBusinessEvidence.rows.some(row => row.reason === 'evidence_budget_deferred'));
+    await require('./helpers/releaseResearchCycle').releaseNextResearchCycle(pool, h.actor, grant.grantId, 'synthetic-accounting-release-3');
     assert.equal((await cycle('accounting-3')).researchOnly.status, 'completed');
     const now = (await tickets()).find(row => row.candidate_key === target.candidate_key);
     assert.equal(now.state, 'blocked'); assert.equal(now.reason, 'business_evidence_not_authorized'); assert.equal(now.attempts, 2);

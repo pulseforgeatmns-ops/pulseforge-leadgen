@@ -35,6 +35,7 @@ test('eight native research cycles diversify without widening authority, paid pa
   require('../utils/placesQueryCache').clearPlacesQueryCache();
   const selected = [];
   for (let n = 1; n <= 8; n++) {
+    if (n > 1) await require('./helpers/releaseResearchCycle').releaseNextResearchCycle(pool, h.actor, grant.grantId, `synthetic-p004-release-${n}`);
     const searchesBefore = google.calls.filter(x => x.path.endsWith('/textsearch/json')).length;
     const result = await runMaxOutboundControlLoop({ pool, tenantId: '10', cycleId: `synthetic-p004-${n}`,
       logger: { log() {}, warn() {} }, runPreparationRefill: async () => assert.fail('preparation forbidden') });

@@ -5,6 +5,7 @@
 const deny = require('./helpers/denyExternalProviders.cjs');
 const test = require('node:test'), assert = require('node:assert/strict');
 const { startResearchOnlyHarness, placesFetch, ENV, ADMIN_ID, OWNED_DOMAIN } = require('./helpers/scoutResearchOnlyFixture');
+const { releaseNextResearchCycle } = require('./helpers/releaseResearchCycle');
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const quiet = { log() {}, warn() {}, error() {} };
@@ -185,7 +186,10 @@ async function run(t, part) {
   await scenario('durable memory: later cycles never repurchase a searched query or a detailed place', async () => {
     const grant = await install();
     const before = places.calls.length;
-    for (let i = 1; i <= 3; i++) assert.equal((await cycle(`memory-${i}`)).researchOnly?.status, 'completed');
+    for (let i = 1; i <= 3; i++) {
+      if (i > 1) await releaseNextResearchCycle(pool, h.actor, grant.grantId, `synthetic-memory-release-${i}`);
+      assert.equal((await cycle(`memory-${i}`)).researchOnly?.status, 'completed');
+    }
     const searches = places.calls.filter(c => c.path.endsWith('/textsearch/json')).map(c => c.query);
     const details = places.calls.filter(c => c.path.endsWith('/details/json')).map(c => c.placeId);
     assert.equal(new Set(searches).size, searches.length, 'no text search query is bought twice');
@@ -298,13 +302,17 @@ async function run(t, part) {
     await grants.finishResearchCycle(pool, racing.find(r => r.status === 'fulfilled').value, { completed: false, result: { reason: 'synthetic_crash' } });
     // Restart: a claimed cycle whose worker died is abandoned after its lease,
     // stays consumed, and its token can no longer reserve Google spend.
+    await releaseNextResearchCycle(pool, h.actor, grant.grantId, 'synthetic-orphan-release-2');
     const orphan = await claimDirect('orphan', { leaseMs: 400 });
     await assert.rejects(claimDirect('too-soon'), { code: 'research_only_cycle_in_progress' });
     await sleep(700);
     await assert.rejects(grants.runInResearchScope(orphan, () => grants.googleMeter().reserve({ endpoint: 'text_search', tenantId: '10' }), pool),
       { code: grants.SPEND_CODE });
     const results = [];
-    for (let i = 0; i < 8; i++) results.push(await cycle(`cap-${i}`));
+    for (let i = 0; i < 8; i++) {
+      if (i < 6) await releaseNextResearchCycle(pool, h.actor, grant.grantId, `synthetic-cap-release-${i + 3}`);
+      results.push(await cycle(`cap-${i}`));
+    }
     assert.equal(results.filter(r => r.researchOnly?.status === 'completed').length, 6, '2 consumed + 6 run = 8');
     // Raw queue admissions count as research-only yield: no zero-yield backoff
     // or premature search-generation rotation while queries still admit.
@@ -387,9 +395,12 @@ async function run(t, part) {
   if (part === 'research_mission') {
   await stageResearch();
   await scenario('discovery uses only the research mission: facility-buyer queries, research fingerprint, no outbound-scope tickets', async () => {
-    await install();
+    const installed = await install();
     const before = places.calls.length;
-    for (let i = 0; i < 2; i++) assert.equal((await cycle(`scope-${i}`)).researchOnly?.status, 'completed');
+    for (let i = 0; i < 2; i++) {
+      if (i) await releaseNextResearchCycle(pool, h.actor, installed.grantId, 'synthetic-scope-release-2');
+      assert.equal((await cycle(`scope-${i}`)).researchOnly?.status, 'completed');
+    }
     const queries = places.calls.slice(before).filter(c => c.path.endsWith('/textsearch/json')).map(c => c.query);
     assert.ok(queries.length >= 2);
     const cities = ['Manchester', 'Bedford', 'Londonderry', 'Hooksett', 'Auburn', 'Goffstown', 'Nashua', 'Merrimack'];
