@@ -8,7 +8,7 @@
 // still bind. The marker is consumed atomically in SQL, so it cannot be
 // replayed by a concurrent request and consuming it never re-saves (or
 // resurrects) a session that was logged out in another tab.
-const PURPOSES = Object.freeze(['scout_research_approval']);
+const PURPOSES = Object.freeze(['scout_research_approval', 'scout_research_cycle_release']);
 const VALID_MS = 2 * 60 * 1000;
 const MAX_FAILURES = 5;
 const LOCKOUT_MS = 15 * 60 * 1000;

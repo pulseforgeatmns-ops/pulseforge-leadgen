@@ -35,6 +35,7 @@ test('eight native research cycles diversify without widening authority, paid pa
   require('../utils/placesQueryCache').clearPlacesQueryCache();
   const selected = [];
   for (let n = 1; n <= 8; n++) {
+    if (n > 1) await require('./helpers/releaseResearchCycle').releaseNextResearchCycle(pool, h.actor, grant.grantId, `synthetic-p004-release-${n}`);
     const searchesBefore = google.calls.filter(x => x.path.endsWith('/textsearch/json')).length;
     const result = await runMaxOutboundControlLoop({ pool, tenantId: '10', cycleId: `synthetic-p004-${n}`,
       logger: { log() {}, warn() {} }, runPreparationRefill: async () => assert.fail('preparation forbidden') });
@@ -58,6 +59,7 @@ test('eight native research cycles diversify without widening authority, paid pa
   assert.deepEqual(await snapshot(), before, 'all recovery, suppression/ownership, source missions and downstream records are intact');
   const attempts = google.calls.length;
   const exhausted = await runMaxOutboundControlLoop({ pool, tenantId: '10', cycleId: 'synthetic-p004-exhausted', logger: { log() {}, warn() {} } });
-  assert.equal(exhausted.researchOnly.status, 'blocked'); assert.equal(google.calls.length, attempts);
+  assert.equal(exhausted.researchOnly.status, 'cycles_exhausted'); assert.equal(google.calls.length, attempts);
+  assert.equal(receipt.executionStatus, 'cycles_exhausted');
   assert.equal(deny.attempts(), 0);
 });

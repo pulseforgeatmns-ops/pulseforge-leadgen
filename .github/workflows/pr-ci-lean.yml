@@ -137,7 +137,12 @@ jobs:
           node-version: '22'
       - uses: ./.github/actions/setup-postgres-environment
       - run: npm ci --ignore-scripts
-      - name: Scout mission scope, search memory and native PostgreSQL contracts (no providers)
+      - name: Scout per-cycle release concurrency and native admin authorization (no providers)
+        env:
+          DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
+          DATABASE_SSL: 'false'
+        run: node --test test/scoutResearchCycleRelease.test.js test/scoutResearchCycleReleasePostgres.test.js test/scoutResearchCycleReleaseHttpPostgres.test.js
+      - name: Scout mission scope and search-memory regressions (no providers)
         env:
           DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
           DATABASE_SSL: 'false'
@@ -152,7 +157,13 @@ jobs:
         run: node --require ./test/helpers/denyExternalProviders.cjs --test test/loginSessionPersistencePostgres.test.js
       - uses: browser-actions/setup-chrome@v1
         id: anchor-chrome
-      - name: Native Anchor approval tablet journey (synthetic, no providers)
+      - name: Native research cycle release on tablet and phone (synthetic, no providers)
+        env:
+          CHROMIUM_PATH: ${{ steps.anchor-chrome.outputs.chrome-path }}
+          DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
+          DATABASE_SSL: 'false'
+        run: node --test test/browser/scoutResearchCycleReleaseBrowser.test.js
+      - name: Existing Anchor preparation approval tablet journey (synthetic, no providers)
         env:
           CHROMIUM_PATH: ${{ steps.anchor-chrome.outputs.chrome-path }}
           DATABASE_URL: postgresql://localhost:1/pulseforge_test_only

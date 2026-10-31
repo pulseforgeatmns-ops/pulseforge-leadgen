@@ -15,7 +15,7 @@
   <header><a href="/admin/clients">← Admin</a><span class="eyebrow">Anchor · Scout · Administrator controls</span></header>
   <h1>Scout research approval</h1>
   <p class="lead">Review and approve the facility-buyer research mission and the research-only Google spending grant, check what the grant has used, or revoke it.</p>
-  <aside class="boundary"><strong>Approving here does not start research.</strong> Cycles only run from the existing Max control loop, inside the grant’s limits. This page never enables paid discovery by itself, never changes outbound eligibility, and never lifts recovery maintenance, the provider pause or the outbound restriction.</aside>
+  <aside class="boundary"><strong>A new grant releases one research cycle.</strong> The Max control loop may run that cycle automatically. Every later cycle needs a separate administrator release. The eight-cycle ceiling, recovery maintenance, provider pause and outbound restriction stay in place.</aside>
 
   <section class="card" aria-labelledby="authorityHeading">
     <h2 id="authorityHeading">Your current authority</h2>
@@ -35,6 +35,15 @@
       <button id="exportCohort" type="button" disabled>Download all research records</button>
     </div>
     <p class="help">The download includes every business outcome and its existing search evidence for offline review. It starts no research and changes no records.</p>
+    <div id="releaseArea" hidden>
+      <h3>Review the next research cycle</h3>
+      <p class="help">A release permits exactly one additional cycle. It does not change the grant’s budget, expiry, mission, revision or research-only restrictions. The scheduler may claim it after approval.</p>
+      <form id="releaseForm" autocomplete="off">
+        <label>Cycle release reference<input id="releaseReference" required maxlength="120" pattern="[A-Za-z0-9_.:\-]{1,120}" spellcheck="false" autocapitalize="none"></label>
+        <label>Cycle release statement<textarea id="releaseStatement" required maxlength="2000" rows="3"></textarea></label>
+        <button id="previewRelease" type="submit" disabled>Review next cycle release…</button>
+      </form>
+    </div>
     <details>
       <summary>Look up a specific grant (including revoked or expired)</summary>
       <form id="lookupForm" autocomplete="off"><label>Grant ID — 64 lowercase hex characters<input id="lookupGrantId" pattern="[a-f0-9]{64}" maxlength="64" spellcheck="false" autocapitalize="none"></label>
@@ -78,7 +87,7 @@
     </form>
     <div id="grantResult" hidden></div>
     <div id="grantApprove" hidden>
-      <label class="check"><input id="grantConfirm" type="checkbox"> I authorize this exact research-only grant: at most 8 discovery cycles, at most the Google limit shown per UTC day, until the expiry shown, pinned to this revision. It does not permit enrichment, verification, preparation or sending.</label>
+      <label class="check"><input id="grantConfirm" type="checkbox"> I authorize this exact research-only grant: an 8-cycle ceiling with only the first cycle released, at most the Google limit shown per UTC day, until the expiry shown, pinned to this revision. Every later cycle needs separate approval. It does not permit enrichment, verification, preparation or sending.</label>
       <button id="installGrant" class="primary" type="button" disabled>Install grant…</button>
     </div>
   </section>
@@ -91,7 +100,7 @@
     <dl id="confirmFacts" class="facts"></dl>
     <div id="confirmPasswordArea">
       <input type="text" name="username" id="confirmUsername" autocomplete="username" hidden>
-      <label>Your password — required for every install<input id="confirmPassword" type="password" autocomplete="current-password" maxlength="1024"></label>
+      <label>Your password — required for each approval<input id="confirmPassword" type="password" autocomplete="current-password" maxlength="1024"></label>
     </div>
     <p id="confirmError" class="blocked" role="alert"></p>
     <div class="actions"><button id="confirmSubmit" class="primary" type="submit" value="confirm">Confirm</button><button id="confirmCancel" type="button">Cancel</button></div>

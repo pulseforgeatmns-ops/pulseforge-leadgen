@@ -18,7 +18,7 @@ const ENV_KEYS = [...Object.keys(ENV), 'ANCHOR_EMAIL_SCOPED_RESUME_ID', 'ANCHOR_
 const MIGRATIONS = ['2026-10-17-scout-query-checkpoints.sql', '2026-10-19-scout-query-pages.sql',
   '2026-10-19-scout-candidate-tickets.sql', '2026-10-19-scout-query-coverage-epochs.sql', '2026-10-20-scout-coverage-grants.sql',
   '2026-10-14-api-usage-control.sql', '2026-10-20-scout-bounded-acquisition.sql', '2026-10-26-scout-bounded-research-authority.sql',
-  '2026-10-27-scout-tenant-search-memory.sql', '2026-10-28-scout-research-only-grants.sql'];
+  '2026-10-27-scout-tenant-search-memory.sql', '2026-10-28-scout-research-only-grants.sql', '2026-10-30-scout-research-cycle-releases.sql'];
 const SESSION_ID = 'synthetic-research-admin-session';
 const ADMIN_ID = '71';
 const MISSION_ID = 'synthetic-anchor-research-mission';

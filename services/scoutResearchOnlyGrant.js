@@ -14,6 +14,7 @@ const { PLACES_UPPER_BOUND } = require('../utils/apiPricing');
 const RECOVERY_LOCK_KEY = 'anchor-email-recovery:10';
 const SPEND_LOCK_KEY = 'scout-research-google:10';
 const MAX_CYCLES = 8;
+const INITIAL_RELEASED_CYCLES = 1;
 const MAX_DAILY_USD_MICROS = 5000000;
 const MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const CYCLE_LEASE_MS = 30 * 60 * 1000;
@@ -98,6 +99,7 @@ async function assertSchema(db) {
       FROM scout_research_only_cycles LIMIT 0`);
     await db.query(`SELECT id,tenant_id,grant_id,cycle_number,usage_day,operation,reserved_usd_micros,api_usage_id,state,http_status,created_at,finished_at
       FROM scout_research_google_spend LIMIT 0`);
+    await db.query('SELECT release_id,grant_id,tenant_id,previous_allowance,released_cycles,administrator_id,approver_session_hash,approval_reference,authorization_statement,kind,created_at FROM scout_research_cycle_releases LIMIT 0');
   } catch { fail('research_only_schema_unavailable'); }
   const guards = (await db.query(`SELECT count(*)::int AS count FROM pg_trigger WHERE NOT tgisinternal AND tgenabled='O'
     AND tgname = ANY($1::text[])`, [['scout_research_only_grants_no_delete', 'scout_research_only_grants_revoke_only',
@@ -106,6 +108,10 @@ async function assertSchema(db) {
   const indexes = (await db.query(`SELECT count(*)::int AS count FROM pg_index i WHERE i.indisunique AND i.indisvalid AND i.indisready
     AND i.indexrelid IN (to_regclass('public.scout_research_only_one_open_tenant'), to_regclass('public.scout_research_only_one_live_cycle'))`)).rows[0];
   if (guards?.count !== 6 || indexes?.count !== 2) fail('research_only_schema_guards_missing');
+  const releaseGuards = (await db.query(`SELECT count(*)::int AS count FROM pg_trigger WHERE NOT tgisinternal AND tgenabled='O'
+    AND tgname=ANY($1::text[])`, [['scout_research_releases_no_delete', 'scout_research_releases_no_update',
+    'scout_research_releases_forward', 'scout_research_cycles_release_guard']])).rows[0];
+  if (releaseGuards?.count !== 4) fail('research_only_schema_guards_missing');
   await require('./scoutResearchMission').assertSchema(db)
     .catch(error => fail(error.code === 'research_mission_schema_guards_missing' ? 'research_only_schema_guards_missing' : 'research_only_schema_unavailable'));
 }
@@ -205,7 +211,7 @@ function summary(manifest) {
     missionId: manifest.missionId, researchMissionId: manifest.researchMissionId, researchMissionHash: manifest.researchMissionHash,
     fingerprint: manifest.fingerprint, expectedRevision: manifest.expectedRevision,
     quarantineDecisionHash: manifest.quarantineDecisionHash, operatorId: manifest.operator.id,
-    maxCycles: manifest.maxCycles, dailyGoogleUsdMicros: manifest.dailyGoogleUsdMicros,
+    maxCycles: manifest.maxCycles, initiallyReleasedCycles: INITIAL_RELEASED_CYCLES, dailyGoogleUsdMicros: manifest.dailyGoogleUsdMicros,
     notBefore: manifest.notBefore, expiresAt: manifest.expiresAt, permissions: { ...PERMISSIONS }, providers: [...PROVIDERS],
     preparationInvoked: false, sent: 0, retryAllowed: false };
 }
@@ -280,7 +286,9 @@ async function installResearchOnlyGrant(pool, input, actor, { env = process.env 
     if (existing[0]) {
       storedManifest(existing[0]);
       if (existing[0].revoked_at) fail('research_only_grant_revoked');
-      return { ...summary(manifest), status: 'installed', installed: false, idempotent: true };
+      const releasedCycles = await releasedAllowance(db, hash(manifest));
+      return { ...summary(manifest), initiallyReleasedCycles: releasedCycles ? INITIAL_RELEASED_CYCLES : 0,
+        releasedCycles, status: 'installed', installed: false, idempotent: true };
     }
     if ((await db.query("SELECT 1 FROM scout_research_only_grants WHERE tenant_id='10' AND revoked_at IS NULL")).rows.length)
       fail('research_only_other_grant_open');
@@ -291,7 +299,12 @@ async function installResearchOnlyGrant(pool, input, actor, { env = process.env 
     [hash(manifest), manifest.approvalRef, manifest.programId, manifest.missionId, manifest.fingerprint, JSON.stringify(manifest),
       manifest.operator.id, manifest.operator.sessionHash, manifest.maxCycles, manifest.dailyGoogleUsdMicros,
       manifest.notBefore, manifest.expiresAt, manifest.researchMissionId]);
-    return { ...summary(manifest), status: 'installed', installed: true, idempotent: false };
+    // Installation releases one cycle, not the eight-cycle ceiling. An older
+    // grant is never backfilled on an idempotent installation retry.
+    await appendRelease(db, { grantId: hash(manifest), previousAllowance: 0, newAllowance: INITIAL_RELEASED_CYCLES,
+      operator: manifest.operator, approvalReference: manifest.approvalRef,
+      statement: manifest.authorizationEvidence.statement, expectedRevision: manifest.expectedRevision }, 'initial_install');
+    return { ...summary(manifest), releasedCycles: INITIAL_RELEASED_CYCLES, status: 'installed', installed: true, idempotent: false };
   });
 }
 
@@ -320,6 +333,101 @@ async function revokeResearchOnlyGrant(pool, input, actor) {
   });
 }
 
+async function releasedAllowance(db, grantId) {
+  return Number((await db.query('SELECT COALESCE(max(released_cycles),0)::int AS n FROM scout_research_cycle_releases WHERE grant_id=$1', [grantId])).rows[0].n);
+}
+async function appendRelease(db, release, kind) {
+  const releaseId = hash({ auditKind: kind, ...release });
+  await db.query(`INSERT INTO scout_research_cycle_releases(release_id,grant_id,tenant_id,previous_allowance,released_cycles,
+    administrator_id,approver_session_hash,approval_reference,authorization_statement,kind)
+    VALUES($1,$2,'10',$3,$4,$5,$6,$7,$8,$9)`, [releaseId, release.grantId, release.previousAllowance, release.newAllowance,
+  release.operator.id, release.operator.sessionHash, release.approvalReference, release.statement, kind]);
+  return releaseId;
+}
+const RELEASE_KEYS = ['version','kind','tenantId','grantId','previousAllowance','newAllowance','expectedRevision','operator','approvalReference','statement'];
+function validateCycleRelease(release) {
+  const op = release?.operator;
+  if (!exact(release, RELEASE_KEYS) || release.version !== 1 || release.kind !== 'scout_research_cycle_release'
+    || release.tenantId !== '10' || !HEX64.test(release.grantId || '') || !/^[a-f0-9]{40}$/.test(release.expectedRevision || '')
+    || !Number.isSafeInteger(release.previousAllowance) || release.previousAllowance < 1
+    || release.newAllowance !== release.previousAllowance + 1 || release.newAllowance > MAX_CYCLES
+    || !/^[a-zA-Z0-9_.:-]{1,120}$/.test(release.approvalReference || '') || !text(release.statement, 2000)
+    || !exact(op, OPERATOR_KEYS) || !/^[1-9][0-9]{0,18}$/.test(op.id || '') || op.role !== 'admin'
+    || ![null, 10].includes(op.accountClientId) || !HEX64.test(op.sessionHash || '')) fail('research_only_release_invalid');
+  return release;
+}
+async function releaseBindings(db, grantId, actor, env, lock) {
+  if (!HEX64.test(grantId || '') || !actor || actor.role !== 'admin') fail('research_only_operator_invalid');
+  const grant = await one(db, `SELECT * FROM scout_research_only_grants WHERE grant_id=$1 AND tenant_id='10'${lock ? ' FOR UPDATE' : ''}`,
+    [grantId], 'research_only_grant_not_found');
+  const manifest = storedManifest(grant);
+  if (grant.revoked_at) fail('research_only_grant_revoked');
+  assertEnvironment(manifest, env);
+  assertWindow(manifest, await dbNow(db));
+  await assertOperatorAccount(db, manifest.operator, { lock });
+  await liveBindings(db, manifest, { lock });
+  const account = (await db.query('SELECT client_id,email_verified FROM users WHERE id::text=$1', [String(actor.id)])).rows[0];
+  if (!account || account.email_verified !== true) fail('research_only_operator_invalid');
+  const operator = { id: String(actor.id), role: 'admin', accountClientId: account.client_id == null ? null : Number(account.client_id),
+    sessionHash: require('./anchorCrmPreparationIdentity').sessionBindingHash(actor.sessionId) };
+  await assertOperatorAccount(db, operator, { lock });
+  await require('./anchorCrmPreparationIdentity').assertPreparationApprover(db, approverIdentity({ operator }), { sessionId: actor.sessionId, lock });
+  return { grant, manifest, operator };
+}
+async function assertReleaseDue(db, grant, previousAllowance) {
+  const allowance = await releasedAllowance(db, grant.grant_id);
+  if (!allowance) fail('research_only_release_initial_missing');
+  if (allowance >= grant.max_cycles) fail('research_only_cycles_exhausted');
+  if (previousAllowance !== undefined && allowance !== previousAllowance) fail('research_only_release_allowance_changed');
+  const counts = (await db.query(`SELECT count(*)::int AS consumed,
+    count(*) FILTER(WHERE state='claimed' AND lease_expires_at>clock_timestamp())::int AS active
+    FROM scout_research_only_cycles WHERE grant_id=$1`, [grant.grant_id])).rows[0];
+  if (counts.consumed < allowance || counts.active > 0) fail('research_only_release_not_due');
+  return allowance;
+}
+// Read-only preview, bound to the current session, exact grant and old allowance.
+async function previewResearchCycleRelease(pool, input, actor, { env = process.env } = {}) {
+  if (!exact(input, ['grantId','approvalReference','statement']) || !/^[a-zA-Z0-9_.:-]{1,120}$/.test(input.approvalReference || '')
+    || !text(input.statement, 2000)) fail('research_only_release_invalid');
+  return transaction(pool, async db => {
+    await assertSchema(db);
+    const { grant, manifest, operator } = await releaseBindings(db, input.grantId, actor, env, false);
+    const previousAllowance = await assertReleaseDue(db, grant);
+    const release = validateCycleRelease({ version: 1, kind: 'scout_research_cycle_release', tenantId: '10', grantId: input.grantId,
+      previousAllowance, newAllowance: previousAllowance + 1, expectedRevision: manifest.expectedRevision, operator,
+      approvalReference: input.approvalReference, statement: input.statement });
+    return { ...summary(manifest), status: 'previewed', previewOnly: true, releasable: true, release, releaseHash: hash(release) };
+  }, { readOnly: true });
+}
+async function releaseResearchCycle(pool, input, actor, { env = process.env } = {}) {
+  if (!exact(input, ['release','releaseHash']) || !HEX64.test(input.releaseHash || '')) fail('research_only_release_invalid');
+  const release = validateCycleRelease(input.release);
+  if (hash(release) !== input.releaseHash) fail('research_only_release_exact_confirmation_required');
+  const identity = require('./anchorCrmPreparationIdentity');
+  if (!actor || actor.role !== 'admin' || String(actor.id) !== release.operator.id
+    || identity.sessionBindingHash(actor.sessionId) !== release.operator.sessionHash) fail('research_only_operator_invalid');
+  return transaction(pool, async db => {
+    await recoveryLock(db, true);
+    await assertSchema(db);
+    const { grant, manifest, operator } = await releaseBindings(db, release.grantId, actor, env, true);
+    if (manifest.expectedRevision !== release.expectedRevision || hash(operator) !== hash(release.operator)) fail('research_only_release_invalid');
+    const releaseId = hash({ auditKind: 'administrative', ...release });
+    const existing = (await db.query('SELECT release_id FROM scout_research_cycle_releases WHERE release_id=$1 OR approval_reference=$2',
+      [releaseId, release.approvalReference])).rows;
+    if (existing.length) {
+      if (existing.length !== 1 || existing[0].release_id !== releaseId) fail('research_only_release_conflict');
+      return { grantId: release.grantId, releaseId, status: 'released', idempotent: true, releasedCycles: await releasedAllowance(db, release.grantId) };
+    }
+    await assertReleaseDue(db, grant, release.previousAllowance);
+    // Single-use, purpose-bound password confirmation is consumed atomically
+    // with the release. A concurrent request or logout cannot resurrect it.
+    if (!await require('../utils/freshConfirmation').consume(db, { sessionId: actor.sessionId,
+      userId: actor.id, purpose: 'scout_research_cycle_release' })) fail('fresh_confirmation_required');
+    await appendRelease(db, release, 'administrative');
+    return { grantId: release.grantId, releaseId, status: 'released', idempotent: false, releasedCycles: release.newAllowance };
+  });
+}
+
 async function inspectResearchOnlyGrant(pool, grantId) {
   if (grantId !== undefined && !HEX64.test(grantId || '')) fail('research_only_grant_not_found');
   return transaction(pool, async db => {
@@ -329,13 +437,22 @@ async function inspectResearchOnlyGrant(pool, grantId) {
     const now = await dbNow(db);
     if (!grant) return { status: 'not_installed', observedAt: now.toISOString() };
     const manifest = storedManifest(grant);
-    const cycles = (await db.query(`SELECT cycle_number,cycle_id,state,claimed_at,finished_at,result FROM scout_research_only_cycles
+    const cycles = (await db.query(`SELECT cycle_number,cycle_id,state,claimed_at,lease_expires_at,finished_at,result FROM scout_research_only_cycles
       WHERE grant_id=$1 ORDER BY cycle_number`, [grant.grant_id])).rows;
     const spend = (await db.query(`SELECT usage_day::text AS day,state,operation,count(*)::int AS attempts,sum(reserved_usd_micros)::int AS micros
       FROM scout_research_google_spend WHERE grant_id=$1 GROUP BY usage_day,state,operation ORDER BY usage_day,operation,state`, [grant.grant_id])).rows;
+    const releases = (await db.query(`SELECT release_id,previous_allowance,released_cycles,administrator_id,approval_reference,
+      authorization_statement,kind,created_at FROM scout_research_cycle_releases WHERE grant_id=$1 ORDER BY released_cycles`, [grant.grant_id])).rows;
+    const releasedCycles = releases.at(-1)?.released_cycles || 0;
+    const status = grant.revoked_at ? 'revoked' : +now >= +new Date(grant.expires_at) ? 'expired'
+      : cycles.length >= grant.max_cycles ? 'exhausted' : cycles.length >= releasedCycles ? 'awaiting_cycle_release' : 'installed';
     return { ...summary(manifest), observedAt: now.toISOString(),
-      status: grant.revoked_at ? 'revoked' : +now >= +new Date(grant.expires_at) ? 'expired'
-        : cycles.length >= grant.max_cycles ? 'exhausted' : 'installed',
+      // Keep the historical receipt status alias, while exposing the canonical
+      // execution outcome separately from a pause awaiting another release.
+      status, executionStatus: status === 'exhausted' ? 'cycles_exhausted' : status,
+      initiallyReleasedCycles: releases.length ? INITIAL_RELEASED_CYCLES : 0,
+      releasedCycles, releasedCyclesRemaining: Math.max(0, releasedCycles - cycles.length), releases,
+      cycleInProgress: cycles.some(row => row.state === 'claimed' && +new Date(row.lease_expires_at) > +now),
       installedAt: grant.installed_at, revokedAt: grant.revoked_at, revokedBy: grant.revoked_by,
       cyclesConsumed: cycles.length, cyclesRemaining: Math.max(0, grant.max_cycles - cycles.length), cycles,
       // Reservations are priced at the highest public field tier before each
@@ -428,8 +545,12 @@ async function claimResearchCycle(pool, { program, source, cycleId, env = proces
       result='{"reason":"lease_expired_not_refunded"}'::jsonb WHERE grant_id=$1 AND state='claimed' AND lease_expires_at<=clock_timestamp()`,
     [grant.grant_id]);
     const cycles = (await db.query('SELECT cycle_number,state FROM scout_research_only_cycles WHERE grant_id=$1', [grant.grant_id])).rows;
+    if ((await db.query('SELECT 1 FROM scout_research_only_cycles WHERE cycle_id=$1', [cycleId])).rows.length)
+      fail('research_only_cycle_already_claimed');
     if (cycles.some(row => row.state === 'claimed')) fail('research_only_cycle_in_progress');
     if (cycles.length >= grant.max_cycles) fail('research_only_cycles_exhausted');
+    const releasedCycles = await releasedAllowance(db, grant.grant_id);
+    if (cycles.length >= releasedCycles) fail('research_only_awaiting_cycle_release');
     // Do not consume a cycle that today's ceiling cannot fund a single search for.
     const spent = Number((await db.query(`SELECT COALESCE(sum(reserved_usd_micros),0)::bigint AS micros FROM scout_research_google_spend
       WHERE tenant_id='10' AND usage_day=(clock_timestamp() AT TIME ZONE 'UTC')::date`)).rows[0].micros);
@@ -439,7 +560,7 @@ async function claimResearchCycle(pool, { program, source, cycleId, env = proces
     await db.query(`INSERT INTO scout_research_only_cycles(grant_id,cycle_number,tenant_id,cycle_id,execution_token,lease_expires_at)
       VALUES($1,$2,'10',$3,$4,clock_timestamp()+$5::interval)`, [grant.grant_id, cycleNumber, cycleId, token, `${lease} milliseconds`]);
     const missions = require('./scoutResearchMission');
-    return Object.freeze({ grantId: grant.grant_id, cycleNumber, cycleId, token, manifest, maxCycles: grant.max_cycles,
+    return Object.freeze({ grantId: grant.grant_id, cycleNumber, cycleId, token, manifest, maxCycles: grant.max_cycles, releasedCycles,
       researchMissionId: bound.research.id, researchSource: bound.researchSource,
       researchProgram: missions.researchProgram(bound.program, bound.research),
       dailyCapMicros: Math.min(grant.daily_google_usd_micros, MAX_DAILY_USD_MICROS),
@@ -552,9 +673,10 @@ function googleMeter() {
 }
 
 module.exports = {
-  MAX_CYCLES, MAX_DAILY_USD_MICROS, PERMISSIONS, SPEND_CODE, RECOVERY_LOCK_KEY,
+  MAX_CYCLES, INITIAL_RELEASED_CYCLES, MAX_DAILY_USD_MICROS, PERMISSIONS, SPEND_CODE, RECOVERY_LOCK_KEY,
   schedulerEnabled, validateManifest, assertEnvironment, assertSchema,
   previewResearchOnlyGrant, installResearchOnlyGrant, revokeResearchOnlyGrant, inspectResearchOnlyGrant,
+  previewResearchCycleRelease, releaseResearchCycle, validateCycleRelease,
   claimResearchCycle, finishResearchCycle, runInResearchScope, assertResearchOnlyScope,
   allowsResearchOnlyProvider, googleMeter,
 };

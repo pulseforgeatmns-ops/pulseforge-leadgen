@@ -264,7 +264,9 @@ for (const [resource, operation, service, method] of [
   ['research-only-grant', 'install', 'scoutResearchOnlyGrant', 'installResearchOnlyGrant'],
   ['research-only-grant', 'revoke', 'scoutResearchOnlyGrant', 'revokeResearchOnlyGrant'],
   ['research-only-grant', 'inspect', 'scoutResearchOnlyGrant', 'inspectResearchOnlyGrant'],
-  ['research-only-grant', 'export', 'scoutResearchRetrospective', 'exportForAdmin']]) {
+  ['research-only-grant', 'export', 'scoutResearchRetrospective', 'exportForAdmin'],
+  ['research-cycle-release', 'preview', 'scoutResearchOnlyGrant', 'previewResearchCycleRelease'],
+  ['research-cycle-release', 'release', 'scoutResearchOnlyGrant', 'releaseResearchCycle']]) {
   router.post(`/api/v1/tenant-outreach/anchor-program/${resource}/${operation}`,
     (req, res, next) => {
       noStore(res);
@@ -295,6 +297,9 @@ for (const [resource, operation, service, method] of [
         req.session = null;
       }
       const handler = require(`../services/${service}`);
+      // Release consumes its distinct password purpose inside the same durable
+      // transaction as the allowance audit. Do not save a stale session copy.
+      if (operation === 'release') req.session = null;
       try {
         if (operation === 'inspect') return res.json(await handler.inspectResearchOnlyGrant(pool, req.body?.grantId));
         if (operation === 'export') {
@@ -305,6 +310,8 @@ for (const [resource, operation, service, method] of [
         }
         return res.json(await handler[method](pool, req.body, actor));
       } catch (error) {
+        if (error.code === 'fresh_confirmation_required') return res.status(403).json({ error: error.code, code: error.code,
+          status: 'rejected', writesMayHaveOccurred: false, retryAllowed: true });
         return res.status(409).json({ error: 'research_only_grant_rejected', code: /^research_(only|mission)_[a-z_]+$/.test(error.code || '') ? error.code : null,
           status: ['preview', 'inspect', 'export'].includes(operation) ? 'rejected' : 'outcome_requires_readback',
           writesMayHaveOccurred: !['preview', 'inspect', 'export'].includes(operation), retryAllowed: false });
