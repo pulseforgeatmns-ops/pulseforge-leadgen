@@ -60,10 +60,19 @@ function discoveryDiagnostic(discovery, { researchOnly = false } = {}) {
   const unavailableCodes = ['provider_unavailable', 'external_discovery_capability_unavailable', 'adapter_unavailable'];
   const unavailable = error => unavailableCodes.includes(error?.code)
     && (error.googleStatus == null || unavailableCodes.includes(error.googleStatus));
-  const onlyUnavailableErrors = errors.length > 0 && errors.every(unavailable)
-    && reports.filter(report => report?.status === 'failed').every(report =>
-      reportErrors(report).length > 0 && reportErrors(report).every(unavailable));
-  if (researchOnly && blocker === 'provider_unavailable' && !onlyUnavailableErrors) blocker = 'provider_failed';
+  const failedProvidersUnavailable = reports.filter(report => report?.status === 'failed').every(report =>
+    reportErrors(report).length > 0 && reportErrors(report).every(unavailable));
+  const onlyUnavailableErrors = errors.length > 0 && errors.every(unavailable) && failedProvidersUnavailable;
+  const scopeControl = error => ['insufficient_coverage', 'invalid_target'].includes(error?.code)
+    && error.googleStatus == null;
+  if (researchOnly && blocker === 'provider_unavailable' && !onlyUnavailableErrors) {
+    // A bounded partial search is a coverage limit, not a failed provider call.
+    // Unknown/mixed provider errors still fail visibly; this never grants a healthy status.
+    const knownScopeLimit = failedProvidersUnavailable && errors.some(unavailable)
+      && errors.every(error => unavailable(error) || scopeControl(error));
+    blocker = knownScopeLimit && codes.includes('invalid_target') ? 'invalid_target'
+      : knownScopeLimit && codes.includes('insufficient_coverage') ? 'insufficient_coverage' : 'provider_failed';
+  }
   // Optional adapters may be unavailable after a completed bounded discovery.
   // Denials, quotas and actual/unknown provider failures stay visible as errors.
   const nonBlocking = researchCompleted && blocker === 'provider_unavailable' && onlyUnavailableErrors;

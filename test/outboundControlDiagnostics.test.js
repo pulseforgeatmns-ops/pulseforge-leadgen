@@ -39,6 +39,16 @@ test('research receipts expose unavailable adapters without concealing real prov
   assert.equal(discoveryDiagnostic(mixed, opts).nonBlockingProviderIssue, null);
   mixed.result.payload.providerReceipts[2] = { providerId: 'google_places', status: 'failed' };
   assert.equal(discoveryDiagnostic(mixed, opts).blocker, 'provider_failed', 'a failed report with no recorded cause is not optional unavailability');
+  for (const code of ['insufficient_coverage', 'invalid_target']) {
+    const limited = structuredClone(completed);
+    limited.result.status = 'partial'; limited.result.errors = [{ code }];
+    assert.equal(discoveryDiagnostic(limited, opts).blocker, code);
+    assert.equal(discoveryDiagnostic(limited, opts).nonBlockingProviderIssue, null);
+    limited.result.payload.providerReceipts.push({ providerId: 'google_places', status: 'failed', errors: [{ code: 'provider_error' }] });
+    assert.equal(discoveryDiagnostic(limited, opts).blocker, 'provider_failed', 'a scope limit must not hide a real failure');
+    limited.result.payload.providerReceipts[2].errors = [];
+    assert.equal(discoveryDiagnostic(limited, opts).blocker, 'provider_failed', 'an unexplained failed report remains a failure');
+  }
   const truncated = structuredClone(completed);
   truncated.result.payload.providerReceipts = [...Array(20).fill(completed.result.payload.providerReceipts[0]),
     { providerId: 'google_places', status: 'failed', errors: [{ code: 'provider_error' }] }];

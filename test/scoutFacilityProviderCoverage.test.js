@@ -29,6 +29,28 @@ test('hypothesis discovery preserves typed unavailable-adapter causes after coll
   assert.ok(receipt.providers.some(row => row.errors.some(error => error.code === 'adapter_unavailable')));
 });
 
+test('native Scout result keeps incomplete coverage distinct from optional adapter unavailability', async () => {
+  const { runScoutAcquisitionIntelligence } = require('../packages/max/scoutAcquisition/ScoutAdapter');
+  const { providerReceiptDiagnostic } = require('../services/outboundControlDiagnostics');
+  const segments = scope.eligibleSubsegments;
+  const searchDefinition = { tenantId: '10', segments, businessNeed: 'commercial_cleaning',
+    geography: { label: 'Greater Manchester NH', state: 'NH', cities: scope.cities } };
+  const result = await runScoutAcquisitionIntelligence({ tenantId: '10', authority: 'observe',
+    objective: 'Find approved commercial cleaning facilities.',
+    businessContext: { serviceGeography: 'Greater Manchester NH', preferredSegments: segments },
+    targetContext: { geography: 'Greater Manchester NH', cities: scope.cities, segments, businessType: 'commercial_cleaning' } },
+  { companies: [], people: [], marketDefinition: { segments, geography: 'Greater Manchester NH', searchDefinition },
+    discoveryAdapters: [{ id: 'public_business_places', sourceType: 'public_business_data', available: () => true,
+      discover: async () => ({ candidates: [{ name: 'Synthetic Private School', placeId: 'synthetic-school',
+        website: 'https://fixture.example', address: '1 Fixture Rd, Manchester, NH 03101, USA',
+        location: 'Manchester NH', types: ['school'] }], errors: [], execution: { executed: true, errors: [] } }) }] });
+  assert.equal(result.status, 'partial');
+  const receipt = providerReceiptDiagnostic('10', 'moc_10_1234567890abcdef', result, { researchOnly: true });
+  assert.equal(receipt.discovery.blocker, 'insufficient_coverage');
+  assert.equal(receipt.discovery.nonBlockingProviderIssue, null);
+  assert.ok(receipt.providers.some(row => row.errors.some(error => error.code === 'adapter_unavailable')));
+});
+
 test('real provider/checkpoint boundary keeps one page and diversifies across eight restarted synthetic passes', async () => {
   const checkpoints = new Map(), pages = new Map(), history = [], selected = [], searches = [];
   const store = { tenantId: '10', load: async key => checkpoints.get(key) || null,

@@ -21,6 +21,9 @@ hypothesis discovery returned facility evidence while optional adapters were
 unavailable. The unavailable branch supplied only a message, and provider-report
 normalization discarded structured error causes. This reproduction explains a
 concrete ambiguity; it does not reconstruct an unrecorded historical HTTP error.
+The complete Scout result can also report `insufficient_coverage` after a bounded
+partial search. That limit must remain distinct from an actual provider failure,
+including when optional adapters are unavailable in the same result.
 
 ## Changes and constraints
 
