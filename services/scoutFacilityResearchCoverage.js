@@ -7,6 +7,9 @@ const { queryIdentity } = require('./scoutQueryCheckpoints');
 const VERSION = 'anchor-facility-coverage-v1';
 const normalize = value => String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
 const CATEGORIES = ['school', 'campus', 'property_manager', 'manufacturer', 'warehouse', 'dealership', 'commercial_office', 'restaurant'];
+// Coverage workloads use canonical labels for these approved facility categories.
+// Resolve only their mission authority, never their broader ordinary query sets.
+const CANONICAL_FACILITY_SEGMENTS = Object.freeze(['property_management', 'commercial_office']);
 function category(concept) {
   const s = normalize(concept);
   if (/school|academy/.test(s)) return 'school';
@@ -76,9 +79,13 @@ function createFacilityResearchCoverage({ pool, tenantId, scope, generation = 0,
   return {
     async plan(request, buildQueries) {
       if (String(request.tenantId) !== '10') throw Error('facility_research_tenant_mismatch');
-      if (request.entity || request.scope === 'entity' || request.evidenceType !== 'identity')
+      // Places also treats a top-level businessName as entity work and disables
+      // market checkpoints for it. It cannot enter this one-page market planner.
+      if (request.entity || request.businessName || request.scope === 'entity' || request.evidenceType !== 'identity')
         throw Object.assign(Error('facility_research_identity_only'), { code: 'facility_research_identity_only' });
-      if (!scope.eligibleSubsegments.includes(request.segment)
+      const missionSegment = CANONICAL_FACILITY_SEGMENTS.includes(request.segment)
+        ? 'managed_facilities' : request.segment;
+      if (!scope.eligibleSubsegments.includes(missionSegment)
         || request.geography?.cities?.some(c => !scope.cities.map(normalize).includes(normalize(c)))
         || (request.geography?.state && normalize(request.geography.state) !== 'nh'))
         throw Object.assign(Error('facility_research_request_scope_mismatch'), { code: 'facility_research_request_scope_mismatch' });
