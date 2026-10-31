@@ -23,7 +23,7 @@ test('cycle releases require a direct Anchor admin, exact preview and a fresh pu
   assert.equal(installed.status, 200, installed.text);
   const grantId = installed.json.grantId;
   const grants = require('../services/scoutResearchOnlyGrant'), control = require('../services/maxOutboundControlLoop');
-  const program = (await pool.query("SELECT * FROM acquisition_outbound_programs WHERE tenant_id='10'")).rows[0];
+  const program = (await pool.query("SELECT * FROM acquisition_outbound_programs WHERE tenant_id='10' ORDER BY authorized_at DESC LIMIT 1")).rows[0];
   const source = await control._test.loadSource(pool, program, '10');
   const claim = id => grants.claimResearchCycle(pool, { program, source, cycleId: id });
   const first = await claim('synthetic-http-cycle-one');

@@ -19,7 +19,7 @@ test('durable per-cycle execution allowance (native PostgreSQL, synthetic provid
   const mp = await missions.previewResearchMission(pool, { approvalRef: 'synthetic-cycle-release-mission' }, h.actor);
   const mission = await missions.installResearchMission(pool, { approvalRef: 'synthetic-cycle-release-mission', mission: mp.mission, missionHash: mp.missionHash }, h.actor);
   await pool.query("INSERT INTO api_spend_policies(provider,daily_usd_limit,paused,updated_by) VALUES('google_places',50,false,'operator')");
-  const program = (await pool.query("SELECT * FROM acquisition_outbound_programs WHERE tenant_id='10'")).rows[0];
+  const program = (await pool.query("SELECT * FROM acquisition_outbound_programs WHERE tenant_id='10' ORDER BY authorized_at DESC LIMIT 1")).rows[0];
   const source = await control._test.loadSource(pool, program, '10');
   let sequence = 0;
   const table = async name => (await pool.query(`SELECT to_jsonb(x) row FROM ${name} x ORDER BY to_jsonb(x)::text`)).rows;
@@ -33,6 +33,10 @@ test('durable per-cycle execution allowance (native PostgreSQL, synthetic provid
     return grants.installResearchOnlyGrant(pool, { manifest: p.manifest, manifestHash: p.manifestHash }, h.actor);
   };
   const close = grantId => grants.revokeResearchOnlyGrant(pool, { grantId, approvalReference: `synthetic-close-${++sequence}` }, { kind: 'operator_cli' });
+  t.afterEach(async () => {
+    for (const row of (await pool.query('SELECT grant_id FROM scout_research_only_grants WHERE revoked_at IS NULL')).rows)
+      await close(row.grant_id);
+  });
   const claim = (id, extra = {}) => grants.claimResearchCycle(pool, { program, source, cycleId: id, ...extra });
   const tick = id => control.runMaxOutboundControlLoop({ pool, tenantId: '10', cycleId: id, logger: quiet,
     runPreparationRefill: async () => assert.fail('no downstream preparation') });
@@ -43,7 +47,7 @@ test('durable per-cycle execution allowance (native PostgreSQL, synthetic provid
     assert.match(h.postgres.connectionString, /localhost|127\.0\.0\.1/);
     const script = `(async()=>{const {Pool}=require('pg');const p=new Pool({connectionString:process.env.DATABASE_URL,max:2});
       try{const g=require('./services/scoutResearchOnlyGrant'),c=require('./services/maxOutboundControlLoop');
-      const program=(await p.query("SELECT * FROM acquisition_outbound_programs WHERE tenant_id='10'")).rows[0];
+      const program=(await p.query("SELECT * FROM acquisition_outbound_programs WHERE tenant_id='10' ORDER BY authorized_at DESC LIMIT 1")).rows[0];
       try{await g.claimResearchCycle(p,{program,source:await c._test.loadSource(p,program,'10'),cycleId:${JSON.stringify(cycleId)}});
         console.log(JSON.stringify({claimed:true}));}catch(e){console.log(JSON.stringify({claimed:false,code:e.code}));}}
       finally{await p.end();}})().catch(e=>{console.error(e);process.exitCode=1});`;

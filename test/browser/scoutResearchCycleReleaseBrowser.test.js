@@ -14,7 +14,7 @@ test('Anchor admin reviews and releases exactly one next cycle on tablet and pho
     expiresAt: new Date(Date.now() + 86400000).toISOString(), statement: 'Synthetic first-cycle-only fixture.' }, h.actor);
   const grant = await grants.installResearchOnlyGrant(pool, { manifest: gp.manifest, manifestHash: gp.manifestHash }, h.actor);
   const control = require('../../services/maxOutboundControlLoop');
-  const program = (await pool.query("SELECT * FROM acquisition_outbound_programs WHERE tenant_id='10'")).rows[0];
+  const program = (await pool.query("SELECT * FROM acquisition_outbound_programs WHERE tenant_id='10' ORDER BY authorized_at DESC LIMIT 1")).rows[0];
   const first = await grants.claimResearchCycle(pool, { program, source: await control._test.loadSource(pool, program, '10'), cycleId: 'synthetic-browser-first' });
   await grants.finishResearchCycle(pool, first, { completed: false, result: { reason: 'synthetic_review_fixture' } });
   const browser = await puppeteer.launch({ executablePath: process.env.CHROMIUM_PATH || '/opt/pw-browsers/chromium', headless: true, pipe: true,
