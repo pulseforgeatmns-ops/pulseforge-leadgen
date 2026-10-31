@@ -131,11 +131,12 @@ function providerReceiptDiagnostic(tenantId, cycleId, discovery, options = {}) {
   const boolean = v => typeof v === 'boolean' ? v : null;
   const time = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(v) && Number.isFinite(Date.parse(v)) ? v : null;
   const array = (v, limit) => Array.isArray(v) ? v.slice(0, limit) : [];
-  const errors = v => array(v, 20).map(e => ({ code: choice(e?.code, codes), status: choice(e?.googleStatus, codes) }));
+  const errors = v => array(v, 20).map(e => ({ code: choice(e?.code, codes), status: choice(e?.googleStatus, codes),
+    ...(e?.causeCode === 'facility_research_identity_only' ? { cause: e.causeCode } : {}) }));
   const providerErrors = report => {
     const normalized = errors([...array(report?.execution?.errors, 20), ...array(report?.errors, 20)]);
     return normalized.filter((error, i) => normalized.findIndex(other =>
-      other.code === error.code && other.status === error.status) === i);
+      other.code === error.code && other.status === error.status && other.cause === error.cause) === i);
   };
   return {
     ...correlation(tenantId, cycleId), schemaVersion: 1,

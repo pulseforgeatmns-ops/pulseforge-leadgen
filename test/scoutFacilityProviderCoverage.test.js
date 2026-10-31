@@ -17,12 +17,13 @@ test('the real Places adapter preserves the research identity-only refusal witho
   const result = await adapter.discover({ tenantId: '10', evidenceRequest: { tenantId: '10', scope: 'market',
     segment: 'managed_facilities', evidenceType: 'decision_makers', geography: { cities: scope.cities, state: 'NH' } } });
   assert.equal(calls, 0);
-  assert.equal(result.errors[0].code, 'facility_research_identity_only');
+  assert.equal(result.errors[0].code, 'provider_error', 'legacy provider/admission error codes stay unchanged');
+  assert.equal(result.errors[0].causeCode, 'facility_research_identity_only');
   assert.equal(result.execution, null, 'the refused invocation cannot inherit an earlier paid/HTTP receipt');
   const { buildDiscoveryProviderReport } = require('../packages/scout/coverage/ProviderExecution');
   const receipt = providerReceiptDiagnostic('10', 'moc_10_1234567890abcdef',
     { status: 'completed', payload: { providerReceipts: [buildDiscoveryProviderReport(result, adapter)] } }, { researchOnly: true });
-  assert.equal(receipt.providers[0].errors[0].code, 'facility_research_identity_only');
+  assert.equal(receipt.providers[0].errors[0].cause, 'facility_research_identity_only');
   assert.equal(receipt.providers[0].executed, null);
   assert.equal(receipt.providers[0].queryCount, null);
   assert.equal(receipt.discovery.blocker, 'provider_failed');

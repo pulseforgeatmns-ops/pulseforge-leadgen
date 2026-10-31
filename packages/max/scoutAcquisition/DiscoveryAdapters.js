@@ -213,7 +213,8 @@ function createPlacesDiscoveryAdapter(opts = {}) {
             } catch (err) {
               rethrowResearchProviderControl(err);
               errors.push({
-                code: err.code || 'provider_error',
+                code: 'provider_error',
+                ...(err.code === 'facility_research_identity_only' ? { causeCode: err.code } : {}),
                 message: err.message || String(err),
                 evidenceRequest,
               });
