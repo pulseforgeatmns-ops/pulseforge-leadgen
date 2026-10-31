@@ -214,6 +214,8 @@ function createPlacesDiscoveryAdapter(opts = {}) {
               rethrowResearchProviderControl(err);
               errors.push({
                 code: 'provider_error',
+                ...(['facility_research_identity_only', 'facility_research_request_scope_mismatch'].includes(err.code)
+                  ? { causeCode: err.code } : {}),
                 message: err.message || String(err),
                 evidenceRequest,
               });

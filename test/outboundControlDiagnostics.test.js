@@ -5,6 +5,68 @@ const { admissionReceiptDiagnostic, providerReceiptDiagnostic, scoutRampDiagnost
 const { runMaxOutboundControlLoop } = require('../services/maxOutboundControlLoop');
 const cycleId = 'moc_13_1234567890abcdef';
 
+test('research ramp reports retention separately from actual enrichment admissions', () => {
+  const result = scoutRampDiagnostic({ tenantId: '10', cycleId: 'moc_10_1234567890abcdef', researchOnly: true,
+    discoveredQueued: 3, admission: { discovered: 20, evaluated: 71, fit: 3, admittedToEnrichment: 0, retainedForResearch: 3 },
+    enrichment: { considered: 0, emailResolved: 0, emailVerified: 0 } });
+  assert.equal(result.retainedForResearch, 3);
+  assert.equal(result.discoveredQueued, 0);
+  assert.equal(result.admission.admittedToEnrichment, 0);
+  assert.equal(result.admission.retainedForResearch, 3);
+  const ordinary = scoutRampDiagnostic({ tenantId: '13', cycleId, discoveredQueued: 3, admission: { admittedToEnrichment: 3 } });
+  assert.equal(ordinary.discoveredQueued, 3);
+  assert.equal(ordinary.admission.admittedToEnrichment, 3);
+  assert.equal(ordinary.researchOnly, undefined);
+});
+
+test('research receipts expose unavailable adapters without concealing real provider failures', () => {
+  const secret = 'private@example.test?token=private';
+  const completed = { kind: 'investigated', result: { status: 'completed', payload: { providerReceipts: [
+    { providerId: 'google_maps', status: 'completed', execution: { executed: true } },
+    { providerId: 'website', status: 'failed', errors: [{ code: 'adapter_unavailable', message: secret }] },
+  ] } } };
+  const opts = { researchOnly: true };
+  const receipt = providerReceiptDiagnostic('10', 'moc_10_1234567890abcdef', completed, opts);
+  assert.equal(receipt.discovery.blocker, 'none');
+  assert.equal(receipt.discovery.nonBlockingProviderIssue, 'provider_unavailable');
+  assert.equal(receipt.providers[1].errors[0].code, 'adapter_unavailable');
+  assert.equal(receipt.providers[1].executed, null, 'missing HTTP evidence remains unknown');
+  assert.ok(!JSON.stringify(receipt).includes('private'));
+  assert.equal(discoveryDiagnostic(completed).blocker, 'provider_unavailable', 'ordinary telemetry keeps its existing semantics');
+  const mixed = structuredClone(completed);
+  mixed.result.payload.providerReceipts.push({ providerId: 'google_places', status: 'failed', errors: [{ code: 'provider_error' }] });
+  assert.equal(discoveryDiagnostic(mixed, opts).blocker, 'provider_failed', 'an unavailable optional adapter cannot conceal a real failure');
+  assert.equal(discoveryDiagnostic(mixed, opts).nonBlockingProviderIssue, null);
+  mixed.result.payload.providerReceipts[2] = { providerId: 'google_places', status: 'failed' };
+  assert.equal(discoveryDiagnostic(mixed, opts).blocker, 'provider_failed', 'a failed report with no recorded cause is not optional unavailability');
+  for (const code of ['insufficient_coverage', 'invalid_target']) {
+    const limited = structuredClone(completed);
+    limited.result.status = 'partial'; limited.result.errors = [{ code }];
+    assert.equal(discoveryDiagnostic(limited, opts).blocker, code);
+    assert.equal(discoveryDiagnostic(limited, opts).nonBlockingProviderIssue, null);
+    limited.result.payload.providerReceipts.push({ providerId: 'google_places', status: 'failed', errors: [{ code: 'provider_error' }] });
+    assert.equal(discoveryDiagnostic(limited, opts).blocker, 'provider_failed', 'a scope limit must not hide a real failure');
+    limited.result.payload.providerReceipts[2].errors = [];
+    assert.equal(discoveryDiagnostic(limited, opts).blocker, 'provider_failed', 'an unexplained failed report remains a failure');
+  }
+  const truncated = structuredClone(completed);
+  truncated.result.payload.providerReceipts = [...Array(20).fill(completed.result.payload.providerReceipts[0]),
+    { providerId: 'google_places', status: 'failed', errors: [{ code: 'provider_error' }] }];
+  assert.equal(discoveryDiagnostic(truncated, opts).providerIssuesComplete, false);
+  assert.notEqual(discoveryDiagnostic(truncated, opts).blocker, 'none', 'omitted providers cannot make a healthy receipt');
+  for (const [code, expected] of [['REQUEST_DENIED', 'provider_denied'], ['OVER_QUERY_LIMIT', 'provider_quota'],
+    ['provider_error', 'provider_failed'], [secret, 'provider_failed']]) {
+    const failed = structuredClone(completed);
+    failed.result.payload.providerReceipts[1].errors[0].code = code;
+    const result = providerReceiptDiagnostic('10', 'moc_10_1234567890abcdef', failed, opts);
+    assert.equal(result.discovery.blocker, expected);
+    assert.equal(result.discovery.nonBlockingProviderIssue, null);
+    assert.ok(!JSON.stringify(result).includes('private'));
+  }
+  completed.result.status = 'blocked';
+  assert.equal(discoveryDiagnostic(completed, opts).blocker, 'provider_unavailable');
+});
+
 test('evidence cursor diagnostics expose bounded progress and fixed outcomes without keys or fingerprints', () => {
   const { evidenceProgressionDiagnostic } = require('../services/outboundControlDiagnostics');
   assert.deepEqual(evidenceProgressionDiagnostic({ selected: 20, investigated: 19, advanced: true, sequence: 4 }),

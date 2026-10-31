@@ -25,6 +25,7 @@ function buildProviderEvidenceReport(partial = {}) {
         : 0,
     status: partial.status || 'completed',
     error: partial.error || null,
+    errors: Array.isArray(partial.errors) ? partial.errors : [],
     executedAt: partial.executedAt || new Date().toISOString(),
     execution: partial.execution || null,
   };
@@ -93,6 +94,7 @@ function normalizeProviderReport(adapterReport = {}, assignment = {}) {
     mappedCandidateCount: candidates.length,
     status: failed ? 'failed' : candidates.length ? 'completed' : 'empty',
     error: failed ? errors[0]?.message || 'Provider unavailable' : null,
+    errors,
     execution,
   });
 }

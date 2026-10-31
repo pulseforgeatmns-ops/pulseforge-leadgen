@@ -951,7 +951,10 @@ async function persistDiscoveredCompanies(pool, store, {
     if (!handled.applied) { checkpointDeferred = true; continue; }
     const result = handled.result || { rowCount: 0, rows: [] };
     inserted += result.rowCount;
-    if (result.rowCount) counters.admittedToEnrichment += 1;
+    if (result.rowCount) {
+      if (scoutContext.researchCandidateSink) counters.retainedForResearch += result.rowCount;
+      else counters.admittedToEnrichment += 1;
+    }
     else {
       counters.alreadyQueued += 1;
       // Read-only observation of the same tenant-scoped duplicate predicate.
@@ -1370,7 +1373,7 @@ async function defaultScoutRampResearchScoped({
   emitDiagnostic(logger, '[max-outbound-control] Scout ramp', scoutRampDiagnostic({
     tenantId: tenant.tenantId, cycleId, requested: plan.deficit, promoted,
     recoveredExisting: recoveredExistingCount, discoveredQueued: persisted.inserted,
-    admission: persisted.admission, enrichment: first, discovery,
+    admission: persisted.admission, enrichment: first, discovery, researchOnly,
   }));
   const recoveredExisting = first.recovered + Number(persisted.admission?.recovered || 0) + recoveredExistingCount;
   const verificationRetry = skipVerificationRetry || researchOnly

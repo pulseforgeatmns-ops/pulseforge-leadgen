@@ -482,6 +482,7 @@ function createReplenishmentAdmissionCounters() {
     evaluated: 0,
     fit: 0,
     admittedToEnrichment: 0,
+    retainedForResearch: 0,
     rejected: {
       outside_geography: 0,
       segment_mismatch: 0,
