@@ -77,7 +77,7 @@ function createFacilityResearchCoverage({ pool, tenantId, scope, generation = 0,
     async plan(request, buildQueries) {
       if (String(request.tenantId) !== '10') throw Error('facility_research_tenant_mismatch');
       if (request.entity || request.scope === 'entity' || request.evidenceType !== 'identity')
-        throw Error('facility_research_identity_only');
+        throw Object.assign(Error('facility_research_identity_only'), { code: 'facility_research_identity_only' });
       if (!scope.eligibleSubsegments.includes(request.segment)
         || request.geography?.cities?.some(c => !scope.cities.map(normalize).includes(normalize(c)))
         || (request.geography?.state && normalize(request.geography.state) !== 'nh'))

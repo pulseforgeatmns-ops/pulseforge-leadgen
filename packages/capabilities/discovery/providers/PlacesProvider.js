@@ -271,6 +271,9 @@ function createPlacesProvider(deps = {}) {
   for (const method of ['collectEvidence', 'search']) {
     const execute = provider[method];
     provider[method] = async function (request = {}) {
+      // A refused/thrown invocation must not inherit the previous HTTP receipt.
+      // Only this invocation's completed measurement can replace unknown.
+      this.lastExecution = null;
       const tenants = [request.tenantId, request.clientId, request.client_id,
         deps.tenantId, deps.clientId, deps.client_id].filter(value => value != null);
       return withResearchProviderScope(tenants[0], () => {

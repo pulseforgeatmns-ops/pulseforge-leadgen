@@ -213,7 +213,7 @@ function createPlacesDiscoveryAdapter(opts = {}) {
             } catch (err) {
               rethrowResearchProviderControl(err);
               errors.push({
-                code: 'provider_error',
+                code: err.code || 'provider_error',
                 message: err.message || String(err),
                 evidenceRequest,
               });

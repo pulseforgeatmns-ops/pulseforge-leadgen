@@ -25,6 +25,16 @@ The complete Scout result can also report `insufficient_coverage` after a bounde
 partial search. That limit must remain distinct from an actual provider failure,
 including when optional adapters are unavailable in the same result.
 
+The full native scheduler additionally attempts non-identity evidence work after
+its one allowed page. The existing identity-only gate refuses that work before
+HTTP. Its exception was flattened to `provider_error`. Preserve the fixed
+`facility_research_identity_only` cause in the bounded receipt. A completed cycle
+with refused work or truncated provider observations must not be relabeled healthy.
+No additional evidence type or provider operation is authorized by this change.
+Clear the previous provider execution receipt at each invocation so an exception
+cannot reuse an earlier invocation's HTTP counts. Missing current measurements
+remain unknown; they do not imply either zero spending or another paid call.
+
 ## Changes and constraints
 
 - Recognize explicit historical-marker/landmark names and structured place types
