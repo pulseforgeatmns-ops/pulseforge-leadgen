@@ -52,8 +52,8 @@ test('eight native research cycles diversify without widening authority, paid pa
     assert.equal(result.researchOnly.providerReceipt.reportsAvailable, true);
     const providers = result.researchOnly.providerReceipt;
     assert.ok(providers.providers.some(row => row.executed === null
-      && row.errors.some(error => error.cause === 'facility_research_identity_only')),
-    `the identity-only gate must remain visible without HTTP: ${JSON.stringify(providers)}`);
+      && row.errors.some(error => error.cause === 'facility_research_request_scope_mismatch')),
+    `the mission-segment gate must remain visible without HTTP: ${JSON.stringify(providers)}`);
     assert.equal(providers.reportsTruncated, true);
     assert.equal(providers.discovery.providerIssuesComplete, false);
     assert.notEqual(providers.discovery.blocker, 'none', 'a truncated pass with refused work must not be labeled healthy');

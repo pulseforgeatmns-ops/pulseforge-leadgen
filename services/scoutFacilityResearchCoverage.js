@@ -81,7 +81,7 @@ function createFacilityResearchCoverage({ pool, tenantId, scope, generation = 0,
       if (!scope.eligibleSubsegments.includes(request.segment)
         || request.geography?.cities?.some(c => !scope.cities.map(normalize).includes(normalize(c)))
         || (request.geography?.state && normalize(request.geography.state) !== 'nh'))
-        throw Error('facility_research_request_scope_mismatch');
+        throw Object.assign(Error('facility_research_request_scope_mismatch'), { code: 'facility_research_request_scope_mismatch' });
       if (plan) return []; // A cycle can contain repeated identity tasks, never a second allocation.
       plan = approvedQueryPlan(scope, generation, buildQueries);
       const keys = plan.flatMap(row => [row.rootKey, queryIdentity(row.query, true)]);

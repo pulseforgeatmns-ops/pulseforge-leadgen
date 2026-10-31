@@ -6,28 +6,34 @@ const { createFacilityResearchCoverage } = require('../services/scoutFacilityRes
 const scope = { eligibleSubsegments: ['managed_facilities', 'restaurant_foh'],
   cities: ['Manchester', 'Bedford', 'Londonderry', 'Hooksett', 'Auburn', 'Goffstown', 'Nashua', 'Merrimack'] };
 
-test('the real Places adapter preserves the research identity-only refusal without calling HTTP', async () => {
+test('the real Places adapter preserves exact research-scope refusals without calling HTTP', async () => {
   const { createPlacesDiscoveryAdapter } = require('../packages/max/scoutAcquisition/DiscoveryAdapters');
   const { providerReceiptDiagnostic } = require('../services/outboundControlDiagnostics');
   let calls = 0;
   const provider = createPlacesProvider({ apiKey: 'synthetic-key', fetchImpl: async () => { calls++; assert.fail('HTTP forbidden'); },
     facilityResearchCoverage: createFacilityResearchCoverage({ tenantId: '10', scope, loadHistory: async () => [] }) });
-  provider.lastExecution = { executed: true, totals: { queries: 1, results: 20 }, queries: [{ googleStatus: 'OK' }] };
   const adapter = createPlacesDiscoveryAdapter({ placesProvider: provider });
-  const result = await adapter.discover({ tenantId: '10', evidenceRequest: { tenantId: '10', scope: 'market',
-    segment: 'managed_facilities', evidenceType: 'decision_makers', geography: { cities: scope.cities, state: 'NH' } } });
-  assert.equal(calls, 0);
-  assert.equal(result.errors[0].code, 'provider_error', 'legacy provider/admission error codes stay unchanged');
-  assert.equal(result.errors[0].causeCode, 'facility_research_identity_only');
-  assert.equal(result.execution, null, 'the refused invocation cannot inherit an earlier paid/HTTP receipt');
   const { buildDiscoveryProviderReport } = require('../packages/scout/coverage/ProviderExecution');
-  const receipt = providerReceiptDiagnostic('10', 'moc_10_1234567890abcdef',
-    { status: 'completed', payload: { providerReceipts: [buildDiscoveryProviderReport(result, adapter)] } }, { researchOnly: true });
-  assert.equal(receipt.providers[0].errors[0].cause, 'facility_research_identity_only');
-  assert.equal(receipt.providers[0].executed, null);
-  assert.equal(receipt.providers[0].queryCount, null);
-  assert.equal(receipt.discovery.blocker, 'provider_failed');
-  assert.equal(receipt.discovery.nonBlockingProviderIssue, null);
+  for (const [segment, evidenceType, cause] of [
+    ['managed_facilities', 'decision_makers', 'facility_research_identity_only'],
+    ['property_management', 'identity', 'facility_research_request_scope_mismatch'],
+    ['commercial_office', 'identity', 'facility_research_request_scope_mismatch'],
+  ]) {
+    provider.lastExecution = { executed: true, totals: { queries: 1, results: 20 }, queries: [{ googleStatus: 'OK' }] };
+    const result = await adapter.discover({ tenantId: '10', evidenceRequest: { tenantId: '10', scope: 'market',
+      segment, evidenceType, geography: { cities: scope.cities, state: 'NH' } } });
+    assert.equal(calls, 0);
+    assert.equal(result.errors[0].code, 'provider_error', 'legacy provider/admission error codes stay unchanged');
+    assert.equal(result.errors[0].causeCode, cause);
+    assert.equal(result.execution, null, 'the refused invocation cannot inherit an earlier paid/HTTP receipt');
+    const receipt = providerReceiptDiagnostic('10', 'moc_10_1234567890abcdef',
+      { status: 'completed', payload: { providerReceipts: [buildDiscoveryProviderReport(result, adapter)] } }, { researchOnly: true });
+    assert.equal(receipt.providers[0].errors[0].cause, cause);
+    assert.equal(receipt.providers[0].executed, null);
+    assert.equal(receipt.providers[0].queryCount, null);
+    assert.equal(receipt.discovery.blocker, 'provider_failed');
+    assert.equal(receipt.discovery.nonBlockingProviderIssue, null);
+  }
 });
 
 test('hypothesis discovery preserves typed unavailable-adapter causes after collecting a facility', async () => {
