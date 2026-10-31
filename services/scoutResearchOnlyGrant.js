@@ -286,7 +286,9 @@ async function installResearchOnlyGrant(pool, input, actor, { env = process.env 
     if (existing[0]) {
       storedManifest(existing[0]);
       if (existing[0].revoked_at) fail('research_only_grant_revoked');
-      return { ...summary(manifest), releasedCycles: await releasedAllowance(db, hash(manifest)), status: 'installed', installed: false, idempotent: true };
+      const releasedCycles = await releasedAllowance(db, hash(manifest));
+      return { ...summary(manifest), initiallyReleasedCycles: releasedCycles ? INITIAL_RELEASED_CYCLES : 0,
+        releasedCycles, status: 'installed', installed: false, idempotent: true };
     }
     if ((await db.query("SELECT 1 FROM scout_research_only_grants WHERE tenant_id='10' AND revoked_at IS NULL")).rows.length)
       fail('research_only_other_grant_open');
@@ -442,9 +444,13 @@ async function inspectResearchOnlyGrant(pool, grantId) {
     const releases = (await db.query(`SELECT release_id,previous_allowance,released_cycles,administrator_id,approval_reference,
       authorization_statement,kind,created_at FROM scout_research_cycle_releases WHERE grant_id=$1 ORDER BY released_cycles`, [grant.grant_id])).rows;
     const releasedCycles = releases.at(-1)?.released_cycles || 0;
+    const status = grant.revoked_at ? 'revoked' : +now >= +new Date(grant.expires_at) ? 'expired'
+      : cycles.length >= grant.max_cycles ? 'exhausted' : cycles.length >= releasedCycles ? 'awaiting_cycle_release' : 'installed';
     return { ...summary(manifest), observedAt: now.toISOString(),
-      status: grant.revoked_at ? 'revoked' : +now >= +new Date(grant.expires_at) ? 'expired'
-        : cycles.length >= grant.max_cycles ? 'exhausted' : cycles.length >= releasedCycles ? 'awaiting_cycle_release' : 'installed',
+      // Keep the historical receipt status alias, while exposing the canonical
+      // execution outcome separately from a pause awaiting another release.
+      status, executionStatus: status === 'exhausted' ? 'cycles_exhausted' : status,
+      initiallyReleasedCycles: releases.length ? INITIAL_RELEASED_CYCLES : 0,
       releasedCycles, releasedCyclesRemaining: Math.max(0, releasedCycles - cycles.length), releases,
       cycleInProgress: cycles.some(row => row.state === 'claimed' && +new Date(row.lease_expires_at) > +now),
       installedAt: grant.installed_at, revokedAt: grant.revoked_at, revokedBy: grant.revoked_by,

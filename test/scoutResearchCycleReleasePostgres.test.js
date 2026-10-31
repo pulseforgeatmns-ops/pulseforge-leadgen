@@ -206,9 +206,11 @@ test('migration preserves legacy grants and claims without inventing release aut
   assert.deepEqual([await rows('scout_research_only_grants'),await rows('scout_research_only_cycles')], before);
   const receipt = await grants.inspectResearchOnlyGrant(pool, p.grantId);
   assert.equal(receipt.status, 'awaiting_cycle_release'); assert.equal(receipt.releasedCycles, 0);
+  assert.equal(receipt.initiallyReleasedCycles, 0);
   assert.deepEqual(receipt.releases, []);
   const again = await grants.installResearchOnlyGrant(pool, { manifest: p.manifest, manifestHash: p.manifestHash }, h.actor);
   assert.equal(again.idempotent, true); assert.equal(again.releasedCycles, 0);
+  assert.equal(again.initiallyReleasedCycles, 0);
   await assert.rejects(grants.previewResearchCycleRelease(pool, { grantId: p.grantId, approvalReference: 'synthetic-no-backfill', statement: 'No retroactive permission.' }, h.actor),
     { code: 'research_only_release_initial_missing' });
   const rollbackDb = await pool.connect();

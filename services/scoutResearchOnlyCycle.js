@@ -37,7 +37,8 @@ async function runResearchOnlyCycleIfGranted({ pool, store, program, governed, c
   const halt = async reason => {
     await recordHold({ reason, detail: 'research_only' });
     return { halted: reason, programId: program.id, recoveryMode: recovery.mode,
-      researchOnly: { status: reason === 'research_only_awaiting_cycle_release' ? 'awaiting_cycle_release' : 'blocked', reason },
+      researchOnly: { status: reason === 'research_only_awaiting_cycle_release' ? 'awaiting_cycle_release'
+        : reason === 'research_only_cycles_exhausted' ? 'cycles_exhausted' : 'blocked', reason },
       prepareRequested: false, preparedAdded: 0, sent: 0 };
   };
   if (open === 'schema_missing') return halt('research_only_schema_unavailable');
