@@ -44,6 +44,41 @@ test('planning only reorders queries from the approved segments/cities and recor
   assert.equal(scheduler.snapshot().maxNewPages, 1);
 });
 
+test('canonical property and office requests allocate only the mission-approved facility query set', async () => {
+  const expected = rankQueries(plan(), []).ordered.map(row => row.query);
+  for (const segment of ['property_management', 'commercial_office']) {
+    let loads = 0;
+    const scheduler = createFacilityResearchCoverage({ tenantId: '10', scope,
+      loadHistory: async () => { loads++; return []; } });
+    const request = { tenantId: '10', segment, evidenceType: 'identity', scope: 'market',
+      geography: { cities: scope.cities, state: 'NH' }, discoveryConcept: 'unapproved residential rental search Boston MA' };
+    assert.deepEqual(await scheduler.plan(request, buildQueriesForEvidence), expected,
+      'a canonical label cannot add its ordinary concepts or caller-supplied search text');
+    for (const next of ['managed_facilities', 'property_management', 'commercial_office', 'restaurant_foh'])
+      assert.deepEqual(await scheduler.plan({ ...request, segment: next }, buildQueriesForEvidence), []);
+    assert.equal(loads, 1, 'all authorized task labels share one cycle allocation');
+  }
+});
+
+test('canonical facility labels require managed-facilities authority and keep later requests fenced', async () => {
+  const request = { tenantId: '10', evidenceType: 'identity', scope: 'market',
+    geography: { cities: scope.cities, state: 'NH' } };
+  for (const segment of ['property_management', 'commercial_office']) {
+    const restaurantOnly = createFacilityResearchCoverage({ tenantId: '10',
+      scope: { ...scope, eligibleSubsegments: ['restaurant_foh'] }, loadHistory: async () => assert.fail('unauthorized history read') });
+    await assert.rejects(restaurantOnly.plan({ ...request, segment }, buildQueriesForEvidence),
+      { code: 'facility_research_request_scope_mismatch' });
+    for (const change of [{ segment: 'short_term_rental' }, { segment: 'property_manager' }, { segment: 'realtor' },
+      { segment: ['property_management'] }, { segment: { toString: () => 'commercial_office' } },
+      { tenantId: '13' }, { entity: { name: 'Unapproved entity' } }, { businessName: 'Unapproved entity' }, { evidenceType: 'owner' },
+      { geography: { cities: ['Boston'], state: 'MA' } }, { geography: { cities: ['Manchester'], state: 'WA' } }]) {
+      const scheduler = createFacilityResearchCoverage({ tenantId: '10', scope, loadHistory: async () => [] });
+      await scheduler.plan({ ...request, segment }, buildQueriesForEvidence);
+      await assert.rejects(scheduler.plan({ ...request, segment, ...change }, buildQueriesForEvidence));
+    }
+  }
+});
+
 test('unsupported tenants, categories, geography and entity work fail closed', async () => {
   assert.throws(() => createFacilityResearchCoverage({ tenantId: '13', scope, loadHistory: async () => [] }));
   assert.throws(() => approvedQueryPlan({ ...scope, eligibleSubsegments: ['realtor'] }, 0, buildQueriesForEvidence));
