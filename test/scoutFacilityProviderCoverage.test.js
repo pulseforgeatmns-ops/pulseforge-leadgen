@@ -6,6 +6,29 @@ const { createFacilityResearchCoverage } = require('../services/scoutFacilityRes
 const scope = { eligibleSubsegments: ['managed_facilities', 'restaurant_foh'],
   cities: ['Manchester', 'Bedford', 'Londonderry', 'Hooksett', 'Auburn', 'Goffstown', 'Nashua', 'Merrimack'] };
 
+test('hypothesis discovery preserves typed unavailable-adapter causes after collecting a facility', async () => {
+  const { constructCandidateUniverse } = require('../packages/max/scoutAcquisition/CandidateUniverse');
+  const { providerReceiptDiagnostic } = require('../services/outboundControlDiagnostics');
+  const searchDefinition = { tenantId: '10', segments: scope.eligibleSubsegments,
+    businessNeed: 'commercial_cleaning', geography: { cities: scope.cities, state: 'NH' } };
+  const result = await constructCandidateUniverse({ searchDefinition, existing: { companies: [], people: [] },
+    adapters: [{ id: 'public_business_places', sourceType: 'public_business_data', available: () => true,
+      discover: async () => ({ candidates: [{ name: 'Synthetic Manufacturing', placeId: 'synthetic-factory',
+        address: '101 Fixture Rd, Manchester, NH 03101, USA', website: 'https://fixture.example' }],
+      errors: [], execution: { executed: true, errors: [] } }) }],
+    marketDefinition: { segments: scope.eligibleSubsegments, geography: 'NH', searchDefinition } });
+  assert.ok(result.companies.length > 0);
+  const unavailable = result.providerReceipts.filter(row => ['existing_pf', 'website'].includes(row.providerId));
+  assert.ok(unavailable.length > 0);
+  assert.ok(unavailable.every(row => row.errors[0].code === 'adapter_unavailable'));
+  const receipt = providerReceiptDiagnostic('10', 'moc_10_1234567890abcdef',
+    { kind: 'investigated', result: { status: 'completed', payload: { providerReceipts: result.providerReceipts } } },
+    { researchOnly: true });
+  assert.equal(receipt.discovery.blocker, 'none');
+  assert.equal(receipt.discovery.nonBlockingProviderIssue, 'provider_unavailable');
+  assert.ok(receipt.providers.some(row => row.errors.some(error => error.code === 'adapter_unavailable')));
+});
+
 test('real provider/checkpoint boundary keeps one page and diversifies across eight restarted synthetic passes', async () => {
   const checkpoints = new Map(), pages = new Map(), history = [], selected = [], searches = [];
   const store = { tenantId: '10', load: async key => checkpoints.get(key) || null,

@@ -79,6 +79,7 @@ async function runResearchOnlyCycleIfGranted({ pool, store, program, governed, c
       byReason: scout.candidateWork.byReason } : null,
     searchGeneration: Number(scout?.searchGeneration || 0), searchGenerationExhausted: scout?.searchGenerationExhausted === true,
     googleReservedUsdMicros: spend.reservedUsdMicros, googleAttempts: spend.attempts,
+    providerReceipt: require('./outboundControlDiagnostics').providerReceiptDiagnostic('10', cycleId, scout?.discovery, { researchOnly: true }),
     ...(scout?.queryProgression?.researchCoverage ? { researchCoverage: scout.queryProgression.researchCoverage } : {}),
     enrichment: false, verification: false, preparation: false, outbound: false,
   };

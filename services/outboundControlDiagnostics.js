@@ -26,30 +26,52 @@ function discoveryProviderReceipts(payload = {}) {
   if (!payload || typeof payload !== 'object') return undefined;
   return Object.hasOwn(payload, 'providerReceipts') ? payload.providerReceipts : payload.providerExecution;
 }
-function discoveryDiagnostic(discovery) {
+function discoveryDiagnostic(discovery, { researchOnly = false } = {}) {
   const result = discovery?.result || discovery || {};
   const payload = result.payload || {};
   const receipts = discoveryProviderReceipts(payload);
   const reports = Array.isArray(receipts) ? receipts.slice(0, 20) : [];
+  const reportErrors = row => [
+    ...(Array.isArray(row?.errors) ? row.errors.slice(0, 100) : []),
+    ...(Array.isArray(row?.execution?.errors) ? row.execution.errors.slice(0, 100) : []),
+  ];
   // Exact code matching only. Error messages, URLs and arbitrary provider fields never leave here.
-  const errors = [...(Array.isArray(result.errors) ? result.errors.slice(0, 100) : []),
-    ...reports.flatMap(row => [
-      ...(Array.isArray(row?.errors) ? row.errors.slice(0, 100) : []),
-      ...(Array.isArray(row?.execution?.errors) ? row.execution.errors.slice(0, 100) : []),
-    ])].slice(0, 100);
+  const observedErrors = [...(Array.isArray(result.errors) ? result.errors.slice(0, 100) : []),
+    ...reports.flatMap(reportErrors)];
+  const errors = observedErrors.slice(0, 100);
+  const completeProjection = Array.isArray(receipts) && receipts.length <= 20 && observedErrors.length <= 100
+    && (!Array.isArray(result.errors) || result.errors.length <= 100)
+    && reports.every(row => (Array.isArray(row?.errors) ? row.errors.length : 0)
+      + (Array.isArray(row?.execution?.errors) ? row.execution.errors.length : 0) <= 100);
   const codes = [payload.blockerCode, ...errors.flatMap(row => [row?.code, row?.googleStatus])];
   let blocker = 'unknown';
   if (discovery?.kind === 'backoff') blocker = 'backoff';
   else if (codes.some(code => ['REQUEST_DENIED', 'google_places_status_REQUEST_DENIED'].includes(code))) blocker = 'provider_denied';
   else if (codes.some(code => ['OVER_QUERY_LIMIT', 'RESOURCE_EXHAUSTED', 'google_places_status_OVER_QUERY_LIMIT'].includes(code))) blocker = 'provider_quota';
   else if (codes.some(code => ['provider_unavailable', 'external_discovery_capability_unavailable', 'adapter_unavailable'].includes(code))) blocker = 'provider_unavailable';
-  else if (codes.some(code => ['provider_error', 'discovery_provider_failed'].includes(code))) blocker = 'provider_failed';
+  else if (codes.some(code => ['provider_error', 'provider_failed', 'discovery_provider_failed'].includes(code))) blocker = 'provider_failed';
   else if (codes.includes('insufficient_coverage')) blocker = 'insufficient_coverage';
   else if (codes.includes('invalid_target')) blocker = 'invalid_target';
+  else if (reports.some(report => report?.status === 'failed')) blocker = 'provider_failed';
+  const outcome = choice(result.status || payload.outcome, ['completed', 'partial', 'blocked', 'failed', 'success']);
+  const researchCompleted = researchOnly === true && completeProjection && ['completed', 'success'].includes(outcome)
+    && reports.some(report => ['completed', 'success', 'empty'].includes(report?.status))
+    && result.blocked !== true && payload.blocked !== true && !payload.blockerCode;
+  const unavailableCodes = ['provider_unavailable', 'external_discovery_capability_unavailable', 'adapter_unavailable'];
+  const unavailable = error => unavailableCodes.includes(error?.code)
+    && (error.googleStatus == null || unavailableCodes.includes(error.googleStatus));
+  const onlyUnavailableErrors = errors.length > 0 && errors.every(unavailable)
+    && reports.filter(report => report?.status === 'failed').every(report =>
+      reportErrors(report).length > 0 && reportErrors(report).every(unavailable));
+  if (researchOnly && blocker === 'provider_unavailable' && !onlyUnavailableErrors) blocker = 'provider_failed';
+  // Optional adapters may be unavailable after a completed bounded discovery.
+  // Denials, quotas and actual/unknown provider failures stay visible as errors.
+  const nonBlocking = researchCompleted && blocker === 'provider_unavailable' && onlyUnavailableErrors;
   return {
     kind: choice(discovery?.kind, ['backoff', 'investigated', 'reused', 'skipped']),
-    outcome: choice(result.status || payload.outcome, ['completed', 'partial', 'blocked', 'failed', 'success']),
-    blocker,
+    outcome,
+    blocker: nonBlocking || (researchCompleted && blocker === 'unknown') ? 'none' : blocker,
+    ...(researchOnly ? { nonBlockingProviderIssue: nonBlocking ? blocker : null, providerIssuesComplete: completeProjection } : {}),
   };
 }
 // Defaults allocated before admission runs are not a measured zero.
@@ -81,7 +103,7 @@ function admissionReceiptDiagnostic(tenantId, cycleId, admission, measured = fal
     netNewAdmitted: available ? count(admission.admittedToEnrichment) : null,
     existingQueueCandidateMatches: available ? count(admission.alreadyQueued) : null,
     queueMatches: queueMatchesDiagnostic(available ? admission.queueMatches : null),
-    counts: Object.fromEntries(['discovered', 'evaluated', 'fit', 'admittedToEnrichment',
+    counts: Object.fromEntries(['discovered', 'evaluated', 'fit', 'admittedToEnrichment', 'retainedForResearch',
       'alreadyUsable', 'alreadyQueued', 'recoveryBackoff', 'recovered'].map(k => [k, available ? count(admission[k]) : null])),
     rejected: Object.fromEntries(keys.map(k => [k, count(rejected?.[k])])),
     recordedRejectedTotal: total,
@@ -91,12 +113,12 @@ function admissionReceiptDiagnostic(tenantId, cycleId, admission, measured = fal
   };
 }
 // Durable, bounded observations only; never infer network spend from executed/status.
-function providerReceiptDiagnostic(tenantId, cycleId, discovery) {
+function providerReceiptDiagnostic(tenantId, cycleId, discovery, options = {}) {
   const result = discovery?.result || discovery || {};
   const reports = discoveryProviderReceipts(result.payload);
   const statuses = ['completed', 'partial', 'blocked', 'failed', 'skipped', 'success', 'empty'];
   const providers = ['google_places', 'google_maps', 'county_records', 'linkedin', 'facebook', 'website', 'news', 'prospeo', 'existing_pf', 'apollo'];
-  const codes = ['OK', 'ZERO_RESULTS', 'REQUEST_DENIED', 'OVER_QUERY_LIMIT', 'RESOURCE_EXHAUSTED', 'INVALID_REQUEST', 'UNKNOWN_ERROR', 'UNKNOWN_STATUS', 'insufficient_coverage', 'provider_error', 'provider_unavailable', 'external_discovery_capability_unavailable', 'adapter_unavailable', 'discovery_provider_failed', 'invalid_target', 'enrichment_unavailable', 'google_places_status_REQUEST_DENIED', 'google_places_status_OVER_QUERY_LIMIT'];
+  const codes = ['OK', 'ZERO_RESULTS', 'REQUEST_DENIED', 'OVER_QUERY_LIMIT', 'RESOURCE_EXHAUSTED', 'INVALID_REQUEST', 'UNKNOWN_ERROR', 'UNKNOWN_STATUS', 'insufficient_coverage', 'provider_error', 'provider_failed', 'provider_unavailable', 'external_discovery_capability_unavailable', 'adapter_unavailable', 'discovery_provider_failed', 'invalid_target', 'enrichment_unavailable', 'google_places_status_REQUEST_DENIED', 'google_places_status_OVER_QUERY_LIMIT'];
   const boolean = v => typeof v === 'boolean' ? v : null;
   const time = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(v) && Number.isFinite(Date.parse(v)) ? v : null;
   const array = (v, limit) => Array.isArray(v) ? v.slice(0, limit) : [];
@@ -108,7 +130,7 @@ function providerReceiptDiagnostic(tenantId, cycleId, discovery) {
   };
   return {
     ...correlation(tenantId, cycleId), schemaVersion: 1,
-    discovery: discoveryDiagnostic(discovery),
+    discovery: discoveryDiagnostic(discovery, options),
     reportsAvailable: Array.isArray(reports),
     reportsTruncated: Array.isArray(reports) && reports.length > 20,
     startedAt: time(result.startedAt), completedAt: time(result.completedAt),
@@ -136,16 +158,18 @@ function providerReceiptDiagnostic(tenantId, cycleId, discovery) {
     }),
   };
 }
-function scoutRampDiagnostic({ tenantId, cycleId, requested, promoted, recoveredExisting, discoveredQueued, admission, enrichment, discovery }) {
+function scoutRampDiagnostic({ tenantId, cycleId, requested, promoted, recoveredExisting, discoveredQueued, admission, enrichment, discovery, researchOnly = false }) {
   return {
     ...correlation(tenantId, cycleId), phase: 'scout_ramp',
     requested: count(requested), promoted: count(promoted), recoveredExisting: count(recoveredExisting),
-    discoveredQueued: count(discoveredQueued),
-    admission: Object.fromEntries(['discovered', 'evaluated', 'fit', 'admittedToEnrichment'].map(key => [key, count(admission?.[key])])),
+    discoveredQueued: researchOnly ? 0 : count(discoveredQueued),
+    ...(researchOnly ? { researchOnly: true, retainedForResearch: count(admission?.retainedForResearch) } : {}),
+    admission: Object.fromEntries(['discovered', 'evaluated', 'fit', 'admittedToEnrichment', 'retainedForResearch'].map(key => [key, count(admission?.[key])])),
     enrichment: Object.fromEntries(['considered', 'emailResolved', 'emailVerified'].map(key => [key, count(enrichment?.[key])])),
     inventoryMeasured: false,
     preCycleCleanInventory: null, postCycleCleanInventory: null, netCleanInventoryDelta: null,
-    discovery: discoveryDiagnostic(discovery),
+    discovery: discoveryDiagnostic(discovery, { researchOnly }),
+    ...(researchOnly ? { providerReceipt: providerReceiptDiagnostic(tenantId, cycleId, discovery, { researchOnly: true }) } : {}),
   };
 }
 // First-failure counts across the loaded inventory, not the newly promoted cohort.

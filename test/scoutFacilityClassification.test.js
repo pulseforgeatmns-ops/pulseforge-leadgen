@@ -10,6 +10,32 @@ const candidate = extra => ({ tenantId: '10', name: 'Observed Business', website
   address: '101 Fixture Way, Manchester, NH 03101, USA', ...extra });
 const decision = extra => facility.evaluateFacilityResearch(candidate(extra), context);
 
+test('historical listings are rejected even with a complete identity and factory wording', () => {
+  for (const extra of [
+    { name: 'Synthetic Ketchup Factory Historical Marker' },
+    { name: 'Old Textile Factory', placeTypes: ['historical_landmark'] },
+    { name: 'Historic Landmark', types: ['factory'] },
+    { name: 'Synthetic Factory', classificationObservations: [{ name: 'Synthetic Factory Historical Marker' }] },
+    { name: 'Synthetic Factory', place_types: ['historical_marker'] },
+  ]) {
+    const result = decision(extra);
+    assert.equal(result.facilityDecision.recognition.category, 'historical_site');
+    assert.equal(result.vertical, null);
+    assert.equal(result.facilityDecision.suitability.reason, 'historical_site_not_service_premises');
+    assert.equal(result.facilityDecision.admission.status, 'rejected');
+    assert.equal(result.admitted, false);
+    assert.equal(result.deferred, false, 'a website is not the gate excluding a historical marker');
+  }
+});
+
+test('historic operating facilities and nearby landmark mentions keep their observed category', () => {
+  const result = decision({ name: 'Historic Mill Manufacturing', placeTypes: ['factory'],
+    description: 'Located near a historical marker.', discoveryQuery: 'factory historical landmark Manchester NH' });
+  assert.equal(result.vertical, 'manufacturer');
+  assert.equal(result.admitted, true);
+  assert.equal(decision({ name: 'Historic University', placeTypes: ['university', 'tourist_attraction'] }).admitted, true);
+});
+
 test('structured categories recognize suitable facilities without website investigation', () => {
   for (const [type, vertical] of [['school', 'school'], ['primary_school', 'school'], ['secondary_school', 'school'],
     ['university', 'campus'], ['college', 'campus'], ['car_dealer', 'dealership'], ['restaurant', 'restaurant'], ['cafe', 'restaurant']]) {

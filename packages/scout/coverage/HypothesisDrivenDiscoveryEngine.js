@@ -231,7 +231,7 @@ async function executeProviderAssignment(assignment, searchDefinition, adapters,
 
   if (!adapterAvailable) {
     return normalizeProviderReport(
-      { candidates: [], errors: [{ message: `${assignment.providerId} unavailable` }], available: false },
+      { candidates: [], errors: [{ code: 'adapter_unavailable', message: `${assignment.providerId} unavailable` }], available: false },
       assignment
     );
   }
@@ -249,7 +249,8 @@ async function executeProviderAssignment(assignment, searchDefinition, adapters,
   } catch (err) {
     rethrowResearchProviderControl(err);
     return normalizeProviderReport(
-      { candidates: [], errors: [{ message: err.message || String(err) }] },
+      { candidates: [], errors: [{ code: err.code || 'provider_error', googleStatus: err.googleStatus || null,
+        message: err.message || String(err) }] },
       assignment
     );
   }
@@ -274,16 +275,12 @@ async function executeInvestigationTask(task, searchDefinition, adapters, market
     );
     reports.push(report);
     if (report.status === 'failed') {
+      const cause = report.errors?.[0] || report.execution?.errors?.[0];
       errors.push({
         providerId: assignment.providerId,
         error: report.error,
-        code: report.execution && report.execution.errors && report.execution.errors[0]
-          ? report.execution.errors[0].code
-          : 'provider_failed',
-        googleStatus:
-          report.execution && report.execution.errors && report.execution.errors[0]
-            ? report.execution.errors[0].googleStatus
-            : null,
+        code: cause?.code || 'provider_failed',
+        googleStatus: cause?.googleStatus || null,
         execution: report.execution || null,
       });
     }

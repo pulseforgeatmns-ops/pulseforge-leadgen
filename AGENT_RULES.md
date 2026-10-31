@@ -6,7 +6,7 @@
 
 ## SCOUT (leadgen.js)
 
-### Proposed P0-004 facility research path (default off, not activated)
+### P0-004 facility research path (explicit Tenant 10 authority required)
 - Only Tenant 10 native research-only discovery may use `SCOUT_ANCHOR_FACILITY_RECOVERY_ENABLED`.
 - Category recognition is not facility suitability, geography, purchasing authority or admission.
 - A city name alone never proves NH eligibility. Retain ambiguous geography as held evidence.
@@ -14,6 +14,8 @@
 - Never backfill/promote the 34 parked records or fetch websites through this change.
 - Query diversity never authorizes a new category, paid-history reset, extra page or grant.
 - Full-cohort downloads require an exact grant and the direct verified Anchor admin gate. Keep raw exports private; never publish production fixtures or silently truncate a retrospective.
+- Historical-marker/landmark listings are not operating factories, even when they have a website and the name contains “factory.” Nearby landmark mentions do not exclude an observed operating business.
+- Count research retention separately from enrichment admission. Preserve typed unavailable-adapter causes and bounded provider receipts; never hide real provider denials, quota failures or unknown failures behind a completed research status.
 
 ### Data Sources
 - Primary: SerpAPI (`SERPAPI_KEY`) — good for service businesses, weak for retail/wellness/auto

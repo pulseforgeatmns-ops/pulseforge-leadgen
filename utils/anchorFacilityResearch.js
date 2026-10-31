@@ -2,7 +2,7 @@
 
 // SPEC-SCOUT-P0-004. Pure observed-evidence decisions; no providers or writes.
 const { createHash } = require('node:crypto');
-const VERSION = 'anchor-facility-research-v1';
+const VERSION = 'anchor-facility-research-v2';
 const FLAG = 'SCOUT_ANCHOR_FACILITY_RECOVERY_ENABLED';
 const enabled = (tenantId, researchOnly, env = process.env) =>
   String(tenantId) === '10' && researchOnly === true && env[FLAG] === 'true';
@@ -30,6 +30,13 @@ function verifiedAttributes(candidate) {
 
 function recognizeFacility(candidate) {
   const types = placeTypes(candidate), hay = observedText(candidate), verified = verifiedAttributes(candidate);
+  // Identify the listing itself, not a nearby landmark mentioned in a snippet
+  // or a search query. A former factory marker is not an operating factory.
+  const historicalType = types.find(type => ['historical_landmark', 'historical_marker'].includes(type));
+  const historicalName = observedRows(candidate).flatMap(row => [row.name, row.companyName, row.company, row.businessType])
+    .find(value => typeof value === 'string' && /\bhistor(?:ic|ical)\s+(?:marker|landmark)\b/i.test(value));
+  if (historicalType || historicalName) return { status: 'recognized', vertical: null, category: 'historical_site', reason: null,
+    evidence: [{ field: historicalType ? 'google_place_type' : 'observed_business_identity', value: historicalType || historicalName.slice(0, 600) }] };
   if (/\bschool district\b/i.test(hay)) return { status: 'recognized', vertical: 'school', category: 'education_authority',
     reason: null, evidence: [{ field: 'observed_business_text', value: hay.slice(0, 600) }] };
   const found = [];
@@ -100,6 +107,7 @@ function validateFacilityGeography(candidate, allowedCities) {
 function assessFacilitySuitability(candidate, recognition) {
   const hay = observedText(candidate), types = placeTypes(candidate), verified = verifiedAttributes(candidate);
   const excluded = reason => ({ status: 'unsuitable', reason, missingEvidence: [] });
+  if (recognition.category === 'historical_site') return excluded('historical_site_not_service_premises');
   if (observedRows(candidate).some(x => /CLOSED_(?:PERMANENTLY|TEMPORARILY)/.test(x.businessStatus || x.business_status || '')))
     return excluded('premises_not_operational');
   if (/\b(?:online.only|virtual.only|mailbox.only|po box|p\.?o\.? box)\b/i.test(hay) || verified.physicalPremises === false)

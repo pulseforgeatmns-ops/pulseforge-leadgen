@@ -111,7 +111,7 @@ function kindOf(query) {
   if (/property management/.test(q)) return { label: 'Commercial Property Management', types: ['point_of_interest', 'establishment'] };
   return { label: 'Facility', types: ['point_of_interest', 'establishment'] };
 }
-function placesFetch({ unclassifiable = false } = {}) {
+function placesFetch({ unclassifiable = false, historicalMarker = false } = {}) {
   const calls = [], places = new Map();
   let serial = 0;
   const fetchImpl = async input => {
@@ -124,8 +124,10 @@ function placesFetch({ unclassifiable = false } = {}) {
       const slug = query.toLowerCase().replace(/[^a-z0-9]+/g, '-');
       const city = / ([A-Za-z]+) NH$/.exec(query)?.[1] || 'Manchester';
       const kind = kindOf(query);
-      const results = (unclassifiable ? [0, 1, 2, 3] : [0, 1, 2]).map(i => {
+      const results = [0, 1, 2, ...(unclassifiable ? [3] : []), ...(historicalMarker ? [4] : [])].map(i => {
         const place = i === 0 ? { place_id: `owned-${slug}`, name: 'Owned Anchor Customer', website: `https://${OWNED_DOMAIN}`, types: kind.types }
+          : i === 4 ? { place_id: `${slug}-${i}`, name: 'Synthetic Factory Historical Marker',
+            website: `https://${slug}-${i}.example`, types: ['historical_landmark', 'point_of_interest'] }
           : i === 3 ? { place_id: `${slug}-${i}`, name: `${city} Granite Works ${++serial}`, website: `https://${slug}-${i}.example`,
             types: ['point_of_interest', 'establishment'] }
           : { place_id: `${slug}-${i}`, name: `${city} ${kind.label} ${++serial}`, website: `https://${slug}-${i}.example`, types: kind.types };
