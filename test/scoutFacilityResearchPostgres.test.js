@@ -10,6 +10,16 @@ test('eight native research cycles diversify without widening authority, paid pa
   t.after(() => { if (originalFlag === undefined) delete process.env[FLAG]; else process.env[FLAG] = originalFlag; globalThis.fetch = originalFetch; });
   const { pool } = h;
   const grants = require('../services/scoutResearchOnlyGrant'), missions = require('../services/scoutResearchMission');
+  const coverage = require('../services/scoutFacilityResearchCoverage'), originalCoverage = coverage.createFacilityResearchCoverage;
+  const requestedSegments = [];
+  coverage.createFacilityResearchCoverage = options => {
+    const scheduler = originalCoverage(options);
+    return { ...scheduler, plan(request, buildQueries) {
+      requestedSegments.push(request.segment);
+      return scheduler.plan(request, buildQueries);
+    } };
+  };
+  t.after(() => { coverage.createFacilityResearchCoverage = originalCoverage; });
   const { runMaxOutboundControlLoop } = require('../services/maxOutboundControlLoop');
   const dispatch = require('../services/scoutCandidateTicketDispatch');
   const source = (await pool.query("SELECT * FROM acquisition_missions WHERE tenant_id='10'")).rows[0];
@@ -37,6 +47,7 @@ test('eight native research cycles diversify without widening authority, paid pa
   for (let n = 1; n <= 8; n++) {
     if (n > 1) await require('./helpers/releaseResearchCycle').releaseNextResearchCycle(pool, h.actor, grant.grantId, `synthetic-p004-release-${n}`);
     const searchesBefore = google.calls.filter(x => x.path.endsWith('/textsearch/json')).length;
+    const requestsBefore = requestedSegments.length;
     const result = await runMaxOutboundControlLoop({ pool, tenantId: '10', cycleId: `synthetic-p004-${n}`,
       logger: { log() {}, warn() {} }, runPreparationRefill: async () => assert.fail('preparation forbidden') });
     assert.equal(result.researchOnly.status, 'completed', JSON.stringify(result.researchOnly));
@@ -51,9 +62,10 @@ test('eight native research cycles diversify without widening authority, paid pa
     assert.ok(result.researchOnly.retainedCandidates > 0, 'successful facility retention must still work');
     assert.equal(result.researchOnly.providerReceipt.reportsAvailable, true);
     const providers = result.researchOnly.providerReceipt;
-    assert.ok(providers.providers.some(row => row.executed === null
-      && row.errors.some(error => error.cause === 'facility_research_request_scope_mismatch')),
-    `the mission-segment gate must remain visible without HTTP: ${JSON.stringify(providers)}`);
+    assert.ok(['managed_facilities', 'property_management', 'commercial_office'].every(segment =>
+      requestedSegments.slice(requestsBefore).includes(segment)), 'the real native coverage workloads exercise both canonical facility labels');
+    assert.ok(providers.providers.every(row => row.errors.every(error => error.cause !== 'facility_research_request_scope_mismatch')),
+      'approved canonical facility workloads no longer create scope-denial errors');
     assert.equal(providers.reportsTruncated, true);
     assert.equal(providers.discovery.providerIssuesComplete, false);
     assert.notEqual(providers.discovery.blocker, 'none', 'a truncated pass with refused work must not be labeled healthy');

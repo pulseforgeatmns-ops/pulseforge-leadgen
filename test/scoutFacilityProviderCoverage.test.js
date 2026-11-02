@@ -16,8 +16,8 @@ test('the real Places adapter preserves exact research-scope refusals without ca
   const { buildDiscoveryProviderReport } = require('../packages/scout/coverage/ProviderExecution');
   for (const [segment, evidenceType, cause] of [
     ['managed_facilities', 'decision_makers', 'facility_research_identity_only'],
-    ['property_management', 'identity', 'facility_research_request_scope_mismatch'],
-    ['commercial_office', 'identity', 'facility_research_request_scope_mismatch'],
+    ['short_term_rental', 'identity', 'facility_research_request_scope_mismatch'],
+    ['realtor', 'identity', 'facility_research_request_scope_mismatch'],
   ]) {
     provider.lastExecution = { executed: true, totals: { queries: 1, results: 20 }, queries: [{ googleStatus: 'OK' }] };
     const result = await adapter.discover({ tenantId: '10', evidenceRequest: { tenantId: '10', scope: 'market',
@@ -82,7 +82,8 @@ test('native Scout result keeps incomplete coverage distinct from optional adapt
 });
 
 test('real provider/checkpoint boundary keeps one page and diversifies across eight restarted synthetic passes', async () => {
-  const checkpoints = new Map(), pages = new Map(), history = [], selected = [], searches = [];
+  const { createPlacesDiscoveryAdapter } = require('../packages/max/scoutAcquisition/DiscoveryAdapters');
+  const checkpoints = new Map(), pages = new Map(), history = [], selected = [], searches = [], reservations = [];
   const store = { tenantId: '10', load: async key => checkpoints.get(key) || null,
     stage: async (key, candidates) => { const row = { state: 'fetched', candidates }; checkpoints.set(key, row); return row; },
     acknowledge: async keys => keys.forEach(key => { checkpoints.get(key).state = 'handled'; }) };
@@ -97,14 +98,32 @@ test('real provider/checkpoint boundary keeps one page and diversifies across ei
     const scheduler = createFacilityResearchCoverage({ tenantId: '10', scope, loadHistory: async () => history });
     const provider = createPlacesProvider({ apiKey: 'synthetic-key', queryCheckpointSession: checkpoint,
       facilityResearchCoverage: scheduler, useCache: false,
-      placesApiDeps: { db: { query: async () => ({ rows: [] }) }, reserveApiCall: async () => 'synthetic-usage', settleApiCall: async () => {} },
+      placesApiDeps: { db: { query: async () => ({ rows: [] }) },
+        reserveApiCall: async input => { reservations.push(input); return 'synthetic-usage'; }, settleApiCall: async () => {} },
       fetchImpl: async url => {
         const parsed = new URL(url); assert.ok(parsed.pathname.endsWith('/textsearch/json'));
         const query = parsed.searchParams.get('query'); searches.push(query); history.push({ query_text: query, attempts: 1 });
         return { status: 200, ok: true, json: async () => ({ status: 'ZERO_RESULTS', results: [] }) };
       } });
-    await provider.collectEvidence({ tenantId: '10', scope: 'market', segment: 'managed_facilities', evidenceType: 'identity',
-      geography: { cities: scope.cities, state: 'NH' } });
+    const adapter = createPlacesDiscoveryAdapter({ placesProvider: provider });
+    const request = { tenantId: '10', scope: 'market', evidenceType: 'identity',
+      geography: { cities: scope.cities, state: 'NH' } };
+    const segment = ['property_management', 'commercial_office', 'managed_facilities'][n % 3];
+    const result = await adapter.discover({ tenantId: '10', evidenceRequest: { ...request, segment } });
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.execution.totals.queries, 1, 'either canonical label can enter the same bounded planner first');
+    const paid = searches.length;
+    for (const next of ['managed_facilities', 'property_management', 'commercial_office', 'restaurant_foh']) {
+      const followup = await adapter.discover({ tenantId: '10', evidenceRequest: { ...request, segment: next } });
+      assert.deepEqual(followup.errors, []);
+      assert.equal(followup.execution.executed, false);
+      assert.equal(searches.length, paid, 'repeated canonical workloads cannot allocate another page');
+      assert.equal(reservations.length, paid, 'repeated workloads cannot reserve additional spend');
+    }
+    const entity = await adapter.discover({ tenantId: '10', evidenceRequest: { ...request, segment, businessName: 'Fixture Entity' } });
+    assert.equal(entity.errors[0].causeCode, 'facility_research_identity_only');
+    assert.equal(entity.execution, null);
+    assert.equal(searches.length, paid);
     await checkpoint.acknowledge();
     const receipt = scheduler.snapshot(), chosen = receipt.decisions.filter(x => x.status === 'selected');
     assert.equal(chosen.length, 1); selected.push(chosen[0]);
@@ -112,5 +131,6 @@ test('real provider/checkpoint boundary keeps one page and diversifies across ei
     assert.ok(receipt.decisions.some(x => x.reason === 'cycle_page_budget_reached'));
   }
   assert.equal(searches.length, 8); assert.equal(new Set(searches).size, 8);
+  assert.equal(reservations.length, 8);
   assert.equal(new Set(selected.map(x => x.category)).size, 8); assert.equal(new Set(selected.map(x => x.city)).size, 8);
 });
