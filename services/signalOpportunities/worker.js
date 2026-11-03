@@ -94,7 +94,8 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
     }catch{}
    }
    const old=await opportunities.list(asOf),tokens=[...new Set([...priority,...old.map(p=>p.tokenAddress)])].slice(0,200);
-   const held=new Set((await store.list('balance',null,{ascending:false,limit:500})).filter(b=>Number(b.tokens)>0&&Date.parse(asOf)-Date.parse(b.observedAt)<90000).map(b=>b.tokenAddress));
+   const paperAudit={evaluated:0,entries:0,exits:0,blocked:{}};
+    const held=new Set((await store.list('balance',null,{ascending:false,limit:500})).filter(b=>Number(b.tokens)>0&&Date.parse(asOf)-Date.parse(b.observedAt)<90000).map(b=>b.tokenAddress));
    for(const ca of tokens){
     const observations=await store.list('observation',ca,{ascending:false,limit:500});
     const riskCursor=(await store.list('cursor',ca)).find(c=>c.key==='opportunity-risk:'+ca);
@@ -106,12 +107,17 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
     if(!decision)continue;
     decision.relationshipVersion=relationshipGraph.version;
     const saved=await opportunities.append(decision,{held:held.has(ca)});
-    if(last&&(saved.created||(await paper.snapshot()).positions[ca]))await paper.evaluate(decision,last);
+    if(last&&(saved.created||(await paper.snapshot()).positions[ca])){
+     const result=await paper.evaluate(decision,last);
+     paperAudit.evaluated++;
+     if(result.created){if(result.event.side==='BUY')paperAudit.entries++;else paperAudit.exits++;}
+     else {const reason=result.decision?.reason||'NO_EXECUTION';paperAudit.blocked[reason]=(paperAudit.blocked[reason]||0)+1;}
+    }
     if(saved.created&&saved.transition){const e={id:hash(['opportunity-state',decision.id]),tokenAddress:ca,category:'OPPORTUNITY_'+decision.opportunityState,occurredAt:decision.knowledgeAt,knownAt:decision.knowledgeAt,source:decision.definitionVersion,evidence:decision,provenance:decision.provenance};await store.put('event',ca,e.id,e);}
    }
    if(transportTestId&&transports.every(t=>t.ready))await opportunities.enqueueTransportTest(transportTestId);
    await deliver(opportunities,transports);
-   const paperAccount=await paper.snapshot();await store.put('status','*','paper-account',{component:'paper-account',state:'OBSERVED',version:require('./paperAccount').VERSION,config:require('./paperAccount').CONFIG,account:paperAccount,reason:'Prospective simulated execution only. No real orders or wallet access.',occurredAt:asOf,knownAt:asOf},{mutable:true});
+   const paperAccount=await paper.snapshot();await store.put('status','*','paper-account',{component:'paper-account',state:'OBSERVED',version:require('./paperAccount').VERSION,config:require('./paperAccount').CONFIG,account:paperAccount,audit:paperAudit,reason:'Prospective simulated execution only. No real orders or wallet access.',occurredAt:asOf,knownAt:asOf},{mutable:true});
    const at=now().toISOString();await store.put('status','*','opportunity-capacity',{component:'opportunity-capacity',state:counts.size>maxTokens?'PARTIAL':'OBSERVED',
      discoveredTokens:counts.size,evaluatedTokens:tokens.length,marketEnrichmentLimit:maxTokens,deferredTokens:Math.max(0,counts.size-maxTokens),
      sourceCandidateCount:SOURCES.length,liveSources:sources.filter(s=>s.active).length,requiredLiveSources:10,
