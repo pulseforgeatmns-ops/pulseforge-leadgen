@@ -24,6 +24,7 @@ function summarizeResearchProviderIssues(result = {}, reports) {
   let malformed = 0, unknownErrorCount = 0, failedWithoutCauseCount = 0, omittedIssueGroups = 0;
   let successfulReports = 0;
   function observe(provider, error) {
+    if (!object(error)) malformed++;
     const code = choice(error?.code, CODES), status = error?.googleStatus == null ? null : choice(error.googleStatus, CODES);
     const cause = CAUSES.includes(error?.causeCode) ? error.causeCode : null;
     const codes = [code, status];

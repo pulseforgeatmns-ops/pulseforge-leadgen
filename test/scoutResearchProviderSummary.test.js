@@ -62,6 +62,9 @@ test('oversized and malformed receipts explicitly refuse diagnostic completeness
   assert.equal(malformed.discovery.providerIssuesComplete, false);
   assert.notEqual(malformed.discovery.blocker, 'none');
   assert.equal(receipt([{ ...empty(), execution: 'malformed' }]).discovery.providerIssuesComplete, false);
+  const malformedError = receipt([], [null]);
+  assert.equal(malformedError.discovery.providerIssuesComplete, false);
+  assert.equal(malformedError.discovery.blocker, 'provider_failed');
   const tooManyErrors = receipt([], Array(11000).fill({ code: 'adapter_unavailable' }));
   assert.equal(tooManyErrors.discovery.providerIssuesComplete, false);
   assert.notEqual(tooManyErrors.discovery.blocker, 'none');

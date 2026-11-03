@@ -49,7 +49,8 @@ unknown failures, scope limits and query failures after the sample boundary.
 Additional cases exceed error, query, report and group bounds, preserve source
 objects, and assert that arbitrary private text does not escape. Provider
 transports are denied. The native disposable-PostgreSQL facility journey must
-record a complete aggregate and an explicit coverage limit, preserve the
+record a complete aggregate and disclose optional adapter unavailability for
+the completed pass, preserve the
 one-page budget and unreleased-cycle refusal, and leave all protected recovery,
 suppression, mission and outbound tables unchanged. Existing release/grant
 regressions remain required. Missing PostgreSQL prerequisites must not be skipped.
