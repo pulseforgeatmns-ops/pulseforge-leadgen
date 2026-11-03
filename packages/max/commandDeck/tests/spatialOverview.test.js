@@ -81,6 +81,48 @@ describe('Living Command Deck — domain priority', () => {
     }
   });
 
+  it('uses private-lending language only for private-lending tenants', async () => {
+    const model = {
+      meta: { generatedAt: '2026-11-03T21:00:00.000Z' },
+      priorityQueue: [],
+      watchAlerts: [],
+      operations: { missions: [] },
+    };
+
+    const privateLending = await composeSpatialOverview({
+      model,
+      tenantProfile: { name: 'LA Endeavors', vertical: 'private_lending' },
+    });
+    assert.deepEqual(
+      Object.fromEntries(privateLending.domains.map((domain) => [domain.id, domain.label])),
+      {
+        content: 'Market Signals',
+        acquisition: 'Borrowers & Buyers',
+        clients: 'Private Lenders & Investors',
+        campaigns: 'Deal Matches',
+      }
+    );
+    assert.equal(
+      privateLending.domains.find((domain) => domain.id === DOMAIN_IDS.ACQUISITION)
+        .summary.compressed,
+      'Borrower pipeline steady'
+    );
+    assert.equal(
+      privateLending.domains.find((domain) => domain.id === DOMAIN_IDS.CLIENTS)
+        .summary.compressed,
+      'Investor network steady'
+    );
+
+    const generic = await composeSpatialOverview({
+      model,
+      tenantProfile: { name: 'Anchor Cleaning', vertical: 'commercial_cleaning' },
+    });
+    assert.deepEqual(
+      generic.domains.map((domain) => domain.label),
+      ['Content', 'Acquisition', 'Clients', 'Campaigns']
+    );
+  });
+
   it('records explainable Normal → Elevated transition', async () => {
     const model = {
       meta: { generatedAt: '2026-08-16T12:00:00.000Z' },
