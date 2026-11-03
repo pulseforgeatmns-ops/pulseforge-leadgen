@@ -204,6 +204,17 @@ async function buildSpatialContext(clientId, req, operatorBrief = null) {
   let activeObjectives = [];
   let storedPriorities = new Map();
   let acquisitionIntelligence = null;
+  let tenantProfile = null;
+
+  try {
+    const result = await require('../db').query(
+      'SELECT name, vertical FROM clients WHERE id = $1 LIMIT 1',
+      [Number(clientId)]
+    );
+    tenantProfile = result.rows[0] || null;
+  } catch (err) {
+    console.warn('[command-deck] tenant presentation load failed:', err.message);
+  }
 
   try {
     const store = createPostgresStore();
@@ -277,6 +288,7 @@ async function buildSpatialContext(clientId, req, operatorBrief = null) {
     operatorBrief,
     reconcilePriority,
     acquisitionIntelligence,
+    tenantProfile,
   };
 }
 
