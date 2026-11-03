@@ -1,7 +1,7 @@
 'use strict';
 // Read-only prospective cohort report. Input is retained live events and snapshots.
 // No historical imports, holdout access, order placement, or scoring mutations.
-const {evaluatePostConfirmation}=require('./postConfirmationResearch');
+const {evaluateObservationEntry}=require('./postConfirmationResearch');
 const VERSION='signal-prospective-post-confirmation-v1';
 function time(value){const t=Date.parse(value);return Number.isFinite(t)?t:null;}
 function reportProspectiveEntries({calls=[],observations=[],asOf,delayMs=60000,maxEntryLagMs=120000,feeBps=50,slippageBps=100,liquidityFloorUsd=10000}={}){
@@ -9,7 +9,7 @@ function reportProspectiveEntries({calls=[],observations=[],asOf,delayMs=60000,m
  const byToken=new Map();
  for(const c of calls){
   if(c.dataClass==='HISTORICAL_BACKFILL'||c.partition==='HISTORICAL_HOLDOUT'||c.partition==='HISTORICAL_DISCOVERY')continue;
-  if(c.category!=='CALLER'||!c.tokenAddress||!time(c.knownAt)||time(c.knownAt)>now)continue;
+  if(c.category!=='CALLER'||!c.tokenAddress||time(c.knownAt)===null||time(c.knownAt)>now)continue;
   const a=byToken.get(c.tokenAddress)||[];a.push(c);byToken.set(c.tokenAddress,a);
  }
  const obsBy=new Map();
@@ -27,8 +27,7 @@ function reportProspectiveEntries({calls=[],observations=[],asOf,delayMs=60000,m
   const knownAt=amplifier.knownAt;
   const observedAt=amplifier.occurredAt;
   if(time(observedAt)===null||time(knownAt)===null||time(knownAt)<time(observedAt)){exclusions.UNOBSERVABLE_CONFIRMATION++;continue;}
-  // Reuse guarded evaluator with an in-memory discovery-only adapter; never persist this record.
-  const result=evaluatePostConfirmation({record:{dataClass:'HISTORICAL_BACKFILL',partition:'HISTORICAL_DISCOVERY',tokenAddress},confirmation:{observedAt,knownAt},observations:obsBy.get(tokenAddress)||[],delayMs,maxEntryLagMs,feeBps,slippageBps,liquidityFloorUsd});
+  const result=evaluateObservationEntry({tokenAddress,confirmation:{observedAt,knownAt},observations:obsBy.get(tokenAddress)||[],delayMs,maxEntryLagMs,feeBps,slippageBps,liquidityFloorUsd});
   if(result.status!=='EVALUATED'){exclusions[result.status]=(exclusions[result.status]||0)+1;continue;}
   const outcomes={};
   for(const [h,v] of Object.entries(result.outcomes)){
