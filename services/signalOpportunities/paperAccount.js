@@ -17,7 +17,9 @@ function decide({decision,observation,account,position,asOf}){
  const action=desiredAction({opportunityState:decision.opportunityState,position});
  const evidence={opportunityId:decision.id,opportunityState:decision.opportunityState,opportunityKnowledgeAt:decision.knowledgeAt,marketObservedAt:observation.observedAt,marketKnownAt:observation.knownAt,priceUsd:Number(observation.priceUsd),liquidityUsd:Number(observation.liquidityUsd)||null};
  if(action==='PASS')return {action,reason:'NO_PAPER_PORTFOLIO_TRANSITION',evidence};
- if(action==='ENTER'){const budget=Math.min(Number(account.cashUsd),CONFIG.startingCashUsd*CONFIG.maxPositionPct);if(budget<=0)return {action:'PASS',reason:'NO_PAPER_CASH',evidence};const fillPrice=applyCost(evidence.priceUsd,'BUY'),tokens=budget/fillPrice;return {action,side:'BUY',notionalUsd:budget,tokens,fillPrice,evidence};}
+ if(action==='ENTER'){
+  if(!Array.isArray(decision.independentClusters)||decision.independentClusters.length<3||Number(observation.liquidityUsd)<20000||!Number.isFinite(Number(observation.liquidityUsd))||decision.quality==='DELAYED')return {action:'PASS',reason:'INSUFFICIENT_ENTRY_EVIDENCE',evidence};
+  const budget=Math.min(Number(account.cashUsd),CONFIG.startingCashUsd*CONFIG.maxPositionPct);if(budget<=0)return {action:'PASS',reason:'NO_PAPER_CASH',evidence};const fillPrice=applyCost(evidence.priceUsd,'BUY'),tokens=budget/fillPrice;return {action,side:'BUY',notionalUsd:budget,tokens,fillPrice,evidence};}
  const tokens=Number(position.tokens),fillPrice=applyCost(evidence.priceUsd,'SELL');return {action,side:'SELL',notionalUsd:tokens*fillPrice,tokens,fillPrice,evidence};
 }
 class PaperAccount{
