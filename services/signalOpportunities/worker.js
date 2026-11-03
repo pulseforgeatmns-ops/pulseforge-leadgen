@@ -117,7 +117,7 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
    }
    if(transportTestId&&transports.every(t=>t.ready))await opportunities.enqueueTransportTest(transportTestId);
    await deliver(opportunities,transports);
-   const paperAccount=await paper.snapshot();await store.put('status','*','paper-account',{component:'paper-account',state:'OBSERVED',version:require('./paperAccount').VERSION,config:require('./paperAccount').CONFIG,account:paperAccount,reason:'Prospective simulated execution only. No real orders or wallet access.',occurredAt:asOf,knownAt:asOf},{mutable:true});
+   const paperAccount=await paper.snapshot();await store.put('status','*','paper-account',{component:'paper-account',state:'OBSERVED',version:require('./paperAccount').VERSION,config:require('./paperAccount').CONFIG,account:paperAccount,audit:paperAudit,reason:'Prospective simulated execution only. No real orders or wallet access.',occurredAt:asOf,knownAt:asOf},{mutable:true});
    const at=now().toISOString();await store.put('status','*','opportunity-capacity',{component:'opportunity-capacity',state:counts.size>maxTokens?'PARTIAL':'OBSERVED',
      discoveredTokens:counts.size,evaluatedTokens:tokens.length,marketEnrichmentLimit:maxTokens,deferredTokens:Math.max(0,counts.size-maxTokens),
      sourceCandidateCount:SOURCES.length,liveSources:sources.filter(s=>s.active).length,requiredLiveSources:10,
