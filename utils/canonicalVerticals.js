@@ -56,6 +56,7 @@ const CANONICAL_BUSINESS_VERTICALS = Object.freeze([
   { value: 'msp_it_services', label: 'IT / Managed Services' },
   { value: 'pest_control', label: 'Pest Control' },
   { value: 'plumbing', label: 'Plumbing' },
+  { value: 'private_lending', label: 'Private Lending' },
   { value: 'property_management', label: 'Property Management' },
   { value: 'restaurant', label: 'Restaurant' },
   { value: 'restoration', label: 'Restoration' },

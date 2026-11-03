@@ -1,0 +1,100 @@
+-- Roll back the Private Lending canonical vertical.
+-- Refuses to run while private_lending rows exist.
+
+BEGIN;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM clients WHERE vertical = 'private_lending')
+     OR EXISTS (SELECT 1 FROM prospects WHERE vertical = 'private_lending') THEN
+    RAISE EXCEPTION 'Cannot remove private_lending while rows still use it';
+  END IF;
+END $$;
+
+ALTER TABLE clients
+  DROP CONSTRAINT IF EXISTS clients_vertical_canonical_chk;
+
+ALTER TABLE clients
+  ADD CONSTRAINT clients_vertical_canonical_chk
+  CHECK (vertical IS NULL OR vertical IN (
+    'accounting',
+    'architecture_engineering',
+    'auto',
+    'business_coaching',
+    'cleaning',
+    'commercial_cleaning',
+    'commercial_hvac',
+    'commercial_insurance',
+    'commercial_landscaping',
+    'commercial_roofing',
+    'dental',
+    'electrical',
+    'equipment_rental',
+    'facility_services',
+    'fitness',
+    'freight_brokerage',
+    'home_renovation',
+    'home_services',
+    'hvac',
+    'janitorial',
+    'landscaping',
+    'legal',
+    'marketing_automation',
+    'med_spa',
+    'msp_it_services',
+    'pest_control',
+    'plumbing',
+    'property_management',
+    'restaurant',
+    'restoration',
+    'roofing',
+    'salon',
+    'staffing_recruiting',
+    'web_design',
+    'wholesale_distribution'
+  ));
+
+ALTER TABLE prospects
+  DROP CONSTRAINT IF EXISTS prospects_vertical_canonical_chk;
+
+ALTER TABLE prospects
+  ADD CONSTRAINT prospects_vertical_canonical_chk
+  CHECK (vertical IS NULL OR vertical IN (
+    'accounting',
+    'architecture_engineering',
+    'auto',
+    'business_coaching',
+    'cleaning',
+    'commercial_cleaning',
+    'commercial_hvac',
+    'commercial_insurance',
+    'commercial_landscaping',
+    'commercial_roofing',
+    'dental',
+    'electrical',
+    'equipment_rental',
+    'facility_services',
+    'fitness',
+    'freight_brokerage',
+    'home_renovation',
+    'home_services',
+    'hvac',
+    'janitorial',
+    'landscaping',
+    'legal',
+    'marketing_automation',
+    'med_spa',
+    'msp_it_services',
+    'pest_control',
+    'plumbing',
+    'property_management',
+    'restaurant',
+    'restoration',
+    'roofing',
+    'salon',
+    'staffing_recruiting',
+    'web_design',
+    'wholesale_distribution'
+  ));
+
+COMMIT;

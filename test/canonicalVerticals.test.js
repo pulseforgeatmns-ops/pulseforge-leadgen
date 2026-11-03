@@ -21,6 +21,7 @@ describe('PEC-116 canonical business verticals', () => {
     assert.ok(CANONICAL_BUSINESS_VERTICALS.length >= 10);
     assert.ok(CANONICAL_BUSINESS_VERTICALS.some((v) => v.value === 'business_coaching'));
     assert.equal(labelForBusinessVertical('business_coaching'), 'Business Coaching');
+    assert.equal(labelForBusinessVertical('private_lending'), 'Private Lending');
     assert.deepEqual(listCanonicalBusinessVerticals()[0], CANONICAL_BUSINESS_VERTICALS[0]);
   });
 
@@ -28,6 +29,7 @@ describe('PEC-116 canonical business verticals', () => {
     assert.equal(assertCanonicalBusinessVertical('business_coaching'), 'business_coaching');
     assert.equal(assertCanonicalBusinessVertical('Commercial Cleaning'), 'commercial_cleaning');
     assert.equal(isCanonicalBusinessVertical('legal'), true);
+    assert.equal(assertCanonicalBusinessVertical('Private Lending'), 'private_lending');
     assert.equal(isCanonicalBusinessVertical('Founder-led agencies'), false);
     assert.throws(
       () => assertCanonicalBusinessVertical('Founder Led Businesses'),
