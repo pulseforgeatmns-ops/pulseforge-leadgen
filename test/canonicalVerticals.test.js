@@ -109,6 +109,8 @@ describe('PEC-116 canonical business verticals', () => {
     await ensureProspectsCanonicalVerticalConstraint(pool);
     assert.equal(statements.length, 2);
     for (const sql of statements) {
+      assert.match(sql, /DO \$canonical\$/);
+      assert.match(sql, /END \$canonical\$;/);
       assert.match(sql, /pg_get_constraintdef/);
       assert.match(sql, /POSITION\('''private_lending''' IN constraint_definition\)/);
       assert.match(sql, /DROP CONSTRAINT/);
