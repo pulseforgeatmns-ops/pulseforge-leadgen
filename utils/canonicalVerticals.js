@@ -168,36 +168,54 @@ function canonicalVerticalSqlInList() {
 async function ensureCanonicalVerticalConstraint(pool) {
   const allowedList = canonicalVerticalSqlInList();
   await pool.query(`
-    DO $$
+    DO $
+    DECLARE
+      constraint_definition TEXT;
     BEGIN
-      IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conname = 'clients_vertical_canonical_chk'
-          AND conrelid = 'clients'::regclass
-      ) THEN
+      SELECT pg_get_constraintdef(oid)
+        INTO constraint_definition
+      FROM pg_constraint
+      WHERE conname = 'clients_vertical_canonical_chk'
+        AND conrelid = 'clients'::regclass;
+
+      IF constraint_definition IS NOT NULL
+         AND POSITION(''private_lending'' IN constraint_definition) = 0 THEN
+        ALTER TABLE clients DROP CONSTRAINT clients_vertical_canonical_chk;
+        constraint_definition := NULL;
+      END IF;
+
+      IF constraint_definition IS NULL THEN
         ALTER TABLE clients ADD CONSTRAINT clients_vertical_canonical_chk
           CHECK (vertical IS NULL OR vertical IN (${allowedList}));
       END IF;
-    END $$;
+    END $;
   `);
 }
 
 async function ensureProspectsCanonicalVerticalConstraint(pool) {
   const allowedList = canonicalVerticalSqlInList();
   await pool.query(`
-    DO $$
+    DO $
+    DECLARE
+      constraint_definition TEXT;
     BEGIN
-      IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conname = 'prospects_vertical_canonical_chk'
-          AND conrelid = 'prospects'::regclass
-      ) THEN
+      SELECT pg_get_constraintdef(oid)
+        INTO constraint_definition
+      FROM pg_constraint
+      WHERE conname = 'prospects_vertical_canonical_chk'
+        AND conrelid = 'prospects'::regclass;
+
+      IF constraint_definition IS NOT NULL
+         AND POSITION(''private_lending'' IN constraint_definition) = 0 THEN
+        ALTER TABLE prospects DROP CONSTRAINT prospects_vertical_canonical_chk;
+        constraint_definition := NULL;
+      END IF;
+
+      IF constraint_definition IS NULL THEN
         ALTER TABLE prospects ADD CONSTRAINT prospects_vertical_canonical_chk
           CHECK (vertical IS NULL OR vertical IN (${allowedList}));
       END IF;
-    END $$;
+    END $;
   `);
 }
 
