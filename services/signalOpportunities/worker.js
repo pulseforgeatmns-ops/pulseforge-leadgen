@@ -94,7 +94,8 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
     }catch{}
    }
    const old=await opportunities.list(asOf),tokens=[...new Set([...priority,...old.map(p=>p.tokenAddress)])].slice(0,200);
-   const held=new Set((await store.list('balance',null,{ascending:false,limit:500})).filter(b=>Number(b.tokens)>0&&Date.parse(asOf)-Date.parse(b.observedAt)<90000).map(b=>b.tokenAddress));
+   const paperAudit={evaluated:0,entries:0,exits:0,blocked:{}};
+    const held=new Set((await store.list('balance',null,{ascending:false,limit:500})).filter(b=>Number(b.tokens)>0&&Date.parse(asOf)-Date.parse(b.observedAt)<90000).map(b=>b.tokenAddress));
    for(const ca of tokens){
     const observations=await store.list('observation',ca,{ascending:false,limit:500});
     const riskCursor=(await store.list('cursor',ca)).find(c=>c.key==='opportunity-risk:'+ca);
