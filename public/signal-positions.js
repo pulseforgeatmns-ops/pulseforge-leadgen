@@ -105,6 +105,7 @@
     const promo=p.risk.promotion,card=el('div',undefined,'promotion-card'),top=el('div',undefined,'promotion-top');top.append(el('h3','How much is it being promoted?'),el('span',title(promo.state),'quiet-badge'));card.append(top);
     const line=el('p');line.append(el('span',String(promo.promotionEventCount),'promotion-number'),document.createTextNode(' promotional posts in the last 5 minutes'));card.append(line);
     const facts=el('div',undefined,'promotion-facts');facts.append(el('span',promo.uniquePromotionalSources+' sources'),el('span',promo.promotionVelocityPerMinute.toFixed(1)+' posts / minute'));card.append(facts);
+    const readiness=candidateReadiness(p);card.append(el('p',readiness.state+' · '+readiness.reasons[0],'data-note'),el('p','Contract: '+p.tokenAddress,'data-note'));
     card.append(el('p','More promotion does not mean a better investment. Sources from the same group do not count as independent agreement.'));
     card.append(el('p',p.risk.divergence.state==='OBSERVED'?'Promotion is rising while part of the market picture is weakening. This is a research warning, not an instruction to sell.':p.risk.divergence.state==='UNKNOWN'?'We cannot yet compare promotion with a reliable market trend.':'No promotion-versus-market mismatch has been observed in the available window.'));
     const details=el('details',undefined,'technical-details');details.append(el('summary','Source groups & research details'),el('pre',JSON.stringify({promotion:promo,divergence:p.risk.divergence,researchState:p.signalState},null,2)));card.append(details);target.append(card);
@@ -198,6 +199,15 @@
     if(!data.liveSignals.length)empty(signals,'No tracked calls yet','New eligible mentions will appear here. Missing activity does not mean a token is safe.');
   }
   function amplifierLabel(p){return p.amplifiers.some(x=>x.status==='OBSERVED')?'Major amplifier observed':p.amplifiers.some(x=>x.status==='COVERAGE_UNKNOWN')?'Major amplifier coverage incomplete · arrival unknown':'AMPLIFIER NOT YET ARRIVED in observed coverage · arrival is not predicted';}
+  function candidateReadiness(p){
+    const reasons=[];
+    if(p.evaluationDelayed||p.quality==='DELAYED')reasons.push('Evaluation is stale');
+    if(!Array.isArray(p.independentClusters)||p.independentClusters.length<2)reasons.push('Independent confirmation missing');
+    if(!Number.isFinite(Number(p.liquidity))||Number(p.liquidity)<20000)reasons.push('Observed pool value below $20,000 or unavailable');
+    if(p.quality!=='OBSERVED')reasons.push('Market freshness or coverage incomplete');
+    if(p.opportunityState!=='HOT')reasons.push('Not a HOT opportunity');
+    return {state:reasons.length?'WATCH / DO NOT ENTER':'PAPER REVIEW ONLY',reasons:reasons.length?reasons:['Confirm quote age, swap route, exit depth and estimated fees manually before any paper entry']};
+  }
   function opportunityCard(p){
     const card=el('a',undefined,'position-card opportunity-card');card.href='/signal-v1/positions/'+encodeURIComponent(p.tokenAddress);card.dataset.state=p.opportunityState;
     const header=el('div',undefined,'card-top');header.append(el('h3',p.symbol||p.tokenAddress.slice(0,8)),el('span',p.opportunityState+' · '+p.opportunityScore+'/100','quiet-badge'));card.append(header,el('p','First seen '+time(p.firstSeenAt),'muted'));
@@ -218,6 +228,7 @@
   function renderOpportunityDetail(p){
     const section=$('tokenIntelligence');if(!section)return;section.hidden=!p;if(!p)return;
     const target=$('opportunityDetail');target.replaceChildren();target.append(el('p',`${p.opportunityState} · ${p.opportunityScore}/100 · ${p.definitionVersion} · ${p.quality}`,'quiet-badge'),el('p','Known at '+time(p.knowledgeAt),'muted'),el('p',amplifierLabel(p)));
+    const readiness=candidateReadiness(p);target.append(el('p','ENTRY ASSESSMENT: '+readiness.state,'quiet-badge'),el('p','Contract: '+p.tokenAddress,'muted'));for(const reason of readiness.reasons)target.append(el('p',reason,'data-note'));
     if(p.preFrontRunners)target.append(el('p','PRE-FRONT-RUNNERS OBSERVATION'+(p.frontRunnersLeadMs!=null?' · lead '+Math.round(p.frontRunnersLeadMs/60000)+' minutes':''),'accent'));
     for(const [heading,items]of [['WHY SCORE INCREASED',p.evidence.increases.map(e=>`+${e.points}: ${e.text}`)],['WHY SCORE DECREASED',p.evidence.decreases.map(e=>`${e.points}: ${e.text}`)],['WHAT IS UNKNOWN',p.unknowns]]){const block=el('div',undefined,'evidence-section');block.append(el('h3',heading));const list=el('ul');for(const text of items.length?items:['No evidence recorded.'])list.append(el('li',text));block.append(list);target.append(block);}
     const seq=$('callerSequence');seq.replaceChildren();for(const [i,c]of p.callerSequence.entries()){const row=el('div',undefined,'health-row');row.append(el('strong',(i+1)+'. '+c.sourceId),el('span',time(c.occurredAt)+' · MC '+fmt(c.marketCap)+' · '+c.role+(c.forwarding?' · FORWARDED':'')));seq.append(row);}
