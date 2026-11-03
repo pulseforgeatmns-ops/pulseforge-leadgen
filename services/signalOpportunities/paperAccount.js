@@ -1,21 +1,25 @@
 'use strict';
 const crypto=require('node:crypto');
-const VERSION='signal-paper-v1.0.0';
+const VERSION='signal-paper-v1.0.1';
 const CONFIG=Object.freeze({startingCashUsd:10000,maxPositionPct:.10,feeBps:50,slippageBps:100});
 const hash=x=>crypto.createHash('sha256').update(JSON.stringify(x)).digest('hex');
 function applyCost(price,side){const bps=(CONFIG.feeBps+CONFIG.slippageBps)/10000;return price*(side==='BUY'?1+bps:1-bps);}
-function desiredAction({opportunityState,position}){
+function desiredAction({opportunityState,position,asOf,priceUsd}){
  const held=Number(position?.tokens)>0;
- if(!held&&['OPPORTUNITY','HOT'].includes(opportunityState))return 'ENTER';
- if(held&&['AVOID','OBSERVED'].includes(opportunityState))return 'EXIT';
+ if(!held&&opportunityState==='HOT')return 'ENTER';
+ if(held&&(['AVOID','OBSERVED'].includes(opportunityState)||Number.isFinite(Date.parse(position.enteredAt))&&Date.parse(asOf)-Date.parse(position.enteredAt)>=3600000||Number(position.entryFillPrice)>0&&priceUsd<=Number(position.entryFillPrice)*0.8))return 'EXIT';
  return 'PASS';
 }
 function decide({decision,observation,account,position,asOf}){
  if(!decision||!observation||!Number.isFinite(Number(observation.priceUsd))||Number(observation.priceUsd)<=0)return {action:'PASS',reason:'CURRENT_MARKET_OBSERVATION_REQUIRED'};
- const action=desiredAction({opportunityState:decision.opportunityState,position});
+ const age=Date.parse(asOf)-Date.parse(observation.knownAt),observedAge=Date.parse(asOf)-Date.parse(observation.observedAt);
+ if(!Number.isFinite(age)||age<0||age>90000||!Number.isFinite(observedAge)||observedAge<0||observedAge>90000||Date.parse(observation.observedAt)>Date.parse(observation.knownAt)||Date.parse(decision.knowledgeAt)>Date.parse(asOf))return {action:'PASS',reason:'MARKET_OR_DECISION_NOT_FRESH'};
+ const action=desiredAction({opportunityState:decision.opportunityState,position,asOf,priceUsd:Number(observation.priceUsd)});
  const evidence={opportunityId:decision.id,opportunityState:decision.opportunityState,opportunityKnowledgeAt:decision.knowledgeAt,marketObservedAt:observation.observedAt,marketKnownAt:observation.knownAt,priceUsd:Number(observation.priceUsd),liquidityUsd:Number(observation.liquidityUsd)||null};
  if(action==='PASS')return {action,reason:'NO_PAPER_PORTFOLIO_TRANSITION',evidence};
- if(action==='ENTER'){const budget=Math.min(Number(account.cashUsd),CONFIG.startingCashUsd*CONFIG.maxPositionPct);if(budget<=0)return {action:'PASS',reason:'NO_PAPER_CASH',evidence};const fillPrice=applyCost(evidence.priceUsd,'BUY'),tokens=budget/fillPrice;return {action,side:'BUY',notionalUsd:budget,tokens,fillPrice,evidence};}
+ if(action==='ENTER'){
+  if(!Array.isArray(decision.independentClusters)||decision.independentClusters.length<3||Number(observation.liquidityUsd)<20000||!Number.isFinite(Number(observation.liquidityUsd))||decision.quality==='DELAYED')return {action:'PASS',reason:'INSUFFICIENT_ENTRY_EVIDENCE',evidence};
+  const budget=Math.min(Number(account.cashUsd),CONFIG.startingCashUsd*CONFIG.maxPositionPct);if(budget<=0)return {action:'PASS',reason:'NO_PAPER_CASH',evidence};const fillPrice=applyCost(evidence.priceUsd,'BUY'),tokens=budget/fillPrice;return {action,side:'BUY',notionalUsd:budget,tokens,fillPrice,evidence};}
  const tokens=Number(position.tokens),fillPrice=applyCost(evidence.priceUsd,'SELL');return {action,side:'SELL',notionalUsd:tokens*fillPrice,tokens,fillPrice,evidence};
 }
 class PaperAccount{
