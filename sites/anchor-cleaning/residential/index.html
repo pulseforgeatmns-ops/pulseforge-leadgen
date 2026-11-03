@@ -238,18 +238,18 @@
 <script>
   window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag('js',new Date());gtag('config','G-LCOWW1SO7N');
   function track(name,params){window.dataLayer.push(Object.assign({event:name},params||{}));gtag('event',name,params||{})}
-  var ATTRIBUTION_STORAGE_KEY='anchor_first_party_attribution';
+  var ATTRIBUTION_STORAGE_KEY='anchor_first_party_attribution',ATTRIBUTION_TTL_MS=90*24*60*60*1000;
   var ATTRIBUTION_QUERY_KEYS=['campaign_id','ad_group_id','ad_id','ad_account_id','gclid','gbraid','wbraid','oppref','opref','utm_source','utm_medium','utm_campaign','utm_content','utm_term'];
   var ATTRIBUTION_MAX={campaign_id:128,ad_group_id:128,ad_id:128,ad_account_id:128,gclid:256,gbraid:256,wbraid:256,oppref:256,opref:256,utm_source:128,utm_medium:128,utm_campaign:256,utm_content:256,utm_term:256,landing_page_url:2048,referrer:2048};
   function cleanAttributionValue(value,max){if(value==null||typeof value==='object')return'';var text=String(value).replace(/[\0-\x08\x0B\x0C\x0E-\x1F\x7F]/g,'').trim();return text?text.slice(0,max):''}
   function sanitizeAttributionObject(input){if(!input||typeof input!=='object'||Array.isArray(input))return null;var out={};ATTRIBUTION_QUERY_KEYS.concat(['landing_page_url','referrer']).forEach(function(key){var cleaned=cleanAttributionValue(input[key],ATTRIBUTION_MAX[key]);if(cleaned)out[key]=cleaned});return Object.keys(out).length?out:null}
   function parseLandingAttributionFromQuery(){var params=new URLSearchParams(window.location.search||''),raw={};ATTRIBUTION_QUERY_KEYS.forEach(function(key){if(params.has(key))raw[key]=params.get(key)});return sanitizeAttributionObject(raw)}
-  function readStoredAttribution(){try{var raw=sessionStorage.getItem(ATTRIBUTION_STORAGE_KEY);return raw?sanitizeAttributionObject(JSON.parse(raw)):null}catch(_){return null}}
-  function persistLandingAttribution(){var incoming=parseLandingAttributionFromQuery()||{};incoming.landing_page_url=cleanAttributionValue(String(window.location.href||'').split('#')[0],ATTRIBUTION_MAX.landing_page_url);incoming.referrer=cleanAttributionValue(document.referrer||'',ATTRIBUTION_MAX.referrer);var existing=readStoredAttribution();var merged=Object.assign({},incoming,existing||{});if(merged){try{sessionStorage.setItem(ATTRIBUTION_STORAGE_KEY,JSON.stringify(merged))}catch(_){}}return merged}
+  function readStoredAttribution(){try{var raw=localStorage.getItem(ATTRIBUTION_STORAGE_KEY);if(!raw)return null;var parsed=JSON.parse(raw),savedAt=Number(parsed&&parsed._saved_at||0);if(!savedAt||Date.now()-savedAt>ATTRIBUTION_TTL_MS){localStorage.removeItem(ATTRIBUTION_STORAGE_KEY);return null}return sanitizeAttributionObject(parsed)}catch(_){return null}}
+  function persistLandingAttribution(){var incoming=parseLandingAttributionFromQuery()||{};incoming.landing_page_url=cleanAttributionValue(String(window.location.href||'').split('#')[0],ATTRIBUTION_MAX.landing_page_url);incoming.referrer=cleanAttributionValue(document.referrer||'',ATTRIBUTION_MAX.referrer);var existing=readStoredAttribution();var merged=Object.assign({},incoming,existing||{});if(merged){try{localStorage.setItem(ATTRIBUTION_STORAGE_KEY,JSON.stringify(Object.assign({_saved_at:Date.now()},merged)))}catch(_){}}return merged}
   function getSubmissionAttribution(){return readStoredAttribution()||persistLandingAttribution()}
   persistLandingAttribution();
 
-  document.querySelectorAll('.js-phone').forEach(function(el){el.addEventListener('click',function(){track('phone_click',{event_category:'contact',page_type:'residential'})})});document.querySelectorAll('.js-email').forEach(function(el){el.addEventListener('click',function(){track('email_click',{event_category:'contact',page_type:'residential'})})});
+  document.addEventListener('click',function(e){var link=e.target&&e.target.closest?e.target.closest('a[href^="tel:"]'):null;if(!link)return;var attribution=getSubmissionAttribution()||{};track('phone_click',{event_category:'contact',page_type:'residential',gclid:attribution.gclid||'',utm_source:attribution.utm_source||'',utm_campaign:attribution.utm_campaign||''})});document.querySelectorAll('.js-email').forEach(function(el){el.addEventListener('click',function(){track('email_click',{event_category:'contact',page_type:'residential'})})});
   function trackOpenAiLeadCreated(alreadyTracked, submissionId) {
     if (alreadyTracked.value) return;
     if (typeof window.oaiq !== 'function') return;
