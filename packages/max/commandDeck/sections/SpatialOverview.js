@@ -58,7 +58,9 @@ function personalizeSummary(domainId, summary, presentation) {
     for (let i = 0; i < lines.length; i += 1) {
       if (lines[i] === 'Pipeline steady') lines[i] = 'Borrower pipeline steady';
     }
-    if (compressed === 'Acquisition steady') compressed = 'Borrower pipeline steady';
+    if (compressed === 'Acquisition steady' || compressed === 'Pipeline steady') {
+      compressed = 'Borrower pipeline steady';
+    }
   } else if (domainId === DOMAIN_IDS.CONTENT) {
     for (let i = 0; i < lines.length; i += 1) {
       if (lines[i] === 'Content channels monitored') lines[i] = 'Private-capital market monitored';
