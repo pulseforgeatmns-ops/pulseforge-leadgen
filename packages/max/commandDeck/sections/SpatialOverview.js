@@ -31,6 +31,51 @@ const DOMAIN_LABELS = Object.freeze({
   campaigns: 'Campaigns',
 });
 
+const VERTICAL_PRESENTATIONS = Object.freeze({
+  private_lending: Object.freeze({
+    labels: Object.freeze({
+      acquisition: 'Borrowers & Buyers',
+      content: 'Market Signals',
+      clients: 'Private Lenders & Investors',
+      campaigns: 'Deal Matches',
+    }),
+  }),
+});
+
+function presentationForTenant(tenantProfile) {
+  const vertical = String(tenantProfile && tenantProfile.vertical || '')
+    .trim()
+    .toLowerCase();
+  return VERTICAL_PRESENTATIONS[vertical] || null;
+}
+
+function personalizeSummary(domainId, summary, presentation) {
+  if (!presentation || !summary) return summary;
+  const lines = [...(summary.lines || [])];
+  let compressed = summary.compressed || '';
+
+  if (domainId === DOMAIN_IDS.ACQUISITION) {
+    for (let i = 0; i < lines.length; i += 1) {
+      if (lines[i] === 'Pipeline steady') lines[i] = 'Borrower pipeline steady';
+    }
+    if (compressed === 'Acquisition steady') compressed = 'Borrower pipeline steady';
+  } else if (domainId === DOMAIN_IDS.CONTENT) {
+    for (let i = 0; i < lines.length; i += 1) {
+      if (lines[i] === 'Content channels monitored') lines[i] = 'Private-capital market monitored';
+    }
+    if (compressed === 'Content steady') compressed = 'Market signals steady';
+  } else if (domainId === DOMAIN_IDS.CLIENTS) {
+    for (let i = 0; i < lines.length; i += 1) {
+      if (lines[i] === 'Clients monitored') lines[i] = 'Investor network monitored';
+    }
+    if (compressed === 'Clients steady') compressed = 'Investor network steady';
+  } else if (domainId === DOMAIN_IDS.CAMPAIGNS) {
+    if (compressed === 'No active campaigns') compressed = 'No active deal matches';
+  }
+
+  return { ...summary, lines, compressed };
+}
+
 /**
  * @param {object} input
  * @param {object} input.model - composed CommandDeckModel (partial)
@@ -49,6 +94,7 @@ async function composeSpatialOverview(input = {}) {
 
   const missions = (model.operations && model.operations.missions) || [];
   const hlaDomain = inferHlaDomain(model);
+  const presentation = presentationForTenant(input.tenantProfile);
 
   const signalsByDomain = collectDomainSignals({
     missions,
@@ -80,7 +126,11 @@ async function composeSpatialOverview(input = {}) {
     const priority = reconciled.priority || computed;
     const slot = DOMAIN_SLOTS[domainId];
     const distance = DISTANCE_BY_PRIORITY[priority] ?? DISTANCE_BY_PRIORITY.normal;
-    const summary = buildDomainSummary(domainId, signals);
+    const summary = personalizeSummary(
+      domainId,
+      buildDomainSummary(domainId, signals),
+      presentation
+    );
     const drawer = buildDomainDrawer(domainId, signals);
     const hasNewIntelligence =
       Boolean(reconciled.transition) ||
@@ -88,7 +138,10 @@ async function composeSpatialOverview(input = {}) {
 
     domains.push({
       id: domainId,
-      label: DOMAIN_LABELS[domainId] || domainId,
+      label:
+        (presentation && presentation.labels && presentation.labels[domainId]) ||
+        DOMAIN_LABELS[domainId] ||
+        domainId,
       priority,
       previousPriority: reconciled.previousPriority || null,
       position: {
@@ -259,4 +312,7 @@ module.exports = {
   composeSpatialOverview,
   DOMAIN_ORDER,
   DOMAIN_LABELS,
+  VERTICAL_PRESENTATIONS,
+  presentationForTenant,
+  personalizeSummary,
 };
