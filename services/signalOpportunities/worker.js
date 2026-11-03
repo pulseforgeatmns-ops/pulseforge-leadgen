@@ -106,7 +106,7 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
     if(!decision)continue;
     decision.relationshipVersion=relationshipGraph.version;
     const saved=await opportunities.append(decision,{held:held.has(ca)});
-    if(saved.created&&last)await paper.evaluate(decision,last);
+    if(last&&(saved.created||(await paper.snapshot()).positions[ca]))await paper.evaluate(decision,last);
     if(saved.created&&saved.transition){const e={id:hash(['opportunity-state',decision.id]),tokenAddress:ca,category:'OPPORTUNITY_'+decision.opportunityState,occurredAt:decision.knowledgeAt,knownAt:decision.knowledgeAt,source:decision.definitionVersion,evidence:decision,provenance:decision.provenance};await store.put('event',ca,e.id,e);}
    }
    if(transportTestId&&transports.every(t=>t.ready))await opportunities.enqueueTransportTest(transportTestId);
