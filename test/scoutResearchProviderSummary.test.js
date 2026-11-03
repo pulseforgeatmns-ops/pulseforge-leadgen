@@ -37,6 +37,8 @@ for (const [code, blocker] of [['REQUEST_DENIED', 'provider_denied'], ['OVER_QUE
 test('late query status, failed reports with no cause, and errors beyond legacy error limits stay visible', () => {
   assert.equal(receipt([{ ...empty(), execution: { queries: [{ googleStatus: 'REQUEST_DENIED' }] } }]).discovery.blocker, 'provider_denied');
   assert.equal(receipt([{ providerId: 'website', status: 'failed' }]).discovery.blocker, 'provider_failed');
+  assert.equal(receipt([{ providerId: 'website', status: 'partial' }]).discovery.blocker, 'provider_failed',
+    'an unexplained partial provider cannot establish a healthy completed pass');
   const errors = [...Array(130).fill({ code: 'adapter_unavailable' }), { code: 'provider_error' }];
   assert.equal(receipt([], errors).discovery.blocker, 'provider_failed');
   assert.equal(receipt([{ providerId: 'website', status: 'failed', errors }]).discovery.blocker, 'provider_failed');

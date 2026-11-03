@@ -71,7 +71,7 @@ function summarizeResearchProviderIssues(result = {}, reports) {
         causes++; observe(provider, { code: 'provider_error' });
       }
     });
-    if (['failed', 'blocked'].includes(status) && !causes) {
+    if (['failed', 'blocked', 'partial'].includes(status) && !causes) {
       failedWithoutCauseCount++; seen.failure = true;
     }
   }
