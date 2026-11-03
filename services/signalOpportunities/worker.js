@@ -5,6 +5,7 @@ const {evaluateOpportunity,empirical}=require('./evaluator');
 const {feedEvents}=require('../signalDashboard/events');
 const {evaluate:distribution}=require('../signalDistribution/risk');
 const {deliver}=require('./notifications');
+const {reportProspectiveEntries}=require('./prospectiveEntryReport');
 function sourcesFromHealth(health,at){
  const runtime=new Map((health?.sources||[]).map(s=>[s.sourceId,s]));
  return SOURCES.map(s=>{const r=runtime.get(s.sourceId);return {...s,active:r?.active===true,available:r?.available===true,
@@ -74,6 +75,13 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
    const calls=events.filter(e=>e.category==='CALLER'&&Date.parse(asOf)-Date.parse(e.knownAt)<=86400000);
    const recent=calls.filter(e=>Date.parse(asOf)-Date.parse(e.occurredAt)<=DEFINITION.windowMs);
    const obsAll=await store.list('observation',null,{ascending:false,limit:20000}),obsBy=new Map();for(const o of obsAll){if(!obsBy.has(o.tokenAddress))obsBy.set(o.tokenAddress,[]);obsBy.get(o.tokenAddress).push(o);}
+   // Research-only materialized status; never feeds live opportunity decisions.
+   try{
+    const research=reportProspectiveEntries({calls,observations:obsAll,asOf});
+    await store.put('status','*','prospective-post-confirmation-v1',{component:'prospective-post-confirmation-v1',...research,occurredAt:asOf,knownAt:asOf},{mutable:true});
+   }catch(err){
+    await store.put('status','*','prospective-post-confirmation-v1',{component:'prospective-post-confirmation-v1',state:'UNKNOWN',reason:'RESEARCH_EVALUATION_UNAVAILABLE',occurredAt:asOf,knownAt:asOf},{mutable:true});
+   }
    const madapes=madApesResearch(calls,events,obsBy,asOf);await store.put('status','*','madapes-gambles-prospective-001',{component:'madapes-gambles-prospective-001',state:'PARTIAL',reason:'Prospective empirical research only; not used by live opportunity scoring.',sampleSize:madapes.length,records:madapes,occurredAt:asOf,knownAt:asOf},{mutable:true});
    const cadence=cadenceProfile(calls,sources,asOf);await store.put('status','*','amplifier-cadence',{component:'amplifier-cadence',state:'PARTIAL',reason:'Rolling retained-feed history; not an announced schedule.',profiles:cadence,occurredAt:asOf,knownAt:asOf},{mutable:true});
    const counts=new Map();for(const c of recent)counts.set(c.tokenAddress,(counts.get(c.tokenAddress)||0)+1);

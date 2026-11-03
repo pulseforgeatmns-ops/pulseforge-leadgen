@@ -2,8 +2,8 @@
 // Offline discovery-only evaluator. No database, network, scoring or holdout access.
 const HORIZONS=[10,30,60];
 function ms(v){const t=Date.parse(v);return Number.isFinite(t)?t:NaN;}
-function evaluatePostConfirmation({record,confirmation,observations,delayMs=60000,maxEntryLagMs=120000,feeBps=0,slippageBps=0,liquidityFloorUsd=0}){
- if(!record||record.partition!=='HISTORICAL_DISCOVERY'||record.dataClass!=='HISTORICAL_BACKFILL')throw Error('discovery_historical_only');
+function evaluateObservationEntry({tokenAddress,confirmation,observations,delayMs=60000,maxEntryLagMs=120000,feeBps=0,slippageBps=0,liquidityFloorUsd=0}){
+ if(!tokenAddress)throw Error('token_address_required');
  if(!confirmation||!Array.isArray(observations))throw Error('invalid_inputs');
  const confirmed=ms(confirmation.observedAt),known=ms(confirmation.knownAt);
  // Historical import time is never evidence of when an amplifier became observable.
@@ -11,7 +11,7 @@ function evaluatePostConfirmation({record,confirmation,observations,delayMs=6000
  if(!Number.isFinite(delayMs)||delayMs<0||!Number.isFinite(maxEntryLagMs)||maxEntryLagMs<0)throw Error('invalid_delay');
  if(![feeBps,slippageBps].every(v=>Number.isFinite(v)&&v>=0&&v<10000)||!Number.isFinite(liquidityFloorUsd)||liquidityFloorUsd<0)throw Error('invalid_costs');
  const decisionAt=Math.max(confirmed,known),earliest=decisionAt+delayMs;
- const market=observations.filter(o=>o.tokenAddress===record.tokenAddress&&Number(o.priceUsd)>0&&Number.isFinite(ms(o.observedAt))&&Number.isFinite(ms(o.knownAt))&&ms(o.knownAt)>=ms(o.observedAt)&&Number(o.liquidityUsd)>=liquidityFloorUsd).sort((a,b)=>ms(a.observedAt)-ms(b.observedAt));
+ const market=observations.filter(o=>o.tokenAddress===tokenAddress&&Number(o.priceUsd)>0&&Number.isFinite(ms(o.observedAt))&&Number.isFinite(ms(o.knownAt))&&ms(o.knownAt)>=ms(o.observedAt)&&Number(o.liquidityUsd)>=liquidityFloorUsd).sort((a,b)=>ms(a.observedAt)-ms(b.observedAt));
  const entry=market.find(o=>ms(o.observedAt)>=earliest&&ms(o.knownAt)<=ms(o.observedAt)+maxEntryLagMs&&ms(o.knownAt)<=earliest+maxEntryLagMs);
  if(!entry)return {status:'NO_EXECUTABLE_ENTRY'};
  const entryAt=ms(entry.knownAt),entryPrice=Number(entry.priceUsd)*(1+(feeBps+slippageBps)/10000);
@@ -27,4 +27,8 @@ function evaluatePostConfirmation({record,confirmation,observations,delayMs=6000
  }
  return {status:'EVALUATED',entryAt:entry.knownAt,entryMarketObservedAt:entry.observedAt,confirmationKnownAt:confirmation.knownAt,entryPriceUsd:entryPrice,outcomes,quality:'OBSERVATION_BASED_NOT_EXECUTION_PROOF'};
 }
-module.exports={HORIZONS,evaluatePostConfirmation};
+function evaluatePostConfirmation({record,...options}){
+ if(!record||record.partition!=='HISTORICAL_DISCOVERY'||record.dataClass!=='HISTORICAL_BACKFILL')throw Error('discovery_historical_only');
+ return evaluateObservationEntry({...options,tokenAddress:record.tokenAddress});
+}
+module.exports={HORIZONS,evaluatePostConfirmation,evaluateObservationEntry};
