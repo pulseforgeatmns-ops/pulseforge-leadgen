@@ -52,7 +52,8 @@ test('research receipts expose unavailable adapters without concealing real prov
   const truncated = structuredClone(completed);
   truncated.result.payload.providerReceipts = [...Array(20).fill(completed.result.payload.providerReceipts[0]),
     { providerId: 'google_places', status: 'failed', errors: [{ code: 'provider_error' }] }];
-  assert.equal(discoveryDiagnostic(truncated, opts).providerIssuesComplete, false);
+  assert.equal(discoveryDiagnostic(truncated, opts).providerIssuesComplete, true);
+  assert.equal(discoveryDiagnostic(truncated, opts).blocker, 'provider_failed');
   assert.notEqual(discoveryDiagnostic(truncated, opts).blocker, 'none', 'omitted providers cannot make a healthy receipt');
   for (const [code, expected] of [['REQUEST_DENIED', 'provider_denied'], ['OVER_QUERY_LIMIT', 'provider_quota'],
     ['provider_error', 'provider_failed'], [secret, 'provider_failed']]) {
