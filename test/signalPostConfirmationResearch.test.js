@@ -31,3 +31,14 @@ test('costs reduce net outcomes and empty horizons are not fabricated',()=>{
  assert.equal(result.outcomes['30m'].status,'OBSERVED_PARTIAL');
  assert.equal(result.quality,'OBSERVATION_BASED_NOT_EXECUTION_PROOF');
 });
+
+test('entry is not backdated to market observation time',()=>{
+ const result=e({record,confirmation,observations:[observation(3,2,4),observation(5,3,5),observation(14,4,14)]});
+ assert.equal(result.entryAt,at(4));
+ assert.equal(result.entryMarketObservedAt,at(3));
+ assert.equal(result.outcomes['10m'].lastKnownAt,at(14));
+});
+test('market quote learned after permitted entry lag is ineligible',()=>{
+ const result=e({record,confirmation,observations:[observation(3,2,6)]});
+ assert.equal(result.status,'NO_EXECUTABLE_ENTRY');
+});
