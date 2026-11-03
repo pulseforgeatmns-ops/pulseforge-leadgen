@@ -49,11 +49,15 @@ unknown failures, scope limits and query failures after the sample boundary.
 Additional cases exceed error, query, report and group bounds, preserve source
 objects, and assert that arbitrary private text does not escape. Provider
 transports are denied. The native disposable-PostgreSQL facility journey must
-record a complete aggregate and disclose optional adapter unavailability for
-the completed pass, preserve the
+record a complete aggregate and no provider errors for its successful/empty
+adapter reports, preserve the
 one-page budget and unreleased-cycle refusal, and leave all protected recovery,
 suppression, mission and outbound tables unchanged. Existing release/grant
 regressions remain required. Missing PostgreSQL prerequisites must not be skipped.
+
+Separate real-adapter and native Scout integration regressions exercise optional
+adapter unavailability and incomplete coverage; those conditions must not be
+invented for an error-free native coverage pass.
 
 No schema migration, production data rewrite or authority change is needed.
 A future deployment changes the revision pin and requires the existing

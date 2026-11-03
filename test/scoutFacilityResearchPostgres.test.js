@@ -73,10 +73,12 @@ test('eight native research cycles diversify without widening authority, paid pa
     assert.equal(providers.providerIssueSummary.reportsScanned, providers.providerIssueSummary.reportsTotal);
     assert.ok(providers.providerIssueSummary.reportsTotal > providers.providers.length);
     assert.equal(providers.discovery.outcome, 'completed');
-    assert.equal(providers.discovery.blocker, 'none',
-      'completed native research with only unavailable optional adapters has no unexplained blocker');
-    assert.equal(providers.discovery.nonBlockingProviderIssue, 'provider_unavailable');
-    assert.ok(providers.providerIssueSummary.issues.some(row => row.code === 'adapter_unavailable'));
+    assert.deepEqual({ blocker: providers.discovery.blocker,
+      nonBlockingProviderIssue: providers.discovery.nonBlockingProviderIssue,
+      issues: providers.providerIssueSummary.issues },
+    { blocker: 'none', nonBlockingProviderIssue: null, issues: [] },
+    'this native coverage fixture has successful/empty adapter reports and no provider errors: '
+      + JSON.stringify(providers.providerIssueSummary));
     assert.equal((await pool.query("SELECT count(*)::int AS n FROM scout_research_candidates WHERE company LIKE '%Historical Marker%'")).rows[0].n, 0);
     if (n === 1) {
       const marker = (await pool.query("SELECT raw_candidate FROM scout_candidate_memberships WHERE raw_candidate->>'companyName'='Synthetic Factory Historical Marker' LIMIT 1")).rows[0];
