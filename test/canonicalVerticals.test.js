@@ -13,6 +13,8 @@ const {
   assertCanonicalBusinessVertical,
   resolveMissionBoundCrmVertical,
   mapVerticalConstraintError,
+  ensureCanonicalVerticalConstraint,
+  ensureProspectsCanonicalVerticalConstraint,
 } = require('../utils/canonicalVerticals');
 const { validateCreateClientInput } = require('../services/tenantWorkspace');
 
@@ -97,6 +99,20 @@ describe('PEC-116 canonical business verticals', () => {
     for (const entry of CANONICAL_BUSINESS_VERTICALS) {
       assert.match(clientMigration, new RegExp(`'${entry.value}'`));
       assert.match(prospectMigration, new RegExp(`'${entry.value}'`));
+    }
+  });
+
+  it('repairs pre-existing canonical constraints that lack private_lending', async () => {
+    const statements = [];
+    const pool = { query: async (sql) => statements.push(sql) };
+    await ensureCanonicalVerticalConstraint(pool);
+    await ensureProspectsCanonicalVerticalConstraint(pool);
+    assert.equal(statements.length, 2);
+    for (const sql of statements) {
+      assert.match(sql, /pg_get_constraintdef/);
+      assert.match(sql, /POSITION\('''private_lending''' IN constraint_definition\)/);
+      assert.match(sql, /DROP CONSTRAINT/);
+      assert.match(sql, /'private_lending'/);
     }
   });
 
