@@ -39,6 +39,7 @@ BEGIN
         'msp_it_services',
         'pest_control',
         'plumbing',
+        'private_lending',
         'property_management',
         'restaurant',
         'restoration',
