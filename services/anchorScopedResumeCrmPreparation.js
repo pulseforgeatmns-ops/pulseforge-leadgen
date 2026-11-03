@@ -154,11 +154,12 @@ function crmDiscovery(binding) {
     unknowns: ['No new discovery or verification was performed; existing contact eligibility does not establish buyer readiness.'] } };
 }
 // Preserve native numbers/outcomes; its legacy explanation conflates absence of
-// blacklist evidence with clearance. This bridge must disclose the unknown.
+// blacklist evidence with clearance. This bridge must disclose the unknown,
+// including when native recommendations join several reasons into one string.
 function reviewExplanations(value) {
-  if (typeof value === 'string') return value === 'No blacklist concerns'
-    ? 'Blacklist not checked; no clearance is established.'
-    : value === 'Healthy. Safe. Send.' ? 'Native planning assessment permits review; provider readiness remains unchecked.' : value;
+  if (typeof value === 'string') return value
+    .replaceAll('No blacklist concerns', 'Blacklist not checked; no clearance is established.')
+    .replaceAll('Healthy. Safe. Send.', 'Native planning assessment permits review; provider readiness remains unchecked.');
   if (Array.isArray(value)) return value.map(reviewExplanations);
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, reviewExplanations(v)]));
   return value;

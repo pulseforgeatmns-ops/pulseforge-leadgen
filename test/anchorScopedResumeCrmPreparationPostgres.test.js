@@ -126,6 +126,11 @@ test('native CRM-only scoped preparation from discover without providers or boot
     assert.equal(capacity.capacity.recommended, 1);
     assert.doesNotMatch(JSON.stringify(saved), /No blacklist concerns|Healthy\. Safe\. Send\./);
     assert.match(JSON.stringify(saved), /Blacklist not checked/);
+    assert.ok(capacity.sendRecommendations.some(reason =>
+      reason.includes('Reply rate is thin for this volume.')
+      && reason.includes('Open rate is below a healthy floor.')
+      && reason.includes('Blacklist not checked; no clearance is established.')),
+    'joined recommendations preserve observed warnings and disclose the unchecked blacklist');
     for (const [specialist, kind] of [['scout','discovery'],['max','prioritization'],['max','acquisition_approach'],['paige','variants'],['emmett','capacity']]) {
       assert.ok(saved.contributions.some(c => c.specialist === specialist && c.kind === kind), `${specialist}/${kind}`);
     }
