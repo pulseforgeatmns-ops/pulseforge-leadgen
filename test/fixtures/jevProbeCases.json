@@ -1,0 +1,182 @@
+[
+  {
+    "id": "status_mission",
+    "category": "status",
+    "provenance": "synthetic",
+    "operator_message": "What is the current status of the Anchor cleaning discovery mission?",
+    "expected_route": "inspection",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "status_confidence",
+    "category": "status",
+    "provenance": "synthetic",
+    "operator_message": "How confident are we in Scout's discovery results so far?",
+    "expected_route": "inspection",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "briefing",
+    "category": "briefing",
+    "provenance": "synthetic",
+    "operator_message": "Summarize the outreach pipeline and what needs my attention.",
+    "expected_route": "intelligence",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "mission_instruction",
+    "category": "mission",
+    "provenance": "synthetic",
+    "operator_message": "Start a new prospect discovery mission for office buildings.",
+    "expected_route": "mission",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "mission_continue",
+    "category": "mission",
+    "provenance": "synthetic",
+    "operator_message": "Continue the existing discovery task and prepare the next candidates.",
+    "expected_route": "mission",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "pending_ambiguous",
+    "category": "clarification",
+    "provenance": "synthetic",
+    "operator_message": "Maybe we should proceed, but I want to see the details first.",
+    "expected_route": "clarification",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "approval_question",
+    "category": "clarification",
+    "provenance": "synthetic",
+    "operator_message": "Should I approve this outreach?",
+    "expected_route": "clarification",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "approval_reference",
+    "category": "clarification",
+    "provenance": "synthetic",
+    "operator_message": "What exactly would I be approving?",
+    "expected_route": "clarification",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "approve_no_context",
+    "category": "clarification",
+    "provenance": "synthetic",
+    "operator_message": "Yes, approve it.",
+    "expected_route": "clarification",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "ads_readonly",
+    "category": "inspection",
+    "provenance": "synthetic",
+    "operator_message": "How is the current Google Ads campaign performing?",
+    "expected_route": "intelligence",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "ads_change",
+    "category": "specialist",
+    "provenance": "synthetic",
+    "operator_message": "Pause the Google Ads search campaign.",
+    "expected_route": "specialist",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "content_review",
+    "category": "specialist",
+    "provenance": "synthetic",
+    "operator_message": "Show Paige's pending social posts for review.",
+    "expected_route": "specialist",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "ordinary_chat",
+    "category": "conversation",
+    "provenance": "synthetic",
+    "operator_message": "Let's discuss whether institutional facilities are a good market.",
+    "expected_route": "conversation",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "identity",
+    "category": "identity",
+    "provenance": "synthetic",
+    "operator_message": "What can Max do for me?",
+    "expected_route": "identity",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "uncertain",
+    "category": "clarification",
+    "provenance": "synthetic",
+    "operator_message": "Take care of that thing we discussed before.",
+    "expected_route": "clarification",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "ao_coaching",
+    "category": "conversation",
+    "provenance": "synthetic",
+    "operator_message": "How should I open the conversation with a facility manager?",
+    "expected_route": "conversation",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "ao_briefing",
+    "category": "intelligence",
+    "provenance": "synthetic",
+    "operator_message": "Give me the account brief for an upcoming commercial cleaning visit.",
+    "expected_route": "intelligence",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "status_vs_approval",
+    "category": "status",
+    "provenance": "synthetic",
+    "operator_message": "Don't approve anything yet. Just show me the mission status.",
+    "expected_route": "inspection",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "delegation",
+    "category": "mission",
+    "provenance": "synthetic",
+    "operator_message": "Build an outreach plan but do not send any messages.",
+    "expected_route": "mission",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "credentials",
+    "category": "clarification",
+    "provenance": "synthetic",
+    "operator_message": "I need to update some account credentials; what should I do?",
+    "expected_route": "conversation",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  }
+]
