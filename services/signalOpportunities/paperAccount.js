@@ -1,6 +1,6 @@
 'use strict';
 const crypto=require('node:crypto');
-const VERSION='signal-paper-v1.0.0';
+const VERSION='signal-paper-v1.0.1';
 const CONFIG=Object.freeze({startingCashUsd:10000,maxPositionPct:.10,feeBps:50,slippageBps:100});
 const hash=x=>crypto.createHash('sha256').update(JSON.stringify(x)).digest('hex');
 function applyCost(price,side){const bps=(CONFIG.feeBps+CONFIG.slippageBps)/10000;return price*(side==='BUY'?1+bps:1-bps);}
