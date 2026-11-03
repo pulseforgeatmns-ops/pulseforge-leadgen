@@ -6,7 +6,7 @@ const hash=x=>crypto.createHash('sha256').update(JSON.stringify(x)).digest('hex'
 function applyCost(price,side){const bps=(CONFIG.feeBps+CONFIG.slippageBps)/10000;return price*(side==='BUY'?1+bps:1-bps);}
 function desiredAction({opportunityState,position}){
  const held=Number(position?.tokens)>0;
- if(!held&&['OPPORTUNITY','HOT'].includes(opportunityState))return 'ENTER';
+ if(!held&&opportunityState==='HOT')return 'ENTER';
  if(held&&['AVOID','OBSERVED'].includes(opportunityState))return 'EXIT';
  return 'PASS';
 }
