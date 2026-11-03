@@ -59,7 +59,7 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
         identityVerifiedAt:s.verifiedAt,originalKnowledgeAt:knowledgeAt}};
     // Edits produce revisions, never overwrite the original raw message.
     e.id=hash([event.id,call.provenance?.messageEditAt||null]);
-    await store.put('event',e.tokenAddress,e.id,e);if(e.category==='CALLER')accepted++;
+    await store.put('event',e.tokenAddress,e.id,e);if(e.category==='CALLER'){accepted++;const activityRow=activity.get(s.sourceId);if(activityRow){activityRow.acceptedCalls++;if(!activityRow.lastKnowledgeAt||knowledgeAt>activityRow.lastKnowledgeAt){activityRow.lastKnowledgeAt=knowledgeAt;activityRow.lastObservedAt=call.occurredAt;activityRow.lastIngestedAt=call.ingestedAt;activityRow.lastLatencyMs=Math.max(0,ingested-occurred);}}}
    }
   }
   await status('PARTIAL','Prospective collection only; source and market coverage may be incomplete.',{sources,sourceHealth:payload.health?.expansionHealth||null,medianIngestionLatencyMs:payload.health?.medianIngestionLatencyMs??null,acceptedFromRetainedFeed:accepted,retainedFeedCalls:payload.calls.length,sourceActivity:[...activity.values()],productiveSources:[...activity.values()].filter(x=>x.acceptedCalls>0).length,lastAcceptedCallAt:[...activity.values()].map(x=>x.lastKnowledgeAt).filter(Boolean).sort().at(-1)||null,feedCheckedAt:at});
