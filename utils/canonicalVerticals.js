@@ -168,7 +168,7 @@ function canonicalVerticalSqlInList() {
 async function ensureCanonicalVerticalConstraint(pool) {
   const allowedList = canonicalVerticalSqlInList();
   await pool.query(`
-    DO $
+    DO $canonical$
     DECLARE
       constraint_definition TEXT;
     BEGIN
@@ -188,14 +188,14 @@ async function ensureCanonicalVerticalConstraint(pool) {
         ALTER TABLE clients ADD CONSTRAINT clients_vertical_canonical_chk
           CHECK (vertical IS NULL OR vertical IN (${allowedList}));
       END IF;
-    END $;
+    END $canonical$;
   `);
 }
 
 async function ensureProspectsCanonicalVerticalConstraint(pool) {
   const allowedList = canonicalVerticalSqlInList();
   await pool.query(`
-    DO $
+    DO $canonical$
     DECLARE
       constraint_definition TEXT;
     BEGIN
@@ -215,7 +215,7 @@ async function ensureProspectsCanonicalVerticalConstraint(pool) {
         ALTER TABLE prospects ADD CONSTRAINT prospects_vertical_canonical_chk
           CHECK (vertical IS NULL OR vertical IN (${allowedList}));
       END IF;
-    END $;
+    END $canonical$;
   `);
 }
 
