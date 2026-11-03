@@ -30,6 +30,8 @@ function discoveryDiagnostic(discovery, { researchOnly = false } = {}) {
   const result = discovery?.result || discovery || {};
   const payload = result.payload || {};
   const receipts = discoveryProviderReceipts(payload);
+  if (researchOnly) return researchDiscoveryDiagnostic(discovery,
+    require('./scoutResearchProviderSummary').summarizeResearchProviderIssues(result, receipts));
   const reports = Array.isArray(receipts) ? receipts.slice(0, 20) : [];
   const reportErrors = row => [
     ...(Array.isArray(row?.errors) ? row.errors.slice(0, 100) : []),
@@ -39,10 +41,6 @@ function discoveryDiagnostic(discovery, { researchOnly = false } = {}) {
   const observedErrors = [...(Array.isArray(result.errors) ? result.errors.slice(0, 100) : []),
     ...reports.flatMap(reportErrors)];
   const errors = observedErrors.slice(0, 100);
-  const completeProjection = Array.isArray(receipts) && receipts.length <= 20 && observedErrors.length <= 100
-    && (!Array.isArray(result.errors) || result.errors.length <= 100)
-    && reports.every(row => (Array.isArray(row?.errors) ? row.errors.length : 0)
-      + (Array.isArray(row?.execution?.errors) ? row.execution.errors.length : 0) <= 100);
   const codes = [payload.blockerCode, ...errors.flatMap(row => [row?.code, row?.googleStatus])];
   let blocker = 'unknown';
   if (discovery?.kind === 'backoff') blocker = 'backoff';
@@ -54,34 +52,18 @@ function discoveryDiagnostic(discovery, { researchOnly = false } = {}) {
   else if (codes.includes('invalid_target')) blocker = 'invalid_target';
   else if (reports.some(report => report?.status === 'failed')) blocker = 'provider_failed';
   const outcome = choice(result.status || payload.outcome, ['completed', 'partial', 'blocked', 'failed', 'success']);
-  const researchCompleted = researchOnly === true && completeProjection && ['completed', 'success'].includes(outcome)
-    && reports.some(report => ['completed', 'success', 'empty'].includes(report?.status))
-    && result.blocked !== true && payload.blocked !== true && !payload.blockerCode;
-  const unavailableCodes = ['provider_unavailable', 'external_discovery_capability_unavailable', 'adapter_unavailable'];
-  const unavailable = error => unavailableCodes.includes(error?.code)
-    && (error.googleStatus == null || unavailableCodes.includes(error.googleStatus));
-  const failedProvidersUnavailable = reports.filter(report => report?.status === 'failed').every(report =>
-    reportErrors(report).length > 0 && reportErrors(report).every(unavailable));
-  const onlyUnavailableErrors = errors.length > 0 && errors.every(unavailable) && failedProvidersUnavailable;
-  const scopeControl = error => ['insufficient_coverage', 'invalid_target'].includes(error?.code)
-    && error.googleStatus == null;
-  if (researchOnly && blocker === 'provider_unavailable' && !onlyUnavailableErrors) {
-    // A bounded partial search is a coverage limit, not a failed provider call.
-    // Unknown/mixed provider errors still fail visibly; this never grants a healthy status.
-    const knownScopeLimit = failedProvidersUnavailable && errors.some(unavailable)
-      && errors.every(error => unavailable(error) || scopeControl(error));
-    blocker = knownScopeLimit && codes.includes('invalid_target') ? 'invalid_target'
-      : knownScopeLimit && codes.includes('insufficient_coverage') ? 'insufficient_coverage' : 'provider_failed';
-  }
-  // Optional adapters may be unavailable after a completed bounded discovery.
-  // Denials, quotas and actual/unknown provider failures stay visible as errors.
-  const nonBlocking = researchCompleted && blocker === 'provider_unavailable' && onlyUnavailableErrors;
   return {
     kind: choice(discovery?.kind, ['backoff', 'investigated', 'reused', 'skipped']),
     outcome,
-    blocker: nonBlocking || (researchCompleted && blocker === 'unknown') ? 'none' : blocker,
-    ...(researchOnly ? { nonBlockingProviderIssue: nonBlocking ? blocker : null, providerIssuesComplete: completeProjection } : {}),
+    blocker,
   };
+}
+function researchDiscoveryDiagnostic(discovery, analysis) {
+  const result = discovery?.result || discovery || {};
+  return { kind: choice(discovery?.kind, ['backoff', 'investigated', 'reused', 'skipped']),
+    outcome: choice(result.status || result.payload?.outcome, ['completed', 'partial', 'blocked', 'failed', 'success']),
+    ...analysis.diagnostic,
+    ...(discovery?.kind === 'backoff' ? { blocker: 'backoff' } : {}) };
 }
 // Defaults allocated before admission runs are not a measured zero.
 function queueMatchesDiagnostic(value) {
@@ -125,6 +107,8 @@ function admissionReceiptDiagnostic(tenantId, cycleId, admission, measured = fal
 function providerReceiptDiagnostic(tenantId, cycleId, discovery, options = {}) {
   const result = discovery?.result || discovery || {};
   const reports = discoveryProviderReceipts(result.payload);
+  const researchAnalysis = options.researchOnly
+    ? require('./scoutResearchProviderSummary').summarizeResearchProviderIssues(result, reports) : null;
   const statuses = ['completed', 'partial', 'blocked', 'failed', 'skipped', 'success', 'empty'];
   const providers = ['google_places', 'google_maps', 'county_records', 'linkedin', 'facebook', 'website', 'news', 'prospeo', 'existing_pf', 'apollo'];
   const codes = ['OK', 'ZERO_RESULTS', 'REQUEST_DENIED', 'OVER_QUERY_LIMIT', 'RESOURCE_EXHAUSTED', 'INVALID_REQUEST', 'UNKNOWN_ERROR', 'UNKNOWN_STATUS', 'insufficient_coverage', 'provider_error', 'provider_failed', 'provider_unavailable', 'external_discovery_capability_unavailable', 'adapter_unavailable', 'discovery_provider_failed', 'invalid_target', 'enrichment_unavailable', 'facility_research_identity_only', 'facility_research_request_scope_mismatch', 'google_places_status_REQUEST_DENIED', 'google_places_status_OVER_QUERY_LIMIT'];
@@ -141,7 +125,8 @@ function providerReceiptDiagnostic(tenantId, cycleId, discovery, options = {}) {
   };
   return {
     ...correlation(tenantId, cycleId), schemaVersion: 1,
-    discovery: discoveryDiagnostic(discovery, options),
+    discovery: researchAnalysis ? researchDiscoveryDiagnostic(discovery, researchAnalysis) : discoveryDiagnostic(discovery, options),
+    ...(researchAnalysis ? { providerIssueSummary: researchAnalysis.summary } : {}),
     reportsAvailable: Array.isArray(reports),
     reportsTruncated: Array.isArray(reports) && reports.length > 20,
     startedAt: time(result.startedAt), completedAt: time(result.completedAt),

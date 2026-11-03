@@ -172,6 +172,8 @@
       "utils/pulseforgeCashflowOffer.js",
       "services/maxOutboundControlLoop.js",
       "services/outboundControlDiagnostics.js",
+      "services/scoutResearchProviderSummary.js",
+      "test/scoutResearchProviderSummary.test.js",
       "services/scoutQueueAccounting.js",
       "services/scoutQueryCheckpoints.js",
       "services/scoutTenantDiscoveryMemory.js",
