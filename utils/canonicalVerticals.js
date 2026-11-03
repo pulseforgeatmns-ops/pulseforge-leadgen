@@ -179,7 +179,7 @@ async function ensureCanonicalVerticalConstraint(pool) {
         AND conrelid = 'clients'::regclass;
 
       IF constraint_definition IS NOT NULL
-         AND POSITION(''private_lending'' IN constraint_definition) = 0 THEN
+         AND POSITION('''private_lending''' IN constraint_definition) = 0 THEN
         ALTER TABLE clients DROP CONSTRAINT clients_vertical_canonical_chk;
         constraint_definition := NULL;
       END IF;
@@ -206,7 +206,7 @@ async function ensureProspectsCanonicalVerticalConstraint(pool) {
         AND conrelid = 'prospects'::regclass;
 
       IF constraint_definition IS NOT NULL
-         AND POSITION(''private_lending'' IN constraint_definition) = 0 THEN
+         AND POSITION('''private_lending''' IN constraint_definition) = 0 THEN
         ALTER TABLE prospects DROP CONSTRAINT prospects_vertical_canonical_chk;
         constraint_definition := NULL;
       END IF;
