@@ -13,7 +13,9 @@ function desiredAction({opportunityState,position,asOf,priceUsd}){
 function decide({decision,observation,account,position,asOf}){
  if(!decision||!observation||!Number.isFinite(Number(observation.priceUsd))||Number(observation.priceUsd)<=0)return {action:'PASS',reason:'CURRENT_MARKET_OBSERVATION_REQUIRED'};
  const age=Date.parse(asOf)-Date.parse(observation.knownAt),observedAge=Date.parse(asOf)-Date.parse(observation.observedAt);
- if(!Number.isFinite(age)||age<0||age>90000||!Number.isFinite(observedAge)||observedAge<0||observedAge>90000||Date.parse(observation.observedAt)>Date.parse(observation.knownAt)||Date.parse(decision.knowledgeAt)>Date.parse(asOf))return {action:'PASS',reason:'MARKET_OR_DECISION_NOT_FRESH'};
+ if(!Number.isFinite(age)||!Number.isFinite(observedAge)||!Number.isFinite(Date.parse(decision.knowledgeAt)))return {action:'PASS',reason:'INVALID_MARKET_OR_DECISION_TIMESTAMP'};
+ if(age<0||observedAge<0||Date.parse(observation.observedAt)>Date.parse(observation.knownAt)||Date.parse(decision.knowledgeAt)>Date.parse(asOf))return {action:'PASS',reason:'FUTURE_MARKET_OR_DECISION_TIMESTAMP'};
+ if(age>90000||observedAge>90000)return {action:'PASS',reason:'STALE_MARKET_OBSERVATION',marketAgeMs:Math.max(age,observedAge)};
  const action=desiredAction({opportunityState:decision.opportunityState,position,asOf,priceUsd:Number(observation.priceUsd)});
  const evidence={opportunityId:decision.id,opportunityState:decision.opportunityState,opportunityKnowledgeAt:decision.knowledgeAt,marketObservedAt:observation.observedAt,marketKnownAt:observation.knownAt,priceUsd:Number(observation.priceUsd),liquidityUsd:Number(observation.liquidityUsd)||null};
  if(action==='PASS')return {action,reason:'NO_PAPER_PORTFOLIO_TRANSITION',evidence};
