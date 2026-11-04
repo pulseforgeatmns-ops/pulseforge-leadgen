@@ -9,7 +9,10 @@ const account={cashUsd:10000};
 test('HOT independent fresh paper candidate enters',()=>assert.equal(decide({decision,observation,account,asOf:now}).action,'ENTER'));
 test('WATCH cannot enter',()=>assert.equal(decide({decision:{...decision,opportunityState:'WATCH'},observation,account,asOf:now}).action,'PASS'));
 test('insufficient clusters cannot enter',()=>assert.equal(decide({decision:{...decision,independentClusters:['a']},observation,account,asOf:now}).reason,'INSUFFICIENT_ENTRY_EVIDENCE'));
-test('stale market cannot enter',()=>assert.equal(decide({decision,observation:{...observation,observedAt:'2026-11-03T14:00:00.000Z'},account,asOf:now}).reason,'MARKET_OR_DECISION_NOT_FRESH'));
+test('stale market cannot enter',()=>assert.equal(decide({decision,observation:{...observation,observedAt:'2026-11-03T14:00:00.000Z'},account,asOf:now}).reason,'STALE_MARKET_OBSERVATION'));
 test('low liquidity cannot enter',()=>assert.equal(decide({decision,observation:{...observation,liquidityUsd:1000},account,asOf:now}).action,'PASS'));
 test('held paper position exits at time limit',()=>assert.equal(desiredAction({opportunityState:'HOT',position:{tokens:10,enteredAt:'2026-11-03T13:59:00.000Z',entryFillPrice:1},asOf:now,priceUsd:1}),'EXIT'));
 test('held paper position exits at stop loss',()=>assert.equal(desiredAction({opportunityState:'HOT',position:{tokens:10,enteredAt:now,entryFillPrice:1},asOf:now,priceUsd:.79}),'EXIT'));
+
+test('future market observation cannot enter',()=>assert.equal(decide({decision,observation:{...observation,knownAt:'2026-11-03T15:00:01.000Z'},account,asOf:now}).reason,'FUTURE_MARKET_OR_DECISION_TIMESTAMP'));
+test('missing market timestamp cannot enter',()=>assert.equal(decide({decision,observation:{...observation,knownAt:null},account,asOf:now}).reason,'INVALID_MARKET_OR_DECISION_TIMESTAMP'));
