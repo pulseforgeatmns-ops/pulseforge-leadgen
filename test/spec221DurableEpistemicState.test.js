@@ -82,6 +82,40 @@ describe('SPEC-221 — Durable Epistemic State for Business Understanding', () =
       );
     });
 
+    it('distinguishes an unclear deal attribute from operator uncertainty', () => {
+      const answer =
+        'We avoid undercapitalized borrowers, inactive operators, stale contacts, unclear ownership or collateral, and deals without a credible exit.';
+
+      assert.strictEqual(
+        classifyEpistemicState(answer),
+        EPISTEMIC_STATES.KNOWN
+      );
+
+      const sufficiency = assessAnswerSufficiency(
+        answer,
+        { section: 'avoidCustomers' },
+        { hasSpecificity: true }
+      );
+      assert.strictEqual(sufficiency.sufficient, true);
+
+      const disposition = classifyAnswerDisposition(
+        answer,
+        { section: 'avoidCustomers' },
+        { hasSpecificity: true }
+      );
+      assert.strictEqual(disposition.shouldAdvance, true);
+      assert.strictEqual(disposition.disposition, 'ANSWER_ACCEPTED');
+
+      assert.strictEqual(
+        classifyEpistemicState('It is unclear whether customers value speed.'),
+        EPISTEMIC_STATES.UNKNOWN
+      );
+      assert.strictEqual(
+        classifyEpistemicState('Unclear.'),
+        EPISTEMIC_STATES.UNKNOWN
+      );
+    });
+
     it('classifies HYPOTHESIS statements across natural language variations', () => {
       assert.strictEqual(
         classifyEpistemicState('We think service businesses will respond best.'),

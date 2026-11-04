@@ -77,7 +77,8 @@ function classifyEpistemicState(text, opts = {}) {
     /\b(?:don'?t|do not|didn'?t|did not)\s+(?:really\s+)?(?:know|understand|see|possess)\b/i.test(s) ||
     /\b(?:don'?t|do not|didn'?t|did not)\s+know\s+which\b/i.test(s) ||
     /\b(?:don'?t|do not|didn'?t|did not)\s+have\s+(?:enough\s+)?(?:evidence|data|information)\b/i.test(s) ||
-    /\b(?:not\s+sure|unsure|no\s+idea|tbd|unknown|idk|unclear|hard to say|hard to tell)\b/i.test(s) ||
+    /\b(?:not\s+sure|unsure|no\s+idea|tbd|unknown|idk|hard to say|hard to tell)\b/i.test(s) ||
+    /\bunclear(?:\s+(?:whether|if|how|what|which|who|when|where)\b|\s+to\s+(?:me|us)\b|$)/i.test(s) ||
     /\b(?:couldn'?t|could not|can'?t|cannot)\s+tell\s+you\b/i.test(s) ||
     /\b(?:still|currently)\s+(?:figuring|working|deciding|determining|looking into|exploring|trying to figure)\b/i.test(s) ||
     /\b(?:isn'?t|is not|there is no|there isn'?t|there'?s no)\s+(?:enough\s+)?(?:evidence|data|formal|defined|established|information|answer)\b/i.test(s) ||
