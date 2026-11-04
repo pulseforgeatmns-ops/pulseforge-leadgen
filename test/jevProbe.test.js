@@ -39,3 +39,15 @@ test('reject non-synthetic and sensitive prompts before provider invocation', ()
   assert.throws(() => validateCases([{ ...input[0], operator_message: 'send to someone@example.com' }]));
   assert.throws(() => validateCases([...input, input[0]]));
 });
+
+test('timed-out provider that ignores abort cannot stall evaluation', async () => {
+  const started = Date.now();
+  const report = await probeJev([{ ...input[0], label_status: 'human_reviewed' }], {
+    timeoutMs: 100,
+    provider: { evaluate: async () => new Promise(() => {}) },
+  });
+  assert.ok(Date.now() - started < 2000);
+  assert.deepEqual(report.failures, [{ id: 'status01', code: 'timeout' }]);
+  assert.equal(report.reviewed_prediction_count, 0);
+  assert.equal(report.activation_authorized, false);
+});
