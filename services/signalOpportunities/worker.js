@@ -67,10 +67,10 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
   return sources;
  }
  async function tick(){
-  if(running)return {skipped:true};running=true;
+  if(running)return {skipped:true};running=true;let failureStage='START';
   try{return await store.lock(async()=>{
    if(!feed){await status('UNKNOWN','CALLER_FEED_NOT_CONFIGURED');return;}
-   const sources=await ingest(await feed()),asOf=now().toISOString();
+   failureStage='FEED_INGEST';const sources=await ingest(await feed()),asOf=now().toISOString();
    const events=await store.list('event',null,{ascending:false,limit:20000});
    const calls=events.filter(e=>e.category==='CALLER'&&Date.parse(asOf)-Date.parse(e.knownAt)<=86400000);
    const recent=calls.filter(e=>Date.parse(asOf)-Date.parse(e.occurredAt)<=DEFINITION.windowMs);
@@ -93,7 +93,7 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
      for(const snapshot of snapshots)if(batch.includes(snapshot.tokenAddress))await store.put('observation',snapshot.tokenAddress,hash([snapshot.tokenAddress,snapshot.observedAt]),snapshot);
     }catch{}
    }
-   const old=await opportunities.list(asOf),tokens=[...new Set([...priority,...old.map(p=>p.tokenAddress)])].slice(0,200);
+   failureStage='OPPORTUNITY_EVALUATION';const old=await opportunities.list(asOf),tokens=[...new Set([...priority,...old.map(p=>p.tokenAddress)])].slice(0,200);
    const paperAudit={evaluated:0,entries:0,exits:0,blocked:{}};
     const held=new Set((await store.list('balance',null,{ascending:false,limit:500})).filter(b=>Number(b.tokens)>0&&Date.parse(asOf)-Date.parse(b.observedAt)<90000).map(b=>b.tokenAddress));
    for(const ca of tokens){
@@ -117,13 +117,13 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
    }
    if(transportTestId&&transports.every(t=>t.ready))await opportunities.enqueueTransportTest(transportTestId);
    await deliver(opportunities,transports);
-   const paperAccount=await paper.snapshot();await store.put('status','*','paper-account',{component:'paper-account',state:'OBSERVED',version:require('./paperAccount').VERSION,config:require('./paperAccount').CONFIG,account:paperAccount,audit:paperAudit,reason:'Prospective simulated execution only. No real orders or wallet access.',occurredAt:asOf,knownAt:asOf},{mutable:true});
+   failureStage='PAPER_STATUS';const paperAccount=await paper.snapshot();await store.put('status','*','paper-account',{component:'paper-account',state:'OBSERVED',version:require('./paperAccount').VERSION,config:require('./paperAccount').CONFIG,account:paperAccount,audit:paperAudit,reason:'Prospective simulated execution only. No real orders or wallet access.',occurredAt:asOf,knownAt:asOf},{mutable:true});
    const at=now().toISOString();await store.put('status','*','opportunity-capacity',{component:'opportunity-capacity',state:counts.size>maxTokens?'PARTIAL':'OBSERVED',
      discoveredTokens:counts.size,evaluatedTokens:tokens.length,marketEnrichmentLimit:maxTokens,deferredTokens:Math.max(0,counts.size-maxTokens),
      sourceCandidateCount:SOURCES.length,liveSources:sources.filter(s=>s.active).length,requiredLiveSources:10,
      coverage:'Bounded retained feed; no completeness claim',alerts:transports.map(t=>({channel:t.channel,configured:t.ready})),occurredAt:at,knownAt:at},{mutable:true});
    return {evaluated:tokens.length};
-  },'opportunities');}catch(error){const failureType=error instanceof Error?error.name:'UnknownError';await status('UNKNOWN','OPPORTUNITY_COLLECTION_UNAVAILABLE',{failureType});return {unavailable:true};}finally{running=false;}
+  },'opportunities');}catch(error){const failureType=error instanceof Error?error.name:'UnknownError';await status('UNKNOWN','OPPORTUNITY_COLLECTION_UNAVAILABLE',{failureType,failureStage});return {unavailable:true};}finally{running=false;}
  }
  return {tick,ingest};
 }
