@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pulseforge — Review-only prospect import</title>
+  <link rel="stylesheet" href="/shared/tokens.css">
+  <style>
+    body { margin: 0; background: var(--pf-bg, #050914); color: var(--pf-text, #edf2fb); font-family: var(--pf-font-body, sans-serif); }
+    main { max-width: 980px; margin: 0 auto; padding: 28px 18px 60px; }
+    h1 { margin-bottom: 6px; }
+    p { color: var(--pf-text-dim, #9eacc2); line-height: 1.5; }
+    textarea { width: 100%; min-height: 320px; box-sizing: border-box; padding: 14px; border-radius: 10px; border: 1px solid var(--pf-border-strong, #53627a); background: #08101f; color: inherit; font: 13px/1.5 monospace; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0; }
+    button, a { border: 1px solid var(--pf-border-strong, #53627a); border-radius: 9px; padding: 10px 14px; background: #101c31; color: inherit; cursor: pointer; text-decoration: none; }
+    button.primary { border-color: #d5ad55; color: #f5d98e; }
+    button:disabled { opacity: .45; cursor: default; }
+    .notice { border: 1px solid #a87818; background: rgba(168,120,24,.12); border-radius: 10px; padding: 12px; }
+    .status { min-height: 24px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 14px; }
+    th, td { text-align: left; padding: 8px; border-bottom: 1px solid #253149; vertical-align: top; }
+    th { color: #9eacc2; font-size: 12px; }
+    code { color: #f5d98e; }
+  </style>
+</head>
+<body>
+<main>
+  <a href="/dashboard#pf-tab=prospects">← Prospects</a>
+  <h1>Review-only prospect import</h1>
+  <p class="notice"><strong>Safety hold:</strong> imported contacts remain unassigned, hidden from setter queues, and blocked from automated calls, email, messaging, and campaign enrollment until a separate outreach review is completed.</p>
+  <p>Paste a JSON array of contacts. Preview is required before the import button is enabled.</p>
+  <textarea id="contacts" spellcheck="false" placeholder='[{"name":"Example Person","company":"Example LLC","reviewState":"qualify_first"}]'></textarea>
+  <div class="actions">
+    <button id="preview" type="button">Preview contacts</button>
+    <button id="commit" class="primary" type="button" disabled>Import as review-only</button>
+  </div>
+  <p id="status" class="status" role="status"></p>
+  <div id="results"></div>
+</main>
+<script>
+(() => {
+  const input = document.getElementById('contacts');
+  const previewButton = document.getElementById('preview');
+  const commitButton = document.getElementById('commit');
+  const status = document.getElementById('status');
+  const results = document.getElementById('results');
+  let previewedText = null;
+
+  function contacts() {
+    const parsed = JSON.parse(input.value);
+    if (!Array.isArray(parsed)) throw new Error('Paste a JSON array.');
+    return parsed;
+  }
+  async function request(url, body) {
+    const response = await fetch(url, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || data.error || 'Request failed.');
+    return data;
+  }
+  function table(rows) {
+    if (!rows.length) return '<p>No contacts.</p>';
+    return `<table><thead><tr><th>Name</th><th>Company</th><th>Market</th><th>Review state</th><th>Contact paths</th></tr></thead><tbody>${rows.map(row => `<tr><td>${escape(row.name)}</td><td>${escape(row.company)}</td><td>${escape(row.market || '')}</td><td>${escape(row.reviewState)}</td><td>${escape([row.email, row.phone, row.linkedinUrl, row.profileUrl].filter(Boolean).join(' · '))}</td></tr>`).join('')}</tbody></table>`;
+  }
+  function escape(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+  }
+  input.addEventListener('input', () => {
+    if (input.value !== previewedText) commitButton.disabled = true;
+  });
+  previewButton.addEventListener('click', async () => {
+    try {
+      previewButton.disabled = true;
+      status.textContent = 'Validating…';
+      const data = await request('/api/v1/review-only-prospects/preview', { contacts: contacts() });
+      previewedText = input.value;
+      commitButton.disabled = false;
+      results.innerHTML = table(data.contacts || []);
+      status.textContent = `${data.contacts.length} contacts ready. Outreach remains blocked.`;
+    } catch (error) {
+      commitButton.disabled = true;
+      status.textContent = error.message;
+    } finally {
+      previewButton.disabled = false;
+    }
+  });
+  commitButton.addEventListener('click', async () => {
+    if (input.value !== previewedText) return;
+    try {
+      commitButton.disabled = true;
+      status.textContent = 'Importing…';
+      const data = await request('/api/v1/review-only-prospects/import', {
+        contacts: contacts(),
+        confirmation: 'IMPORT_REVIEW_ONLY',
+      });
+      results.innerHTML = table((data.inserted || []).map(row => ({
+        name: [row.first_name, row.last_name].filter(Boolean).join(' '),
+        company: row.company_name,
+        market: '',
+        reviewState: row.review_state,
+        email: row.email,
+        phone: row.phone,
+      })));
+      status.textContent = `Imported ${data.inserted.length}; skipped ${data.skipped.length} existing. Outreach remains blocked.`;
+    } catch (error) {
+      commitButton.disabled = false;
+      status.textContent = error.message;
+    }
+  });
+})();
+</script>
+</body>
+</html>

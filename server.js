@@ -300,6 +300,7 @@ app.use('/', require('./routes/maxDecisionExecution'));
 app.use('/', require('./routes/maxAttention'));
 app.use('/', require('./routes/operatorContext'));
 app.use('/', require('./routes/missions'));
+app.use('/', require('./routes/reviewOnlyProspectImport'));
 app.use('/', require('./routes/approvals'));
 app.use('/', require('./routes/users'));
 app.use('/', require('./routes/pricingCalculator'));
