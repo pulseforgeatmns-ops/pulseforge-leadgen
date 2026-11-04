@@ -164,6 +164,7 @@ router.post(
             message: lock.message,
             reply: lock.message,
             answer: lock.message,
+            prose: lock.message,
           });
         }
       }
