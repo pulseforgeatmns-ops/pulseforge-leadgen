@@ -4380,7 +4380,9 @@
     const Cadence = window.MaxInteractionCadence;
     const structured = result.structured || {};
     const metadata = result.metadata || structured.metadata || {};
-    const rawProse = String(result.prose || '');
+    const rawProse = String(
+      result.prose || result.reply || result.answer || result.message || ''
+    );
     const prose = stripReasoningMarker(rawProse);
     const meta = presentation || {};
     const div = document.createElement('div');
