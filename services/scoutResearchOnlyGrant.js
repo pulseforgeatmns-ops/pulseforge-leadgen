@@ -87,7 +87,22 @@ function assertEnvironment(manifest, env = process.env) {
     || ![undefined, ''].includes(env.ANCHOR_EMAIL_RECOVERY_MANIFEST_ID)
     || ![undefined, ''].includes(env.ANCHOR_EMAIL_SCOPED_RESUME_ID)) fail('research_only_closed_environment_required');
   if (env.SCOUT_ANCHOR_DISCOVERY_MEMORY_ENABLED !== 'true') fail('research_only_discovery_memory_required');
-  if (manifest && env.RAILWAY_GIT_COMMIT_SHA !== manifest.expectedRevision) fail('research_only_revision_mismatch');
+  if (manifest && env.RAILWAY_GIT_COMMIT_SHA !== manifest.expectedRevision) {
+    // SPEC-SCOUT-P0-005: fail closed exactly as before, but name the grant and
+    // both revisions so the hold is actionable without log forensics.
+    const status = revisionStatus(manifest, env);
+    throw Object.assign(new Error('research_only_revision_mismatch'), { code: 'research_only_revision_mismatch',
+      reason: 'research_only_revision_mismatch', retryAllowed: false,
+      diagnostic: { grantId: hash(manifest), pinnedRevision: status.pinned, deployedRevision: status.deployed } });
+  }
+}
+
+// Read-only comparison of a grant's immutable pin with the running revision.
+// It never changes the pin: a mismatch can only be cleared by deploying the
+// pinned revision again or by an administrator approving a successor grant.
+function revisionStatus(manifest, env = process.env) {
+  const deployed = /^[a-f0-9]{40}$/.test(env.RAILWAY_GIT_COMMIT_SHA || '') ? env.RAILWAY_GIT_COMMIT_SHA : null;
+  return { pinned: manifest.expectedRevision, deployed, matches: deployed !== null && deployed === manifest.expectedRevision };
 }
 
 async function assertSchema(db) {
@@ -428,7 +443,7 @@ async function releaseResearchCycle(pool, input, actor, { env = process.env } = 
   });
 }
 
-async function inspectResearchOnlyGrant(pool, grantId) {
+async function inspectResearchOnlyGrant(pool, grantId, { env = process.env } = {}) {
   if (grantId !== undefined && !HEX64.test(grantId || '')) fail('research_only_grant_not_found');
   return transaction(pool, async db => {
     await assertSchema(db);
@@ -446,10 +461,18 @@ async function inspectResearchOnlyGrant(pool, grantId) {
     const releasedCycles = releases.at(-1)?.released_cycles || 0;
     const status = grant.revoked_at ? 'revoked' : +now >= +new Date(grant.expires_at) ? 'expired'
       : cycles.length >= grant.max_cycles ? 'exhausted' : cycles.length >= releasedCycles ? 'awaiting_cycle_release' : 'installed';
+    // SPEC-SCOUT-P0-005: an open grant pinned to another revision cannot run
+    // and cannot be released. Say so instead of reporting a releasable pause.
+    const revision = revisionStatus(manifest, env);
+    const mismatched = !revision.matches && ['installed', 'awaiting_cycle_release'].includes(status);
+    const hold = mismatched ? { reason: 'research_only_revision_mismatch', releasable: false,
+      action: 'No cycle can run or be released under this grant on the running revision. Either redeploy the pinned revision, '
+        + 'or revoke this grant and approve a successor pinned to the running revision. Nothing is repinned automatically.' } : null;
     return { ...summary(manifest), observedAt: now.toISOString(),
       // Keep the historical receipt status alias, while exposing the canonical
       // execution outcome separately from a pause awaiting another release.
-      status, executionStatus: status === 'exhausted' ? 'cycles_exhausted' : status,
+      status, executionStatus: mismatched ? 'revision_mismatch' : status === 'exhausted' ? 'cycles_exhausted' : status,
+      revision, hold,
       initiallyReleasedCycles: releases.length ? INITIAL_RELEASED_CYCLES : 0,
       releasedCycles, releasedCyclesRemaining: Math.max(0, releasedCycles - cycles.length), releases,
       cycleInProgress: cycles.some(row => row.state === 'claimed' && +new Date(row.lease_expires_at) > +now),
@@ -675,7 +698,7 @@ function googleMeter() {
 module.exports = {
   MAX_CYCLES, INITIAL_RELEASED_CYCLES, MAX_DAILY_USD_MICROS, PERMISSIONS, SPEND_CODE, RECOVERY_LOCK_KEY,
   schedulerEnabled, validateManifest, assertEnvironment, assertSchema,
-  previewResearchOnlyGrant, installResearchOnlyGrant, revokeResearchOnlyGrant, inspectResearchOnlyGrant,
+  previewResearchOnlyGrant, installResearchOnlyGrant, revokeResearchOnlyGrant, inspectResearchOnlyGrant, revisionStatus,
   previewResearchCycleRelease, releaseResearchCycle, validateCycleRelease,
   claimResearchCycle, finishResearchCycle, runInResearchScope, assertResearchOnlyScope,
   allowsResearchOnlyProvider, googleMeter,
