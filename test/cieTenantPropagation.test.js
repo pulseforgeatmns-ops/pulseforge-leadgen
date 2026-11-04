@@ -94,7 +94,11 @@ async function request(base, method, urlPath, body) {
   return { status: res.status, json, text };
 }
 
-function mountTenantAwareStartRoute(activeClientId, store) {
+function mountTenantAwareStartRoute(
+  activeClientId,
+  store,
+  { userClientId = null } = {}
+) {
   const app = express();
   app.use(express.json());
   app.use(
@@ -105,7 +109,7 @@ function mountTenantAwareStartRoute(activeClientId, store) {
     })
   );
   app.use((req, _res, next) => {
-    req.user = { id: 3, role: 'admin', client_id: null };
+    req.user = { id: 3, role: 'admin', client_id: userClientId };
     req.session.user = req.user;
     req.session.active_client_id = activeClientId;
     next();
@@ -177,6 +181,22 @@ describe('CIE tenant propagation — auth helpers', () => {
     const req = adminReq(ANCHOR_ID);
     assert.equal(resolveCieCanonicalClientId(req), ANCHOR_ID);
     assert.equal(resolveCieClientId(req, ANCHOR_ID), ANCHOR_ID);
+  });
+
+  it('selected admin workspace overrides a different bound user client', () => {
+    const req = adminReq(ANCHOR_ID);
+    req.user.client_id = PULSEFORGE_ID;
+    req.session.user = req.user;
+
+    assert.equal(resolveCieCanonicalClientId(req), ANCHOR_ID);
+    assert.equal(resolveCieClientId(req, ANCHOR_ID), ANCHOR_ID);
+    assert.doesNotThrow(() => assertCieClientAccess(req, ANCHOR_ID));
+    assert.throws(
+      () => assertCieClientAccess(req, PULSEFORGE_ID),
+      (err) =>
+        err instanceof ClientIntelligenceError &&
+        err.code === 'forbidden_client_scope'
+    );
   });
 
   it('route client_id=1 rejects when session active_client_id=10', () => {
@@ -285,9 +305,11 @@ describe('CIE tenant propagation — service lifecycle', () => {
 });
 
 describe('CIE tenant propagation — HTTP route resolution', () => {
-  it('admin active_client_id=10 start via matching route persists client_id=10', async () => {
+  it('selected workspace wins over bound admin client and persists the selected tenant', async () => {
     const store = createMemoryStore();
-    const app = mountTenantAwareStartRoute(ANCHOR_ID, store);
+    const app = mountTenantAwareStartRoute(ANCHOR_ID, store, {
+      userClientId: PULSEFORGE_ID,
+    });
     const { base, close } = await listen(app);
     try {
       const start = await request(

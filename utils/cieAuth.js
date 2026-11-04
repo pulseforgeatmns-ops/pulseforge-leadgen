@@ -46,19 +46,23 @@ function resolveCieCanonicalClientId(req) {
     return id;
   }
 
-  const user = userFrom(req);
-  if (user?.client_id != null && String(user.client_id).trim() !== '') {
-    const bound = parseInt(user.client_id, 10);
-    if (Number.isFinite(bound) && bound > 0) {
-      return bound;
-    }
-  }
-
+  // Internal operators can switch workspaces. The selected workspace stored in
+  // the session must win over any default/bound client_id on the user record.
+  // Otherwise the UI can show tenant B while CIE authorizes every resource as
+  // tenant A, producing a false cross-tenant ownership error on recovery.
   const sessionRaw = req?.session?.active_client_id;
   if (sessionRaw != null && String(sessionRaw).trim() !== '') {
     const sessionId = parseInt(sessionRaw, 10);
     if (Number.isFinite(sessionId) && sessionId > 0) {
       return sessionId;
+    }
+  }
+
+  const user = userFrom(req);
+  if (user?.client_id != null && String(user.client_id).trim() !== '') {
+    const bound = parseInt(user.client_id, 10);
+    if (Number.isFinite(bound) && bound > 0) {
+      return bound;
     }
   }
 
