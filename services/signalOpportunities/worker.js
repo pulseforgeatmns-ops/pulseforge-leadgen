@@ -123,7 +123,7 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
      sourceCandidateCount:SOURCES.length,liveSources:sources.filter(s=>s.active).length,requiredLiveSources:10,
      coverage:'Bounded retained feed; no completeness claim',alerts:transports.map(t=>({channel:t.channel,configured:t.ready})),occurredAt:at,knownAt:at},{mutable:true});
    return {evaluated:tokens.length};
-  },'opportunities');}catch{await status('UNKNOWN','OPPORTUNITY_COLLECTION_UNAVAILABLE');return {unavailable:true};}finally{running=false;}
+  },'opportunities');}catch(error){const failureType=error instanceof Error?error.name:'UnknownError';await status('UNKNOWN','OPPORTUNITY_COLLECTION_UNAVAILABLE',{failureType});return {unavailable:true};}finally{running=false;}
  }
  return {tick,ingest};
 }
