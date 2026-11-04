@@ -180,8 +180,11 @@
       $('releaseArea').hidden = true;
       return sync();
     }
-    const tone = { installed: 'good', awaiting_cycle_release: 'warn', expired: 'warn', exhausted: 'warn', revoked: 'bad' }[grant.status] || '';
-    const label = { installed: 'Active', awaiting_cycle_release: 'Awaiting cycle release', expired: 'Expired', exhausted: 'All cycles used', revoked: 'Revoked' }[grant.status] || grant.status;
+    // SPEC-SCOUT-P0-005: a revision hold outranks the releasable-pause label.
+    const held = grant.executionStatus === 'revision_mismatch';
+    const tone = held ? 'bad' : { installed: 'good', awaiting_cycle_release: 'warn', expired: 'warn', exhausted: 'warn', revoked: 'bad' }[grant.status] || '';
+    const label = held ? 'Held: revision mismatch'
+      : { installed: 'Active', awaiting_cycle_release: 'Awaiting cycle release', expired: 'Expired', exhausted: 'All cycles used', revoked: 'Revoked' }[grant.status] || grant.status;
     const max = Number(grant.maxCycles || 0), used = Number(grant.cyclesConsumed || 0);
     const fill = el('span');
     // CSSOM, not a style attribute: the page CSP forbids inline styles.
@@ -198,7 +201,7 @@
         : 'This older grant has no initial release. Revoke it and approve a new grant.',
     };
     area.replaceChildren(
-      el('p', null, el('span', { class: `badge ${tone}` }, label), notes[grant.status] || ''),
+      el('p', null, el('span', { class: `badge ${tone}` }, label), held ? grant.hold?.action || '' : notes[grant.status] || ''),
       el('p', { class: 'help' }, `Cycles used: ${used} of ${max}`), meter,
       facts([
         ['Grant ID', grant.grantId, true],
@@ -210,6 +213,7 @@
         ['Released cycles remaining', String(grant.releasedCyclesRemaining ?? 0)],
         ['Window', `${utc(grant.notBefore)} → ${utc(grant.expiresAt)}`],
         ['Revision pin', grant.expectedRevision, true],
+        ['Running revision', grant.revision?.deployed || 'unknown', true],
         ['Research mission', grant.researchMissionId, true],
         ['Installed', utc(grant.installedAt)],
         ['Checked', utc(grant.observedAt)],
@@ -219,7 +223,7 @@
       el('ul', { class: 'list' }, (grant.releases || []).map(r => el('li', null,
         `${r.previous_allowance} → ${r.released_cycles} · administrator ${r.administrator_id} · ${utc(r.created_at)} · ${r.approval_reference}`))));
     $('revokeArea').hidden = grant.status === 'revoked';
-    $('releaseArea').hidden = grant.status !== 'awaiting_cycle_release' || !grant.releasedCycles || grant.cycleInProgress;
+    $('releaseArea').hidden = held || grant.status !== 'awaiting_cycle_release' || !grant.releasedCycles || grant.cycleInProgress;
     sync();
   }
 

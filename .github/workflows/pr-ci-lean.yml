@@ -141,7 +141,7 @@ jobs:
         env:
           DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
           DATABASE_SSL: 'false'
-        run: node --test test/scoutResearchCycleRelease.test.js test/scoutResearchCycleReleasePostgres.test.js test/scoutResearchCycleReleaseHttpPostgres.test.js
+        run: node --test test/scoutResearchCycleRelease.test.js test/scoutResearchCycleReleasePostgres.test.js test/scoutResearchCycleReleaseHttpPostgres.test.js test/researchHoldLogThrottle.test.js test/scoutResearchContinuityPostgres.test.js
       - name: Scout mission scope and search-memory regressions (no providers)
         env:
           DATABASE_URL: postgresql://localhost:1/pulseforge_test_only

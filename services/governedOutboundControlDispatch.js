@@ -14,6 +14,10 @@ const {
 // does not take Emmett's lock.
 const cycles = new Map();
 const background = new Set();
+// SPEC-SCOUT-P0-005: one throttle per process, shared by every caller of the
+// dispatcher (HTTP cron and the in-process clock), so duplicate schedulers do
+// not double the diagnostic stream.
+let holdLog = require('./researchHoldLogThrottle').createResearchHoldLogThrottle();
 
 function defaultRunControl(options) {
   return require('./maxOutboundControlLoop').runMaxOutboundControlLoop(options);
@@ -53,9 +57,10 @@ async function whenControlDispatchSettled() {
   }
 }
 
-function resetControlDispatchForTests() {
+function resetControlDispatchForTests(throttleOptions) {
   cycles.clear();
   background.clear();
+  holdLog = require('./researchHoldLogThrottle').createResearchHoldLogThrottle(throttleOptions);
 }
 
 async function admitControlCycle(pool, tenantId) {
@@ -134,14 +139,20 @@ function launchControlCycle({
         tenantId,
         cycleId,
       });
-      logger.log?.('[max-outbound-control] cycle finished', JSON.stringify({
-        tenant: tenantId,
-        cycleId,
-        status: 'finished',
-        halted: result?.halted || null,
-        state: result?.plan?.state || null,
-        replenishment: result?.replenishment?.status || null,
-      }));
+      const decision = holdLog(tenantId, result);
+      if (decision.emit) {
+        const diagnostic = result?.researchOnly?.diagnostic || null;
+        logger.log?.('[max-outbound-control] cycle finished', JSON.stringify({
+          tenant: tenantId,
+          cycleId,
+          status: 'finished',
+          halted: result?.halted || null,
+          state: result?.plan?.state || null,
+          replenishment: result?.replenishment?.status || null,
+          ...(decision.kind === 'initial' || decision.kind === 'heartbeat'
+            ? { holdDiagnostic: decision.kind, suppressedRepeats: decision.suppressed, ...(diagnostic ? { diagnostic } : {}) } : {}),
+        }));
+      }
       return result;
     } catch (error) {
       logger.error?.('[max-outbound-control] tenant cycle failed', JSON.stringify({

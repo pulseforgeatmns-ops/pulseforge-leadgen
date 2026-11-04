@@ -34,11 +34,17 @@ async function runResearchOnlyCycleIfGranted({ pool, store, program, governed, c
   if (recovery.mode !== 'maintenance') return null;
   const open = await openGrant(pool);
   const control = require('./maxOutboundControlLoop');
-  const halt = async reason => {
-    await recordHold({ reason, detail: 'research_only' });
+  const halt = async (reason, diagnostic = null) => {
+    // SPEC-SCOUT-P0-005: a revision hold names its grant and both revisions,
+    // so a new grant or revision is a new durable hold, not a merged one.
+    const detail = diagnostic ? `research_only:grant=${diagnostic.grantId.slice(0, 12)}`
+      + `:pinned=${diagnostic.pinnedRevision.slice(0, 12)}:deployed=${(diagnostic.deployedRevision || 'unknown').slice(0, 12)}` : 'research_only';
+    await recordHold({ reason, detail });
     return { halted: reason, programId: program.id, recoveryMode: recovery.mode,
       researchOnly: { status: reason === 'research_only_awaiting_cycle_release' ? 'awaiting_cycle_release'
-        : reason === 'research_only_cycles_exhausted' ? 'cycles_exhausted' : 'blocked', reason },
+        : reason === 'research_only_cycles_exhausted' ? 'cycles_exhausted'
+          : reason === 'research_only_revision_mismatch' ? 'revision_mismatch' : 'blocked', reason,
+      ...(diagnostic ? { diagnostic } : {}) },
       prepareRequested: false, preparedAdded: 0, sent: 0 };
   };
   if (open === 'schema_missing') return halt('research_only_schema_unavailable');
@@ -52,7 +58,8 @@ async function runResearchOnlyCycleIfGranted({ pool, store, program, governed, c
   catch (error) {
     // A retried durable run reuses its id: the unique cycle id refuses a replay.
     return halt(error.code === '23505' ? 'research_only_cycle_already_claimed'
-      : /^research_only_[a-z_]+$/.test(error.code || '') ? error.code : 'research_only_claim_failed');
+      : /^research_only_[a-z_]+$/.test(error.code || '') ? error.code : 'research_only_claim_failed',
+    error.code === 'research_only_revision_mismatch' ? error.diagnostic || null : null);
   }
   if (!claim) return null;
 

@@ -1546,6 +1546,10 @@ async function recordReplenishmentHold(pool, { tenantId, clientId, programId, re
         SELECT 1 FROM agent_actions
          WHERE client_id = $4 AND action_type = 'scout_replenishment_blocked'
            AND status = 'pending' AND payload->>'reason' = $5
+           -- SPEC-SCOUT-P0-005: for a revision hold only, a changed grant or
+           -- revision is a new hold. Other reasons keep reason-only dedupe
+           -- (their detail can carry timestamps).
+           AND ($5 <> 'research_only_revision_mismatch' OR payload->>'detail' IS NOT DISTINCT FROM $6)
       )
     `, [
       'Anchor Scout replenishment is blocked',
@@ -1557,6 +1561,7 @@ async function recordReplenishmentHold(pool, { tenantId, clientId, programId, re
       JSON.stringify({ tenantId: String(tenantId), programId: programId || null, reason, detail }),
       clientId,
       reason,
+      detail,
     ]);
   } catch (error) {
     logger.warn?.('[max-outbound-control] replenishment hold record failed', error.message || error);
