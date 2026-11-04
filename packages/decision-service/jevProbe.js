@@ -27,14 +27,27 @@ async function probeJev(cases, { provider, timeoutMs = 5000 } = {}) {
   for (const entry of cases) {
     const controller = new AbortController();
     // A timeout guard cannot invoke or affect any production routing path.
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    let timer;
     let decision = null, failure = null;
     try {
-      const result = await provider.evaluate(snapshotInput({ question: entry.operator_message }), { signal: controller.signal });
+      // Bound elapsed time even if an injected provider ignores AbortSignal.
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          const error = new Error('provider timed out');
+          error.code = 'timeout';
+          reject(error);
+        }, timeoutMs);
+      });
+      const result = await Promise.race([
+        Promise.resolve().then(() => provider.evaluate(snapshotInput({ question: entry.operator_message }), { signal: controller.signal })),
+        timeout,
+      ]);
       decision = result.decision;
     } catch (error) {
-      failure = error?.name === 'AbortError' ? 'timeout' : ['http_error', 'invalid_response'].includes(error?.code) ? error.code : 'provider_error';
-    } finally { clearTimeout(timeout); }
+      failure = error?.code === 'timeout' || error?.name === 'AbortError' ? 'timeout'
+        : ['http_error', 'invalid_response'].includes(error?.code) ? error.code : 'provider_error';
+    } finally { clearTimeout(timer); }
     rows.push({
       id: entry.id, category: entry.category, expected_route: entry.expected_route,
       label_status: entry.label_status, provenance: 'synthetic',
