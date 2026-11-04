@@ -165,6 +165,14 @@ describe('SPEC-115 product surfaces — no SQL', () => {
     const dashboard = fs.readFileSync(path.join(__dirname, '../public/dashboard.html'), 'utf8');
     const login = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
     const auth = fs.readFileSync(path.join(__dirname, '../middleware/auth.js'), 'utf8');
+    const maxWorkspaceRoute = fs.readFileSync(
+      path.join(__dirname, '../routes/maxWorkspace.js'),
+      'utf8'
+    );
+    const commandDeck = fs.readFileSync(
+      path.join(__dirname, '../public/command-deck/command-deck.js'),
+      'utf8'
+    );
 
     assert.match(admin, /Create tenant/);
     assert.match(admin, /Temporary password/);
@@ -190,6 +198,11 @@ describe('SPEC-115 product surfaces — no SQL', () => {
     assert.match(dashboard, /Open Acquisition Intelligence/);
     assert.match(login, /password_change_required/);
     assert.match(auth, /password_change_required/);
+    assert.match(maxWorkspaceRoute, /prose:\\s*lock\\.message/);
+    assert.match(
+      commandDeck,
+      /result\\.prose \\|\\| result\\.reply \\|\\| result\\.answer \\|\\| result\\.message/
+    );
     assert.doesNotMatch(login, /href="\/signup"/);
   });
 
