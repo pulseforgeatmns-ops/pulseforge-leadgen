@@ -27,6 +27,7 @@ const {
 } = require('../packages/acquisition-mission/TransactionalPersistence');
 
 const MULTIPLE_ACQUISITION_RUNTIMES = 'MULTIPLE_ACQUISITION_RUNTIMES';
+const MISSION_PERSISTENCE_UNAVAILABLE = 'MISSION_PERSISTENCE_UNAVAILABLE';
 
 /** @type {object|null} */
 let currentRuntime = null;
@@ -230,9 +231,17 @@ function createAcquisitionMissionRuntime(opts = {}) {
         }
       } catch (err) {
         if (hydrateOpts.preinitializedSchema === true) throw err;
-        if (!/relation .* does not exist/i.test(String(err.message))) {
-          console.error('[amo] hydrate:', err.message);
-        }
+        // An absent schema means no durable missions exist yet — safe to continue.
+        if (/relation .* does not exist/i.test(String(err.message))) return state.engine;
+        // P0 — any other load failure means durable state is unknown. Continuing
+        // on the in-memory view would report stale/empty missions as truth and
+        // could create a duplicate of a mission that failed to load.
+        console.error('[amo] hydrate failed — durable mission state unavailable:', err.message);
+        throw runtimeError(
+          MISSION_PERSISTENCE_UNAVAILABLE,
+          'Acquisition mission state could not be loaded from durable storage.',
+          { tenantId: String(tenantId), cause: err }
+        );
       }
       return state.engine;
     },
@@ -309,11 +318,27 @@ function createAcquisitionMissionRuntime(opts = {}) {
 
     async create(input = {}, createOpts = {}) {
       await this.hydrate(input.tenantId || input.clientId, createOpts);
-      const mission = state.engine.create(input);
       const autonomous = input.autonomous === true || createOpts.autonomous === true;
+      const store = state.engine.store;
+      // P0 — creation is atomic: a mission that failed its durable write must not
+      // survive in the in-memory view, or a later turn would "resume" a mission
+      // that was never committed.
+      const before = !autonomous && store && typeof store.snapshot === 'function'
+        ? store.snapshot()
+        : null;
+      const mission = state.engine.create(input);
       // ADR-075 — defer durable writes until persistStageCommit (autonomous TME or explicit persist).
       if (!autonomous) {
-        await this.persistMissionState(mission.id, createOpts);
+        try {
+          await this.persistMissionState(mission.id, createOpts);
+        } catch (err) {
+          if (before && typeof store.restore === 'function') store.restore(before);
+          throw runtimeError(
+            MISSION_PERSISTENCE_UNAVAILABLE,
+            'Acquisition mission was not created: durable write failed.',
+            { tenantId: String(input.tenantId || input.clientId || ''), cause: err }
+          );
+        }
       }
       if (autonomous) {
         return this.runAutonomousProgression(mission.id, {
@@ -534,6 +559,7 @@ async function resetAmoRuntime(opts = {}) {
 
 module.exports = {
   MULTIPLE_ACQUISITION_RUNTIMES,
+  MISSION_PERSISTENCE_UNAVAILABLE,
   createAcquisitionMissionRuntime,
   bootAcquisitionMissionRuntime,
   getAcquisitionMissionRuntime,

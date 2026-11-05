@@ -41,6 +41,7 @@ const { assessMissionResumeCompatibility } = require('./MissionResumeCompatibili
 const { detectAcquisitionObjective, normalizeObjectiveText } = require('./AcquisitionObjectiveDetection');
 const { detectMissionExecutionLanguage } = require('./ExecutionLanguageDetection');
 const { PRIMARY_OBJECTIVES } = require('./PrimaryObjective');
+const MISSION_PERSISTENCE_UNAVAILABLE = 'MISSION_PERSISTENCE_UNAVAILABLE';
 const {
   MissionLifecycleIntent,
   resolveMissionLifecycleIntent,
@@ -395,8 +396,58 @@ async function maybeHandleAcquisitionOwnershipTurn(input = {}) {
     ? () => buildAcquisitionOwnershipTrace()
     : audit.buildOwnershipTrace.bind(audit);
 
-  if (!tenantId) return null;
+  if (!tenantId) {
+    // Legacy text-detected callers keep their null contract. A routed
+    // mission-creation decision must not silently fall back to reasoning.
+    if (!routedMissionCreation) return null;
+    return buildMissionCreationNotCompleted({
+      reason: 'acquisition_mission_tenant_required',
+      answer: 'No active client selected. Select a client workspace before creating a mission — nothing was created.',
+      blocker: 'tenant_required',
+    });
+  }
 
+  try {
+    return await handleAcquisitionOwnershipForTenant(input, {
+      question, lifecycleIntent, tenantId, audit, emitOwner, emitCiContribution, traceOwnership,
+    });
+  } catch (err) {
+    if (!err || err.code !== MISSION_PERSISTENCE_UNAVAILABLE) throw err;
+    return buildMissionCreationNotCompleted({
+      reason: 'acquisition_mission_persistence_unavailable',
+      answer: 'I could not create or resume the mission: durable mission storage is unavailable right now. Nothing was created or changed. Retry once storage is healthy.',
+      blocker: 'persistence_unavailable',
+    });
+  }
+}
+
+/**
+ * P0 — explicit, evidence-free "not completed" turn. Never reports a mission.
+ * @param {{ reason: string, answer: string, blocker: string }} input
+ */
+function buildMissionCreationNotCompleted({ reason, answer, blocker }) {
+  return {
+    reason,
+    prose: answer,
+    structured: buildStructuredResponse({
+      answer,
+      reasoning: [`Mission creation did not complete (${blocker}).`],
+      metadata: {
+        missionCreated: false,
+        missionResumed: false,
+        executionState: 'blocked',
+        blocker,
+      },
+    }),
+    mission: null,
+    created: false,
+    blocked: true,
+  };
+}
+
+async function handleAcquisitionOwnershipForTenant(input, ctx) {
+  const { question, lifecycleIntent, tenantId, emitOwner, emitCiContribution, traceOwnership } = ctx;
+  const audit = ctx.audit;
   const runtime = resolveAcquisitionMissionRuntime(input);
   const persistOpts = runtime.persistOpts(input);
 

@@ -14,6 +14,7 @@ const {
 } = require('..');
 const { createBuiltinRegistry } = require('../../capabilities');
 const { createWorkspaceEngine } = require('../../max/workspace');
+const { createTestAmoRuntime } = require('../../max/workspace/tests/amoTestRuntime');
 
 function testEngine(opts = {}) {
   return createMissionEngine({
@@ -247,6 +248,8 @@ describe('SPEC-039 WorkspaceEngine Active Mission precedence', () => {
   it('follow-up diagnose does not spawn campaign_review Mission', async () => {
     const missionEngine = testEngine();
     const workspace = createWorkspaceEngine({
+      // Explicitly isolated: in-memory AMO runtime (no implicit DB pool).
+      acquisitionMissionRuntime: createTestAmoRuntime(),
       missionEngine,
       missionsEnabled: true,
       resolverEnabled: true,
@@ -285,6 +288,8 @@ describe('SPEC-039 WorkspaceEngine Active Mission precedence', () => {
   it('resolver disabled falls back to create-on-intent', async () => {
     const missionEngine = testEngine({ resolverEnabled: false });
     const workspace = createWorkspaceEngine({
+      // Explicitly isolated: in-memory AMO runtime (no implicit DB pool).
+      acquisitionMissionRuntime: createTestAmoRuntime(),
       missionEngine,
       missionsEnabled: true,
       resolverEnabled: false,
@@ -307,6 +312,8 @@ describe('SPEC-039 WorkspaceEngine Active Mission precedence', () => {
   it('answers execution-negated follow-up conversationally instead of exposing resolver internals first', async () => {
     const missionEngine = testEngine();
     const workspace = createWorkspaceEngine({
+      // Explicitly isolated: in-memory AMO runtime (no implicit DB pool).
+      acquisitionMissionRuntime: createTestAmoRuntime(),
       missionEngine,
       missionsEnabled: true,
       resolverEnabled: true,
