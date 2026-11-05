@@ -141,6 +141,32 @@ describe('SPEC-200 — Explicit Mission Lifecycle Intent', () => {
       assert.equal(amoEngine.list('10').length, 2);
     });
 
+    it('accepts a structured mission-creation decision without re-parsing tenant-specific wording', async () => {
+      const question = 'Set up a review-only contact intake mission for an existing customer. No outreach, calls, content, or campaign activation.';
+      const turn = await maybeHandleAcquisitionOwnershipTurn({
+        question,
+        context: { tenantId: '10' },
+        objectiveResolution: { primaryObjective: 'mission_creation' },
+        acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
+        persist: false,
+      });
+      assert.ok(turn, 'resolved ownership must reach the AMO handler');
+      assert.equal(turn.created, true);
+      assert.equal(amoEngine.list('10').length, 1);
+    });
+
+    it('does not treat an unrelated resolved objective as a mission command', async () => {
+      const turn = await maybeHandleAcquisitionOwnershipTurn({
+        question: 'Tell me about the weather.',
+        context: { tenantId: '10' },
+        objectiveResolution: { primaryObjective: 'general_conversation' },
+        acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
+        persist: false,
+      });
+      assert.equal(turn, null);
+      assert.equal(amoEngine.list('10').length, 0);
+    });
+
     it('UNSPECIFIED still resumes similar acquisition mission (duplicate prevention)', async () => {
       const existing = amoEngine.create({
         tenantId: '10',
