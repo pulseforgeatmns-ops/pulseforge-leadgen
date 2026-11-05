@@ -56,6 +56,9 @@ const { startAnchorUnenrichedEnrichmentScheduler } = require('./scoutUnenrichedE
 const { ensureEmmettAutosendSchema } = require('./utils/emmettAutosend');
 const { ensurePlacesAttributionSchema } = require('./utils/placesCostAttribution');
 const { ensureAnchorPortalSchema } = require('./utils/anchorPortalSchema');
+const {
+  applyLaEndeavorsWorkspaceCorrection,
+} = require('./utils/laEndeavorsWorkspaceCorrection');
 const stripeWebhookRouter = require('./routes/stripeWebhook');
 const { ensureSignalSchema } = require('./packages/signal-v1');
 
@@ -1029,6 +1032,13 @@ async function ensureAgentActionsTable() {
 try {
   app.listen(PORT, '0.0.0.0', async () => {
     await ensureAgentActionsTable().catch(e => console.error('[startup] agent_actions table error:', e.message));
+    await applyLaEndeavorsWorkspaceCorrection(pool)
+      .then(result => {
+        if (result && result.changed) {
+          console.log('[startup] LA Endeavors Growth Workspace corrected for prospecting-only validation.');
+        }
+      })
+      .catch(e => console.error('[startup] LA Endeavors workspace correction error:', e.message));
     console.log(`\n🔷 Pulseforge Lead Engine Server`);
     console.log(`─────────────────────────────────`);
     console.log(`   http://localhost:${PORT}`);
