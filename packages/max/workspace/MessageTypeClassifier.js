@@ -16,6 +16,7 @@
 const askPathTrace = require('./audit/AskPathTrace');
 const { MESSAGE_TYPES, buildMessageClassification } = require('./MessageType');
 const { normalizeText } = require('./SessionState');
+const { stripNegatedDirectives } = require('./NegatedDirective');
 const {
   detectSessionDirectiveSignals,
   isSessionResetRequest,
@@ -329,7 +330,8 @@ function isCorrectionMessage(text) {
 function isMissionCreationMessage(text) {
   const q = normalizeText(text);
   if (!q) return false;
-  return matchesAny(q, MISSION_CREATION_RES);
+  // P0 — negated directives ("do not create a mission") are constraints.
+  return matchesAny(stripNegatedDirectives(q), MISSION_CREATION_RES);
 }
 
 function isMissionExecutionMessage(text, input = {}) {

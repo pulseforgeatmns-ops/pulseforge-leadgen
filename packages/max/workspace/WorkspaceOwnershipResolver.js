@@ -123,6 +123,54 @@ function claimsActiveDeskWorkflow(question) {
   return false;
 }
 
+/**
+ * P0 Max reliability — canonical precedence between continuing existing work
+ * and creating a new mission. Tenant-independent; reads only the utterance
+ * and the session's activeWorkContext.
+ *
+ * Precedence (highest first):
+ *   1. Explicit new objective ("start a new mission", "start over",
+ *      "use a different campaign") → new mission creation.
+ *   2. Active desk workflow cue (packet / call-script review, fillable table,
+ *      canary summary, focused work order) → continuation.
+ *   3. Session holds an activeWorkContext with entities and the utterance is a
+ *      follow-up / transform / table-update cue → continuation.
+ *   4. Otherwise the structured mission-creation decision stands.
+ *
+ * A classifier's mission_creation decision is a routing hint, never proof that
+ * the operator abandoned in-flight work.
+ *
+ * @param {string} question
+ * @param {object} [input]
+ * @returns {{ continuation: boolean, reason: string }}
+ */
+function resolveContinuationPrecedence(question, input = {}) {
+  const q = String(question || '').trim();
+  if (!q) return { continuation: false, reason: 'empty_question' };
+  let active;
+  try {
+    active = require('./ActiveWorkContext');
+  } catch (_) {
+    return { continuation: false, reason: 'active_work_context_unavailable' };
+  }
+  if (active.isExplicitNewMissionRequest(q) || active.isExplicitContextOverride(q)) {
+    return { continuation: false, reason: 'explicit_new_objective' };
+  }
+  if (claimsActiveDeskWorkflow(q)) {
+    return { continuation: true, reason: 'active_desk_workflow_precedence' };
+  }
+  const prior = active.getActiveWorkContext(input.session || null);
+  if (
+    active.activeContextHasEntities(prior) &&
+    (active.isActiveWorkFollowUpCue(q) ||
+      active.isActiveWorkTransformCue(q) ||
+      active.isFillableTableUpdateRequest(q, prior))
+  ) {
+    return { continuation: true, reason: 'active_work_context_precedence' };
+  }
+  return { continuation: false, reason: 'no_continuation_claim' };
+}
+
 const INTERROGATION_RE =
   /\b(?:what did|what has|show me what|explain what)\b.{0,30}\b(?:scout|paige|find|search|investigation)\b|\bwhy did (?:you|scout|paige)\b/i;
 
@@ -436,6 +484,21 @@ async function resolveWorkspaceOwner(input = {}) {
   if (objectiveResolution) {
     const routing = objectiveResolution.routingDecision;
     if (objectiveResolution.primaryObjective === PRIMARY_OBJECTIVES.MISSION_CREATION) {
+      // P0 — existing work continues unless the operator explicitly starts new work.
+      const precedence = resolveContinuationPrecedence(question, input);
+      if (precedence.continuation) {
+        askPathTrace.traceOwner(WORKSPACE_OWNERS.ACTIVE_MISSION, precedence.reason);
+        askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', precedence.reason);
+        return {
+          owner: WORKSPACE_OWNERS.ACTIVE_MISSION,
+          reason: precedence.reason,
+          confidence: 0.95,
+          specialist: null,
+          fallback: false,
+          objectiveResolution,
+          overriddenObjective: PRIMARY_OBJECTIVES.MISSION_CREATION,
+        };
+      }
       askPathTrace.traceOwner(WORKSPACE_OWNERS.MISSION_CREATION, routing.reason);
       askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', routing.reason);
       return {
@@ -957,6 +1020,7 @@ async function resolveWorkspaceOwner(input = {}) {
 
 module.exports = {
   WORKSPACE_OWNERS,
+  resolveContinuationPrecedence,
   MISSION_KEYWORD_RE,
   BLUEPRINT_TOPIC_RE,
   SCOUT_COMMAND_RE,

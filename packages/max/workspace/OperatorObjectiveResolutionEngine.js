@@ -44,6 +44,7 @@ const {
   isApprovalMessage,
 } = require('./MessageTypeClassifier');
 const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
+const { stripNegatedDirectives } = require('./NegatedDirective');
 
 const MISSION_CREATION_RES = [
   /\bcreate (?:a )?(?:new )?mission\b/i,
@@ -209,10 +210,13 @@ function extractSegmentCandidates(segment, segmentIndex, input = {}) {
     return candidates;
   }
 
+  // P0 — "Do not create a mission" is a constraint, not a creation request.
+  const affirmative = stripNegatedDirectives(q);
   if (
-    isMissionCreationMessage(q) ||
-    matchesAny(q, MISSION_CREATION_RES) ||
-    detectAcquisitionObjective(q)
+    affirmative &&
+    (isMissionCreationMessage(affirmative) ||
+      matchesAny(affirmative, MISSION_CREATION_RES) ||
+      detectAcquisitionObjective(affirmative))
   ) {
     candidates.push({
       objective: PRIMARY_OBJECTIVES.MISSION_CREATION,

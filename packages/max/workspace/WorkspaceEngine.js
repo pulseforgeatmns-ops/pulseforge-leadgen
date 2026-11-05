@@ -2089,7 +2089,7 @@ class WorkspaceEngine {
           text: proseOwnership,
           structured: structuredOwnership,
         });
-        return {
+        return traceAskReturn('mission_creation', {
           sessionId: session.id,
           prose: proseOwnership,
           structured: structuredOwnership,
@@ -2131,7 +2131,7 @@ class WorkspaceEngine {
           },
           ownershipTrace: acquisitionOwnershipTurn.ownershipTrace || null,
           workspaceOwnership,
-        };
+        }, { missionRuntime: MISSION_RUNTIMES.AMO, responseOwner: workspaceOwnership.owner });
       }
       fallbackToReasoning('mission_creation_unhandled');
     }
