@@ -78,38 +78,117 @@ catch boot errors; the HTTP surface responds "No review or action is confirmed."
 ## 4. Execution evidence
 
 `packages/acquisition-mission/ExecutionEvidence.js` classifies every
-`routeExecutionRequest` result. States (adapted to existing CER/TME contracts):
+`routeExecutionRequest` result against the **evidence requirement of its
+intent**. An internal commit and an external outcome are different things.
 
-`accepted · persisted · dispatched · running · awaiting_authorization ·
-completed_verified · already_executed · blocked · failed · outcome_unknown`
-
-| Handler result | State | Reportable as done |
+| Intent | Requirement | Level |
 |---|---|---|
-| `rolledBack: true` | `failed` | no |
-| `alreadyExecuted: true` | `already_executed` | yes (prior commit) |
-| `blocked` / `executionOutcome: 'blocked'` | `blocked` | no |
-| committed `transactionId` + `executionOutcome` absent or `completed` | `completed_verified` | yes |
-| anything else | `outcome_unknown` | no |
+| `EXECUTE_OUTBOUND` | every attempted send record has `status:'sent'` **and** a `providerMessageId` (provider acceptance). Delivery / opens / replies arrive later by webhook and are not implied. | `provider_accepted` |
+| `APPROVE_DISCOVERY`, `START_DISCOVERY`, `CONTINUE_INVESTIGATION` | a live (non-synthetic) Scout result committed with a discovery record | `provider_results_committed` |
+| everything else (plan, prioritization, Paige variants, Emmett capacity, Penny assessment…) | a committed TME transaction — the artifact is the outcome | `internal_commit` |
 
-The router returns `execution = { state, verified, reason, evidence, correlation }`
-and writes `executionState` to its audit row. `correlation` carries request,
-mission, tenant, operator, intent, specialist, runtime owner, execution mode,
-authorization scope (permissions), parent request and transaction ids.
+| Result | State | Reportable as done |
+|---|---|---|
+| rolled back by an authorization constraint | `blocked` (`authorization_constraint`) | no |
+| rolled back otherwise | `failed` | no |
+| `alreadyExecuted` | `already_executed` | yes |
+| `blocked` / outcome `blocked` / all sends blocked | `blocked` | no |
+| fixture data (`provenance: 'synthetic_fixture'`) | `synthetic_result` | no |
+| internal intent committed | `committed_internal` | yes |
+| external intent with its provider evidence | `completed_verified` | yes |
+| some sends accepted, others failed / unconfirmed | `partially_completed` | no |
+| every send rejected | `failed` | no |
+| committed, but provider evidence missing or pending | `outcome_unknown` | no |
+
+Lifecycle vocabulary (`accepted · persisted · dispatched · running ·
+awaiting_authorization`) names the pre-terminal phases of the existing CER/TME
+contracts; they are not stored as a new state machine.
+
+The router returns `execution = { state, verified, reason, evidence,
+verification, correlation }`, writes `executionState` to its audit row, and the
+REST execute route returns `execution`. `correlation` carries request, mission,
+tenant, operator, intent, specialist, runtime owner, execution mode,
+authorization scope, parent request and transaction ids.
 
 `AcquisitionMissionExecution.applyExecutionTruth` records the state on
-structured metadata. When a work specialist (Scout, Paige, Emmett, Penny, Rex,
-…) is not verified, Max says so: *"Scout was dispatched, but completion is not
-verified — no committed stage evidence was returned. Treat this as outcome
-unknown."* / *"Emmett did not complete this stage: it is blocked."*
+structured metadata and, for any non-verified work specialist, states the
+outcome plainly (blocked by constraint, blocked, synthetic, partial, rejected,
+or unknown).
 
-Authorization is unchanged and remains independent of conversational output:
-`assertPermissions` (`canExecute:false`, missing operator),
-`assertExecutionPolicy` (`read_only`, `execution_disabled`),
-`assertRuntimeOwnership`, tenant-scoped `engine.get` (`amo_tenant_mismatch`),
-SPEC-131 approval consumption in the commit, and handler `alreadyExecuted`
-idempotency. Routing confidence never grants authorization.
+**Synthetic data.** `fixtureScoutDiscoveryResult` substitutes fabricated
+prospects when live Scout yields nothing or fails. It is now labelled
+`provenance: 'synthetic_fixture'`, and fixture fallback is opt-in only
+(`allowFixtureFallback === true`) in `runAutonomousProgression`, the AMO runtime
+and `POST /api/v1/amo/missions/:id/execute`. Previously autonomous progression
+defaulted to `true`.
 
-## 5. Tests
+## 5. Durable authorization constraints
+
+`packages/acquisition-mission/AuthorizationConstraints.js` turns operator
+restrictions into `mission.authorizationConstraints = { reviewOnly, prohibited,
+sources, origin, establishedAt }`.
+
+| Operator language (in a negated clause unless noted) | Prohibited action classes |
+|---|---|
+| "review-only", "preparation-only", "read-only" (affirmative) | `provider_research`, `outreach_authorization`, `outreach`, `paid_media` |
+| outreach, email, mail, calls, texts, send, launch, execute, print, campaign activation | `outreach`, `outreach_authorization` |
+| approve | `outreach_authorization` |
+| content, copy, drafts, posts, variants | `content` |
+| spend, paid, ads, budget | `paid_media`, `provider_research` |
+| discovery, research, prospecting, Scout, Places, enrich | `provider_research` |
+
+Conditional clauses ("do not send without my approval", "don't launch until
+approved") are **not** prohibitions; the existing approval gates already
+enforce them.
+
+Stage → class: Scout → `provider_research`; Paige → `content`; Penny →
+`paid_media`; Emmett `execute` → `outreach`, other Emmett → `outreach_preparation`;
+Operator `execution_approval` → `outreach_authorization`; Max → `planning`.
+
+- **Creation:** `createMission` stores constraints from `input.authorizationConstraints`
+  and the objective; the Max AMO handoff extracts them from the operator's raw text.
+- **Monotonic:** `mergeAuthorizationConstraints` only adds. A resumed request
+  with new restrictions tightens and persists; nothing loosens them. Lifting a
+  restriction requires an explicit operator decision (not implemented — create
+  a new mission).
+- **Persistence / recovery:** part of the mission payload; `missionFromRow`
+  restores it on hydrate (verified on real PostgreSQL across a restart).
+- **Enforcement, independent of conversation:**
+  1. `routeExecutionRequest` refuses a prohibited intent before any handler
+     runs (`authorization_constraint_blocked`, audited `blocked_by_constraint`).
+     Retries and replays hit the same check.
+  2. `executeMissionStage` (TME) re-checks every specialist stage, so autonomous
+     progression and direct callers are covered; the stage rolls back.
+- **Surfaces:** chat renders an explicit blocked turn (approval not consumed);
+  REST returns 403.
+
+## 6. Routing fallback integrity
+
+`packages/max/workspace/RoutingFallbackIntegrity.js`. Every
+`fallbackToReasoning` is recorded as `{ claimedOwner, reason, executionExpected,
+signal }`. Execution is expected when an actionable owner (`active_mission`,
+`mission_creation`, `specialist_scout|paige|cal|direction`) declined and the
+operator's affirmative, non-interrogative text contains an execution command
+(imperative run/launch/send/approve, `isMissionExecutionCommand`, or a Scout
+"find … prospects" command). A `mission_execution` structured decision that no
+owner claimed (e.g. no mission in the workspace) is treated the same way.
+
+Fallback is deliberately not blocked at the branch: late handlers
+(active-work continuation, SPEC-022 mission routes) still own many turns. The
+guard sits at the two `composeResponse` sites that produce the generic answer:
+an expected-execution fallback becomes an explicit traced **"Not executed"**
+turn; informational fallbacks keep the reasoning answer with
+`metadata.routingFallbacks`.
+
+| Branch | Fallback reason | Execution expected? |
+|---|---|---|
+| active mission | `active_mission_unhandled` | if affirmative command |
+| mission creation | `mission_creation_unhandled` (now rare — explicit blocked turns) | if affirmative command |
+| Scout / Paige / Cal / direction | `specialist_unhandled` | if affirmative command |
+| blueprint, mission inspection, knowledge, objective persistence, reflection, identity, conversation layer | `*_unhandled` | no — read/conversational; trail recorded |
+| no owner + `mission_execution` decision | `no_mission_for_execution_request` | if affirmative command |
+
+## 7. Tests
 
 - `packages/max/workspace/tests/p0MaxReliabilityRecovery.test.js` (in `test:max`)
   — the regression matrix: new vs continuing work, ambiguous follow-up,
@@ -118,19 +197,32 @@ idempotency. Routing confidence never grants authorization.
   policy block, unsupported intent, cross-tenant routing, verified / unknown /
   failed / blocked evidence, idempotent retry, persistence fail-closed and
   recovery, atomic create rollback, tenant isolation, status read.
+- `packages/max/workspace/tests/p0MaxReliabilityGaps.test.js` (in `test:max`)
+  — constraint extraction / monotonic merge / router pre-dispatch block /
+  replay / TME bypass / chat refusal with no Scout call / autonomous
+  progression; provider-evidence states; synthetic Scout data; fixture
+  default off; fallback detection and the explicit "Not executed" turn.
 - `test/maxReliabilityRecoveryPostgres.test.js` (in
   `test:max:expectations:postgres`) — real disposable PostgreSQL: commit,
   restart recovery, no duplicate on re-issue, tenant isolation, lost database
-  fails closed with no phantom mission.
+  fails closed with no phantom mission; constraints survive restart, cannot
+  loosen, and tighten durably.
 
-## 6. Known limits
+## 8. Known limits
 
-- An operator prohibition such as "No outreach" is enforced by the existing
-  approval gates, not yet stored as a machine-checked mission constraint.
-- `ExecutionEvidence` classifies structurally; it does not re-read provider
-  receipts. A handler that fabricates a `transactionId` would be trusted.
-- Generic `fallbackToReasoning` remains for other owner branches
-  (specialist, inspection, blueprint…). Only the mission-creation seam was
-  converted to explicit blocked states.
+- Constraint extraction is lexical. Unusual phrasing ("hold off on any
+  emails") may not be recognized; it then falls back to the existing approval
+  gates, which still require explicit human approval.
+- There is no operator flow to lift a restriction; it is permanent for the
+  mission.
+- `ExecutionEvidence` trusts handler-supplied fields (`transactionId`,
+  `providerMessageId`); it does not re-query Brevo or Places. Provider
+  acceptance is not delivery — delivery, opens and replies arrive later by webhook.
+- Discovery is verified by provenance + a discovery record; result quality is
+  not judged.
+- `allowFixtureFallback: true` remains available to authenticated REST callers
+  and tests; such results are labelled synthetic but can still be committed.
+- Fallback detection is lexical; an execution request with no recognizable
+  command language falls back to the reasoning answer (trail recorded).
 - The broad `test:amo` package suite has 67 failures on `main` that pre-date
   this change and are not part of the CI gate.
