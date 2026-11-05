@@ -37,6 +37,7 @@ const CREATE_CLAUSE_RES = [
   /\b(?:begin|start)\s+(?:a\s+)?new\s+(?:acquisition\s+)?mission\b/i,
   /\bcreate\s+another\s+mission\b/i,
   /\bcreate\s+(?:a\s+)?(?:new\s+)?mission\b/i,
+  /\bcreate\s+(?:a\s+)?(?:(?:review[- ]only|prospect|import|contact|borrower|private[- ]capital)\s+){1,5}mission\b/i,
 ];
 
 const RESUME_CLAUSE_RES = [

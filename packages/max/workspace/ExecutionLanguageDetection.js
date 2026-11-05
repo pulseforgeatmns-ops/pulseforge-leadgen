@@ -29,7 +29,7 @@ function executionDomainModule() {
 }
 
 const MISSION_CREATE_COMMAND_RE =
-  /\b(create|begin|start)\s+(?:a\s+)?(?:brand[- ]?new\s+)?(?:new\s+)?(?:acquisition\s+)?mission\b/i;
+  /\b(create|begin|start)\s+(?:a\s+)?(?:brand[- ]?new\s+)?(?:new\s+)?(?:acquisition\s+)?(?:(?:review[- ]only|prospect|import|contact|borrower|private[- ]capital)\s+){0,5}mission\b/i;
 
 const MISSION_OPERATE_COMMAND_RE =
   /\boperate\b.{0,60}\b(?:anchor|client|account|campaign|mission|pulseforge|through)\b/i;
