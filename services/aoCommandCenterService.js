@@ -1,6 +1,7 @@
 'use strict';
 
 const pool = require('../db');
+const { aoWorkingEligibilitySql } = require('../utils/aoWorkingEligibility');
 const { ensureAoFieldSchema } = require('../utils/aoFieldSchema');
 const { ensureAoProspectRoutingSchema } = require('../utils/aoProspectRoutingSchema');
 const {
@@ -131,8 +132,7 @@ async function fetchAssignedProspects({ clientId, aoUserId, db = pool }) {
     ) sess ON true
     WHERE p.client_id = $1
       AND p.assigned_ao_id = $2
-      AND COALESCE(p.do_not_contact, false) = false
-      AND COALESCE(p.prospect_motion, '') NOT IN ('SUPPRESS', 'EMAIL_LED')
+      AND ${aoWorkingEligibilitySql('p')}
   `, [clientId, aoUserId]);
 
   return rows.map(row => ({

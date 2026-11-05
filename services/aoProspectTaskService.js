@@ -1,6 +1,7 @@
 'use strict';
 
 const pool = require('../db');
+const { aoWorkingEligibilitySql } = require('../utils/aoWorkingEligibility');
 const {
   routeProspect,
   buildWeeklyListMix,
@@ -345,11 +346,8 @@ async function listOpenTasks({ clientId, aoOwnerId = null, db = pool }) {
     JOIN users u ON u.id = t.assigned_ao_id
     JOIN prospects p ON p.id = t.prospect_id AND p.client_id = t.client_id
     WHERE t.client_id = $1
-      AND ${anchorOutreachReviewSql('p')}
+      AND ${aoWorkingEligibilitySql('p')}
       AND t.status IN ('open', 'in_progress')
-      AND COALESCE(p.disposition_status, 'active') = 'active'
-      AND COALESCE(p.do_not_contact, false) = false
-      AND p.prospect_motion IS DISTINCT FROM 'SUPPRESS'
       ${ownerClause}
     ORDER BY
       CASE t.priority WHEN 'warm' THEN 0 WHEN 'high' THEN 1 ELSE 2 END,

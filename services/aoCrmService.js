@@ -1,6 +1,7 @@
 'use strict';
 
 const pool = require('../db');
+const { aoWorkingEligibilitySql } = require('../utils/aoWorkingEligibility');
 const { activityReadModel, fetchSpreadsheetCrmEvidence } = require('../utils/spreadsheetCrmEvidence');
 const { ensureAoCrmSchema } = require('../utils/aoCrmSchema');
 const { ensureAoFieldSchema } = require('../utils/aoFieldSchema');
@@ -159,8 +160,7 @@ async function fetchAccountRows({ clientId, aoUserId = null, db = pool }) {
     WHERE p.client_id = $1
       ${ownerClause}
       AND p.assigned_ao_id IS NOT NULL
-      AND COALESCE(p.do_not_contact, false) = false
-      AND COALESCE(p.prospect_motion, '') NOT IN ('SUPPRESS', 'EMAIL_LED')
+      AND ${aoWorkingEligibilitySql('p')}
     ORDER BY p.updated_at DESC
   `, params);
 
