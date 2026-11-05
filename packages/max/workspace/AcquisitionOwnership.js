@@ -40,6 +40,7 @@ const {
 const { assessMissionResumeCompatibility } = require('./MissionResumeCompatibility');
 const { detectAcquisitionObjective, normalizeObjectiveText } = require('./AcquisitionObjectiveDetection');
 const { detectMissionExecutionLanguage } = require('./ExecutionLanguageDetection');
+const { PRIMARY_OBJECTIVES } = require('./PrimaryObjective');
 const {
   MissionLifecycleIntent,
   resolveMissionLifecycleIntent,
@@ -373,7 +374,13 @@ async function maybeHandleAcquisitionOwnershipTurn(input = {}) {
     (executionLanguage.reason === 'mission_create_command' ||
       executionLanguage.reason === 'mission_operate_command');
   const isExplicitLifecycle = isExplicitLifecycleIntent(lifecycleIntent);
-  if (!isAcquisition && !isExplicitMissionCommand && !isExplicitLifecycle) return null;
+  // The objective resolver is the authoritative routing decision. Once Max
+  // assigns mission creation, the handler must not reclassify the same text.
+  // Direct callers without a resolved objective retain legacy detection.
+  const routedMissionCreation =
+    input.objectiveResolution &&
+    input.objectiveResolution.primaryObjective === PRIMARY_OBJECTIVES.MISSION_CREATION;
+  if (!routedMissionCreation && !isAcquisition && !isExplicitMissionCommand && !isExplicitLifecycle) return null;
 
   const tenantId = resolveTenantId(input);
   const audit = input.audit || createAcquisitionOwnershipAudit();
