@@ -33,6 +33,12 @@ const READ_ONLY_MODES = new Set(['read_only', 'execution_disabled']);
 const _routerAudit = [];
 
 const { classifyExecutionEvidence } = require('./ExecutionEvidence');
+const {
+  AUTHORIZATION_CONSTRAINT_BLOCKED,
+  assertActionAuthorized,
+  evaluateAction,
+  intentActionClass,
+} = require('./AuthorizationConstraints');
 
 function cerError(code, message, extras = {}) {
   const err = amoError(code, message);
@@ -451,6 +457,29 @@ async function routeExecutionRequest(request, context = {}) {
   const specialist = specialistForIntent(request.intent);
   const action = actionFromIntent(request.intent);
   const replay = context.replay === true;
+
+  // P0 — durable mission restrictions are checked before any handler runs.
+  // TME re-checks per stage, so autonomous chains are covered as well.
+  const actionClass = intentActionClass(request.intent);
+  const verdict = evaluateAction(mission, actionClass);
+  if (!verdict.allowed) {
+    recordRouterAudit({
+      requestId: request.id,
+      source: request.source,
+      intent: request.intent,
+      missionId: request.missionId,
+      operatorId: request.operatorId,
+      runtimeOwner,
+      specialist,
+      action,
+      outcome: 'blocked_by_constraint',
+      executionState: 'blocked',
+      errorCode: AUTHORIZATION_CONSTRAINT_BLOCKED,
+      replay,
+      request,
+    });
+    assertActionAuthorized(mission, actionClass, { requestId: request.id, intent: request.intent });
+  }
 
   const dispatched = await dispatch(request, context, mission, handlers, runtimeOwner);
   const chained = await maybeChainAutonomousDiscovery(request, context, dispatched, handlers);

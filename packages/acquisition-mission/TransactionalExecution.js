@@ -1,5 +1,7 @@
 'use strict';
 
+const { assertActionAuthorized, stageActionClass } = require('./AuthorizationConstraints');
+
 /**
  * SPEC-131 — Transactional Mission Execution (TME).
  *
@@ -235,6 +237,9 @@ async function executeMissionStage(input = {}) {
     if (!prior) {
       throw planningError('tme_mission_missing', 'Mission does not exist.');
     }
+    // P0 — durable operator restrictions bind every stage, whichever surface
+    // (chat, approval button, REST, autonomous progression) reached it.
+    assertActionAuthorized(prior, stageActionClass(specialist, stage), { specialist, stage });
     runtimeState = isStructuredMissionApproved(prior)
       ? RUNTIME_STATES.APPROVED
       : RUNTIME_STATES.PLANNED;

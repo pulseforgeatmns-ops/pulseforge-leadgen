@@ -41,6 +41,7 @@ const { assessMissionResumeCompatibility } = require('./MissionResumeCompatibili
 const { detectAcquisitionObjective, normalizeObjectiveText } = require('./AcquisitionObjectiveDetection');
 const { detectMissionExecutionLanguage } = require('./ExecutionLanguageDetection');
 const { PRIMARY_OBJECTIVES } = require('./PrimaryObjective');
+const amo = require('../../acquisition-mission');
 const MISSION_PERSISTENCE_UNAVAILABLE = 'MISSION_PERSISTENCE_UNAVAILABLE';
 const {
   MissionLifecycleIntent,
@@ -426,19 +427,21 @@ async function maybeHandleAcquisitionOwnershipTurn(input = {}) {
  * @param {{ reason: string, answer: string, blocker: string }} input
  */
 function buildMissionCreationNotCompleted({ reason, answer, blocker }) {
+  const structured = buildStructuredResponse({
+    answer,
+    reasoning: [`Mission creation did not complete (${blocker}).`],
+  });
+  // Assigned after construction: buildStructuredResponse whitelists metadata keys.
+  Object.assign(structured.metadata, {
+    missionCreated: false,
+    missionResumed: false,
+    executionState: 'blocked',
+    blocker,
+  });
   return {
     reason,
     prose: answer,
-    structured: buildStructuredResponse({
-      answer,
-      reasoning: [`Mission creation did not complete (${blocker}).`],
-      metadata: {
-        missionCreated: false,
-        missionResumed: false,
-        executionState: 'blocked',
-        blocker,
-      },
-    }),
+    structured,
     mission: null,
     created: false,
     blocked: true,
@@ -459,6 +462,11 @@ async function handleAcquisitionOwnershipForTenant(input, ctx) {
   let created = false;
 
   const targetSegment = inferTargetSegment(question);
+  // Restrictions come from the operator's own words, before normalization.
+  const operatorConstraints = amo.extractAuthorizationConstraints(
+    String(input.question || ''),
+    { source: 'operator_instruction' }
+  );
   const resolvedObjective =
     input.resolvedObjective ||
     (input.session && input.session.context && input.session.context.resolvedObjective) ||
@@ -526,10 +534,23 @@ async function handleAcquisitionOwnershipForTenant(input, ctx) {
           blueprint: ciEvidence.strategicEvidence || null,
         },
         executionContract: input.executionContract || null,
+        authorizationConstraints: operatorConstraints,
       },
       persistOpts
     );
     created = true;
+  } else if (amo.tightens(mission.authorizationConstraints, operatorConstraints)) {
+    // P0 — a resumed request may add restrictions; it can never remove them.
+    const tightened = {
+      ...mission,
+      authorizationConstraints: amo.mergeAuthorizationConstraints(
+        mission.authorizationConstraints,
+        operatorConstraints
+      ),
+    };
+    runtime.engine().store.putMission(tightened);
+    await runtime.persistMissionState(mission.id, persistOpts);
+    mission = runtime.engine().store.getMission(mission.id) || tightened;
   }
 
   const engine = runtime.engine();

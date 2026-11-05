@@ -66,7 +66,8 @@ function fail(res, err, fallbackCode, fallbackStatus = 500) {
   const status =
     code === 'amo_mission_not_found' ? 404
       : code === 'MISSION_STATE_INCONSISTENT' ? 409
-      : code === 'cer_permission_denied' || code === 'cer_policy_blocked' ? 403
+      : code === 'cer_permission_denied' || code === 'cer_policy_blocked'
+        || code === 'authorization_constraint_blocked' ? 403
       : code === 'MISSION_RUNTIME_BOUNDARY_VIOLATION' ? 409
       : code === 'amo_tenant_required'
         || code === 'amo_tenant_mismatch'
@@ -330,7 +331,7 @@ router.post('/api/v1/amo/missions/:id/execute', requireActor, async (req, res) =
       executionMode: req.body?.executionMode,
       payload: req.body?.payload,
       metadata: req.body?.metadata,
-      allowFixtureFallback: req.body?.allowFixtureFallback,
+      allowFixtureFallback: req.body?.allowFixtureFallback === true,
     }, { pool });
     noStore(res);
     return res.json({
@@ -340,6 +341,7 @@ router.post('/api/v1/amo/missions/:id/execute', requireActor, async (req, res) =
       specialist: routed.specialist,
       runtimeOwner: routed.runtimeOwner,
       snapshot: routed.snapshot,
+      execution: routed.execution || null,
       executionResult: routed.executionResult && {
         alreadyExecuted: routed.executionResult.alreadyExecuted === true,
         rolledBack: routed.executionResult.rolledBack === true,

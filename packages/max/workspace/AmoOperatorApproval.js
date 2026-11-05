@@ -631,6 +631,9 @@ function fixtureScoutDiscoveryResult() {
     },
   ];
   return {
+    // P0 — fixture data is never a live provider result; evidence
+    // classification reports it as synthetic_result, never completed.
+    provenance: 'synthetic_fixture',
     status: 'completed',
     confidence: 0.72,
     summary:
@@ -641,6 +644,7 @@ function fixtureScoutDiscoveryResult() {
       opportunities,
       qualifiedCount: 2,
       confidence: 0.72,
+      provenance: 'synthetic_fixture',
     },
   };
 }

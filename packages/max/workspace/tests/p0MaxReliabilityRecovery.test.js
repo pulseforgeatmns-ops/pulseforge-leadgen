@@ -283,7 +283,7 @@ describe('P0 Max reliability recovery — authorization and review-only safety',
 describe('P0 Max reliability recovery — execution evidence', () => {
   beforeEach(() => clearExecutionRouterAudit());
 
-  it('committed TME result is completed_verified with correlation identifiers', async () => {
+  it('committed internal work is committed_internal (not provider-verified) with correlation identifiers', async () => {
     const engine = amo.createAcquisitionMissionEngine();
     const mission = seedMission(engine);
     const routed = await routeExecutionRequest(
@@ -292,14 +292,16 @@ describe('P0 Max reliability recovery — execution evidence', () => {
         [EXECUTION_INTENTS.GENERATE_VARIANTS]: () => ({ transactionId: 'tx_1', executionOutcome: 'completed', missionVersion: 3 }),
       })
     );
-    assert.equal(routed.execution.state, STATES.COMPLETED_VERIFIED);
+    assert.equal(routed.execution.state, STATES.COMMITTED_INTERNAL);
     assert.equal(routed.execution.verified, true);
+    assert.equal(routed.execution.verification.external, false);
+    assert.equal(routed.execution.verification.levelAchieved, 'internal_commit');
     assert.equal(routed.execution.evidence.transactionId, 'tx_1');
     assert.equal(routed.execution.correlation.missionId, mission.id);
     assert.equal(routed.execution.correlation.tenantId, '10');
     assert.equal(routed.execution.correlation.specialist, 'paige');
     assert.equal(routed.execution.correlation.requestId, routed.request.id);
-    assert.equal(routed.audit.executionState, STATES.COMPLETED_VERIFIED);
+    assert.equal(routed.audit.executionState, STATES.COMMITTED_INTERNAL);
   });
 
   it('specialist returning no completion evidence stays unverified and Max says so', async () => {
@@ -352,7 +354,11 @@ describe('P0 Max reliability recovery — execution evidence', () => {
       [EXECUTION_INTENTS.EXECUTE_OUTBOUND]: () => {
         if (sends > 0) return { alreadyExecuted: true, transactionId: 'tx_send' };
         sends += 1;
-        return { transactionId: 'tx_send', executionOutcome: 'completed' };
+        return {
+          transactionId: 'tx_send',
+          executionOutcome: 'completed',
+          records: [{ id: 'r1', status: 'sent', providerMessageId: '<msg-1@brevo>' }],
+        };
       },
     };
     const first = await routeExecutionRequest(request(mission, EXECUTION_INTENTS.EXECUTE_OUTBOUND), routerContext(engine, handlers));

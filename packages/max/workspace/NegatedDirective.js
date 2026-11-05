@@ -29,6 +29,26 @@ function stripNegatedDirectives(text) {
 }
 
 /**
+ * The negated clauses themselves ("do not launch, execute, or mail anything").
+ * Used to derive durable authorization constraints from operator prohibitions.
+ * @param {string} text
+ * @returns {string[]}
+ */
+function extractNegatedClauses(text) {
+  const raw = String(text || '');
+  const re = new RegExp(NEGATED_CLAUSE_RE.source, 'gi');
+  const out = [];
+  let match = re.exec(raw);
+  while (match) {
+    const clause = match[0].replace(/\s+/g, ' ').trim();
+    if (clause) out.push(clause);
+    if (match[0].length === 0) re.lastIndex += 1;
+    match = re.exec(raw);
+  }
+  return out;
+}
+
+/**
  * True when `pattern` matches only inside negated clauses of `text`.
  * @param {string} text
  * @param {RegExp} pattern
@@ -39,4 +59,4 @@ function matchesOnlyWhenNegated(text, pattern) {
   return re.test(raw) && !re.test(stripNegatedDirectives(raw));
 }
 
-module.exports = { stripNegatedDirectives, matchesOnlyWhenNegated };
+module.exports = { stripNegatedDirectives, extractNegatedClauses, matchesOnlyWhenNegated };

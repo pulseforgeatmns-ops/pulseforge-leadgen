@@ -89,3 +89,42 @@ test('committed missions survive restart, stay tenant-isolated, and a lost datab
   assert.equal(blocked.mission, null);
   assert.equal(blockedRuntime.engine().list('10').length, 0);
 });
+
+test('authorization constraints are durable across restart and only ever tighten', async (t) => {
+  const pg = await startDisposablePostgres('max-p0-constraints-');
+  const pool = new Pool({ connectionString: pg.connectionString });
+  pool.on('error', () => {});
+  t.after(async () => {
+    await pool.end().catch(() => {});
+    await pg.stop();
+  });
+
+  const REVIEW_ONLY =
+    'Set up a review-only contact intake mission. Objective: Acquire one recurring commercial cleaning client ' +
+    'from a property management company in the Greater Manchester area. No outreach.';
+  const created = await createMission(runtimeFor(pool), '10', REVIEW_ONLY);
+  assert.equal(created.created, true);
+  assert.equal(created.mission.authorizationConstraints.reviewOnly, true);
+
+  // Restart: constraints come back from the durable payload.
+  const restarted = runtimeFor(pool);
+  const [recovered] = await restarted.list('10');
+  assert.equal(recovered.id, created.mission.id);
+  assert.equal(recovered.authorizationConstraints.reviewOnly, true);
+  assert.ok(recovered.authorizationConstraints.prohibited.includes('outreach'));
+
+  // Re-issuing the objective without restrictions resumes and cannot loosen.
+  const resumed = await createMission(restarted, '10', OBJECTIVE_ONLY);
+  assert.equal(resumed.mission.id, created.mission.id);
+  const [afterResume] = await runtimeFor(pool).list('10');
+  assert.deepEqual(afterResume.authorizationConstraints.prohibited, recovered.authorizationConstraints.prohibited);
+
+  // A resumed request that adds a restriction tightens durably.
+  const tightened = await createMission(runtimeFor(pool), '10', `${OBJECTIVE_ONLY} No content.`);
+  assert.equal(tightened.mission.id, created.mission.id);
+  const { rows } = await pool.query('SELECT payload FROM acquisition_missions WHERE id = $1', [created.mission.id]);
+  const durable = rows[0].payload.authorizationConstraints;
+  assert.equal(durable.reviewOnly, true);
+  assert.ok(durable.prohibited.includes('content'), 'added restriction committed');
+  assert.ok(durable.prohibited.includes('outreach'), 'existing restriction kept');
+});

@@ -1411,14 +1411,20 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
   const intent = intentFromAction(action);
 
   if (intent) {
-    const routed = await submitChatExecutionRequest(input, {
-      intent,
-      mission,
-      tenantId,
-      engine,
-      question,
-      audit,
-    });
+    let routed;
+    try {
+      routed = await submitChatExecutionRequest(input, {
+        intent,
+        mission,
+        tenantId,
+        engine,
+        question,
+        audit,
+      });
+    } catch (err) {
+      if (!amo.isAuthorizationConstraintError(err)) throw err;
+      return buildConstraintBlockedTurn({ err, mission, action, intent });
+    }
     executionRequest = routed.request;
     executionResult = routed.executionResult;
     execution = routed.execution || null;
@@ -1488,6 +1494,53 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
 }
 
 /**
+ * P0 — a durable mission restriction refused the request before dispatch.
+ */
+function buildConstraintBlockedTurn({ err, mission, action, intent }) {
+  const constraint = err.code === amo.AUTHORIZATION_CONSTRAINT_BLOCKED ? err : err.cause;
+  const actionClass = (constraint && constraint.actionClass) || amo.intentActionClass(intent);
+  const constraints = (constraint && constraint.authorizationConstraints) || mission.authorizationConstraints || null;
+  const answer = [
+    `Not executed: this mission's authorization forbids ${String(actionClass).replace(/_/g, ' ')}` +
+      (constraints && constraints.reviewOnly ? ' (review-only mission).' : '.'),
+    'No specialist was dispatched and no external action was taken.',
+    'The restriction was set by the operator and can only be lifted by an explicit operator decision.',
+  ].join(' ');
+  const structured = buildStructuredResponse({
+    answer,
+    reasoning: [`Mission ${mission.id} prohibits: ${((constraints && constraints.prohibited) || []).join(', ') || actionClass}.`],
+    relatedEntities: [{ id: mission.id, type: 'acquisition_mission', name: mission.title || mission.id }],
+  });
+  // Assigned after construction: buildStructuredResponse whitelists metadata keys.
+  Object.assign(structured.metadata, {
+    acquisitionMission: true,
+    acquisitionMissionExecution: true,
+    missionExecutionAction: action,
+    executionState: 'blocked',
+    executionVerified: false,
+    blocker: amo.AUTHORIZATION_CONSTRAINT_BLOCKED,
+    actionClass,
+    authorizationConstraints: constraints,
+  });
+  return {
+    reason: 'acquisition_mission_authorization_constraint_blocked',
+    structured,
+    prose: answer,
+    mission,
+    action,
+    executionResult: null,
+    executionRequest: null,
+    execution: {
+      state: 'blocked',
+      verified: false,
+      reason: 'authorization_constraint',
+      evidence: { actionClass, prohibited: (constraints && constraints.prohibited) || [] },
+      correlation: { missionId: mission.id, intent, specialist: amo.specialistForIntent(intent) },
+    },
+  };
+}
+
+/**
  * P0 — bind the operator-facing response to router execution evidence.
  * Records the classified state on the structured metadata and, when a work
  * specialist was dispatched without verified completion, says so plainly
@@ -1509,16 +1562,29 @@ function applyExecutionTruth(response, execution) {
     response.structured = structured;
     return response;
   }
-  if (execution.state === amo.EXECUTION_EVIDENCE_STATES.FAILED) {
+  if (execution.state === amo.EXECUTION_EVIDENCE_STATES.FAILED && execution.reason === 'transaction_rolled_back') {
     // Rollback presentation already states the stage could not execute.
     response.structured = structured;
     return response;
   }
   const specialist = execution.correlation && execution.correlation.specialist;
   const name = specialist ? specialist.charAt(0).toUpperCase() + specialist.slice(1) : 'The specialist';
-  const notice = execution.state === amo.EXECUTION_EVIDENCE_STATES.BLOCKED
-    ? `${name} did not complete this stage: it is blocked. No external action was taken.`
-    : `${name} was dispatched, but completion is not verified — no committed stage evidence was returned. Treat this as outcome unknown.`;
+  const STATES = amo.EXECUTION_EVIDENCE_STATES;
+  const counts = execution.evidence && execution.evidence.counts;
+  let notice;
+  if (execution.state === STATES.BLOCKED && execution.reason === 'authorization_constraint') {
+    notice = `${name} did not run: this mission's authorization forbids ${String(execution.evidence && execution.evidence.actionClass || 'this action').replace(/_/g, ' ')}. No external action was taken.`;
+  } else if (execution.state === STATES.BLOCKED) {
+    notice = `${name} did not complete this stage: it is blocked. No external action was taken.`;
+  } else if (execution.state === STATES.SYNTHETIC_RESULT) {
+    notice = `${name} returned synthetic fixture data, not live provider results. Nothing here is verified and none of it may be used for outreach.`;
+  } else if (execution.state === STATES.PARTIALLY_COMPLETED && counts) {
+    notice = `${name} partially completed: the provider accepted ${counts.accepted} of ${counts.total - counts.blocked}; ${counts.failed} failed and ${counts.pending + counts.unconfirmed} are unconfirmed.`;
+  } else if (execution.state === STATES.FAILED) {
+    notice = `${name} did not complete this stage: the provider rejected every attempt.`;
+  } else {
+    notice = `${name} was dispatched, but completion is not verified — the provider evidence this action requires was not returned. Treat this as outcome unknown.`;
+  }
   const prose = [notice, response.prose].filter(Boolean).join('\n\n');
   structured.answer = [notice, structured.answer].filter(Boolean).join('\n\n');
   response.structured = structured;

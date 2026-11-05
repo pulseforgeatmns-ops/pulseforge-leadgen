@@ -1,4 +1,5 @@
 'use strict';
+const { assessFallback, buildFallbackBlockedResponse } = require('./RoutingFallbackIntegrity');
 
 const { normalizeContext } = require('./ContextEnvelope');
 const { buildOpeningState } = require('./OpeningStateBuilder');
@@ -1354,7 +1355,16 @@ class WorkspaceEngine {
       }
     }
 
+    // P0 — every fallback is recorded; the first one where the operator plainly
+    // asked for execution turns a would-be generic answer into "not executed".
+    const routingFallbacks = [];
     const fallbackToReasoning = (reason) => {
+      const assessed = assessFallback({
+        claimedOwner: workspaceOwnership.owner,
+        reason,
+        question,
+      });
+      routingFallbacks.push(assessed);
       askPathTrace.traceFallback(
         workspaceOwnership.owner,
         WORKSPACE_OWNERS.REASONING,
@@ -2886,6 +2896,20 @@ class WorkspaceEngine {
       fallbackToReasoning('owner_pipeline_miss');
     } else {
       askPathTrace.traceBranch('owner_pipeline:reasoning');
+      // P0 — the structured decision asked for mission execution but no owner
+      // could claim it (e.g. no mission in this workspace). Record it so a
+      // generic answer cannot stand in for the expected execution.
+      if (
+        !routingFallbacks.length &&
+        objectiveResolution &&
+        objectiveResolution.primaryObjective === PRIMARY_OBJECTIVES.MISSION_EXECUTION
+      ) {
+        routingFallbacks.push(assessFallback({
+          claimedOwner: WORKSPACE_OWNERS.ACTIVE_MISSION,
+          reason: 'no_mission_for_execution_request',
+          question,
+        }));
+      }
     }
 
     const cognitive = classifyCognitiveMode(question, {
@@ -3507,11 +3531,11 @@ class WorkspaceEngine {
             incomingContext: rawContext,
             mission: null,
           });
-          structured = composeResponse({
+          structured = guardGenericAnswer(composeResponse({
             context: domainAttach.context,
             question,
             session,
-          });
+          }), routingFallbacks);
           route = resolution.route || toRouteDecision(domainDecision);
         }
       } else {
@@ -3562,11 +3586,11 @@ class WorkspaceEngine {
       } else {
         route = toRouteDecision(domainDecision);
       }
-      structured = composeResponse({
+      structured = guardGenericAnswer(composeResponse({
         context: domainAttach.context,
         question,
         session,
-      });
+      }), routingFallbacks);
     }
 
     const presented = await this._presentation.present(structured);
@@ -3714,6 +3738,34 @@ function preserveActiveWorkFocusOverStaleRecommendation(input) {
  * Conversation / policy fallback / mission create.
  * @returns {Promise<{ structured: object, reason: string }|null>}
  */
+/**
+ * P0 — a generic composed answer must not stand in for expected execution.
+ * Records the routing fallback trail on every generic answer.
+ * @param {object} structured
+ * @param {object[]} routingFallbacks
+ */
+function guardGenericAnswer(structured, routingFallbacks) {
+  if (!routingFallbacks || !routingFallbacks.length) return structured;
+  const expected = routingFallbacks.find((f) => f.executionExpected);
+  if (expected) {
+    askPathTrace.traceBranch('routing_fallback_blocked', {
+      claimedOwner: expected.claimedOwner,
+      reason: expected.reason,
+      signal: expected.signal,
+    });
+    const blocked = buildFallbackBlockedResponse(expected);
+    blocked.metadata = { ...(blocked.metadata || {}), routingFallbacks: routingFallbacks.map((f) => ({ ...f })) };
+    return blocked;
+  }
+  if (structured && typeof structured === 'object') {
+    structured.metadata = {
+      ...(structured.metadata || {}),
+      routingFallbacks: routingFallbacks.map((f) => ({ ...f })),
+    };
+  }
+  return structured;
+}
+
 async function maybeHandleActiveWorkContinuation(input) {
   askPathTrace.traceEnter('maybeHandleActiveWorkContinuation');
   const question = String(input.question || '');

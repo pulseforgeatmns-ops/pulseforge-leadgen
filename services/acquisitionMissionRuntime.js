@@ -358,7 +358,7 @@ function createAcquisitionMissionRuntime(opts = {}) {
         missionId,
         tenantId: opts.tenantId,
         operatorId: opts.operatorId,
-        allowFixtureFallback: opts.allowFixtureFallback !== false,
+        allowFixtureFallback: opts.allowFixtureFallback === true,
         maxSteps: opts.maxSteps,
         deps: opts.deps,
         ...opts,
