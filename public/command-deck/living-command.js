@@ -121,7 +121,11 @@
       ? `${number(pipeline.new24h)} new in the last 24 hours. ${number(pipeline.warm)} warm and ${number(pipeline.booked)} booked in your open pipeline.`
       : 'Prospect activity is temporarily unavailable. Open the pipeline or ask me to investigate.',
     pipeline ? `${number(pipeline.total)} open` : 'Unavailable',
-    'Review the current workspace’s prospect pipeline. Explain new prospects in the last 24 hours, warm opportunities, booked calls, and the next follow-up.', 'violet'));
+    'Review the current workspace’s prospect pipeline. Explain new prospects in the last 24 hours, warm opportunities, booked calls, and the next follow-up.', 'violet', () => {
+      // Reuse the existing tenant-scoped Pipeline destination exposed by the shell.
+      // Do not substitute a Max conversation for the actual prospect working list.
+      window.location.assign('/dashboard#pf-tab=pipeline');
+    }));
 
     const ads = brief.googleAds;
     const campaigns = Array.isArray(ads?.campaigns) ? ads.campaigns : [];
