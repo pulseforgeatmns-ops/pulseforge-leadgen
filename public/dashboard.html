@@ -3807,8 +3807,86 @@ body.viewer-role .prospect-pipeline-card { cursor: pointer; }
     </div>
   </div>
 
+<style>
+/* Refined Pipeline: the Command Deck's visual language, applied to action. */
+#pipelineArea.pf-refined { background:radial-gradient(ellipse 55% 34% at 68% 0%,rgba(177,126,48,.13),transparent),#060c19; color:#e9edf7; min-height:100vh; padding:clamp(18px,3vw,44px); }
+#pipelineArea.pf-refined .area-header { display:none; }
+.pf-workspace {display:none}
+#pipelineArea.pf-refined .pf-workspace {display:block}
+#pipelineArea.pf-refined > .pipeline-section,#pipelineArea.pf-refined > .setter-ops-hero,#pipelineArea.pf-refined > .pipeline-pending-only {display:none!important}
+.pf-workspace-head {display:flex;align-items:end;justify-content:space-between;gap:20px;padding:20px 0 28px;border-bottom:1px solid rgba(213,170,91,.19)}
+.pf-workspace-eyebrow {font-size:11px;letter-spacing:.23em;color:#d9ae65;text-transform:uppercase}
+.pf-workspace-head h2 {font-family:Georgia,serif;font-weight:400;font-size:clamp(31px,3.3vw,52px);line-height:1.1;margin:10px 0 8px;color:#f6f2ec}
+.pf-workspace-head p {color:#a7b0c5;font-size:14px;margin:0}
+.pf-workspace-actions {display:flex;gap:10px;flex-wrap:wrap}
+.pf-ws-btn {background:rgba(255,255,255,.035);border:1px solid rgba(209,183,135,.3);color:#e9e4dc;padding:11px 17px;border-radius:24px;cursor:pointer;font:inherit;font-size:13px}
+.pf-ws-btn.primary {background:linear-gradient(120deg,#e7c778,#b88a3f);color:#141018;border:0;font-weight:700}
+.pf-workspace-body {display:grid;grid-template-columns:minmax(0,1fr) 285px;gap:20px;padding-top:25px}
+.pf-ws-metrics {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:20px}
+.pf-ws-metric {border:1px solid rgba(174,187,211,.17);background:linear-gradient(145deg,rgba(25,35,55,.78),rgba(10,17,32,.75));border-radius:13px;padding:18px;min-height:100px}
+.pf-ws-metric:first-child {border-color:#b8914e;box-shadow:inset 0 0 30px rgba(178,132,54,.1)}
+.pf-ws-metric strong {display:block;font:normal 32px Georgia,serif;color:#fff2d9}
+.pf-ws-metric span {font-size:12px;color:#aeb6c8}
+.pf-ws-toolbar {display:flex;gap:10px;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap}
+.pf-ws-toggle {display:flex;border:1px solid rgba(181,194,219,.16);border-radius:10px;overflow:hidden}
+.pf-ws-toggle button {padding:10px 15px;color:#9faabe;background:transparent;border:0;cursor:pointer}
+.pf-ws-toggle button.active {color:#ffe5a9;background:rgba(198,150,72,.17)}
+.pf-ws-search {min-width:190px;max-width:320px;flex:1;padding:11px 14px;border:1px solid rgba(181,194,219,.18);border-radius:10px;background:#10192b;color:#fff;font:inherit}
+.pf-ws-board {display:grid;grid-template-columns:repeat(5,minmax(155px,1fr));gap:10px;overflow-x:auto;padding-bottom:12px}
+.pf-ws-stage {border:1px solid rgba(163,179,208,.18);border-radius:14px;background:rgba(15,23,40,.68);min-height:300px;overflow:hidden}
+.pf-ws-stage:first-child {border-color:rgba(201,155,77,.65)}
+.pf-ws-stage-head {display:flex;justify-content:space-between;gap:6px;padding:15px 13px;border-bottom:1px solid rgba(174,187,211,.16);font-size:13px;font-weight:600}
+.pf-ws-stage-head span:last-child {color:#c7a36a}
+.pf-ws-stage-body {padding:9px;display:grid;align-content:start;gap:9px}
+.pf-ws-prospect {text-align:left;background:linear-gradient(130deg,#182238,#0d1629);border:1px solid rgba(180,191,216,.17);border-left:2px solid #ba914e;color:#e9edf7;border-radius:10px;padding:12px;cursor:pointer;width:100%;font:inherit}
+.pf-ws-prospect:hover,.pf-ws-prospect:focus-visible {border-color:#d6ae64;outline:none;box-shadow:0 0 0 2px rgba(198,155,82,.12)}
+.pf-ws-prospect strong {display:block;font-size:13px;margin-bottom:5px}
+.pf-ws-prospect small {display:block;color:#a4afc4;font-size:11px;line-height:1.5}
+.pf-ws-empty {padding:30px 8px;color:#78849a;text-align:center;font-size:12px}
+.pf-ws-board.list {display:block}
+.pf-ws-board.list .pf-ws-stage {min-height:0;margin-bottom:10px}
+.pf-ws-board.list .pf-ws-stage-body {grid-template-columns:repeat(auto-fill,minmax(200px,1fr))}
+.pf-ws-intel {border:1px solid rgba(203,160,84,.48);background:radial-gradient(ellipse at 50% 100%,rgba(183,125,47,.11),transparent 65%),#0d1526;border-radius:16px;padding:22px;align-self:start;position:sticky;top:20px}
+.pf-ws-intel h3 {font:normal 25px Georgia,serif;color:#f6efe4;margin:0 0 25px}
+.pf-ws-intel h3 span {color:#e9bc6d;margin-right:9px}
+.pf-ws-intel h4 {font:normal 17px Georgia,serif;margin:20px 0 10px;color:#f2eadf}
+.pf-ws-intel p,.pf-ws-intel li {font-size:13px;line-height:1.7;color:#b5bed0}
+.pf-ws-intel ul {padding-left:19px}
+.pf-ws-intel hr {border:0;border-top:1px solid rgba(186,197,217,.15);margin:22px 0}
+.pf-ws-legacy {margin-top:24px;color:#9da8be;font-size:12px}
+.pf-ws-legacy button {color:#cba96c;background:transparent;border:0;text-decoration:underline;cursor:pointer}
+#pipelineArea.pf-refined.pf-legacy-open > .pipeline-section {display:block!important}
+#pipelineArea.pf-refined.pf-legacy-open > .setter-ops-hero {display:grid!important}
+@media(max-width:1000px){.pf-workspace-body{grid-template-columns:1fr}.pf-ws-intel{position:static}.pf-ws-board{grid-template-columns:repeat(5,minmax(185px,1fr))}}
+@media(max-width:620px){.pf-workspace-head{align-items:start;flex-direction:column}.pf-ws-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}#pipelineArea.pf-refined{padding:16px}}
+</style>
   <!-- PIPELINE AREA -->
   <div class="pipeline-area" id="pipelineArea">
+
+    <section class="pf-workspace" aria-label="Opportunity workspace">
+      <div class="pf-workspace-head">
+        <div><div class="pf-workspace-eyebrow" id="pfWorkspaceTenant">Pulseforge · Opportunity intelligence</div>
+          <h2>Opportunity Pipeline</h2><p>From discovery to meaningful outcomes</p></div>
+        <div class="pf-workspace-actions"><button class="pf-ws-btn" id="pfWorkspaceRefresh" type="button">↻ Refresh</button><button class="pf-ws-btn primary" id="pfWorkspaceAdd" type="button">+ Add opportunity</button></div>
+      </div>
+      <div class="pf-workspace-body">
+        <main>
+          <div class="pf-ws-metrics" id="pfWorkspaceMetrics" aria-live="polite"></div>
+          <div class="pf-ws-toolbar">
+            <div class="pf-ws-toggle" role="group" aria-label="Pipeline view"><button type="button" id="pfWsBoard" class="active" aria-pressed="true">Board</button><button type="button" id="pfWsList" aria-pressed="false">List</button></div>
+            <input class="pf-ws-search" id="pfWsSearch" type="search" placeholder="Search opportunities…" aria-label="Search opportunities">
+          </div>
+          <div class="pf-ws-board" id="pfWorkspaceBoard" aria-live="polite"><div class="pf-ws-empty">Loading opportunities…</div></div>
+        </main>
+        <aside class="pf-ws-intel" aria-label="Max intelligence">
+          <h3><span>✦</span> Max Intelligence</h3>
+          <h4>Pipeline overview</h4><p id="pfWsSummary">Reviewing current opportunity data…</p><hr>
+          <h4>Suggested next actions</h4><ul id="pfWsActions"><li>Review the source evidence for new opportunities.</li></ul>
+          <p>Recommendations are based on visible pipeline stages, not verified financing eligibility or permission to contact.</p>
+        </aside>
+      </div>
+      <div class="pf-ws-legacy"><button type="button" id="pfWsLegacy">Show legacy operational reports</button></div>
+    </section>
     <div class="area-header">
       <div>
         <div class="area-title">PIPELINE</div>
@@ -7225,6 +7303,67 @@ function agentHealth(agent) {
   return { label: status || 'Unknown', cls: 'gray' };
 }
 
+
+let _pfWsView = 'board';
+function renderRefinedPipeline() {
+  const board = document.getElementById('pfWorkspaceBoard');
+  if (!board) return;
+  const search = String(document.getElementById('pfWsSearch')?.value || '').toLowerCase().trim();
+  const byStage = Object.fromEntries(_pipelineProspectStages.map(s => [s.stage, s.prospects || []]));
+  const total = PROSPECT_PIPELINE_STAGES.reduce((n, stage) => n + (byStage[stage]?.length || 0), 0);
+  const counts = PROSPECT_PIPELINE_STAGES.map(stage => (byStage[stage] || []).length);
+  document.getElementById('pfWorkspaceMetrics').innerHTML = [
+    [counts[0], 'To review'], [counts[1] + counts[2], 'In progress'], [counts[3], 'Booked'], [counts[4], 'Closed']
+  ].map(([value, label]) => '<div class="pf-ws-metric"><strong>' + value + '</strong><span>' + label + '</span></div>').join('');
+  board.classList.toggle('list', _pfWsView === 'list');
+  board.innerHTML = PROSPECT_PIPELINE_STAGES.map(stage => {
+    const all = byStage[stage] || [];
+    const filtered = all.filter(p => [p.first_name,p.last_name,p.company_name].join(' ').toLowerCase().includes(search));
+    return '<section class="pf-ws-stage"><div class="pf-ws-stage-head"><span>' + _esc(PROSPECT_PIPELINE_LABELS[stage]) + '</span><span>' + all.length + '</span></div><div class="pf-ws-stage-body">' +
+      (filtered.map(p => {
+        const name = [p.first_name,p.last_name].filter(Boolean).join(' ') || 'Unnamed prospect';
+        return '<button type="button" class="pf-ws-prospect" data-pf-ws-prospect="' + _esc(p.id) + '"><strong>' + _esc(name) + '</strong><small>' + _esc(p.company_name || 'Company not recorded') + '</small><small>Last touch: ' + _esc(_fmtDateShort(p.last_contacted_at)) + '</small></button>';
+      }).join('') || '<div class="pf-ws-empty">No opportunities' + (search ? ' matching search' : '') + '</div>') + '</div></section>';
+  }).join('');
+  document.getElementById('pfWsSummary').textContent = total
+    ? total + ' prospects across the current pipeline. ' + counts[0] + ' have not yet been contacted. Review their records and verify fit before taking action.'
+    : 'No prospects currently appear in the pipeline. Refresh or check the active workspace.';
+  document.getElementById('pfWsActions').innerHTML = [
+    counts[0] ? 'Review ' + counts[0] + ' new prospect records and source evidence.' : 'Check for newly admitted prospects.',
+    counts[1] + counts[2] ? 'Review follow-ups for prospects already in progress.' : 'Qualify prospects before moving them forward.',
+    counts[3] ? 'Review booked opportunities and their next steps.' : 'Track booked conversations when they are confirmed.'
+  ].map(item => '<li>' + _esc(item) + '</li>').join('');
+}
+function initRefinedPipeline() {
+  const area = document.getElementById('pipelineArea');
+  if (!area || area.dataset.pfWsInit) return;
+  area.dataset.pfWsInit = '1';
+  area.classList.add('pf-refined');
+  document.getElementById('pfWsSearch')?.addEventListener('input', renderRefinedPipeline);
+  for (const view of ['board','list']) document.getElementById(view === 'board' ? 'pfWsBoard' : 'pfWsList')?.addEventListener('click', () => {
+    _pfWsView = view;
+    for (const v of ['board','list']) {
+      const b = document.getElementById(v === 'board' ? 'pfWsBoard' : 'pfWsList');
+      b.classList.toggle('active', v === view); b.setAttribute('aria-pressed', String(v === view));
+    }
+    renderRefinedPipeline();
+  });
+  document.getElementById('pfWorkspaceRefresh')?.addEventListener('click', loadPipeline);
+  document.getElementById('pfWorkspaceAdd')?.addEventListener('click', () => {
+    const add = document.getElementById('addProspectBtn') || document.querySelector('[data-action="add-prospect"]');
+    if (add) add.click();
+    else alert('New opportunity creation is not available from this workspace. Use the existing prospect intake workflow.');
+  });
+  document.getElementById('pfWsLegacy')?.addEventListener('click', event => {
+    const open = area.classList.toggle('pf-legacy-open');
+    event.currentTarget.textContent = open ? 'Hide legacy operational reports' : 'Show legacy operational reports';
+  });
+  document.getElementById('pfWorkspaceBoard')?.addEventListener('click', event => {
+    const button = event.target.closest('[data-pf-ws-prospect]');
+    if (button) openProspectModal(button.dataset.pfWsProspect);
+  });
+}
+
 function renderProspectPipeline() {
   const grid = document.getElementById('prospectPipelineGrid');
   if (!grid) return;
@@ -7263,9 +7402,11 @@ async function loadProspectPipeline() {
     const data = await fetchPipelineJson('/api/pipeline/prospects');
     _pipelineProspectStages = data.stages || [];
     renderProspectPipeline();
+    renderRefinedPipeline();
   } catch (e) {
     console.error('loadProspectPipeline:', e);
     _pipelineProspectStages = [];
+    renderRefinedPipeline();
     grid.innerHTML = `<div class="no-data-note">Prospect pipeline unavailable: ${_esc(e.message)}</div>`;
     throw e;
   }
@@ -7566,6 +7707,7 @@ async function loadPipelineAgentHealth() {
 }
 
 async function loadPipeline() {
+  initRefinedPipeline();
   const btn = document.getElementById('pipelineRefreshBtn');
   if (btn) btn.textContent = 'Syncing...';
   document.getElementById('pipelineSub').textContent = 'Syncing selected client...';
