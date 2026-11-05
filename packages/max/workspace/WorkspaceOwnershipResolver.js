@@ -54,7 +54,8 @@ const { missionMayOwnTurn, pendingDecisionRetainsTurn, resolvedPendingHasCanonic
 const { contractBlocksExecution, contractLocksConversation } = require('./ConversationContract');
 const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
 const { MESSAGE_TYPES } = require('./MessageType');
-const { messageTypeBypassesOwnership } = require('./MessageTypeClassifier');
+const { messageTypeBypassesOwnership, isMissionCreationMessage } = require('./MessageTypeClassifier');
+const { stripNegatedDirectives } = require('./NegatedDirective');
 const {
   primaryObjectiveBypassesOwnership,
 } = require('./OperatorObjectiveResolutionEngine');
@@ -153,17 +154,24 @@ function resolveContinuationPrecedence(question, input = {}) {
   } catch (_) {
     return { continuation: false, reason: 'active_work_context_unavailable' };
   }
-  if (active.isExplicitNewMissionRequest(q) || active.isExplicitContextOverride(q)) {
+  if (
+    active.isExplicitNewMissionRequest(q) ||
+    active.isExplicitContextOverride(q) ||
+    isMissionCreationMessage(q)
+  ) {
     return { continuation: false, reason: 'explicit_new_objective' };
   }
   if (claimsActiveDeskWorkflow(q)) {
     return { continuation: true, reason: 'active_desk_workflow_precedence' };
   }
+  // Follow-up cues inside a prohibition ("do not continue …") are not cues.
+  const affirmative = stripNegatedDirectives(q);
   const prior = active.getActiveWorkContext(input.session || null);
   if (
+    affirmative &&
     active.activeContextHasEntities(prior) &&
-    (active.isActiveWorkFollowUpCue(q) ||
-      active.isActiveWorkTransformCue(q) ||
+    (active.isActiveWorkFollowUpCue(affirmative) ||
+      active.isActiveWorkTransformCue(affirmative) ||
       active.isFillableTableUpdateRequest(q, prior))
   ) {
     return { continuation: true, reason: 'active_work_context_precedence' };

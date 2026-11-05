@@ -70,6 +70,8 @@ const MISSION_CREATION_RES = [
   /\bstart (?:a )?(?:new )?(?:acquisition )?mission\b/i,
   /\bbegin (?:a )?(?:new )?(?:acquisition )?mission\b/i,
   /\bnew acquisition mission\b/i,
+  // P0 — "set up a <qualifier> mission" is affirmative creation language.
+  /\bset\s*up\s+(?:a|an|the|new)\s+(?:[\w-]+\s+){0,4}mission\b/i,
   MISSION_CREATE_COMMAND_RE,
 ];
 
