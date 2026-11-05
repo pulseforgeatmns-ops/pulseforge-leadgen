@@ -181,6 +181,7 @@ describe('SPEC-088 Growth Plan continuation', () => {
       'setup:gbp:gbp_claimed',
       opts
     );
+    assert.equal(Number(done.clientId), 92);
     assert.equal(done.nextTask.id, 'setup:domain_dns:branded_email');
     assert.equal(done.growthPlan.currentTask.id, 'setup:domain_dns:branded_email');
   });

@@ -364,6 +364,7 @@ describe('approve → Initial Growth Direction → Growth Conversation', () => {
     await approveBlueprint(turn.blueprint.id, opts);
 
     const growth = await startGrowthConversation(started.interviewId, opts);
+    assert.equal(Number(growth.clientId), 211);
     assert.equal(growth.status, 'GROWTH_CONVERSATION');
     assert.match(growth.message, /approved Blueprint/i);
     assert.ok(growth.initialGrowthDirection);
@@ -374,6 +375,7 @@ describe('approve → Initial Growth Direction → Growth Conversation', () => {
       'Let us dig into the segments first.',
       opts
     );
+    assert.equal(Number(reply.clientId), 211);
     assert.equal(reply.status, 'GROWTH_CONVERSATION');
     assert.match(reply.message, /segment/i);
     assert.doesNotMatch(reply.message, /I built a prospect list|campaign is live/i);

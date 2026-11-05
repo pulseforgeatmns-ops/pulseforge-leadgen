@@ -10713,6 +10713,7 @@ async function completeGrowthPlanTask(sessionId, taskId, opts = {}) {
   return {
     ok: true,
     interviewId: updated.id,
+    clientId: updated.client_id,
     status: updated.status,
     completedTask: applied.completedTask,
     nextTask: growthPlan.currentTask,
@@ -11806,6 +11807,7 @@ async function startGrowthConversation(sessionId, opts = {}) {
   return {
     ok: true,
     interviewId: session.id,
+    clientId: session.client_id,
     status: 'GROWTH_CONVERSATION',
     message: opening,
     initialGrowthDirection: growthDirection,
@@ -11991,6 +11993,7 @@ async function postGrowthMessage(sessionId, message, opts = {}) {
   return {
     ok: true,
     interviewId: session.id,
+    clientId: session.client_id,
     status: 'GROWTH_CONVERSATION',
     message: replyMessage,
     intent: (reply && reply.intent) || null,
@@ -12105,6 +12108,7 @@ async function startInfrastructureReadinessConversation(sessionId, opts = {}) {
   return {
     ok: true,
     interviewId: session.id,
+    clientId: session.client_id,
     status: 'INFRASTRUCTURE_READINESS',
     message: resumed && lastAssistant ? lastAssistant.message : opening,
     blueprint: publicBlueprint(blueprint),
@@ -12216,6 +12220,7 @@ async function postInfrastructureReadinessMessage(sessionId, message, opts = {})
   return {
     ok: true,
     interviewId: session.id,
+    clientId: session.client_id,
     status: 'INFRASTRUCTURE_READINESS',
     message: reply.message,
     intent: reply.intent,
@@ -12336,6 +12341,7 @@ async function startCampaignPlanningConversation(sessionId, opts = {}) {
   return {
     ok: true,
     interviewId: session.id,
+    clientId: session.client_id,
     status: 'CAMPAIGN_PLANNING',
     message: resumed && lastAssistant ? lastAssistant.message : opening,
     blueprint: publicBlueprint(blueprint),
@@ -13033,6 +13039,7 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
   return {
     ok: true,
     interviewId: session.id,
+    clientId: session.client_id,
     status: 'CAMPAIGN_PLANNING',
     message: reply.message,
     intent: reply.intent,
