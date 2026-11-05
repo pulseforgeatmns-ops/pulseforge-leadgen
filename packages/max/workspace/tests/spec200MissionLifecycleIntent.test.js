@@ -50,6 +50,10 @@ describe('SPEC-200 — Explicit Mission Lifecycle Intent', () => {
         intent: MissionLifecycleIntent.CREATE_NEW,
       },
       {
+        utterance: 'Create a review-only prospect import mission for LA Endeavors. No outreach, calls, content, or campaign activation.',
+        intent: MissionLifecycleIntent.CREATE_NEW,
+      },
+      {
         utterance: 'Resume the existing mission for recurring STR clients',
         intent: MissionLifecycleIntent.RESUME_EXISTING,
       },
@@ -77,6 +81,12 @@ describe('SPEC-200 — Explicit Mission Lifecycle Intent', () => {
       assert.equal(isMissionExecutionCommand('Do not resume the old mission.'), false);
       const cognition = classifyOperatorCognition('Do not resume the old mission.');
       assert.notEqual(cognition.intent, THINKING_MODES.RESUME);
+    });
+
+    it('recognizes a qualified review-only import mission command without authorizing outreach', () => {
+      const utterance = 'Create a review-only prospect import mission for LA Endeavors. No outreach, calls, content, or campaign activation.';
+      assert.equal(detectMissionExecutionLanguage(utterance).reason, 'mission_create_command');
+      assert.equal(resolveMissionLifecycleIntent(utterance).intent, MissionLifecycleIntent.CREATE_NEW);
     });
 
     it('does not globally suppress create when a separate clause negates resume', () => {
