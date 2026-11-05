@@ -1197,6 +1197,7 @@ describe('First Campaign Planning session APIs', () => {
       store,
     });
     assert.equal(started.ok, true);
+    assert.equal(Number(started.clientId), 10);
     assert.equal(started.status, 'CAMPAIGN_PLANNING');
     assert.match(started.message, /review-first/i);
     assert.match(started.message, /property managers in Greater Manchester/i);
@@ -1222,6 +1223,7 @@ describe('First Campaign Planning session APIs', () => {
       if (last.firstCampaignPlanPreview) break;
     }
     assert.ok(last);
+    assert.equal(Number(last.clientId), 10);
     assert.equal(last.status, 'CAMPAIGN_PLANNING');
     assert.ok(last.firstCampaignPlanPreview);
     assert.equal(last.firstCampaignPlanPreview.kind, ARTIFACT_KIND);

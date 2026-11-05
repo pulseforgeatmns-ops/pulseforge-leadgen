@@ -470,6 +470,7 @@ describe('approve → Infrastructure Readiness conversation', () => {
       started.interviewId,
       opts
     );
+    assert.equal(Number(ready.clientId), 410);
     assert.equal(ready.status, 'INFRASTRUCTURE_READINESS');
     assert.match(ready.message, /capture and convert/i);
     assert.ok(ready.infrastructureReadiness);
@@ -481,6 +482,7 @@ describe('approve → Infrastructure Readiness conversation', () => {
       'Website is https://anchorcleaning.example and we own the domain.',
       opts
     );
+    assert.equal(Number(mid.clientId), 410);
     assert.equal(mid.status, 'INFRASTRUCTURE_READINESS');
     assert.equal(
       mid.infrastructureReadiness.areas.website.items.website_exists.status,
@@ -492,6 +494,7 @@ describe('approve → Infrastructure Readiness conversation', () => {
       'Please wrap up with the readiness report.',
       opts
     );
+    assert.equal(Number(wrap.clientId), 410);
     assert.ok(wrap.growthInfrastructureReadinessReport);
     assert.equal(
       wrap.growthInfrastructureReadinessReport.kind,
