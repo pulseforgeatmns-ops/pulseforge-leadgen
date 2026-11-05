@@ -1407,6 +1407,7 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
 
   let executionResult = null;
   let executionRequest = null;
+  let execution = null;
   const intent = intentFromAction(action);
 
   if (intent) {
@@ -1420,6 +1421,7 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     });
     executionRequest = routed.request;
     executionResult = routed.executionResult;
+    execution = routed.execution || null;
     action = routed.action || action;
     snapshot = routed.snapshot || engine.inspect(mission.id, { tenantId });
   }
@@ -1437,18 +1439,29 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
       executionRequest,
     });
     action = chained.action;
-    executionResult = chained.executionResult;
+    const chainedResult = chained.executionResult;
+    if (chainedResult !== executionResult) {
+      execution = chained.execution || (chained.executionRequest
+        ? amo.classifyExecutionEvidence({
+          request: chained.executionRequest,
+          executionResult: chainedResult,
+          specialist: amo.specialistForIntent(chained.executionRequest.intent),
+          tenantId,
+        })
+        : null);
+    }
+    executionResult = chainedResult;
     snapshot = chained.snapshot || snapshot;
     executionRequest = chained.executionRequest || executionRequest;
   }
 
-  const response = buildExecutionMissionResponse({
+  const response = applyExecutionTruth(buildExecutionMissionResponse({
     mission: snapshot.mission || mission,
     snapshot,
     action,
     question,
     executionResult,
-  });
+  }), execution);
 
   if (input.session && input.session.context && typeof input.session.context === 'object') {
     input.session.context.missionId = mission.id;
@@ -1469,11 +1482,52 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     action,
     executionResult,
     executionRequest,
+    execution,
     audit,
   };
 }
 
+/**
+ * P0 — bind the operator-facing response to router execution evidence.
+ * Records the classified state on the structured metadata and, when a work
+ * specialist was dispatched without verified completion, says so plainly
+ * instead of letting downstream copy imply the work finished.
+ * @param {{ structured: object, prose: string }} response
+ * @param {object|null} execution
+ */
+function applyExecutionTruth(response, execution) {
+  if (!response || !execution) return response;
+  const structured = response.structured || {};
+  structured.metadata = {
+    ...(structured.metadata || {}),
+    executionState: execution.state,
+    executionVerified: execution.verified,
+    executionEvidence: execution.evidence || null,
+    executionCorrelation: execution.correlation || null,
+  };
+  if (!amo.specialistCompletionUnverified(execution)) {
+    response.structured = structured;
+    return response;
+  }
+  if (execution.state === amo.EXECUTION_EVIDENCE_STATES.FAILED) {
+    // Rollback presentation already states the stage could not execute.
+    response.structured = structured;
+    return response;
+  }
+  const specialist = execution.correlation && execution.correlation.specialist;
+  const name = specialist ? specialist.charAt(0).toUpperCase() + specialist.slice(1) : 'The specialist';
+  const notice = execution.state === amo.EXECUTION_EVIDENCE_STATES.BLOCKED
+    ? `${name} did not complete this stage: it is blocked. No external action was taken.`
+    : `${name} was dispatched, but completion is not verified — no committed stage evidence was returned. Treat this as outcome unknown.`;
+  const prose = [notice, response.prose].filter(Boolean).join('\n\n');
+  structured.answer = [notice, structured.answer].filter(Boolean).join('\n\n');
+  response.structured = structured;
+  response.prose = prose;
+  return response;
+}
+
 module.exports = {
+  applyExecutionTruth,
   detectExecutionAction,
   buildExecutionMissionResponse,
   maybeHandleAcquisitionMissionExecution,

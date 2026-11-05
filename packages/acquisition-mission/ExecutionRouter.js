@@ -32,6 +32,8 @@ const READ_ONLY_MODES = new Set(['read_only', 'execution_disabled']);
 /** @type {object[]} */
 const _routerAudit = [];
 
+const { classifyExecutionEvidence } = require('./ExecutionEvidence');
+
 function cerError(code, message, extras = {}) {
   const err = amoError(code, message);
   err.spec = 'SPEC-171';
@@ -56,6 +58,7 @@ function recordRouterAudit(entry = {}) {
     parentRequestId: entry.parentRequestId || null,
     transactionId: entry.transactionId || null,
     errorCode: entry.errorCode || null,
+    executionState: entry.executionState || null,
     at: entry.at || nowIso(),
     request: entry.request && typeof entry.request === 'object' ? clone(entry.request) : null,
   };
@@ -463,11 +466,22 @@ async function routeExecutionRequest(request, context = {}) {
         ? 'auto_consumed_discovery'
         : 'dispatched';
 
+  // P0 — dispatch is not completion. Classify the result against structural
+  // commit/rollback evidence; only verified states may be reported as done.
+  const execution = classifyExecutionEvidence({
+    request: chained.autoConsumedDiscoveryApproval && chained.request ? chained.request : request,
+    executionResult: chained.executionResult,
+    specialist: chained.specialist || specialist,
+    runtimeOwner,
+    tenantId: context.tenantId,
+  });
+
   const audit = recordRouterAudit({
     requestId: request.id,
     source: request.source,
     intent: request.intent,
     missionId: request.missionId,
+    executionState: execution.state,
     operatorId: request.operatorId,
     runtimeOwner,
     specialist,
@@ -493,6 +507,7 @@ async function routeExecutionRequest(request, context = {}) {
     replay,
     autoConsumedDiscoveryApproval: chained.autoConsumedDiscoveryApproval === true,
     planResult: chained.planResult || null,
+    execution,
     routed: true,
   };
 }

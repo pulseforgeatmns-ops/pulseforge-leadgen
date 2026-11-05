@@ -53,6 +53,7 @@ const missionRuntimeOwnership = require('./MissionRuntimeOwnership');
 const missionExecutionContext = require('./MissionExecutionContext');
 const executionRequest = require('./ExecutionRequest');
 const executionRouter = require('./ExecutionRouter');
+const executionEvidence = require('./ExecutionEvidence');
 const executionApproval = require('./ExecutionApproval');
 const outboundExecution = require('./OutboundExecution');
 const communicationObservation = require('./CommunicationObservation');
@@ -74,6 +75,9 @@ const missionInspectionSnapshot = require('./MissionInspectionSnapshot');
 
 module.exports = {
   ...types,
+  EXECUTION_EVIDENCE_STATES: executionEvidence.EXECUTION_STATES,
+  classifyExecutionEvidence: executionEvidence.classifyExecutionEvidence,
+  specialistCompletionUnverified: executionEvidence.specialistCompletionUnverified,
   assertContract,
   contractFor,
   FORBIDDEN,
