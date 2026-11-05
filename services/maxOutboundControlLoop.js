@@ -1283,8 +1283,11 @@ async function defaultScoutRampResearchScoped({
           db: pool, tenantId: tenant.tenantId, fingerprint,
         }), ticketStore: tickets, pageStore: pages, tenantMemory });
       if (require('../utils/anchorFacilityResearch').enabled(tenant.tenantId, researchOnly)) {
+        // SPEC-SCOUT-P1-001: tier allocation is read-only and inert until its
+        // allocation version is activated; until then the v1 plan applies unchanged.
         facilityResearchCoverage = require('./scoutFacilityResearchCoverage').createFacilityResearchCoverage({
-          pool, tenantId: tenant.tenantId, scope, generation: searchGeneration });
+          pool, tenantId: tenant.tenantId, scope, generation: searchGeneration,
+          tierAllocation: require('../config/anchorFacilityTiers').ANCHOR_FACILITY_TIERS });
       }
       const placesProvider = require('../packages/capabilities/discovery/providers/PlacesProvider')
         .createPlacesProvider({ queryCheckpointSession: checkpointSession, tenantDiscoveryMemory:tenantMemory,

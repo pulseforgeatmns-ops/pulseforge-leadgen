@@ -1,0 +1,1222 @@
+{
+  "spec": "SPEC-SCOUT-P1-001 Rev. 2",
+  "issue": 1048,
+  "allocationVersion": "anchor-p1-001-v1",
+  "cycles": 88,
+  "targetQuotas": {
+    "1": 44,
+    "2": 31,
+    "3": 13
+  },
+  "assumptions": "Empty prior history, every query eligible, one selection per cycle, no lookup-level skips.",
+  "before": {
+    "approvedQueries": 88,
+    "byTier": {
+      "1": 32,
+      "2": 32,
+      "3": 24
+    },
+    "byCategory": {
+      "school": 16,
+      "campus": 8,
+      "property_manager": 8,
+      "manufacturer": 8,
+      "warehouse": 8,
+      "dealership": 8,
+      "commercial_office": 8,
+      "restaurant": 24
+    },
+    "firstTen": [
+      "1:school",
+      "1:campus",
+      "1:property_manager",
+      "2:manufacturer",
+      "2:warehouse",
+      "2:dealership",
+      "2:commercial_office",
+      "3:restaurant",
+      "1:school",
+      "3:restaurant"
+    ],
+    "selections": [
+      {
+        "cycle": 1,
+        "query": "private school Manchester NH",
+        "category": "school",
+        "tier": 1
+      },
+      {
+        "cycle": 2,
+        "query": "college campus Bedford NH",
+        "category": "campus",
+        "tier": 1
+      },
+      {
+        "cycle": 3,
+        "query": "commercial property management Londonderry NH",
+        "category": "property_manager",
+        "tier": 1
+      },
+      {
+        "cycle": 4,
+        "query": "manufacturing facility Hooksett NH",
+        "category": "manufacturer",
+        "tier": 2
+      },
+      {
+        "cycle": 5,
+        "query": "warehouse distribution center Auburn NH",
+        "category": "warehouse",
+        "tier": 2
+      },
+      {
+        "cycle": 6,
+        "query": "auto dealership Goffstown NH",
+        "category": "dealership",
+        "tier": 2
+      },
+      {
+        "cycle": 7,
+        "query": "office park Nashua NH",
+        "category": "commercial_office",
+        "tier": 2
+      },
+      {
+        "cycle": 8,
+        "query": "Restaurant Merrimack NH",
+        "category": "restaurant",
+        "tier": 3
+      },
+      {
+        "cycle": 9,
+        "query": "academy Manchester NH",
+        "category": "school",
+        "tier": 1
+      },
+      {
+        "cycle": 10,
+        "query": "Cafe Merrimack NH",
+        "category": "restaurant",
+        "tier": 3
+      },
+      {
+        "cycle": 11,
+        "query": "college campus Londonderry NH",
+        "category": "campus",
+        "tier": 1
+      },
+      {
+        "cycle": 12,
+        "query": "commercial property management Hooksett NH",
+        "category": "property_manager",
+        "tier": 1
+      },
+      {
+        "cycle": 13,
+        "query": "manufacturing facility Auburn NH",
+        "category": "manufacturer",
+        "tier": 2
+      },
+      {
+        "cycle": 14,
+        "query": "warehouse distribution center Goffstown NH",
+        "category": "warehouse",
+        "tier": 2
+      },
+      {
+        "cycle": 15,
+        "query": "auto dealership Nashua NH",
+        "category": "dealership",
+        "tier": 2
+      },
+      {
+        "cycle": 16,
+        "query": "office park Bedford NH",
+        "category": "commercial_office",
+        "tier": 2
+      },
+      {
+        "cycle": 17,
+        "query": "Bistro Merrimack NH",
+        "category": "restaurant",
+        "tier": 3
+      },
+      {
+        "cycle": 18,
+        "query": "private school Bedford NH",
+        "category": "school",
+        "tier": 1
+      },
+      {
+        "cycle": 19,
+        "query": "college campus Hooksett NH",
+        "category": "campus",
+        "tier": 1
+      },
+      {
+        "cycle": 20,
+        "query": "commercial property management Auburn NH",
+        "category": "property_manager",
+        "tier": 1
+      },
+      {
+        "cycle": 21,
+        "query": "manufacturing facility Goffstown NH",
+        "category": "manufacturer",
+        "tier": 2
+      },
+      {
+        "cycle": 22,
+        "query": "warehouse distribution center Nashua NH",
+        "category": "warehouse",
+        "tier": 2
+      },
+      {
+        "cycle": 23,
+        "query": "office park Manchester NH",
+        "category": "commercial_office",
+        "tier": 2
+      },
+      {
+        "cycle": 24,
+        "query": "auto dealership Londonderry NH",
+        "category": "dealership",
+        "tier": 2
+      },
+      {
+        "cycle": 25,
+        "query": "Restaurant Manchester NH",
+        "category": "restaurant",
+        "tier": 3
+      },
+      {
+        "cycle": 26,
+        "query": "academy Bedford NH",
+        "category": "school",
+        "tier": 1
+      },
+      {
+        "cycle": 27,
+        "query": "office park Merrimack NH",
+        "category": "commercial_office",
+        "tier": 2
+      },
+      {
+        "cycle": 28,
+        "query": "college campus Auburn NH",
+        "category": "campus",
+        "tier": 1
+      },
+      {
+        "cycle": 29,
+        "query": "commercial property management Goffstown NH",
+        "category": "property_manager",
+        "tier": 1
+      },
+      {
+        "cycle": 30,
+        "query": "manufacturing facility Nashua NH",
+        "category": "manufacturer",
+        "tier": 2
+      },
+      {
+        "cycle": 31,
+        "query": "warehouse distribution center Londonderry NH",
+        "category": "warehouse",
+        "tier": 2
+      },
+      {
+        "cycle": 32,
+        "query": "auto dealership Hooksett NH",
+        "category": "dealership",
+        "tier": 2
+      },
+      {
+        "cycle": 33,
+        "query": "Cafe Manchester NH",
+        "category": "restaurant",
+        "tier": 3
+      },
+      {
+        "cycle": 34,
+        "query": "private school Londonderry NH",
+        "category": "school",
+        "tier": 1
+      },
+      {
+        "cycle": 35,
+        "query": "auto dealership Merrimack NH",
+        "category": "dealership",
+        "tier": 2
+      },
+      {
+        "cycle": 36,
+        "query": "college campus Goffstown NH",
+        "category": "campus",
+        "tier": 1
+      },
+      {
+        "cycle": 37,
+        "query": "commercial property management Nashua NH",
+        "category": "property_manager",
+        "tier": 1
+      },
+      {
+        "cycle": 38,
+        "query": "warehouse distribution center Bedford NH",
+        "category": "warehouse",
+        "tier": 2
+      },
+      {
+        "cycle": 39,
+        "query": "office park Hooksett NH",
+        "category": "commercial_office",
+        "tier": 2
+      },
+      {
+        "cycle": 40,
+        "query": "manufacturing facility Merrimack NH",
+        "category": "manufacturer",
+        "tier": 2
+      },
+      {
+        "cycle": 41,
+        "query": "Bistro Auburn NH",
+        "category": "restaurant",
+        "tier": 3
+      },
+      {
+        "cycle": 42,
+        "query": "academy Londonderry NH",
+        "category": "school",
+        "tier": 1
+      },
+      {
+        "cycle": 43,
+        "query": "auto dealership Manchester NH",
+        "category": "dealership",
+        "tier": 2
+      },
+      {
+        "cycle": 44,
+        "query": "college campus Nashua NH",
+        "category": "campus",
+        "tier": 1
+      },
+      {
+        "cycle": 45,
+        "query": "manufacturing facility Bedford NH",
+        "category": "manufacturer",
+        "tier": 2
+      },
+      {
+        "cycle": 46,
+        "query": "office park Auburn NH",
+        "category": "commercial_office",
+        "tier": 2
+      },
+      {
+        "cycle": 47,
+        "query": "warehouse distribution center Hooksett NH",
+        "category": "warehouse",
+        "tier": 2
+      },
+      {
+        "cycle": 48,
+        "query": "commercial property management Merrimack NH",
+        "category": "property_manager",
+        "tier": 1
+      },
+      {
+        "cycle": 49,
+        "query": "Restaurant Goffstown NH",
+        "category": "restaurant",
+        "tier": 3
+      },
+      {
+        "cycle": 50,
+        "query": "private school Hooksett NH",
+        "category": "school",
+        "tier": 1
+      },
+      {
+        "cycle": 51,
+        "query": "warehouse distribution center Manchester NH",
+        "category": "warehouse",
+        "tier": 2
+      },
+      {
+        "cycle": 52,
+        "query": "auto dealership Bedford NH",
+        "category": "dealership",
+        "tier": 2
+      },
+      {
+        "cycle": 53,
+        "query": "office park Londonderry NH",
+        "category": "commercial_office",
+        "tier": 2
+      },
+      {
+        "cycle": 54,
+        "query": "manufacturing facility Manchester NH",
+        "category": "manufacturer",
+        "tier": 2
+      },
+      {
+        "cycle": 55,
+        "query": "college campus Merrimack NH",
+        "category": "campus",
+        "tier": 1
+      },
+      {
+        "cycle": 56,
+        "query": "commercial property management Bedford NH",
+        "category": "property_manager",
+        "tier": 1
+      },
+      {
+        "cycle": 57,
+        "query": "Cafe Auburn NH",
+        "category": "restaurant",
+        "tier": 3
+      },
+      {
+        "cycle": 58,
+        "query": "academy Goffstown NH",
+        "category": "school",
+        "tier": 1
+      },
+      {
+        "cycle": 59,
+        "query": "manufacturing facility Londonderry NH",
+        "category": "manufacturer",
+        "tier": 2
+      },
+      {
+        "cycle": 60,
+        "query": "auto dealership Auburn NH",
+        "category": "dealership",
+        "tier": 2
+      },
+      {
+        "cycle": 61,
+        "query": "office park Goffstown NH",
+        "category": "commercial_office",
+        "tier": 2
+      },
+      {
+        "cycle": 62,
+        "query": "warehouse distribution center Merrimack NH",
+        "category": "warehouse",
+        "tier": 2
+      },
+      {
+        "cycle": 63,
+        "query": "commercial property management Manchester NH",
+        "category": "property_manager",
+        "tier": 1
+      },
+      {
+        "cycle": 64,
+        "query": "college campus Manchester NH",
+        "category": "campus",
+        "tier": 1
+      },
+      {
+        "cycle": 65,
+        "query": "Bistro Nashua NH",
+        "category": "restaurant",
+        "tier": 3
+      },
+      {
+        "cycle": 66,
+        "query": "private school Nashua NH",
+        "category": "school",
+        "tier": 1
+      },
+      {
+        "cycle": 67,
+        "query": "Restaurant Hooksett NH",
+        "category": "restaurant",
+        "tier": 3
+      },
+      {
+        "cycle": 68,
+        "query": "academy Hooksett NH",
+        "category": "school",
+        "tier": 1
+      },
+      {
+        "cycle": 69,
+        "query": "Cafe Bedford NH",
+        "category": "restaurant",
+        "tier": 3
+      },
+      {
+        "cycle": 70,
+        "query": "private school Auburn NH",
+        "category": "school",
+        "tier": 1
+      },
+      {
+        "cycle": 71,
+        "query": "Bistro Londonderry NH",
+        "category": "restaurant",
+        "tier": 3
+      },
+      {
+        "cycle": 72,
+        "query": "academy Nashua NH",
+        "category": "school",
+        "tier": 1
+      },
+      {
+        "cycle": 73,
+        "query": "Cafe Goffstown NH",
+        "category": "restaurant",
+        "tier": 3
+      },
+      {
+        "cycle": 74,
+        "query": "private school Goffstown NH",
+        "category": "school",
+        "tier": 1
+      },
+      {
+        "cycle": 75,
+        "query": "Restaurant Bedford NH",
+        "category": "restaurant",
+        "tier": 3
+      },
+      {
+        "cycle": 76,
+        "query": "academy Auburn NH",
+        "category": "school",
+        "tier": 1
+      },
+      {
+        "cycle": 77,
+        "query": "Bistro Hooksett NH",
+        "category": "restaurant",
+        "tier": 3
+      },
+      {
+        "cycle": 78,
+        "query": "private school Merrimack NH",
+        "category": "school",
+        "tier": 1
+      },
+      {
+        "cycle": 79,
+        "query": "Restaurant Londonderry NH",
+        "category": "restaurant",
+        "tier": 3
+      },
+      {
+        "cycle": 80,
+        "query": "academy Merrimack NH",
+        "category": "school",
+        "tier": 1
+      },
+      {
+        "cycle": 81,
+        "query": "Cafe Nashua NH",
+        "category": "restaurant",
+        "tier": 3
+      },
+      {
+        "cycle": 82,
+        "query": "Bistro Manchester NH",
+        "category": "restaurant",
+        "tier": 3
+      },
+      {
+        "cycle": 83,
+        "query": "Restaurant Auburn NH",
+        "category": "restaurant",
+        "tier": 3
+      },
+      {
+        "cycle": 84,
+        "query": "Cafe Londonderry NH",
+        "category": "restaurant",
+        "tier": 3
+      },
+      {
+        "cycle": 85,
+        "query": "Bistro Bedford NH",
+        "category": "restaurant",
+        "tier": 3
+      },
+      {
+        "cycle": 86,
+        "query": "Restaurant Nashua NH",
+        "category": "restaurant",
+        "tier": 3
+      },
+      {
+        "cycle": 87,
+        "query": "Cafe Hooksett NH",
+        "category": "restaurant",
+        "tier": 3
+      },
+      {
+        "cycle": 88,
+        "query": "Bistro Goffstown NH",
+        "category": "restaurant",
+        "tier": 3
+      }
+    ]
+  },
+  "after": {
+    "approvedQueries": 136,
+    "byTier": {
+      "1": 44,
+      "2": 31,
+      "3": 13
+    },
+    "byCategory": {
+      "early_learning": 14,
+      "manufacturer": 6,
+      "school": 14,
+      "restaurant": 13,
+      "warehouse": 6,
+      "property_manager": 8,
+      "campus": 8,
+      "medical": 6,
+      "dealership": 6,
+      "commercial_office": 7
+    },
+    "firstTen": [
+      "1:early_learning",
+      "2:manufacturer",
+      "1:school",
+      "3:restaurant",
+      "2:warehouse",
+      "1:property_manager",
+      "1:campus",
+      "2:medical",
+      "1:early_learning",
+      "2:dealership"
+    ],
+    "selections": [
+      {
+        "cycle": 1,
+        "query": "daycare Manchester NH",
+        "category": "early_learning",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 2,
+        "query": "manufacturing facility Auburn NH",
+        "category": "manufacturer",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 3,
+        "query": "private school Bedford NH",
+        "category": "school",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 4,
+        "query": "Restaurant Londonderry NH",
+        "category": "restaurant",
+        "tier": 3,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 5,
+        "query": "warehouse distribution center Goffstown NH",
+        "category": "warehouse",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 6,
+        "query": "commercial property management Hooksett NH",
+        "category": "property_manager",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 7,
+        "query": "college campus Nashua NH",
+        "category": "campus",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 8,
+        "query": "medical office Merrimack NH",
+        "category": "medical",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 9,
+        "query": "preschool Manchester NH",
+        "category": "early_learning",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 10,
+        "query": "auto dealership Nashua NH",
+        "category": "dealership",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 11,
+        "query": "Cafe Bedford NH",
+        "category": "restaurant",
+        "tier": 3,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 12,
+        "query": "academy Londonderry NH",
+        "category": "school",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 13,
+        "query": "office park Hooksett NH",
+        "category": "commercial_office",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 14,
+        "query": "commercial property management Auburn NH",
+        "category": "property_manager",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 15,
+        "query": "college campus Goffstown NH",
+        "category": "campus",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 16,
+        "query": "dental office Merrimack NH",
+        "category": "medical",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 17,
+        "query": "Bistro Bedford NH",
+        "category": "restaurant",
+        "tier": 3,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 18,
+        "query": "early learning center Manchester NH",
+        "category": "early_learning",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 19,
+        "query": "multi-tenant office building Londonderry NH",
+        "category": "commercial_office",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 20,
+        "query": "private school Hooksett NH",
+        "category": "school",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 21,
+        "query": "college campus Auburn NH",
+        "category": "campus",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 22,
+        "query": "manufacturing facility Goffstown NH",
+        "category": "manufacturer",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 23,
+        "query": "commercial property management Nashua NH",
+        "category": "property_manager",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 24,
+        "query": "Restaurant Merrimack NH",
+        "category": "restaurant",
+        "tier": 3,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 25,
+        "query": "warehouse distribution center Nashua NH",
+        "category": "warehouse",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 26,
+        "query": "daycare Bedford NH",
+        "category": "early_learning",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 27,
+        "query": "academy Hooksett NH",
+        "category": "school",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 28,
+        "query": "auto dealership Merrimack NH",
+        "category": "dealership",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 29,
+        "query": "college campus Londonderry NH",
+        "category": "campus",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 30,
+        "query": "office park Manchester NH",
+        "category": "commercial_office",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 31,
+        "query": "Cafe Auburn NH",
+        "category": "restaurant",
+        "tier": 3,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 32,
+        "query": "commercial property management Goffstown NH",
+        "category": "property_manager",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 33,
+        "query": "medical office Manchester NH",
+        "category": "medical",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 34,
+        "query": "preschool Bedford NH",
+        "category": "early_learning",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 35,
+        "query": "private school Londonderry NH",
+        "category": "school",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 36,
+        "query": "manufacturing facility Nashua NH",
+        "category": "manufacturer",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 37,
+        "query": "Bistro Hooksett NH",
+        "category": "restaurant",
+        "tier": 3,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 38,
+        "query": "commercial property management Merrimack NH",
+        "category": "property_manager",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 39,
+        "query": "auto dealership Auburn NH",
+        "category": "dealership",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 40,
+        "query": "college campus Hooksett NH",
+        "category": "campus",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 41,
+        "query": "early learning center Goffstown NH",
+        "category": "early_learning",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 42,
+        "query": "warehouse distribution center Merrimack NH",
+        "category": "warehouse",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 43,
+        "query": "academy Bedford NH",
+        "category": "school",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 44,
+        "query": "Restaurant Auburn NH",
+        "category": "restaurant",
+        "tier": 3,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 45,
+        "query": "multi-tenant office building Manchester NH",
+        "category": "commercial_office",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 46,
+        "query": "commercial property management Londonderry NH",
+        "category": "property_manager",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 47,
+        "query": "college campus Merrimack NH",
+        "category": "campus",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 48,
+        "query": "dental office Goffstown NH",
+        "category": "medical",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 49,
+        "query": "daycare Nashua NH",
+        "category": "early_learning",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 50,
+        "query": "auto dealership Manchester NH",
+        "category": "dealership",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 51,
+        "query": "Cafe Londonderry NH",
+        "category": "restaurant",
+        "tier": 3,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 52,
+        "query": "private school Auburn NH",
+        "category": "school",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 53,
+        "query": "warehouse distribution center Bedford NH",
+        "category": "warehouse",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 54,
+        "query": "commercial property management Manchester NH",
+        "category": "property_manager",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 55,
+        "query": "college campus Bedford NH",
+        "category": "campus",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 56,
+        "query": "manufacturing facility Hooksett NH",
+        "category": "manufacturer",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 57,
+        "query": "Bistro Goffstown NH",
+        "category": "restaurant",
+        "tier": 3,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 58,
+        "query": "preschool Nashua NH",
+        "category": "early_learning",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 59,
+        "query": "office park Londonderry NH",
+        "category": "commercial_office",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 60,
+        "query": "academy Auburn NH",
+        "category": "school",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 61,
+        "query": "college campus Manchester NH",
+        "category": "campus",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 62,
+        "query": "medical office Hooksett NH",
+        "category": "medical",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 63,
+        "query": "commercial property management Bedford NH",
+        "category": "property_manager",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 64,
+        "query": "Restaurant Goffstown NH",
+        "category": "restaurant",
+        "tier": 3,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 65,
+        "query": "manufacturing facility Merrimack NH",
+        "category": "manufacturer",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 66,
+        "query": "early learning center Nashua NH",
+        "category": "early_learning",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 67,
+        "query": "private school Goffstown NH",
+        "category": "school",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 68,
+        "query": "auto dealership Londonderry NH",
+        "category": "dealership",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 69,
+        "query": "daycare Hooksett NH",
+        "category": "early_learning",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 70,
+        "query": "warehouse distribution center Auburn NH",
+        "category": "warehouse",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 71,
+        "query": "Cafe Nashua NH",
+        "category": "restaurant",
+        "tier": 3,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 72,
+        "query": "academy Merrimack NH",
+        "category": "school",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 73,
+        "query": "dental office Manchester NH",
+        "category": "medical",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 74,
+        "query": "preschool Londonderry NH",
+        "category": "early_learning",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 75,
+        "query": "private school Nashua NH",
+        "category": "school",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 76,
+        "query": "multi-tenant office building Bedford NH",
+        "category": "commercial_office",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 77,
+        "query": "Bistro Auburn NH",
+        "category": "restaurant",
+        "tier": 3,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 78,
+        "query": "early learning center Hooksett NH",
+        "category": "early_learning",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 79,
+        "query": "auto dealership Goffstown NH",
+        "category": "dealership",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 80,
+        "query": "private school Merrimack NH",
+        "category": "school",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 81,
+        "query": "daycare Londonderry NH",
+        "category": "early_learning",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 82,
+        "query": "warehouse distribution center Manchester NH",
+        "category": "warehouse",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 83,
+        "query": "academy Goffstown NH",
+        "category": "school",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 84,
+        "query": "Restaurant Bedford NH",
+        "category": "restaurant",
+        "tier": 3,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 85,
+        "query": "manufacturing facility Manchester NH",
+        "category": "manufacturer",
+        "tier": 2,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 86,
+        "query": "preschool Hooksett NH",
+        "category": "early_learning",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 87,
+        "query": "academy Nashua NH",
+        "category": "school",
+        "tier": 1,
+        "reason": "deficit"
+      },
+      {
+        "cycle": 88,
+        "query": "office park Auburn NH",
+        "category": "commercial_office",
+        "tier": 2,
+        "reason": "deficit"
+      }
+    ]
+  }
+}
