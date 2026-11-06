@@ -220,6 +220,11 @@ function createAcquisitionMissionEngine(opts = {}) {
   const store = opts.store || createMemoryAmoStore();
 
   function create(input = {}) {
+    // P0 — creation never replaces an existing mission (which would drop its
+    // restrictions or move it across tenants). Callers check existence first.
+    if (input.id != null && String(input.id) !== '' && store.getMission(String(input.id))) {
+      throw amoError('amo_mission_exists', `Mission already exists: ${input.id}`);
+    }
     const mission = createMission(input);
     store.putMission(mission);
     store.addEvent(createEvent({

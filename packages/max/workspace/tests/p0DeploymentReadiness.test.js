@@ -208,20 +208,20 @@ describe('A — amendment HTTP authorization', () => {
   // so the router is driven with mock req/res and the step-up consumer is stubbed.
   const fresh = require('../../../../utils/freshConfirmation');
 
-  function call(user, body) {
+  function call(user, body, extraSession = {}, path = '/api/v1/amo/missions/mission_x/authorization/amendments') {
     const router = require('../../../../routes/acquisitionMissions');
     const data = JSON.stringify(body);
     return new Promise((resolve, reject) => {
       const req = {
         method: 'POST',
-        url: '/api/v1/amo/missions/mission_x/authorization/amendments',
-        originalUrl: '/api/v1/amo/missions/mission_x/authorization/amendments',
-        path: '/api/v1/amo/missions/mission_x/authorization/amendments',
+        url: path,
+        originalUrl: path,
+        path,
         headers: { 'content-type': 'application/json', 'content-length': String(Buffer.byteLength(data)), accept: 'application/json' },
         body,
         params: {},
         query: {},
-        session: { user, active_client_id: 10, save: (cb) => cb && cb() },
+        session: { user, active_client_id: 10, save: (cb) => cb && cb(), ...extraSession },
         sessionID: 'sid_test',
         get(name) { return this.headers[String(name).toLowerCase()]; },
         is(type) { return type === 'application/json' ? 'application/json' : false; },
@@ -261,6 +261,107 @@ describe('A — amendment HTTP authorization', () => {
     } finally {
       fresh.consume = original;
     }
+  });
+
+  it('an impersonating admin cannot amend, even to tighten', async () => {
+    const original = fresh.consume;
+    const consumed = [];
+    fresh.consume = async (_db, args) => { consumed.push(args); return true; };
+    try {
+      const res = await call({ id: 7, role: 'admin', client_id: 10 }, { add: ['content'], reason: 'x' }, {
+        impersonation: { active: true, authenticatedUserId: 7, effectiveUserId: 5, tenantId: 10,
+          effectiveUser: { id: 5, role: 'client', client_id: 10 } },
+      });
+      assert.equal(res.status, 403);
+      assert.equal(res.body.error, 'authorization_amendment_forbidden');
+      assert.equal(consumed.length, 0);
+    } finally {
+      fresh.consume = original;
+    }
+  });
+});
+
+describe('Release review fixes', () => {
+  it('the engine core never infers restrictions from objective text (governed objectives stay sendable)', () => {
+    const engine = amo.createAcquisitionMissionEngine();
+    const mission = engine.create({
+      tenantId: '10',
+      objective: 'Acquire facility buyers with no prior contact. Do not email existing customers.',
+      targetSegment: 'Law Firms',
+    });
+    assert.equal(mission.authorizationConstraints, null);
+  });
+
+  it('creating with an existing id never replaces the mission or moves it across tenants', async () => {
+    const engine = amo.createAcquisitionMissionEngine();
+    const runtime = createTestAmoRuntime({ engine });
+    const original = await runtime.create({ tenantId: '10', objective: OBJECTIVE, authorizationConstraints: extract('Review only.') });
+    await assert.rejects(runtime.create({ id: original.id, tenantId: '10', objective: OBJECTIVE }),
+      (err) => err.code === 'amo_mission_exists');
+    await assert.rejects(runtime.create({ id: original.id, tenantId: '11', objective: OBJECTIVE }),
+      (err) => err.code === 'amo_mission_exists');
+    const kept = engine.get(original.id, '10');
+    assert.equal(kept.authorizationConstraints.reviewOnly, true);
+  });
+
+  it('REST create ignores server-owned fields and derives restrictions from the operator objective', async () => {
+    const service = require('../../../../services/acquisitionMission');
+    const engine = amo.createAcquisitionMissionEngine();
+    const runtime = createTestAmoRuntime({ engine });
+    const existing = await runtime.create({ tenantId: '10', objective: OBJECTIVE, authorizationConstraints: extract('Review only.') });
+    const originalCreate = service.createMission;
+    const seen = [];
+    // Capture what the route hands to the service; do not touch a database.
+    require.cache[require.resolve('../../../../services/acquisitionMission')].exports.createMission =
+      async (input) => { seen.push(input); return runtime.create(input); };
+    delete require.cache[require.resolve('../../../../routes/acquisitionMissions')];
+    try {
+      const router = require('../../../../routes/acquisitionMissions');
+      const body = { id: existing.id, objective: `${OBJECTIVE} Review only.`, planApproved: true,
+        authorizationConstraints: null, syntheticEvidence: null, version: 99 };
+      const result = await new Promise((resolve, reject) => {
+        const req = { method: 'POST', url: '/api/v1/amo/missions', originalUrl: '/api/v1/amo/missions', path: '/api/v1/amo/missions',
+          headers: { 'content-type': 'application/json', accept: 'application/json' }, body, params: {}, query: {},
+          session: { user: { id: 7, role: 'admin', client_id: 10 }, active_client_id: 10, save: (cb) => cb && cb() },
+          sessionID: 'sid', get(n) { return this.headers[String(n).toLowerCase()]; }, is: () => 'application/json' };
+        const res = { statusCode: 200, status(c) { this.statusCode = c; return this; }, set() { return this; },
+          setHeader() {}, json(p) { resolve({ status: this.statusCode, body: p }); return this; } };
+        router.handle(req, res, (err) => (err ? reject(err) : resolve({ status: 404 })));
+      });
+      assert.equal(result.status, 201);
+      assert.equal(seen[0].id, undefined, 'id is not taken from the body');
+      assert.equal(seen[0].planApproved, undefined, 'plan approval is not taken from the body');
+      assert.equal(seen[0].version, undefined);
+      assert.equal(seen[0].authorizationConstraints.reviewOnly, true, 'derived from the operator objective');
+      assert.notEqual(result.body.mission.id, existing.id);
+      assert.equal(engine.get(existing.id, '10').authorizationConstraints.reviewOnly, true, 'existing mission untouched');
+    } finally {
+      require.cache[require.resolve('../../../../services/acquisitionMission')].exports.createMission = originalCreate;
+      delete require.cache[require.resolve('../../../../routes/acquisitionMissions')];
+    }
+  });
+
+  it('a failure after the mission row committed is not reported as "not created"', async () => {
+    const committedRows = new Set();
+    const pool = {
+      query: async (sql, params) => {
+        if (/SELECT 1 FROM acquisition_missions/.test(sql)) return { rows: committedRows.has(params[0]) ? [{ '?column?': 1 }] : [] };
+        return { rows: [] };
+      },
+    };
+    const runtime = require('../../../../services/acquisitionMissionRuntime').createAcquisitionMissionRuntime({ persist: false, pool: null, production: false });
+    runtime.persistOpts = () => ({ persist: true, pool });
+    runtime.hydrate = async () => runtime.engine();
+    runtime.persistMissionState = async (missionId) => { committedRows.add(missionId); throw new Error('learning write failed'); };
+    const mission = await runtime.create({ tenantId: '10', objective: OBJECTIVE });
+    assert.ok(runtime.engine().get(mission.id, '10'), 'committed mission stays visible');
+
+    const unknownRuntime = require('../../../../services/acquisitionMissionRuntime').createAcquisitionMissionRuntime({ persist: false, pool: null, production: false });
+    unknownRuntime.persistOpts = () => ({ persist: true, pool: { query: async () => { throw new Error('connection reset'); } } });
+    unknownRuntime.hydrate = async () => unknownRuntime.engine();
+    unknownRuntime.persistMissionState = async () => { throw new Error('connection reset'); };
+    await assert.rejects(unknownRuntime.create({ tenantId: '10', objective: OBJECTIVE }),
+      (err) => err.code === 'MISSION_PERSISTENCE_UNAVAILABLE' && err.outcome === 'unknown');
   });
 });
 

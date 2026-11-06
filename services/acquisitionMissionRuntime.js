@@ -323,6 +323,23 @@ function createAcquisitionMissionRuntime(opts = {}) {
       // P0 — creation is atomic: a mission that failed its durable write must not
       // survive in the in-memory view, or a later turn would "resume" a mission
       // that was never committed.
+      const { persist: durable, pool: durablePool } = this.persistOpts(createOpts);
+      // P0 — an explicit id must not collide with ANY durable mission (another
+      // tenant's missions are not hydrated here); upserting would overwrite it.
+      if (input.id != null && String(input.id) !== '' && durable && durablePool) {
+        const existing = await durablePool.query(
+          'SELECT tenant_id FROM acquisition_missions WHERE id = $1 LIMIT 1', [String(input.id)]
+        ).catch((err) => {
+          if (/relation .* does not exist/i.test(String(err && err.message))) return { rows: [] };
+          throw runtimeError(MISSION_PERSISTENCE_UNAVAILABLE,
+            'Acquisition mission state could not be checked in durable storage.', { cause: err });
+        });
+        if (existing.rows.length) {
+          const conflict = new Error(`Mission already exists: ${input.id}`);
+          conflict.code = 'amo_mission_exists';
+          throw conflict;
+        }
+      }
       const before = !autonomous && store && typeof store.snapshot === 'function'
         ? store.snapshot()
         : null;
@@ -332,11 +349,25 @@ function createAcquisitionMissionRuntime(opts = {}) {
         try {
           await this.persistMissionState(mission.id, createOpts);
         } catch (err) {
+          // The mission row commits before the follow-on learning writes, so a
+          // failure may come AFTER the mission is durable. Report what is true.
+          const committed = durable && durablePool
+            ? await durablePool.query(
+              'SELECT 1 FROM acquisition_missions WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+              [mission.id, String(mission.tenantId)]
+            ).then((r) => (r.rows.length ? 'committed' : 'absent'), () => 'unknown')
+            : 'absent';
+          if (committed === 'committed') {
+            console.error('[amo] mission committed; follow-on durable write failed:', err && err.message);
+            return mission;
+          }
           if (before && typeof store.restore === 'function') store.restore(before);
           throw runtimeError(
             MISSION_PERSISTENCE_UNAVAILABLE,
-            'Acquisition mission was not created: durable write failed.',
-            { tenantId: String(input.tenantId || input.clientId || ''), cause: err }
+            committed === 'unknown'
+              ? 'Acquisition mission creation outcome is unknown: durable storage could not be confirmed.'
+              : 'Acquisition mission was not created: durable write failed.',
+            { tenantId: String(input.tenantId || input.clientId || ''), cause: err, outcome: committed }
           );
         }
       }

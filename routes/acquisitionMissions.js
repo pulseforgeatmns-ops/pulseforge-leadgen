@@ -25,6 +25,8 @@ const express = require('express');
 const path = require('path');
 const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { extractAuthorizationConstraints } = require('../packages/acquisition-mission');
+const { isImpersonating } = require('../utils/requestIdentity');
 const { resolveActiveTenantId } = require('../packages/max/workspace/TenantContextResolver');
 const pool = require('../db');
 const { observeOperatorHttp } = require('../packages/decision-service/httpObserver');
@@ -74,6 +76,7 @@ function fail(res, err, fallbackCode, fallbackStatus = 500) {
         || code === 'authorization_constraint_blocked'
         || code === 'authorization_amendment_forbidden'
         || code === 'synthetic_evidence_blocked' ? 403
+      : code === 'amo_mission_exists' ? 409
       : code === 'authorization_amendment_stale' ? 409
       : code === 'authorization_amendment_invalid' || code === 'authorization_amendment_noop' ? 400
       : code === 'MISSION_RUNTIME_BOUNDARY_VIOLATION' ? 409
@@ -125,12 +128,23 @@ router.post('/api/v1/amo/missions', requireActor, async (req, res) => {
     if (tenantId == null) {
       return res.status(400).json({ error: 'no_tenant', message: 'No active client selected.' });
     }
+    // Allowlist: server-owned fields (id, plan approval, version, provenance,
+    // authorization) are never taken from the request body. Restrictions are
+    // derived from the operator's own objective text.
+    const body = req.body || {};
+    const pick = (key) => (typeof body[key] === 'string' ? body[key] : undefined);
     const mission = await createMission({
-      ...req.body,
+      objective: pick('objective'),
+      targetSegment: pick('targetSegment'),
+      campaign: pick('campaign'),
+      priority: pick('priority'),
+      title: pick('title'),
+      constraints: Array.isArray(body.constraints) ? body.constraints.filter((c) => typeof c === 'string') : undefined,
+      authorizationConstraints: extractAuthorizationConstraints(pick('objective') || '', { source: 'operator_instruction' }),
       tenantId,
       clientId: Number(tenantId),
-      createdBy: req.body?.createdBy || 'max',
-      owner: req.body?.owner || 'Operator',
+      createdBy: pick('createdBy') || 'max',
+      owner: pick('owner') || 'Operator',
     }, { pool });
     noStore(res);
     return res.status(201).json({ spec: 'SPEC-118', mission });
@@ -401,6 +415,12 @@ router.post('/api/v1/amo/missions/:id/authorization/amendments',
       const tenantId = actorTenantId(req);
       if (tenantId == null) return res.status(400).json({ error: 'no_tenant', message: 'No active client selected.' });
       if (!req.is('application/json')) return res.status(415).json({ error: 'json_required' });
+      // Sensitive decisions are never taken from an impersonated session
+      // (same rule as Clarity decisions and Anchor CRM preparation).
+      if (isImpersonating(req)) {
+        return res.status(403).json({ error: 'authorization_amendment_forbidden',
+          message: 'Exit impersonation before amending mission authorization.' });
+      }
       const user = req.user || (req.session && req.session.user) || {};
       const lift = Array.isArray(req.body?.lift) ? req.body.lift : [];
       if (lift.length) {

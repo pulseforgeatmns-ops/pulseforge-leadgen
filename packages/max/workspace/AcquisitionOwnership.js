@@ -414,6 +414,13 @@ async function maybeHandleAcquisitionOwnershipTurn(input = {}) {
     });
   } catch (err) {
     if (!err || err.code !== MISSION_PERSISTENCE_UNAVAILABLE) throw err;
+    if (err.outcome === 'unknown') {
+      return buildMissionCreationNotCompleted({
+        reason: 'acquisition_mission_persistence_outcome_unknown',
+        answer: 'I could not confirm whether the mission was saved: durable mission storage did not respond. Check the mission list before retrying, so a duplicate is not created.',
+        blocker: 'persistence_outcome_unknown',
+      });
+    }
     return buildMissionCreationNotCompleted({
       reason: 'acquisition_mission_persistence_unavailable',
       answer: 'I could not create or resume the mission: durable mission storage is unavailable right now. Nothing was created or changed. Retry once storage is healthy.',
