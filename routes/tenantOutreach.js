@@ -263,6 +263,10 @@ for (const [resource, operation, service, method] of [
   ['research-only-grant', 'preview', 'scoutResearchOnlyGrant', 'previewResearchOnlyGrant'],
   ['research-only-grant', 'install', 'scoutResearchOnlyGrant', 'installResearchOnlyGrant'],
   ['research-only-grant', 'revoke', 'scoutResearchOnlyGrant', 'revokeResearchOnlyGrant'],
+  // SPEC-SCOUT-P0-008: explicit renewal of a revision-held grant. Same scope,
+  // remaining cycles only, never a later expiry; renew needs password step-up.
+  ['research-only-grant', 'renew-preview', 'scoutResearchOnlyGrant', 'previewResearchOnlyGrantRenewal'],
+  ['research-only-grant', 'renew', 'scoutResearchOnlyGrant', 'renewResearchOnlyGrant'],
   ['research-only-grant', 'inspect', 'scoutResearchOnlyGrant', 'inspectResearchOnlyGrant'],
   ['research-only-grant', 'export', 'scoutResearchRetrospective', 'exportForAdmin'],
   ['research-cycle-release', 'preview', 'scoutResearchOnlyGrant', 'previewResearchCycleRelease'],
@@ -288,7 +292,7 @@ for (const [resource, operation, service, method] of [
       // Installing commits Google spend authority: require a fresh, single-use
       // password confirmation on this exact session, however long-lived the
       // login is. Nothing is written when it is missing. Revoke never needs it.
-      if (operation === 'install') {
+      if (operation === 'install' || operation === 'renew') {
         const confirmed = await require('../utils/freshConfirmation').consume(pool, { sessionId: req.sessionID,
           userId: actor.id, purpose: 'scout_research_approval' }).catch(() => false);
         if (!confirmed) return res.status(403).json({ error: 'fresh_confirmation_required', code: 'fresh_confirmation_required',
@@ -313,8 +317,8 @@ for (const [resource, operation, service, method] of [
         if (error.code === 'fresh_confirmation_required') return res.status(403).json({ error: error.code, code: error.code,
           status: 'rejected', writesMayHaveOccurred: false, retryAllowed: true });
         return res.status(409).json({ error: 'research_only_grant_rejected', code: /^research_(only|mission)_[a-z_]+$/.test(error.code || '') ? error.code : null,
-          status: ['preview', 'inspect', 'export'].includes(operation) ? 'rejected' : 'outcome_requires_readback',
-          writesMayHaveOccurred: !['preview', 'inspect', 'export'].includes(operation), retryAllowed: false });
+          status: ['preview', 'renew-preview', 'inspect', 'export'].includes(operation) ? 'rejected' : 'outcome_requires_readback',
+          writesMayHaveOccurred: !['preview', 'renew-preview', 'inspect', 'export'].includes(operation), retryAllowed: false });
       }
     });
 }

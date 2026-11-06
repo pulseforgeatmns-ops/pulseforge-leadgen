@@ -165,6 +165,37 @@ test('Scout research approval and Remember me (synthetic Tenant 10)', { timeout:
     assert.equal(revoked.status, 200);
   });
 
+  await t.test('SPEC-SCOUT-P0-008: renewing a revision-held grant needs a fresh password and keeps scope', async () => {
+    const preview = (await http(API + 'research-only-grant/preview', { method: 'POST', cookie: admin, body: grantBody('synthetic-ui-renew-1') })).json;
+    assert.equal((await confirm(admin)).status, 200);
+    const installed = (await http(API + 'research-only-grant/install', { method: 'POST', cookie: admin,
+      body: { manifest: preview.manifest, manifestHash: preview.manifestHash } })).json;
+    const pinned = process.env.RAILWAY_GIT_COMMIT_SHA;
+    process.env.RAILWAY_GIT_COMMIT_SHA = 'f'.repeat(40);
+    try {
+      const body = { grantId: installed.grantId, approvalRef: 'synthetic-ui-renew-2', statement: 'Renew with unchanged scope.' };
+      const renewal = (await http(API + 'research-only-grant/renew-preview', { method: 'POST', cookie: admin, body })).json;
+      assert.equal(renewal.installable, true, JSON.stringify(renewal.blockers));
+      assert.deepEqual(renewal.renewal.changedKeys, []);
+      assert.equal(renewal.renewal.cyclesCarried, 8, 'no cycle consumed yet: the remaining ceiling');
+      assert.equal(renewal.expiresAt, preview.expiresAt);
+      const renewBody = { grantId: installed.grantId, manifest: renewal.manifest, manifestHash: renewal.manifestHash };
+      const refused = await http(API + 'research-only-grant/renew', { method: 'POST', cookie: admin, body: renewBody });
+      assert.equal(refused.status, 403); assert.equal(refused.json.code, 'fresh_confirmation_required');
+      assert.match(installed.grantId, /^[a-f0-9]{64}$/);
+      assert.equal(await count(`SELECT count(*)::int n FROM scout_research_only_grants WHERE revoked_at IS NULL AND grant_id='${installed.grantId}'`), 1,
+        'without the password nothing is revoked or installed');
+      assert.equal((await confirm(admin)).status, 200);
+      const renewed = await http(API + 'research-only-grant/renew', { method: 'POST', cookie: admin, body: renewBody });
+      assert.equal(renewed.status, 200, JSON.stringify(renewed.json)); assert.equal(renewed.json.renewed, true);
+      assert.equal(renewed.json.expectedRevision, 'f'.repeat(40));
+      const inspect = (await http(API + 'research-only-grant/inspect', { method: 'POST', cookie: admin, body: {} })).json;
+      assert.equal(inspect.grantId, renewed.json.grantId); assert.equal(inspect.executionStatus, 'installed');
+      await http(API + 'research-only-grant/revoke', { method: 'POST', cookie: admin,
+        body: { grantId: renewed.json.grantId, approvalReference: 'synthetic-ui-renew-close' } });
+    } finally { process.env.RAILWAY_GIT_COMMIT_SHA = pinned; }
+  });
+
   await t.test('step-up locks after repeated wrong passwords', async () => {
     const other = await h.loginAs(OTHER_ADMIN);
     for (let i = 0; i < 5; i++) assert.equal((await confirm(other.cookie, 'wrong')).status, 401);

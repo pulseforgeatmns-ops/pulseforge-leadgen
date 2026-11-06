@@ -16,7 +16,10 @@ function manifest() {
 
 test('only the exact research-only manifest validates', () => {
   assert.equal(grants.validateManifest(manifest()).maxCycles, 8);
-  for (const mutate of [m => { m.maxCycles = 9; }, m => { m.maxCycles = 7; }, m => { m.dailyGoogleUsdMicros = 5000001; },
+  // SPEC-SCOUT-P0-008: a renewal successor carries only its predecessor's
+  // remaining cycles, so a narrower ceiling validates; a wider one never does.
+  assert.equal(grants.validateManifest({ ...manifest(), maxCycles: 7 }).maxCycles, 7);
+  for (const mutate of [m => { m.maxCycles = 9; }, m => { m.maxCycles = 0; }, m => { m.maxCycles = 7.5; }, m => { m.dailyGoogleUsdMicros = 5000001; },
     m => { m.permissions.preparation = true; }, m => { m.permissions.outbound = true; }, m => { m.permissions.verification = true; },
     m => { m.permissions.discovery = false; }, m => { m.providers.push('prospeo'); }, m => { m.tenantId = '13'; },
     m => { m.operator.role = 'manager'; }, m => { m.authorizationEvidence.kind = 'cli'; }, m => { m.extra = true; },

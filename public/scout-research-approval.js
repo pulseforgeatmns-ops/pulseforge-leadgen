@@ -32,6 +32,10 @@
     research_only_closed_environment_required: 'Recovery maintenance, the provider pause and the outbound restriction must all be in place. They are not, so no grant can be installed.',
     research_only_discovery_memory_required: 'Durable discovery memory is not enabled, so research cannot run safely.',
     research_only_revision_mismatch: 'The running revision differs from the one this grant would be pinned to.',
+    research_only_renewal_scope_changed: 'Something other than the revision changed (mission, program, quarantine, recovery state or limits). Renewal cannot carry it over; approve a new grant instead.',
+    research_only_renewal_not_required: 'This grant already matches the running revision. No renewal is needed.',
+    research_only_cycle_in_progress: 'A cycle is running. Wait for it to finish, then renew.',
+    research_only_grant_expired: 'This grant has expired. Renewal never extends an expiry; approve a new grant.',
     research_only_schema_unavailable: 'The research-only grant tables are not installed. The operator migration has not been applied.',
     research_only_schema_guards_missing: 'The grant safety triggers are missing. Do not approve until the migration is verified.',
     research_only_operator_invalid: 'Your administrator session is not accepted as the approver. Sign in again directly as the Anchor administrator.',
@@ -218,6 +222,7 @@
         ['Installed', utc(grant.installedAt)],
         ['Checked', utc(grant.observedAt)],
       ]),
+      ...(held ? renderRenewal(grant) : []),
       ...renderCandidates(grant.candidates),
       el('h3', null, 'Cycle release history'),
       el('ul', { class: 'list' }, (grant.releases || []).map(r => el('li', null,
@@ -501,6 +506,64 @@
           statement: $('grantStatement').value.trim(), researchMissionId: $('grantMissionId').value.trim() }));
         say('');
       } catch (error) { state.grantPreview = null; $('grantApprove').hidden = true; $('grantResult').replaceChildren(errorBox(error)); say('Grant preview failed.', 'error'); }
+    });
+  }
+  // ---------- renewal (SPEC-SCOUT-P0-008) ----------
+  // A deployment changed the running revision. Renewal is explicit: review the
+  // successor (same scope, remaining cycles, same expiry), then confirm with a
+  // password. The held grant is revoked and the successor installed together.
+  function renderRenewal(grant) {
+    const ref = el('input', { id: 'renewReference', type: 'text', maxlength: '120', autocomplete: 'off',
+      placeholder: 'e.g. anchor-research-renewal-2026-11-06' });
+    const statement = el('textarea', { id: 'renewStatement', rows: '2', maxlength: '2000' });
+    statement.value = `Renew research-only grant ${String(grant.grantId).slice(0, 12)} for running revision ${String(grant.revision?.deployed || '').slice(0, 12)} with unchanged scope.`;
+    const review = el('button', { type: 'button' }, 'Review renewal');
+    const out = el('div', { id: 'renewResult' });
+    review.addEventListener('click', () => reviewRenewal(grant, ref.value.trim(), statement.value.trim(), out));
+    return [el('h3', null, 'Renew for the running revision'),
+      el('p', { class: 'help' }, 'Renewal keeps every limit: the same research mission, budget and expiry, and only the cycles this grant has not used. It needs your password. The held grant is revoked in the same step.'),
+      el('label', null, 'Approval reference', ref), el('label', null, 'Authorization statement', statement), review, out];
+  }
+  async function reviewRenewal(grant, approvalRef, statement, out) {
+    if (!REF.test(approvalRef) || !statement) return say('Enter an approval reference and a statement.', 'error');
+    await busy(async () => {
+      try {
+        const preview = await call(API + 'research-only-grant/renew-preview', { grantId: grant.grantId, approvalRef, statement });
+        const r = preview.renewal || {};
+        const nodes = [facts([['Predecessor', r.predecessorGrantId, true], ['Pinned revision', r.pinnedRevision, true],
+          ['New revision pin', preview.expectedRevision || '—', true], ['Cycles used', String(r.cyclesConsumed ?? '—')],
+          ['Cycles carried (1 released)', String(r.cyclesCarried ?? 0)], ['Expires (unchanged)', utc(preview.expiresAt)],
+          ['Google limit (unchanged)', preview.dailyGoogleUsdMicros ? `${dollars(preview.dailyGoogleUsdMicros)} per UTC day` : '—'],
+          ['Changed scope', (r.changedKeys || []).length ? r.changedKeys.join(', ') : 'none']])];
+        if (preview.blockers?.length) nodes.push(blockerBox(preview.blockers));
+        if (preview.installable) {
+          const go = el('button', { type: 'button' }, 'Renew grant');
+          go.addEventListener('click', () => renewGrant(grant, preview));
+          nodes.push(go);
+        }
+        out.replaceChildren(...nodes);
+      } catch (error) { out.replaceChildren(errorBox(error)); }
+    });
+  }
+  async function renewGrant(grant, preview) {
+    const r = preview.renewal || {};
+    const answer = await confirmDialog({ title: 'Renew research-only grant', action: 'Renew grant', password: true,
+      description: 'The held grant is revoked and a successor with the same scope is installed, pinned to the running revision. One cycle is released; every later cycle needs separate approval.',
+      pairs: [['Predecessor', r.predecessorGrantId, true], ['Cycles carried', String(r.cyclesCarried)], ['Expires', utc(preview.expiresAt)],
+        ['Revision pin', preview.expectedRevision, true], ['Successor grant ID', preview.grantId, true]] });
+    if (!answer) return say('Renewal cancelled. Nothing was recorded.');
+    await busy(async () => {
+      try {
+        say('Confirming your password…');
+        await stepUp(answer.password);
+        say('Renewing the grant…');
+        const result = await call(API + 'research-only-grant/renew', { grantId: grant.grantId, manifest: preview.manifest, manifestHash: preview.manifestHash });
+        say(result.idempotent ? 'This exact renewal was already recorded.' : 'Grant renewed for the running revision.', 'success');
+        await refreshGrant();
+      } catch (error) {
+        $('grantStatus').prepend(errorBox(error, { mutation: true }));
+        say('Renewal did not complete.', 'error');
+      }
     });
   }
   async function installGrant() {

@@ -66,7 +66,9 @@ function validateManifest(raw) {
   const evidence = raw.authorizationEvidence;
   if (!exact(evidence, ['kind', 'statement']) || evidence.kind !== 'admin_session_approval'
     || !text(evidence.statement, 2000)) invalid('evidence');
-  if (raw.maxCycles !== MAX_CYCLES) invalid('cycles');
+  // A new grant always gets MAX_CYCLES; a renewal successor carries only the
+  // predecessor's unconsumed cycles. A ceiling above MAX_CYCLES is never valid.
+  if (!Number.isSafeInteger(raw.maxCycles) || raw.maxCycles < 1 || raw.maxCycles > MAX_CYCLES) invalid('cycles');
   if (!Number.isSafeInteger(raw.dailyGoogleUsdMicros) || raw.dailyGoogleUsdMicros < 1
     || raw.dailyGoogleUsdMicros > MAX_DAILY_USD_MICROS) invalid('budget');
   if (!isoTime(raw.notBefore) || !isoTime(raw.expiresAt) || Date.parse(raw.expiresAt) <= Date.parse(raw.notBefore)
@@ -236,10 +238,22 @@ function summary(manifest) {
 async function previewResearchOnlyGrant(pool, input, actor, { env = process.env } = {}) {
   if (!exact(input, ['approvalRef', 'expiresAt', 'statement', 'researchMissionId']) || !/^[a-zA-Z0-9_.:-]{1,120}$/.test(input.approvalRef || '')
     || !isoTime(input.expiresAt) || !text(input.statement, 2000)) fail('research_only_preview_invalid');
-  const identity = require('./anchorCrmPreparationIdentity');
   if (!actor || actor.role !== 'admin' || !/^[1-9][0-9]{0,18}$/.test(String(actor.id || ''))) fail('research_only_operator_invalid');
   return transaction(pool, async db => {
     await assertSchema(db);
+    const { manifest, now } = await deriveManifest(db, input, actor, env);
+    const blockers = await previewBlockers(db, manifest, actor, now, env);
+    const open = (await db.query("SELECT grant_id FROM scout_research_only_grants WHERE tenant_id='10' AND revoked_at IS NULL")).rows;
+    if (open.length && open[0].grant_id !== hash(manifest)) blockers.push('research_only_other_grant_open');
+    return { ...summary(manifest), manifest, manifestHash: hash(manifest), status: blockers.length ? 'blocked' : 'previewed',
+      blockers, installable: blockers.length === 0, previewOnly: true };
+  }, { readOnly: true });
+}
+
+// Derives a v2 manifest from live state for the signed-in admin, pinned to the
+// running revision. Read-only. Shared by new-grant preview and renewal.
+async function deriveManifest(db, input, actor, env, { maxCycles = MAX_CYCLES, dailyGoogleUsdMicros = MAX_DAILY_USD_MICROS } = {}) {
+    const identity = require('./anchorCrmPreparationIdentity');
     const account = (await db.query('SELECT client_id FROM users WHERE id::text=$1', [String(actor.id)])).rows[0];
     if (!account) fail('research_only_operator_invalid');
     const user = await assertOperatorAccount(db, { id: String(actor.id),
@@ -266,19 +280,19 @@ async function previewResearchOnlyGrant(pool, input, actor, { env = process.env 
       operator: { id: String(user.id), role: 'admin', accountClientId: user.client_id == null ? null : Number(user.client_id),
         sessionHash: identity.sessionBindingHash(actor.sessionId) },
       authorizationEvidence: { kind: 'admin_session_approval', statement: input.statement },
-      maxCycles: MAX_CYCLES, dailyGoogleUsdMicros: MAX_DAILY_USD_MICROS, notBefore, expiresAt: input.expiresAt,
+      maxCycles, dailyGoogleUsdMicros, notBefore, expiresAt: input.expiresAt,
       permissions: { ...PERMISSIONS }, providers: [...PROVIDERS] });
-    const blockers = [];
-    const check = async (fn) => { try { await fn(); } catch (error) { blockers.push(error.code || 'research_only_preview_failed'); } };
-    await check(() => assertEnvironment(manifest, env));
-    await check(() => liveBindings(db, manifest, { lock: false }));
-    await check(() => identity.assertPreparationApprover(db, approverIdentity(manifest), { lock: false, sessionId: actor.sessionId }));
-    await check(() => assertWindow(manifest, now));
-    const open = (await db.query("SELECT grant_id FROM scout_research_only_grants WHERE tenant_id='10' AND revoked_at IS NULL")).rows;
-    if (open.length && open[0].grant_id !== hash(manifest)) blockers.push('research_only_other_grant_open');
-    return { ...summary(manifest), manifest, manifestHash: hash(manifest), status: blockers.length ? 'blocked' : 'previewed',
-      blockers, installable: blockers.length === 0, previewOnly: true };
-  }, { readOnly: true });
+    return { manifest, now };
+}
+async function previewBlockers(db, manifest, actor, now, env) {
+  const identity = require('./anchorCrmPreparationIdentity');
+  const blockers = [];
+  const check = async (fn) => { try { await fn(); } catch (error) { blockers.push(error.code || 'research_only_preview_failed'); } };
+  await check(() => assertEnvironment(manifest, env));
+  await check(() => liveBindings(db, manifest, { lock: false }));
+  await check(() => identity.assertPreparationApprover(db, approverIdentity(manifest), { lock: false, sessionId: actor.sessionId }));
+  await check(() => assertWindow(manifest, now));
+  return blockers;
 }
 
 async function installResearchOnlyGrant(pool, input, actor, { env = process.env } = {}) {
@@ -308,6 +322,11 @@ async function installResearchOnlyGrant(pool, input, actor, { env = process.env 
     if ((await db.query("SELECT 1 FROM scout_research_only_grants WHERE tenant_id='10' AND revoked_at IS NULL")).rows.length)
       fail('research_only_other_grant_open');
     assertWindow(manifest, await dbNow(db));
+    await insertGrant(db, manifest);
+    return { ...summary(manifest), releasedCycles: INITIAL_RELEASED_CYCLES, status: 'installed', installed: true, idempotent: false };
+  });
+}
+async function insertGrant(db, manifest) {
     await db.query(`INSERT INTO scout_research_only_grants(grant_id,approval_ref,tenant_id,program_id,mission_id,research_mission_id,search_fingerprint,
       manifest,operator_id,operator_role,approver_session_hash,max_cycles,daily_google_usd_micros,not_before,expires_at)
       VALUES($1,$2,'10',$3,$4,$13,$5,$6,$7,'admin',$8,$9,$10,$11,$12)`,
@@ -319,7 +338,109 @@ async function installResearchOnlyGrant(pool, input, actor, { env = process.env 
     await appendRelease(db, { grantId: hash(manifest), previousAllowance: 0, newAllowance: INITIAL_RELEASED_CYCLES,
       operator: manifest.operator, approvalReference: manifest.approvalRef,
       statement: manifest.authorizationEvidence.statement, expectedRevision: manifest.expectedRevision }, 'initial_install');
-    return { ...summary(manifest), releasedCycles: INITIAL_RELEASED_CYCLES, status: 'installed', installed: true, idempotent: false };
+}
+
+// SPEC-SCOUT-P0-008 Part B: explicit renewal after a deployment changed the
+// running revision. Exact-revision pinning is unchanged: the successor is an
+// ordinary v2 grant pinned to the running revision. Renewal never widens the
+// grant: identical tenant, program, missions, fingerprint, quarantine and
+// recovery bindings, permissions and providers; the same daily ceiling (which
+// is tenant-wide per UTC day across grants); the predecessor's expiry, never
+// later; and only the predecessor's unconsumed cycles, one released. Any
+// difference in those is a blocker, never a silent carry-over.
+const RENEWAL_FIXED_KEYS = Object.freeze(['version', 'kind', 'tenantId', 'programId', 'missionId', 'programHash', 'sourceHash',
+  'researchMissionId', 'researchMissionHash', 'fingerprint', 'quarantineDecisionHash', 'recoveryControlHash',
+  'dailyGoogleUsdMicros', 'expiresAt', 'permissions', 'providers']);
+async function renewalPlan(db, input, actor, env, { lock }) {
+  const row = (await db.query(`SELECT * FROM scout_research_only_grants WHERE grant_id=$1 AND tenant_id='10'${lock ? ' FOR UPDATE' : ''}`,
+    [input.grantId])).rows[0];
+  if (!row) fail('research_only_grant_not_found');
+  const predecessor = storedManifest(row);
+  const blockers = [];
+  if (row.revoked_at) blockers.push('research_only_grant_revoked');
+  const now = await dbNow(db);
+  if (+now >= Date.parse(predecessor.expiresAt)) blockers.push('research_only_grant_expired');
+  if (revisionStatus(predecessor, env).matches) blockers.push('research_only_renewal_not_required');
+  const cycles = (await db.query(`SELECT count(*)::int AS consumed,
+    count(*) FILTER (WHERE state='claimed' AND lease_expires_at>clock_timestamp())::int AS live
+    FROM scout_research_only_cycles WHERE grant_id=$1`, [row.grant_id])).rows[0];
+  if (cycles.live) blockers.push('research_only_cycle_in_progress');
+  const remaining = predecessor.maxCycles - cycles.consumed;
+  if (remaining < 1) blockers.push('research_only_cycles_exhausted');
+  if (blockers.some(code => ['research_only_grant_revoked', 'research_only_grant_expired', 'research_only_cycles_exhausted'].includes(code)))
+    return { predecessor, row, cycles, blockers, successor: null, changedKeys: [] };
+  const { manifest: successor } = await deriveManifest(db, { approvalRef: input.approvalRef, expiresAt: predecessor.expiresAt,
+    statement: input.statement, researchMissionId: predecessor.researchMissionId }, actor, env,
+  { maxCycles: remaining, dailyGoogleUsdMicros: predecessor.dailyGoogleUsdMicros });
+  // Canonical comparison: stored manifests come back from JSONB with reordered keys.
+  const changedKeys = RENEWAL_FIXED_KEYS.filter(key => hash({ v: successor[key] }) !== hash({ v: predecessor[key] }));
+  if (changedKeys.length) blockers.push('research_only_renewal_scope_changed');
+  if (successor.approvalRef === predecessor.approvalRef) blockers.push('research_only_grant_conflict');
+  return { predecessor, row, cycles, blockers, successor, changedKeys, now };
+}
+function renewalSummary(plan) {
+  return { predecessorGrantId: hash(plan.predecessor), pinnedRevision: plan.predecessor.expectedRevision,
+    cyclesConsumed: plan.cycles.consumed, cyclesCarried: plan.successor?.maxCycles ?? 0,
+    changedKeys: plan.changedKeys, unchangedScope: RENEWAL_FIXED_KEYS.filter(key => !plan.changedKeys.includes(key)) };
+}
+const renewalInput = input => exact(input, ['grantId', 'approvalRef', 'statement']) && HEX64.test(input.grantId || '')
+  && /^[a-zA-Z0-9_.:-]{1,120}$/.test(input.approvalRef || '') && text(input.statement, 2000);
+
+async function previewResearchOnlyGrantRenewal(pool, input, actor, { env = process.env } = {}) {
+  if (!renewalInput(input)) fail('research_only_preview_invalid');
+  if (!actor || actor.role !== 'admin' || !/^[1-9][0-9]{0,18}$/.test(String(actor.id || ''))) fail('research_only_operator_invalid');
+  return transaction(pool, async db => {
+    await assertSchema(db);
+    const plan = await renewalPlan(db, input, actor, env, { lock: false });
+    const blockers = [...plan.blockers];
+    if (plan.successor) blockers.push(...await previewBlockers(db, plan.successor, actor, plan.now, env));
+    const unique = [...new Set(blockers)];
+    return { renewal: renewalSummary(plan), ...(plan.successor ? { ...summary(plan.successor), manifest: plan.successor,
+      manifestHash: hash(plan.successor) } : {}), status: unique.length ? 'blocked' : 'previewed', blockers: unique,
+    installable: unique.length === 0, previewOnly: true };
+  }, { readOnly: true });
+}
+
+// One transaction: the predecessor is revoked (referencing the successor's
+// approval) and the successor installed, or neither. The route requires the
+// same fresh password step-up as a new installation.
+async function renewResearchOnlyGrant(pool, input, actor, { env = process.env } = {}) {
+  if (!exact(input, ['grantId', 'manifest', 'manifestHash']) || !HEX64.test(input.grantId || '') || !HEX64.test(input.manifestHash || ''))
+    fail('research_only_explicit_approval_required');
+  const manifest = validateManifest(input.manifest);
+  if (hash(manifest) !== input.manifestHash) fail('research_only_exact_confirmation_required');
+  const identity = require('./anchorCrmPreparationIdentity');
+  if (!actor || String(actor.id) !== manifest.operator.id || actor.role !== 'admin'
+    || identity.sessionBindingHash(actor.sessionId) !== manifest.operator.sessionHash) fail('research_only_operator_invalid');
+  assertEnvironment(manifest, env);
+  return transaction(pool, async db => {
+    await recoveryLock(db, true);
+    await assertSchema(db);
+    const installed = (await db.query('SELECT * FROM scout_research_only_grants WHERE grant_id=$1 FOR UPDATE', [hash(manifest)])).rows[0];
+    if (installed) {
+      storedManifest(installed);
+      if (installed.revoked_at) fail('research_only_grant_revoked');
+      return { ...summary(manifest), status: 'renewed', renewed: false, idempotent: true };
+    }
+    const plan = await renewalPlan(db, { grantId: input.grantId, approvalRef: manifest.approvalRef,
+      statement: manifest.authorizationEvidence.statement }, actor, env, { lock: true });
+    if (plan.blockers.length) fail(plan.blockers[0]);
+    // The approved successor must be exactly what renewal derives now, apart
+    // from the moment it was previewed (notBefore). Nothing else may differ.
+    const { notBefore: _a, ...expected } = plan.successor, { notBefore: _b, ...approved } = manifest;
+    if (hash(expected) !== hash(approved)) fail('research_only_renewal_scope_changed');
+    await identity.assertPreparationApprover(db, approverIdentity(manifest), { sessionId: actor.sessionId });
+    await assertOperatorAccount(db, manifest.operator);
+    await liveBindings(db, manifest);
+    assertWindow(manifest, await dbNow(db));
+    const revoked = await db.query(`UPDATE scout_research_only_grants SET revoked_at=clock_timestamp(),revoke_approval_ref=$2,revoked_by=$3
+      WHERE grant_id=$1 AND revoked_at IS NULL RETURNING grant_id`, [input.grantId, manifest.approvalRef, `admin:${manifest.operator.id}:renewal`]);
+    if (revoked.rows.length !== 1) fail('research_only_grant_revoked');
+    if ((await db.query("SELECT 1 FROM scout_research_only_grants WHERE tenant_id='10' AND revoked_at IS NULL")).rows.length)
+      fail('research_only_other_grant_open');
+    await insertGrant(db, manifest);
+    return { ...summary(manifest), renewal: renewalSummary(plan), releasedCycles: INITIAL_RELEASED_CYCLES,
+      status: 'renewed', renewed: true, idempotent: false };
   });
 }
 
@@ -467,7 +588,8 @@ async function inspectResearchOnlyGrant(pool, grantId, { env = process.env } = {
     const mismatched = !revision.matches && ['installed', 'awaiting_cycle_release'].includes(status);
     const hold = mismatched ? { reason: 'research_only_revision_mismatch', releasable: false,
       action: 'No cycle can run or be released under this grant on the running revision. Either redeploy the pinned revision, '
-        + 'or revoke this grant and approve a successor pinned to the running revision. Nothing is repinned automatically.' } : null;
+        + 'or renew it: an administrator-approved successor with the same scope, the remaining cycles and the same expiry, '
+        + 'pinned to the running revision. Nothing is repinned automatically.', renewable: true } : null;
     return { ...summary(manifest), observedAt: now.toISOString(),
       // Keep the historical receipt status alias, while exposing the canonical
       // execution outcome separately from a pause awaiting another release.
@@ -699,6 +821,7 @@ module.exports = {
   MAX_CYCLES, INITIAL_RELEASED_CYCLES, MAX_DAILY_USD_MICROS, PERMISSIONS, SPEND_CODE, RECOVERY_LOCK_KEY,
   schedulerEnabled, validateManifest, assertEnvironment, assertSchema,
   previewResearchOnlyGrant, installResearchOnlyGrant, revokeResearchOnlyGrant, inspectResearchOnlyGrant, revisionStatus,
+  previewResearchOnlyGrantRenewal, renewResearchOnlyGrant, RENEWAL_FIXED_KEYS,
   previewResearchCycleRelease, releaseResearchCycle, validateCycleRelease,
   claimResearchCycle, finishResearchCycle, runInResearchScope, assertResearchOnlyScope,
   allowsResearchOnlyProvider, googleMeter,
