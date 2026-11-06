@@ -55,6 +55,7 @@ const executionRequest = require('./ExecutionRequest');
 const executionRouter = require('./ExecutionRouter');
 const executionEvidence = require('./ExecutionEvidence');
 const authorizationConstraints = require('./AuthorizationConstraints');
+const authorizationAmendment = require('./AuthorizationAmendment');
 const executionApproval = require('./ExecutionApproval');
 const outboundExecution = require('./OutboundExecution');
 const communicationObservation = require('./CommunicationObservation');
@@ -86,6 +87,13 @@ module.exports = {
   stageActionClass: authorizationConstraints.stageActionClass,
   intentActionClass: authorizationConstraints.intentActionClass,
   isAuthorizationConstraintError: authorizationConstraints.isAuthorizationConstraintError,
+  SYNTHETIC_EVIDENCE_BLOCKED: authorizationConstraints.SYNTHETIC_EVIDENCE_BLOCKED,
+  missionHasSyntheticEvidence: authorizationConstraints.missionHasSyntheticEvidence,
+  isSyntheticEvidenceError: authorizationConstraints.isSyntheticEvidenceError,
+  authorizationConstraintsHash: authorizationAmendment.authorizationConstraintsHash,
+  computeAmendedConstraints: authorizationAmendment.computeAmendedConstraints,
+  previewAuthorization: authorizationAmendment.previewAuthorization,
+  applyAuthorizationAmendment: authorizationAmendment.applyAuthorizationAmendment,
   classifyExecutionEvidence: executionEvidence.classifyExecutionEvidence,
   specialistCompletionUnverified: executionEvidence.specialistCompletionUnverified,
   assertContract,

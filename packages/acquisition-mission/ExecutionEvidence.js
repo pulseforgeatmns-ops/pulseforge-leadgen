@@ -189,6 +189,16 @@ function classifyExecutionEvidence(input = {}) {
     return out(EXECUTION_STATES.OUTCOME_UNKNOWN, 'no_handler_result');
   }
   if (result.rolledBack === true) {
+    const syntheticErr = result.error && (result.error.code === 'synthetic_evidence_blocked'
+      ? result.error
+      : (result.error.cause && result.error.cause.code === 'synthetic_evidence_blocked' ? result.error.cause : null));
+    if (syntheticErr) {
+      return out(EXECUTION_STATES.BLOCKED, 'synthetic_evidence', {
+        transactionId,
+        actionClass: text(syntheticErr.actionClass),
+        provenance: SYNTHETIC_PROVENANCE,
+      });
+    }
     if (isConstraintError(result.error)) {
       const err = result.error.code === 'authorization_constraint_blocked' ? result.error : result.error.cause;
       return out(EXECUTION_STATES.BLOCKED, 'authorization_constraint', {

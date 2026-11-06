@@ -128,3 +128,70 @@ test('authorization constraints are durable across restart and only ever tighten
   assert.ok(durable.prohibited.includes('content'), 'added restriction committed');
   assert.ok(durable.prohibited.includes('outreach'), 'existing restriction kept');
 });
+
+test('governed amendments and synthetic stamps are durable and replay-safe across restart', async (t) => {
+  const pg = await startDisposablePostgres('max-p0-amend-');
+  const pool = new Pool({ connectionString: pg.connectionString });
+  pool.on('error', () => {});
+  t.after(async () => {
+    await pool.end().catch(() => {});
+    await pg.stop();
+  });
+  const service = require('../services/acquisitionMission');
+  const amo = require('../packages/acquisition-mission');
+  const approval = require('../packages/max/workspace/AmoOperatorApproval');
+
+  const created = await createMission(runtimeFor(pool), '10',
+    'Create a new acquisition mission. Objective: Acquire one recurring commercial cleaning client ' +
+    'from a property management company in the Greater Manchester area. No outreach.');
+  const missionId = created.mission.id;
+
+  // Restart, preview, amend through the service (durable TME commit).
+  const preview = await service.previewMissionAuthorization({ tenantId: '10', missionId },
+    { pool, acquisitionMissionRuntime: runtimeFor(pool) });
+  const input = {
+    tenantId: '10', missionId,
+    change: { lift: ['outreach', 'outreach_authorization'], reason: 'Approved live outreach after review.' },
+    expectedConstraintsHash: preview.constraintsHash,
+    amendmentId: 'amend_pg_restart_0001',
+    approver: { id: '7', role: 'admin', name: 'Admin' },
+  };
+  const applied = await service.amendMissionAuthorization(input, { pool, acquisitionMissionRuntime: runtimeFor(pool) });
+  assert.equal(applied.alreadyApplied, false);
+
+  // Restart: amended constraints and the audit contribution come back from PostgreSQL.
+  const [recovered] = await runtimeFor(pool).list('10');
+  assert.equal(recovered.authorizationConstraints.revision, 1);
+  assert.ok(!recovered.authorizationConstraints.prohibited.includes('outreach'));
+  const rows = (await pool.query(
+    `SELECT payload FROM acquisition_mission_contributions WHERE mission_id = $1 AND kind = 'constraints'`, [missionId]
+  )).rows;
+  assert.equal(rows.length, 1);
+  // The payload column stores the whole contribution row; the operator record is nested.
+  const stored = rows[0].payload.payload || rows[0].payload;
+  assert.equal(stored.action, 'authorization_amendment');
+  assert.equal(stored.approvedBy.role, 'admin');
+  assert.deepEqual(stored.lifted, ['outreach', 'outreach_authorization']);
+
+  // Replay after restart applies nothing twice.
+  const replay = await service.amendMissionAuthorization(input, { pool, acquisitionMissionRuntime: runtimeFor(pool) });
+  assert.equal(replay.alreadyApplied, true);
+  const count = await pool.query(
+    `SELECT count(*)::int AS n FROM acquisition_mission_contributions WHERE mission_id = $1 AND kind = 'constraints'`, [missionId]
+  );
+  assert.equal(count.rows[0].n, 1);
+
+  // Synthetic stamp: a fixture discovery committed durably stays synthetic after restart.
+  const runtime = runtimeFor(pool);
+  await runtime.hydrate('10');
+  const engine = runtime.engine();
+  const persistDurable = require('../services/acquisitionMissionPersistence')
+    .bindStagePersistDurable({ pool }, engine, '10');
+  await approval.advancePlanAfterApproval({ engine, mission: engine.get(missionId, '10'), tenantId: '10',
+    question: 'Approved.', pool, persistStage: persistDurable });
+  await approval.advanceDiscoveryAfterApproval({ engine, mission: engine.get(missionId, '10'), tenantId: '10',
+    question: 'Approved.', allowFixtureFallback: true, pool, persistStage: persistDurable });
+  const [afterRestart] = await runtimeFor(pool).list('10');
+  assert.equal(afterRestart.syntheticEvidence && afterRestart.syntheticEvidence.provenance, 'synthetic_fixture');
+  assert.ok(amo.missionHasSyntheticEvidence(afterRestart));
+});

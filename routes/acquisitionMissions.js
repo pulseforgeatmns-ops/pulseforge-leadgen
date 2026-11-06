@@ -17,6 +17,8 @@
  * GET  /api/v1/amo/missions/:id/outcome-learning
  * POST /api/v1/amo/missions/:id/outcome-learning/evaluate
  * POST /api/v1/amo/ask
+ * GET  /api/v1/amo/missions/:id/authorization
+ * POST /api/v1/amo/missions/:id/authorization/amendments
  */
 
 const express = require('express');
@@ -34,6 +36,8 @@ const {
   progressMission,
   answerOperator,
   executeCanonical,
+  previewMissionAuthorization,
+  amendMissionAuthorization,
 } = require('../services/acquisitionMission');
 
 const requireActor = [requireAuth, requireRole('admin', 'manager', 'client')];
@@ -67,7 +71,11 @@ function fail(res, err, fallbackCode, fallbackStatus = 500) {
     code === 'amo_mission_not_found' ? 404
       : code === 'MISSION_STATE_INCONSISTENT' ? 409
       : code === 'cer_permission_denied' || code === 'cer_policy_blocked'
-        || code === 'authorization_constraint_blocked' ? 403
+        || code === 'authorization_constraint_blocked'
+        || code === 'authorization_amendment_forbidden'
+        || code === 'synthetic_evidence_blocked' ? 403
+      : code === 'authorization_amendment_stale' ? 409
+      : code === 'authorization_amendment_invalid' || code === 'authorization_amendment_noop' ? 400
       : code === 'MISSION_RUNTIME_BOUNDARY_VIOLATION' ? 409
       : code === 'amo_tenant_required'
         || code === 'amo_tenant_mismatch'
@@ -363,6 +371,66 @@ router.post('/api/v1/amo/missions/:id/execute', requireActor, async (req, res) =
     return fail(res, err, 'amo_execute_failed');
   }
 });
+
+/**
+ * P0 — current mission authorization restrictions and the hash an amendment
+ * must be bound to. Read-only.
+ */
+router.get('/api/v1/amo/missions/:id/authorization', requireActor, async (req, res) => {
+  try {
+    const tenantId = actorTenantId(req);
+    if (tenantId == null) return res.status(400).json({ error: 'no_tenant', message: 'No active client selected.' });
+    const preview = await previewMissionAuthorization({ tenantId, missionId: req.params.id }, { pool });
+    noStore(res);
+    return res.json({ spec: 'SPEC-MAX-RELIABILITY-004', ...preview });
+  } catch (err) {
+    return fail(res, err, 'amo_authorization_preview_failed');
+  }
+});
+
+/**
+ * P0 — governed amendment of mission restrictions. Max never calls this.
+ * Admin or manager session; any LOOSENING (lift) needs an admin and a fresh,
+ * single-use password confirmation (purpose mission_authorization_amendment)
+ * on this exact session. The change commits durably in one TME stage bound to
+ * the reviewed constraints hash; existing restrictions apply until it commits.
+ */
+router.post('/api/v1/amo/missions/:id/authorization/amendments',
+  requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+    try {
+      const tenantId = actorTenantId(req);
+      if (tenantId == null) return res.status(400).json({ error: 'no_tenant', message: 'No active client selected.' });
+      if (!req.is('application/json')) return res.status(415).json({ error: 'json_required' });
+      const user = req.user || (req.session && req.session.user) || {};
+      const lift = Array.isArray(req.body?.lift) ? req.body.lift : [];
+      if (lift.length) {
+        if (user.role !== 'admin') {
+          return res.status(403).json({ error: 'authorization_amendment_forbidden', message: 'Lifting a mission restriction requires an admin.' });
+        }
+        const confirmed = await require('../utils/freshConfirmation').consume(pool, {
+          sessionId: req.sessionID, userId: user.id, purpose: 'mission_authorization_amendment',
+        }).catch(() => false);
+        if (!confirmed) {
+          return res.status(403).json({ error: 'fresh_confirmation_required', code: 'fresh_confirmation_required',
+            writesMayHaveOccurred: false, retryAllowed: true });
+        }
+        // The marker was consumed in SQL; never re-save this request's stale snapshot.
+        req.session = null;
+      }
+      const result = await amendMissionAuthorization({
+        tenantId,
+        missionId: req.params.id,
+        change: { lift, add: Array.isArray(req.body?.add) ? req.body.add : [], reason: req.body?.reason },
+        expectedConstraintsHash: req.body?.expectedConstraintsHash,
+        amendmentId: req.body?.amendmentId,
+        approver: { id: user.id != null ? String(user.id) : '', role: user.role, name: user.name || user.email },
+      }, { pool });
+      noStore(res);
+      return res.status(result.alreadyApplied ? 200 : 201).json({ spec: 'SPEC-MAX-RELIABILITY-004', ...result });
+    } catch (err) {
+      return fail(res, err, 'amo_authorization_amendment_failed');
+    }
+  });
 
 router.post('/api/v1/amo/ask', requireActor, async (req, res) => {
   try {

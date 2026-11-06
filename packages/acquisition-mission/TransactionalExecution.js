@@ -1,6 +1,12 @@
 'use strict';
 
-const { assertActionAuthorized, stageActionClass } = require('./AuthorizationConstraints');
+const {
+  assertActionAuthorized,
+  stageActionClass,
+  assertNotSyntheticForAction,
+  outputIsSynthetic,
+  SYNTHETIC_PROVENANCE,
+} = require('./AuthorizationConstraints');
 
 /**
  * SPEC-131 — Transactional Mission Execution (TME).
@@ -240,6 +246,8 @@ async function executeMissionStage(input = {}) {
     // P0 — durable operator restrictions bind every stage, whichever surface
     // (chat, approval button, REST, autonomous progression) reached it.
     assertActionAuthorized(prior, stageActionClass(specialist, stage), { specialist, stage });
+    // P0 — synthetic (fixture) evidence never reaches outreach.
+    assertNotSyntheticForAction(prior, stageActionClass(specialist, stage), { specialist, stage });
     runtimeState = isStructuredMissionApproved(prior)
       ? RUNTIME_STATES.APPROVED
       : RUNTIME_STATES.PLANNED;
@@ -311,6 +319,32 @@ async function executeMissionStage(input = {}) {
       });
     } catch (err) {
       throw wrapAs(TME_CLASSES.PERSISTENCE, err, 'tme_persistence', err.message || 'Persistence failure.');
+    }
+
+    // P0 — synthetic evidence is stamped in the same commit, so the durable
+    // mission and its discovery record can never look like live results.
+    if (outputIsSynthetic(output)) {
+      const stamped = engine.get(missionId, tenantId);
+      const discovery = engine.store.listContributions(missionId)
+        .filter((row) => row.kind === 'discovery')
+        .pop();
+      if (discovery && typeof engine.store.updateContribution === 'function') {
+        engine.store.updateContribution(discovery.id, (row) => ({
+          ...row,
+          payload: { ...(row.payload || {}), provenance: SYNTHETIC_PROVENANCE },
+        }));
+      }
+      engine.store.putMission({
+        ...stamped,
+        syntheticEvidence: (stamped && stamped.syntheticEvidence) || {
+          provenance: SYNTHETIC_PROVENANCE,
+          specialist,
+          stage,
+          transactionId,
+          discoveryContributionId: discovery ? discovery.id : null,
+          at: new Date().toISOString(),
+        },
+      });
     }
 
     runtimeState = RUNTIME_STATES.COMPLETED;

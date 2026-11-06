@@ -147,10 +147,10 @@ Operator `execution_approval` → `outreach_authorization`; Max → `planning`.
 
 - **Creation:** `createMission` stores constraints from `input.authorizationConstraints`
   and the objective; the Max AMO handoff extracts them from the operator's raw text.
-- **Monotonic:** `mergeAuthorizationConstraints` only adds. A resumed request
-  with new restrictions tightens and persists; nothing loosens them. Lifting a
-  restriction requires an explicit operator decision (not implemented — create
-  a new mission).
+- **Monotonic:** `mergeAuthorizationConstraints` only adds (and preserves
+  `revision` + amendment history). A resumed request with new restrictions
+  tightens and persists. Nothing in Max can loosen them; the only way is a
+  governed amendment (§5.1).
 - **Persistence / recovery:** part of the mission payload; `missionFromRow`
   restores it on hydrate (verified on real PostgreSQL across a restart).
 - **Enforcement, independent of conversation:**
@@ -161,6 +161,49 @@ Operator `execution_approval` → `outreach_authorization`; Max → `planning`.
      progression and direct callers are covered; the stage rolls back.
 - **Surfaces:** chat renders an explicit blocked turn (approval not consumed);
   REST returns 403.
+
+### 5.1 Governed amendments
+
+`packages/acquisition-mission/AuthorizationAmendment.js`, exposed only as:
+
+- `GET  /api/v1/amo/missions/:id/authorization` — current constraints and
+  `constraintsHash` (read-only).
+- `POST /api/v1/amo/missions/:id/authorization/amendments`
+  `{ lift: [...], add: [...], reason, expectedConstraintsHash, amendmentId }`.
+
+| Rule | Where enforced |
+|---|---|
+| Admin or manager session only; Max / autonomous / client / anonymous refused | route role gate + module `assertApprover` |
+| Any **loosening** (lift, or ending review-only) requires an **admin** | route + module |
+| Loosening requires a fresh, single-use password step-up on the same session (`POST /api/v1/auth/fresh-confirmation`, purpose `mission_authorization_amendment`) | route (`freshConfirmation.consume`, atomic in SQL) |
+| Bound to the reviewed `constraintsHash`; a changed view → `409 authorization_amendment_stale` | TME preconditions (re-read inside the transaction) |
+| Operator `constraints` contribution (before, after, lifted, added, reason, approver, transaction) and the new constraints commit in one TME stage, or nothing changes | `executeMissionStage` + `persistStageCommit` |
+| Existing restrictions enforced until that commit; a failed durable write rolls back | TME rollback |
+| Idempotent by `amendmentId`: retry / replay after restart returns `alreadyApplied` | contribution lookup |
+| Tenant isolation | tenant-scoped `engine.get` (`amo_tenant_mismatch`) |
+
+Asking Max in chat to lift a restriction changes nothing: no Max code path
+calls the amendment module, and restriction language in the request can only
+tighten.
+
+### 5.2 Synthetic data isolation
+
+When a TME stage commits output from the Scout fixture
+(`provenance: 'synthetic_fixture'`), the same commit stamps
+`mission.syntheticEvidence` (sticky) and the discovery contribution's
+`payload.provenance`. Previously the committed discovery dropped the marker and
+recorded `qualifiedCount: 2` indistinguishable from live results.
+
+| Boundary | Guard |
+|---|---|
+| Outreach authorization / outreach (`APPROVE_EXECUTION`, `EXECUTE_OUTBOUND`, Operator `execution_approval`, Emmett `execute`) | router pre-check (audited `blocked_synthetic_evidence`) + TME → `synthetic_evidence_blocked` (403 on REST, explicit turn in chat) |
+| CRM inventory (`prospects` / `companies`) | `admitMissionBoundCandidates` refuses before any query |
+| Acquisition learning | `extractLearningCandidateRows` returns none |
+| Reporting | every later Max execution turn on the mission states the data is synthetic; inspection exposes `syntheticEvidence` |
+
+Internal planning artifacts (prioritization, drafts) may still be produced on a
+synthetic mission, labelled; they can never be sent. Governed outbound paths
+already pin `allowFixtureFallback: false`.
 
 ## 6. Routing fallback integrity
 
@@ -202,26 +245,34 @@ turn; informational fallbacks keep the reasoning answer with
   replay / TME bypass / chat refusal with no Scout call / autonomous
   progression; provider-evidence states; synthetic Scout data; fixture
   default off; fallback detection and the explicit "Not executed" turn.
+- `packages/max/workspace/tests/p0DeploymentReadiness.test.js` (in `test:max`)
+  — amendment approver rules (Max/autonomous/client/manager-lift refused),
+  atomic audited lift, stale-hash refusal, replay idempotency, rollback keeps
+  restrictions, tenant isolation, history preserved, chat cannot lift; HTTP
+  role and step-up gates; synthetic stamp, outreach/CRM/learning isolation,
+  synthetic notice on later turns.
 - `test/maxReliabilityRecoveryPostgres.test.js` (in
   `test:max:expectations:postgres`) — real disposable PostgreSQL: commit,
   restart recovery, no duplicate on re-issue, tenant isolation, lost database
   fails closed with no phantom mission; constraints survive restart, cannot
-  loosen, and tighten durably.
+  loosen, and tighten durably; amendments and their audit rows survive restart
+  and replay applies once; the synthetic stamp survives restart.
 
 ## 8. Known limits
 
 - Constraint extraction is lexical. Unusual phrasing ("hold off on any
   emails") may not be recognized; it then falls back to the existing approval
   gates, which still require explicit human approval.
-- There is no operator flow to lift a restriction; it is permanent for the
-  mission.
+- Amendments have no UI yet; operators use the REST endpoints (documented in
+  `docs/P0-MAX-PRODUCTION-ACCEPTANCE.md` §S3).
 - `ExecutionEvidence` trusts handler-supplied fields (`transactionId`,
   `providerMessageId`); it does not re-query Brevo or Places. Provider
   acceptance is not delivery — delivery, opens and replies arrive later by webhook.
 - Discovery is verified by provenance + a discovery record; result quality is
   not judged.
 - `allowFixtureFallback: true` remains available to authenticated REST callers
-  and tests; such results are labelled synthetic but can still be committed.
+  and tests; such results are committed but stamped synthetic and isolated
+  from outreach, CRM admission and learning.
 - Fallback detection is lexical; an execution request with no recognizable
   command language falls back to the reasoning answer (trail recorded).
 - The broad `test:amo` package suite has 67 failures on `main` that pre-date

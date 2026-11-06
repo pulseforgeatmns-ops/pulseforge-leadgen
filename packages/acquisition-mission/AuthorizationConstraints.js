@@ -143,7 +143,20 @@ function mergeAuthorizationConstraints(...parts) {
     sources: present.flatMap((p) => Array.isArray(p.sources) ? p.sources : []),
     origin: present[0].origin || 'operator_instruction',
     establishedAt,
+    // Governed amendment history survives later tightening (never rewritten).
+    revision: Math.max(0, ...present.map((p) => Number(p.revision) || 0)),
+    amendments: uniqueAmendments(present.flatMap((p) => Array.isArray(p.amendments) ? p.amendments : [])),
   };
+}
+
+function uniqueAmendments(rows) {
+  const seen = new Set();
+  return rows.filter((row) => {
+    const key = row && row.amendmentId;
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /** True when `next` adds at least one prohibition to `current`. */
@@ -218,6 +231,60 @@ function assertActionAuthorized(mission, actionClass, extras = {}) {
   throw err;
 }
 
+/**
+ * Synthetic (fixture) evidence isolation. A mission whose committed evidence
+ * came from synthetic data is stamped `mission.syntheticEvidence` (sticky) and
+ * can never authorize or perform outreach, be admitted into the CRM, or feed
+ * learning. Internal planning artifacts may still be produced, labelled.
+ */
+const SYNTHETIC_PROVENANCE = 'synthetic_fixture';
+const SYNTHETIC_EVIDENCE_BLOCKED = 'synthetic_evidence_blocked';
+const SYNTHETIC_BLOCKED_CLASSES = new Set([ACTION_CLASSES.OUTREACH_AUTHORIZATION, ACTION_CLASSES.OUTREACH]);
+
+/** @param {object|null} output - TME stage output */
+function outputIsSynthetic(output) {
+  if (!output || typeof output !== 'object') return false;
+  const scout = output.scoutResult;
+  return Boolean(
+    output.provenance === SYNTHETIC_PROVENANCE ||
+      (scout && scout.provenance === SYNTHETIC_PROVENANCE) ||
+      (scout && scout.payload && scout.payload.provenance === SYNTHETIC_PROVENANCE)
+  );
+}
+
+/** @param {object|null} mission */
+function missionHasSyntheticEvidence(mission) {
+  return Boolean(mission && mission.syntheticEvidence && mission.syntheticEvidence.provenance === SYNTHETIC_PROVENANCE);
+}
+
+/**
+ * Throw `synthetic_evidence_blocked` when a synthetic-evidence mission would
+ * authorize or perform outreach.
+ * @param {object|null} mission
+ * @param {string} actionClass
+ * @param {object} [extras]
+ */
+function assertNotSyntheticForAction(mission, actionClass, extras = {}) {
+  if (!missionHasSyntheticEvidence(mission) || !SYNTHETIC_BLOCKED_CLASSES.has(actionClass)) return;
+  const err = amoError(
+    SYNTHETIC_EVIDENCE_BLOCKED,
+    'This mission contains synthetic (fixture) discovery data; it cannot authorize or perform outreach. Start a new mission with live discovery.'
+  );
+  err.spec = SPEC;
+  err.actionClass = actionClass;
+  err.missionId = mission && mission.id;
+  err.syntheticEvidence = mission.syntheticEvidence;
+  Object.assign(err, extras);
+  throw err;
+}
+
+/** @param {unknown} err */
+function isSyntheticEvidenceError(err) {
+  if (!err) return false;
+  if (err.code === SYNTHETIC_EVIDENCE_BLOCKED) return true;
+  return Boolean(err.cause && err.cause.code === SYNTHETIC_EVIDENCE_BLOCKED);
+}
+
 /** @param {unknown} err */
 function isAuthorizationConstraintError(err) {
   if (!err) return false;
@@ -238,4 +305,10 @@ module.exports = {
   evaluateAction,
   assertActionAuthorized,
   isAuthorizationConstraintError,
+  SYNTHETIC_PROVENANCE,
+  SYNTHETIC_EVIDENCE_BLOCKED,
+  outputIsSynthetic,
+  missionHasSyntheticEvidence,
+  assertNotSyntheticForAction,
+  isSyntheticEvidenceError,
 };

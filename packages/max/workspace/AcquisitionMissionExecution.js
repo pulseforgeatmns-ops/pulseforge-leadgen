@@ -1422,6 +1422,7 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
         audit,
       });
     } catch (err) {
+      if (amo.isSyntheticEvidenceError(err)) return buildSyntheticBlockedTurn({ mission, action, intent });
       if (!amo.isAuthorizationConstraintError(err)) throw err;
       return buildConstraintBlockedTurn({ err, mission, action, intent });
     }
@@ -1461,13 +1462,13 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     executionRequest = chained.executionRequest || executionRequest;
   }
 
-  const response = applyExecutionTruth(buildExecutionMissionResponse({
+  const response = applySyntheticNotice(applyExecutionTruth(buildExecutionMissionResponse({
     mission: snapshot.mission || mission,
     snapshot,
     action,
     question,
     executionResult,
-  }), execution);
+  }), execution), snapshot.mission || mission, execution);
 
   if (input.session && input.session.context && typeof input.session.context === 'object') {
     input.session.context.missionId = mission.id;
@@ -1535,6 +1536,63 @@ function buildConstraintBlockedTurn({ err, mission, action, intent }) {
       verified: false,
       reason: 'authorization_constraint',
       evidence: { actionClass, prohibited: (constraints && constraints.prohibited) || [] },
+      correlation: { missionId: mission.id, intent, specialist: amo.specialistForIntent(intent) },
+    },
+  };
+}
+
+/**
+ * P0 — every later turn on a synthetic-evidence mission says so, so reports
+ * built from it can never pass for live results.
+ */
+function applySyntheticNotice(response, mission, execution) {
+  if (!response || !amo.missionHasSyntheticEvidence(mission)) return response;
+  const structured = response.structured || {};
+  structured.metadata = { ...(structured.metadata || {}), syntheticEvidence: mission.syntheticEvidence };
+  response.structured = structured;
+  if (execution && execution.state === 'synthetic_result') return response; // already stated
+  const notice = 'Note: this mission\'s discovery data is synthetic (fixture), not live results; it cannot be used for outreach.';
+  response.prose = [notice, response.prose].filter(Boolean).join('\n\n');
+  structured.answer = [notice, structured.answer].filter(Boolean).join('\n\n');
+  return response;
+}
+
+/**
+ * P0 — synthetic (fixture) evidence refused an outreach request before dispatch.
+ */
+function buildSyntheticBlockedTurn({ mission, action, intent }) {
+  const answer = [
+    'Not executed: this mission\'s discovery data is synthetic (fixture), not live provider results.',
+    'Synthetic data cannot authorize or perform outreach, enter the CRM, or feed learning.',
+    'No specialist was dispatched and no external action was taken. Start a new mission with live discovery.',
+  ].join(' ');
+  const structured = buildStructuredResponse({
+    answer,
+    reasoning: [`Mission ${mission.id} carries synthetic evidence.`],
+    relatedEntities: [{ id: mission.id, type: 'acquisition_mission', name: mission.title || mission.id }],
+  });
+  Object.assign(structured.metadata, {
+    acquisitionMission: true,
+    acquisitionMissionExecution: true,
+    missionExecutionAction: action,
+    executionState: 'blocked',
+    executionVerified: false,
+    blocker: amo.SYNTHETIC_EVIDENCE_BLOCKED,
+    syntheticEvidence: mission.syntheticEvidence || null,
+  });
+  return {
+    reason: 'acquisition_mission_synthetic_evidence_blocked',
+    structured,
+    prose: answer,
+    mission,
+    action,
+    executionResult: null,
+    executionRequest: null,
+    execution: {
+      state: 'blocked',
+      verified: false,
+      reason: 'synthetic_evidence',
+      evidence: { provenance: 'synthetic_fixture' },
       correlation: { missionId: mission.id, intent, specialist: amo.specialistForIntent(intent) },
     },
   };

@@ -38,6 +38,8 @@ const {
   assertActionAuthorized,
   evaluateAction,
   intentActionClass,
+  missionHasSyntheticEvidence,
+  assertNotSyntheticForAction,
 } = require('./AuthorizationConstraints');
 
 function cerError(code, message, extras = {}) {
@@ -479,6 +481,19 @@ async function routeExecutionRequest(request, context = {}) {
       request,
     });
     assertActionAuthorized(mission, actionClass, { requestId: request.id, intent: request.intent });
+  }
+  if (missionHasSyntheticEvidence(mission)) {
+    try {
+      assertNotSyntheticForAction(mission, actionClass, { requestId: request.id, intent: request.intent });
+    } catch (err) {
+      recordRouterAudit({
+        requestId: request.id, source: request.source, intent: request.intent, missionId: request.missionId,
+        operatorId: request.operatorId, runtimeOwner, specialist, action,
+        outcome: 'blocked_synthetic_evidence', executionState: 'blocked',
+        errorCode: err.code, replay, request,
+      });
+      throw err;
+    }
   }
 
   const dispatched = await dispatch(request, context, mission, handlers, runtimeOwner);
