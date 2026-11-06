@@ -195,3 +195,44 @@ test('governed amendments and synthetic stamps are durable and replay-safe acros
   assert.equal(afterRestart.syntheticEvidence && afterRestart.syntheticEvidence.provenance, 'synthetic_fixture');
   assert.ok(amo.missionHasSyntheticEvidence(afterRestart));
 });
+
+test('after restart, an explicit id owned by another tenant is refused by the durable check and nothing is overwritten', async (t) => {
+  // The in-memory guard in Engine.create only sees hydrated missions. A fresh
+  // process serving tenant 11 has never loaded tenant 10's missions, so the
+  // durable SELECT in runtime.create is the only barrier against an upsert that
+  // would rewrite tenant 10's payload (ON CONFLICT (id) DO UPDATE).
+  const pg = await startDisposablePostgres('max-p0-id-collision-');
+  const pool = new Pool({ connectionString: pg.connectionString });
+  pool.on('error', () => {});
+  t.after(async () => {
+    await pool.end().catch(() => {});
+    await pg.stop();
+  });
+
+  const created = await createMission(runtimeFor(pool), '10',
+    'Set up a review-only contact intake mission. Objective: Acquire one recurring commercial cleaning client ' +
+    'from a property management company in the Greater Manchester area. No outreach.');
+  assert.equal(created.created, true);
+  const missionId = created.mission.id;
+  const before = (await pool.query('SELECT tenant_id, payload FROM acquisition_missions WHERE id = $1', [missionId])).rows[0];
+
+  // Fresh process; only tenant 11 is hydrated.
+  const restarted = runtimeFor(pool);
+  await assert.rejects(
+    restarted.create({ id: missionId, tenantId: '11', clientId: 11, objective: OBJECTIVE_ONLY }, { pool }),
+    (err) => err.code === 'amo_mission_exists'
+  );
+  // Same tenant, same id, also refused (would drop the persisted restrictions).
+  await assert.rejects(
+    runtimeFor(pool).create({ id: missionId, tenantId: '10', clientId: 10, objective: OBJECTIVE_ONLY }, { pool }),
+    (err) => err.code === 'amo_mission_exists'
+  );
+
+  const after = (await pool.query('SELECT tenant_id, payload FROM acquisition_missions WHERE id = $1', [missionId])).rows[0];
+  assert.equal(after.tenant_id, '10');
+  assert.deepEqual(after.payload, before.payload, 'durable payload untouched');
+  assert.equal(after.payload.authorizationConstraints.reviewOnly, true);
+  assert.deepEqual(await runtimeFor(pool).list('11'), [], 'nothing leaked into tenant 11');
+  const count = await pool.query('SELECT count(*)::int AS n FROM acquisition_missions');
+  assert.equal(count.rows[0].n, 1);
+});

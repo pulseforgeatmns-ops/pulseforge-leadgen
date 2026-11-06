@@ -8,6 +8,50 @@ checks are all green (record the exact SHA in §6 at sign-off).
 
 ---
 
+## 0. Final production-readiness review (2026-11-06)
+
+Read-only review against PR HEAD `5b2db0c` (plus a test-only commit that adds
+one PostgreSQL regression test). No deploy, merge, database write or
+configuration change was made.
+
+### 0.1 Proven
+
+| Item | Evidence |
+|---|---|
+| PR is current with `main` | merge-base = `main` tip `43427e7`; GitHub `mergeable_state = clean` |
+| CI on `5b2db0c` | 15 check runs: all required green (PR CI gate, Max orchestration, Global startup smoke, Anchor governed outbound safety, Revenue PostgreSQL, Paige, Signal, Decision shadow, identity-workflow, portal); 4 path-gated jobs skipped by the planner |
+| Local, Node 22 + PostgreSQL 16 (non-root) | `test:max` 1700/1700; `test:max:unit` 1681/1681; `test:max:expectations:postgres` 43/43 (44 with the new test); `test:max:attention:postgres` 33/33; AO + Anchor review PostgreSQL 5/5 |
+| `test:amo` | 498/544 on the PR **and** 498/544 on `main`, with the same 46 failing suites (stale fixtures: unhandled `ALTER TABLE` in the memory pool, a pending-decision assertion). The failures predate the PR, and no workflow runs `test:amo` |
+| Production DB identity | Railway project `charming-trust`, service `pulseforge-leadgen` (production) has no database service in its own project. Its network-flow log shows its only database egress goes to `66.33.22.231:43478`. Its DNS log resolves `shinkansen.proxy.rlwy.net` → `66.33.22.231`. Port `43478` is the TCP proxy of service `Postgres` in project `amused-harmony`, the only Postgres in the workspace with a public proxy. **The production database is `amused-harmony/Postgres` via `shinkansen.proxy.rlwy.net:43478`.** Credentials were not read |
+| Production SHA (rollback target) | deployment `c773084a-a679-4402-91a1-b5620737b2d7` = `43427e7` (`canRollback: true`) |
+| **Merge = deploy** | the service tracks `main` with `checkSuites: false`; #1069/#1070/#1071 each started a production deployment 2–3 s after the merge commit. Merging PR #1065 deploys it immediately, without waiting for CI |
+| No new schema | the PR adds no migration and no startup DDL. Its only new production SQL is `SELECT tenant_id FROM acquisition_missions WHERE id = $1` (and the same query with `AND tenant_id = $2`), which uses the verified `id`/`tenant_id` columns |
+| Places spend enforcement unchanged | the PR touches no Places, `apiSpendControl` or pause code. Fixture fallback now only replaces live results when a caller opts in, and it never adds Places calls (fallback runs after the live attempt) |
+
+### 0.2 Schema compatibility
+
+| Dependency | Status |
+|---|---|
+| `acquisition_missions` (id PK, tenant_id NOT NULL, payload JSONB NOT NULL); PR's id/tenant reads; payload carrying `authorizationConstraints` / `syntheticEvidence` | **Confirmed compatible** (operator inspection + code). Legacy payloads without the new fields mean "no restrictions" |
+| Upsert `ON CONFLICT (id) DO UPDATE` (pre-existing) | Compatible. It does not update `tenant_id`, but it does overwrite `payload`. Cross-tenant ids are refused before the upsert (new PostgreSQL regression test). See §1.3 #10 |
+| Other `acquisition_mission_*` tables, `missions`, `mission_audit_events` | **Unverified**, but created by `CREATE TABLE/INDEX IF NOT EXISTS` at runtime. **Behaviour change:** a failed generic mission-store init (`ensureMissionSchema`) now fails closed instead of using memory. No `Postgres store failed — using in-memory` line appears in production logs since 2026-10-30. That is consistent with a working init, but it is not proof (init is lazy) |
+| AO CRM `prospects` columns | Operator confirmed `ao_current_status`, `ao_call_suppressed`, `ao_outreach_review_required`. `ao_next_action`, `ao_disqualification_reason`, `ao_paused`, `ao_last_touch_at` etc. are **unverified**. The PR adds no AO query. Production already runs the same AO code at `43427e7`, and no "column … does not exist" error appears in today's logs |
+| `content_recommendations`, `max_spreadsheet_contacts` | **Confirmed absent / not applied** (production logs: `relation "content_recommendations" does not exist`, command deck). Pre-existing, from unapplied operator migrations (`2026-08-16-specialist-direction.sql`, `2026-10-07-max-spreadsheet-reliability.sql`). The PR does not reference them, so this neither blocks nor is fixed by the PR |
+| Migration fingerprints | unchanged (no migration files in the diff) |
+
+### 0.3 Places spending control (traced)
+- Every Places HTTP call goes through `utils/placesApi.js#guardedAttempt`, which calls `reserveApiCall`. That takes a provider advisory lock and checks the `api_spend_policies` row for `google_places`.
+- **Global, not per tenant.** The daily and monthly USD and request limits apply across all tenants. The Tenant 10 research pause (`ANCHOR_RESEARCH_PROVIDERS_PAUSED`) and the research-only grant meter apply to tenant 10 only, so an acceptance tenant is limited by the provider-wide row alone.
+- **Fail-closed when configured.** A reservation error throws before any network call. If a limit is set, an unknown cost is refused (`api_cost_unknown`).
+- **Fail-open when absent:** `enforcePolicy(null)` returns. **With no `google_places` row, there is no limit.**
+- The operator's "budget" table search would not match `api_spend_policies`. `api_usage_events` exists, and it is created by the same migration file, so the policy table almost certainly exists. **Its row is unverified** (acceptance §1.3 query).
+
+### 0.4 Production observations (read-only logs, not PR-caused)
+- `ANTHROPIC_API_KEY` returns `401 invalid x-api-key` for the 12:00 UTC Paige/Mira jobs (2026-11-05 and 2026-11-06). Whether Max workspace turns are affected is unverified. Acceptance cannot judge Max prose if the model call fails.
+- `[amo] hydrate skip inconsistent mission mission_30b36f10-…` (prepared outreach ready, execution approval not pending). The PR keeps skipping it; it does not fail the tenant's hydrate.
+
+---
+
 ## 1. Final review — findings
 
 ### 1.1 Blocking defects (found in release review, fixed in `aeaced5`)
@@ -39,26 +83,36 @@ Each has a regression test that fails on the pre-fix code
 7. Places spend cap is provider-wide (`api_spend_policies`), not per tenant.
 8. Restriction / fallback detection is lexical.
 9. Amendments have no UI (REST only).
+10. `persistMission` upserts with `ON CONFLICT (id) DO UPDATE` and has no tenant predicate. Today the create path refuses cross-tenant ids first. Defence in depth: add `WHERE acquisition_missions.tenant_id = EXCLUDED.tenant_id` and treat 0 rows as a conflict. This needs separate approval because it changes the shared write path.
+11. One production mission (`mission_30b36f10-…`) is skipped on every hydrate as inconsistent. Repair it through the governed path; never by hand-editing SQL.
 
 ---
 
 ## 2. GO / NO-GO
 
+> **Merge and deploy are one event.** The production service auto-deploys
+> `main` without waiting for CI (§0.1). Therefore every "GO for deploy" item
+> below must hold **before** the merge, unless an operator first turns off
+> auto-deploy for `pulseforge-leadgen`. Turning it off is a production
+> configuration change and needs its own authorization.
+
 **GO for merge** only when all hold:
 - [ ] All required GitHub checks green on the exact HEAD being merged (PR CI gate = success).
 - [ ] Human code review approval of PR #1065, including §1.1 fixes.
 - [ ] No unresolved blocking findings.
+- [ ] Every "GO for deploy" item below holds (merge deploys).
 
 **GO for deploy** only when all hold:
-- [ ] Merge done; deploy of that SHA authorized (A1).
-- [ ] Read-only schema check (acceptance §1.2) passed: AO CRM columns present (required by #1064, already on `main`), mission tables present.
-- [ ] Places spend policy recorded (acceptance §1.3).
+- [ ] Deploy of that SHA authorized (A1).
+- [ ] Read-only schema check (acceptance §1.2) passed: mission tables present, and the full AO CRM column set present (required by #1064, already on `main`).
+- [ ] Places spend policy row recorded (acceptance §1.3), with a `daily_usd_limit` low enough to serve as the A3 cap, or the procedural cap accepted in writing.
+- [ ] Anthropic key failure (§0.4) understood: either fixed by the operator, or Max workspace turns shown to work without it.
 - [ ] Governed Anchor outbound state recorded (last 3 days of sends) for post-deploy comparison.
-- [ ] A rollback target SHA (current production) recorded.
+- [x] Rollback target recorded: deployment `c773084a-a679-4402-91a1-b5620737b2d7` = `43427e7`.
 
 **NO-GO** if any:
 - Any required check red or pending on the HEAD to be merged.
-- Schema check shows missing `ao_current_status` / `ao_next_action` / `ao_disqualification_reason` (then #1064 — already on `main` — is itself broken in production; fix that first).
+- Schema check shows any AO CRM column from `migrations/2026-09-28-ao-crm-001.sql` missing (then #1064, already on `main`, is itself broken in production; fix that first).
 - Mission tables missing (fail-closed boot would disable missions).
 - Any production mutation would be required to deploy (none is expected: this PR adds no migration).
 
@@ -107,5 +161,6 @@ Trigger on any §5 rollback condition.
 | GitHub checks | | |
 | Code review approval | | |
 | Schema check result | | |
-| Previous production SHA (rollback target) | | |
+| Previous production SHA (rollback target) | `43427e7` (Railway deployment `c773084a-a679-4402-91a1-b5620737b2d7`) | Railway metadata, 2026-11-06 |
+| Production database | `amused-harmony/Postgres` via `shinkansen.proxy.rlwy.net:43478` (§0.1) | Railway network-flow + DNS logs, 2026-11-06 |
 | Deploy authorization (A1) | | |

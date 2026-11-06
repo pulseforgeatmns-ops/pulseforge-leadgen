@@ -34,18 +34,31 @@ address, or any spend beyond A3. Record the abort and stop.
 ## 1. Preflight (read-only)
 
 ### 1.1 Deployment identity
+- Merging deploys immediately: `pulseforge-leadgen` auto-deploys `main` and does
+  not wait for CI. Complete §1.2–§1.3 **before** the merge.
 - Railway deployment shows the merged commit SHA of PR #1065.
+- No `invalid x-api-key` / `authentication_error` in the server log after one
+  Max workspace turn. If one appears, stop: the Anthropic key returned 401 on
+  2026-11-05/06, and Max prose cannot be judged until the operator fixes it.
 - `GET /api/status` → 200.
 - Server log contains **no** `[missionRuntime] mission persistence unavailable — failing closed`.
   If it does, stop: missions are unavailable by design (fail closed); fix the
   database before continuing.
 
 ### 1.2 Schema (A5 — read-only `SELECT`s, no DDL)
+Database identity is established (release checklist §0.1). Production
+`pulseforge-leadgen` connects to `amused-harmony/Postgres` through
+`shinkansen.proxy.rlwy.net:43478`. Run these queries on that endpoint only, and
+record the port you connected to. 2026-11-06 inspection already confirmed
+`acquisition_missions` (74 rows, no NULL tenant/payload, PK on `id`) and three
+AO columns. The queries below cover what is still unverified.
 ```sql
 SELECT column_name FROM information_schema.columns
- WHERE table_name = 'prospects'
-   AND column_name IN ('ao_current_status','ao_next_action','ao_disqualification_reason');
--- expect 3 rows (migration 2026-09-28-ao-crm-001 applied; required by #1064)
+ WHERE table_schema = 'public' AND table_name = 'prospects'
+   AND column_name IN ('ao_current_status','opportunity_stage','ao_account_priority','ao_why_account_matters',
+     'ao_next_action','ao_last_touch_at','ao_last_touch_type','ao_last_outcome','help_requested','help_reason',
+     'help_requested_at','help_resolved_at','help_manager_note','ao_disqualification_reason','ao_paused');
+-- expect 15 rows (migration 2026-09-28-ao-crm-001 applied; required by #1064)
 
 SELECT to_regclass('acquisition_missions'), to_regclass('acquisition_mission_contributions'),
        to_regclass('acquisition_mission_execution_audit'),
@@ -72,8 +85,13 @@ SELECT count(*) AS calls, COALESCE(sum(COALESCE(estimated_usd, reserved_usd)), 0
  WHERE provider = 'google_places'
    AND created_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';
 ```
+- The table is `api_spend_policies` (migration `2026-10-14-api-usage-control.sql`,
+  the same file that creates `api_usage_events`). A search for "budget" will
+  not find it.
 - Record the row. `reserveApiCall` refuses any Places call that would exceed
-  `daily_usd_limit` (shared across all tenants for the UTC day).
+  `daily_usd_limit` (shared across all tenants for the UTC day). **No row means
+  no limit** (`enforcePolicy(null)` returns). The Tenant 10 research pause does
+  not cover the acceptance tenant.
 - Record today's Places ledger total before S5 and after S9. The run's spend is
   the difference and must be ≤ A3.
 - If there is no limit, or the remaining headroom exceeds A3, the cap is only
