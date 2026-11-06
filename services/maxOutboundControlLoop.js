@@ -11,6 +11,7 @@ const { admissionReceiptDiagnostic, providerReceiptDiagnostic, scoutRampDiagnost
 const { governedContactReason, founderFirst, contactEvidence } = require('../utils/governedContactEligibility');
 
 const { canonicalOutboundEmailIneligibilityReason, normalizeDomain } = require('../utils/canonicalEmailEligibility');
+const { canonicalDomainSql, sameNameIsDistinctBusiness } = require('../packages/scout/identity/BusinessIdentity');
 const { normalizeVertical } = require('../utils/normalize');
 const {
   ENRICHABLE_SCOUT_VERTICALS,
@@ -126,6 +127,29 @@ function replenishmentOutcome({ plan, execute, discoveryBlockedReason, scout, ne
   }
   if (scout.discovery?.kind === 'blocked') return { status: 'zero_yield', reason: scout.discovery.reason || 'discovery_blocked' };
   return { status: 'zero_yield', reason: scout.discoveryAttempted ? 'no_new_qualified_inventory' : 'discovery_not_attempted' };
+}
+
+// Per-cycle counts from this pass's durable writes, never transient matches.
+function replenishmentScorecard(scout, netNewCleanInventory, { researchOnly = false, paidResearchUsdMicros = null } = {}) {
+  const admission = scout?.admissionMeasured ? (scout.admission || {}) : null;
+  const n = key => (admission ? Number(admission[key] || 0) : null);
+  const netNew = admission ? Number(admission.netNewQualified ?? (n('admittedToEnrichment') + n('retainedForResearch'))) : null;
+  return {
+    discovered: n('discovered'),
+    evaluated: n('evaluated'),
+    previouslyKnown: n('previouslyKnown'),
+    qualified: n('fit'),
+    identityCollisions: n('identityCollisions'),
+    newlyRetained: researchOnly ? n('retainedForResearch') : 0,
+    newlyQueued: researchOnly ? 0 : n('admittedToEnrichment'),
+    netNewQualified: netNew,
+    // Research-only retention is never outreach-ready inventory.
+    netNewCleanInventory: researchOnly ? 0 : Number(netNewCleanInventory || 0),
+    outreachReady: !researchOnly && Number(netNewCleanInventory || 0) > 0,
+    paidResearchUsdMicros,
+    costPerNetNewQualifiedUsdMicros: paidResearchUsdMicros != null && netNew > 0
+      ? Math.round(paidResearchUsdMicros / netNew) : null,
+  };
 }
 
 function boundedInt(value, fallback, min = 1, max = 100) {
@@ -604,7 +628,10 @@ async function loadScoutDiscoveryBackoff(pool, tenantId, fingerprint, now = new 
         diversify: false, exhaustedGeneration: generation, lastAttemptAt: new Date(latest.created_at).toISOString(),
         retryAt: retryAt.toISOString(), action: 'review_or_approve_a_revised_search_scope' };
     }
-    return null;
+    // SPEC-SCOUT-P0-007: the daily re-observation stays on the final approved
+    // generation. Restarting at generation 0 re-walked every handled generation.
+    return { reason: 'approved_search_plan_exhausted_recheck', fingerprint, searchGeneration: generation,
+      diversify: true, exhaustedGeneration: generation, lastAttemptAt: new Date(latest.created_at).toISOString() };
   }
   // Anchor keeps a diversified generation once reached. Snapping back to an
   // exhausted generation 0 would spend every other cycle re-proving exhaustion.
@@ -628,7 +655,16 @@ async function loadScoutDiscoveryBackoff(pool, tenantId, fingerprint, now = new 
   ), 0);
   const lastAttemptAt = new Date(rows[0].created_at);
   const retryAt = new Date(lastAttemptAt.getTime() + cooldownMinutes * 60_000);
-  if (+retryAt <= +now) return null;
+  if (+retryAt <= +now) {
+    // SPEC-SCOUT-P0-007: an expired cooldown resumes at the next approved
+    // generation; it never returns to the generation that just yielded zero.
+    // Past the last generation the legacy retry applies: handled queries are
+    // never repurchased (durable checkpoints), so it re-observes only.
+    return latestGeneration < SCOUT_DISCOVERY_MAX_GENERATION
+      ? { reason: 'repeated_zero_yield_rotate_search_resume', fingerprint, consecutiveZeroYieldAttempts: rows.length,
+        searchGeneration: latestGeneration + 1, diversify: true, lastAttemptAt: lastAttemptAt.toISOString() }
+      : null;
+  }
   return {
     reason: latestGeneration < SCOUT_DISCOVERY_MAX_GENERATION
       ? 'repeated_zero_yield_rotate_search'
@@ -699,7 +735,8 @@ async function persistDiscoveredCompanies(pool, store, {
       // Selection is read-only. The processing loop rechecks ownership before
       // each actual request. Newly visited same-company work must not activate
       // alternate-contact providers, even for correctly tenant-bound Anchor.
-      const ownership = await classifyInventoryOwnership(store, { company: name, domain, website }, {
+      const ownership = await classifyInventoryOwnership(store, { company: name, domain, website,
+        location: company.location || company.address || null }, {
         pool, clientId: tenant.clientId, policy: scoutContext.program?.policy,
       });
       if (ownership.kind === OWNERSHIP_KINDS.CLEAR) eligible.push(company);
@@ -734,11 +771,25 @@ async function persistDiscoveredCompanies(pool, store, {
       continue;
     }
 
-    const ownership = await classifyInventoryOwnership(store, { company: name, domain, website }, {
+    const ownership = await classifyInventoryOwnership(store, { company: name, domain, website,
+      location: company.location || company.address || null }, {
       pool,
       clientId: tenant.clientId,
       policy: scoutContext.program?.policy,
     });
+    // SPEC-SCOUT-P0-007: every identity already in the CRM is previously known,
+    // whatever its ownership disposition, and never net-new inventory. Only a
+    // same-company/different-contact match continues, into the governed
+    // alternate-contact workflow; every other kind stops before any paid work.
+    if (ownership.kind !== OWNERSHIP_KINDS.CLEAR) {
+      counters.previouslyKnown = (counters.previouslyKnown || 0) + 1;
+    }
+    if (ownership.kind === OWNERSHIP_KINDS.KNOWN_COMPANY) {
+      reject('owned_elsewhere');
+      await finishTicket(company, { state: 'deferred', reason: 'ownership_policy_observed', retryAfterMs: 24 * 60 * 60_000,
+        evidence: { ownershipKind: ownership.kind, reason: ownership.reason, tenantId: tenant.tenantId } });
+      continue;
+    }
     if (ownership.kind === OWNERSHIP_KINDS.ALREADY_USABLE_CANONICAL) {
       counters.alreadyUsable = (counters.alreadyUsable || 0) + 1;
       await finishTicket(company, { state: 'deferred', reason: 'already_usable_observed', retryAfterMs: 24 * 60 * 60_000 });
@@ -764,12 +815,84 @@ async function persistDiscoveredCompanies(pool, store, {
       await finishTicket(company, { state: 'deferred', reason: 'ownership_unresolved', retryAfterMs: 24 * 60 * 60_000 });
       continue;
     }
+    // SPEC-SCOUT-P0-007: the queue/research ledgers are Scout's discovery
+    // memory. A canonical-domain match is the same business; a name-only match
+    // is the same business unless both domains and localities differ.
+    const identity = { domain, location: company.location || company.address || null };
+    // Lazy: enrichment verticals are only resolved when a duplicate is examined.
+    const queueParams = () => [tenant.clientId, domain, name, CANONICAL_ENRICHABLE_SCOUT_VERTICALS.map(v => v.toLowerCase()),
+      enrichmentVerticals(tenant, scoutContext)];
+    const queueMatchSql = `SELECT u.id, u.client_id, u.domain, u.website_url, u.location,
+          ${require('./scoutQueueAccounting').ELIGIBILITY_SQL} AS eligibility_bucket,
+          ${require('./scoutQueueAccounting').RETRY_AFTER_SQL} AS retry_after_ms,
+          u.enrichment_attempts,u.last_attempt_at
+          FROM scout_unenriched u
+          WHERE u.client_id=$1 AND (${canonicalDomainSql('u.domain')}=lower($2) OR lower(trim(u.company))=lower(trim($3)))
+          AND NOT (u.source = 'max_buffer_replenishment'
+            AND COALESCE(u.enrichment_attempts, 0) = 0
+            AND NOT (lower(trim(u.vertical)) = ANY($4::text[])))`;
+    const sameIdentity = row => normalizeDomain(row.domain || row.website_url) === domain
+      || !sameNameIsDistinctBusiness({ domain: row.domain, website: row.website_url, location: row.location }, identity);
+    const alreadyKnown = (reason, evidence) => Object.assign(Error('Scout candidate identity is already known'), {
+      scoutAlreadyKnown: true, scoutQueueOutcome: { state: reason === 'research_identity_collision' ? 'blocked' : 'handled',
+        reason, evidence: { tenantId: tenant.tenantId, ...evidence } } });
+    // Split the duplicate predicate's matches into the same business and
+    // same-name rows proven to be different businesses (ADR-092).
+    const splitQueueMatches = rows => ({ known: (rows || []).filter(sameIdentity),
+      distinctIds: (rows || []).filter(row => !sameIdentity(row)).map(row => String(row.id)) });
+    // A queue match that is already runnable resolves the ticket as a known
+    // identity; held queue work keeps the ticket deferred on the queue's clock.
+    const knownQueueError = matched => {
+      if (!matched.some(row => row.eligibility_bucket === 'eligible_now')) {
+        const retryable = matched.filter(row => ['retry_cooldown', 'attempt_limit_hold'].includes(row.eligibility_bucket)
+          && !(row.eligibility_bucket === 'attempt_limit_hold' && row.last_attempt_at == null));
+        const earliest = retryable.sort((a,b) => Number(a.retry_after_ms)-Number(b.retry_after_ms))[0];
+        return Object.assign(Error('Existing Scout queue work is held'), { scoutQueueHeld: true,
+          scoutQueueOutcome: earliest ? { state: 'deferred',
+            reason: earliest.eligibility_bucket === 'attempt_limit_hold' ? 'queue_attempt_cooldown' : 'queue_retry_cooldown',
+            retryAfterMs: Math.max(60*60_000, Math.ceil(Number(earliest.retry_after_ms))) }
+            : { state: 'blocked', reason: matched.every(row => row.eligibility_bucket === 'unsupported_vertical')
+              ? 'queue_unsupported_vertical' : 'queue_attempt_limit' } });
+      }
+      return alreadyKnown('already_queued', { matchedBy: 'enrichment_queue', queueRowIds: matched.map(r => String(r.id)) });
+    };
+    const resolveKnownIdentity = async error => {
+      if (error.scoutAlreadyKnown && error.scoutQueueOutcome.reason === 'research_identity_collision') {
+        counters.identityCollisions = (counters.identityCollisions || 0) + 1;
+      } else {
+        counters.alreadyQueued += 1;
+        counters.previouslyKnown = (counters.previouslyKnown || 0) + 1;
+      }
+      // A held queue row still needs this ticket; a known identity is resolved.
+      if (error.scoutQueueHeld) checkpointDeferred = true;
+      await finishTicket(company, error.scoutQueueOutcome);
+    };
+    // Read-only: queue (and, for research, the retained ledger) identity match.
+    // An unobservable memory never blocks; the durable write still dedups.
+    const knownFromDiscoveryMemory = async () => {
+      try {
+        const queue = splitQueueMatches((await pool.query(queueMatchSql, queueParams()))?.rows).known;
+        if (queue.length) { queueAccounting.observe(queue, { tenantId: tenant.tenantId }); return knownQueueError(queue); }
+        if (scoutContext.researchCandidateSink) {
+          const prior = (await require('./scoutResearchMission').findRetainedCandidate(pool, { company: name, domain }))
+            .filter(row => normalizeDomain(row.domain) === domain
+              || !sameNameIsDistinctBusiness({ domain: row.domain, location: row.location }, identity));
+          if (prior.length) return alreadyKnown('already_queued', { matchedBy: 'research_candidate',
+            researchCandidateIds: prior.map(r => String(r.id)) });
+        }
+      } catch (_) { return null; }
+      return null;
+    };
     let businessEvidence = null;
     let investigatedThisCandidate = false;
     let evidenceOutcome = null;
     const initialAdmission = evaluateReplenishmentAdmission(company, admissionContext);
     if (initialAdmission.reason === 'unclassifiable_vertical' && scoutContext.investigateBusinessEvidence && websiteInvestigations < 20
       && (!evidenceCursor || (ownership.kind === OWNERSHIP_KINDS.CLEAR && evidenceCursor.take(company)))) {
+      // SPEC-SCOUT-P0-007: a business already in the enrichment queue is known.
+      // Resolve it from discovery memory instead of crawling its website again.
+      const known = ticketPass ? await knownFromDiscoveryMemory() : null;
+      if (known) { await resolveKnownIdentity(known); continue; }
       websiteInvestigations += 1;
       investigatedThisCandidate = true;
       const response = await require('./scoutWebsiteBusinessEvidence').acquireBusinessEvidence(company, admissionContext,
@@ -785,6 +908,14 @@ async function persistDiscoveredCompanies(pool, store, {
         await finishTicket(company, { state: 'deferred', reason: 'unresolved_business_evidence', retryAfterMs: 24 * 60 * 60_000,
           evidence: { admissionReason: admission.reason, facilityDecision: admission.facilityDecision } });
         continue;
+      }
+      // SPEC-SCOUT-P0-007: a pass that may not investigate websites still
+      // resolves identities its discovery memory already holds, instead of
+      // parking a known business as awaiting website evidence.
+      if (admission.reason === 'unclassifiable_vertical' && ticketPass && !investigatedThisCandidate
+        && scoutContext.businessEvidenceNotAuthorized === true) {
+        const known = await knownFromDiscoveryMemory();
+        if (known) { await resolveKnownIdentity(known); continue; }
       }
       // Missing website evidence may reflect the per-run investigation cap or
       // a temporary fetch failure. Retain replay until this is resolved.
@@ -867,22 +998,8 @@ async function persistDiscoveredCompanies(pool, store, {
       admission.provenance
     ) + (businessEvidence ? ` | business_evidence: ${JSON.stringify(businessEvidence)}` : '')
       + (admission.facilityDecision ? ` | facility_decision: ${JSON.stringify(admission.facilityDecision)}` : '');
-    const writeQueue = async db => {
-      if (ticketPass) {
-        // Different provider identities may resolve to the same canonical queue
-        // predicate. Serialize both OR keys before INSERT ... WHERE NOT EXISTS.
-        for (const key of [`${tenant.tenantId}:domain:${domain.toLowerCase()}`, `${tenant.tenantId}:name:${name.toLowerCase()}`].sort()) {
-          await db.query('SELECT pg_advisory_xact_lock(261023,hashtext($1))', [key]);
-        }
-      }
-      // Research-only discoveries are retained outside the enrichment queue.
-      if (scoutContext.researchCandidateSink) {
-        require('./scoutResearchOnlyGrant').assertResearchOnlyScope(tenant.tenantId);
-        return require('./scoutResearchMission').retainCandidate(db, scoutContext.researchCandidateSink, {
-          company: name, domain, websiteUrl: website || `https://${domain}`, vertical: admission.vertical,
-          location: company.location || admission.provenance?.discoveryCity || null, notes });
-      }
-      const insertedRow = await db.query(`
+    const queueLocation = company.location || admission.provenance?.discoveryCity || null;
+    const insertQueue = (db, excludeIds = []) => db.query(`
       INSERT INTO scout_unenriched (
         client_id, company, website_url, domain, vertical, location, source,
         enrichment_attempts, last_attempt_at, notes
@@ -891,8 +1008,9 @@ async function persistDiscoveredCompanies(pool, store, {
       WHERE NOT EXISTS (
         SELECT 1 FROM scout_unenriched u
         WHERE u.client_id=$8 AND (
-          lower(u.domain)=lower($3) OR lower(trim(u.company))=lower(trim($1))
+          ${canonicalDomainSql('u.domain')}=lower($3) OR lower(trim(u.company))=lower(trim($1))
         )
+        AND NOT (u.id::text = ANY($9::text[]))
         AND NOT (
           u.source = 'max_buffer_replenishment'
           AND COALESCE(u.enrichment_attempts, 0) = 0
@@ -905,36 +1023,70 @@ async function persistDiscoveredCompanies(pool, store, {
       website || `https://${domain}`,
       domain,
       admission.vertical,
-      company.location || admission.provenance?.discoveryCity || null,
+      queueLocation,
       notes,
       CANONICAL_ENRICHABLE_SCOUT_VERTICALS.map(v => v.toLowerCase()),
       tenant.clientId,
+      excludeIds,
     ]);
-      if (ticketPass && !insertedRow.rowCount) {
-        const matched = await db.query(`SELECT u.id, u.client_id,
-          ${require('./scoutQueueAccounting').ELIGIBILITY_SQL} AS eligibility_bucket,
-          ${require('./scoutQueueAccounting').RETRY_AFTER_SQL} AS retry_after_ms,
-          u.enrichment_attempts,u.last_attempt_at
-          FROM scout_unenriched u
-          WHERE u.client_id=$1 AND (lower(u.domain)=lower($2) OR lower(trim(u.company))=lower(trim($3)))
-          AND NOT (u.source = 'max_buffer_replenishment'
-            AND COALESCE(u.enrichment_attempts, 0) = 0
-            AND NOT (lower(trim(u.vertical)) = ANY($4::text[])))`,
-        [tenant.clientId, domain, name, CANONICAL_ENRICHABLE_SCOUT_VERTICALS.map(v => v.toLowerCase()),
-          enrichmentVerticals(tenant, scoutContext)]);
-        if (!matched.rows.length) throw Error('Scout ticket queue handling was not confirmed');
-        queueAccounting.observe(matched.rows, { tenantId: tenant.tenantId });
-        if (!matched.rows.some(row => row.eligibility_bucket === 'eligible_now')) {
-          const retryable = matched.rows.filter(row => ['retry_cooldown', 'attempt_limit_hold'].includes(row.eligibility_bucket)
-            && !(row.eligibility_bucket === 'attempt_limit_hold' && row.last_attempt_at == null));
-          const earliest = retryable.sort((a,b) => Number(a.retry_after_ms)-Number(b.retry_after_ms))[0];
-          throw Object.assign(Error('Existing Scout queue work is held'), { scoutQueueHeld: true,
-            scoutQueueOutcome: earliest ? { state: 'deferred',
-              reason: earliest.eligibility_bucket === 'attempt_limit_hold' ? 'queue_attempt_cooldown' : 'queue_retry_cooldown',
-              retryAfterMs: Math.max(60*60_000, Math.ceil(Number(earliest.retry_after_ms))) }
-              : { state: 'blocked', reason: matched.rows.every(row => row.eligibility_bucket === 'unsupported_vertical')
-                ? 'queue_unsupported_vertical' : 'queue_attempt_limit' } });
+    const writeQueue = async db => {
+      if (ticketPass) {
+        // Different provider identities may resolve to the same canonical queue
+        // predicate. Serialize both OR keys before INSERT ... WHERE NOT EXISTS.
+        for (const key of [`${tenant.tenantId}:domain:${domain.toLowerCase()}`, `${tenant.tenantId}:name:${name.toLowerCase()}`].sort()) {
+          await db.query('SELECT pg_advisory_xact_lock(261023,hashtext($1))', [key]);
         }
+      }
+      // Research-only discoveries are retained outside the enrichment queue.
+      if (scoutContext.researchCandidateSink) {
+        require('./scoutResearchOnlyGrant').assertResearchOnlyScope(tenant.tenantId);
+        const research = require('./scoutResearchMission');
+        const retain = excludeQueueIds => research.retainCandidate(db, scoutContext.researchCandidateSink, {
+          company: name, domain, websiteUrl: website || `https://${domain}`, vertical: admission.vertical,
+          location: queueLocation, notes, excludeQueueIds });
+        let retained = await retain([]);
+        if (retained.rowCount || !ticketPass) return retained;
+        const queue = splitQueueMatches((await db.query(queueMatchSql, queueParams()))?.rows);
+        if (queue.known.length) {
+          throw alreadyKnown('already_queued', { matchedBy: 'enrichment_queue', queueRowIds: queue.known.map(r => String(r.id)) });
+        }
+        const prior = await research.findRetainedCandidate(db, { company: name, domain });
+        if (prior.some(row => normalizeDomain(row.domain) === domain
+          || !sameNameIsDistinctBusiness({ domain: row.domain, location: row.location }, identity))) {
+          throw alreadyKnown('already_queued', { matchedBy: 'research_candidate', researchCandidateIds: prior.map(r => String(r.id)) });
+        }
+        if (!prior.length && queue.distinctIds.length) {
+          retained = await retain(queue.distinctIds);
+          if (retained.rowCount) return retained;
+        }
+        // A distinct same-name business cannot be retained under the research
+        // ledger's name uniqueness. Record that; never count it as retained.
+        throw alreadyKnown('research_identity_collision', { matchedBy: 'research_name_key', researchCandidateIds: prior.map(r => String(r.id)) });
+      }
+      let insertedRow = await insertQueue(db);
+      if (ticketPass && !insertedRow.rowCount) {
+        let queue = splitQueueMatches((await db.query(queueMatchSql, queueParams()))?.rows);
+        if (!queue.known.length && queue.distinctIds.length) {
+          insertedRow = await insertQueue(db, queue.distinctIds);
+          if (insertedRow.rowCount) return insertedRow;
+          queue = splitQueueMatches((await db.query(queueMatchSql, queueParams()))?.rows);
+        }
+        const matched = queue.known;
+        if (!matched.length) throw Error('Scout ticket queue handling was not confirmed');
+        queueAccounting.observe(matched, { tenantId: tenant.tenantId });
+        throw knownQueueError(matched);
+      }
+      if (!ticketPass && !insertedRow.rowCount) {
+        // Read-only observation of the same tenant-scoped duplicate predicate.
+        // A failed read cannot change admission or reset retry/attempt controls.
+        let queue = null;
+        try { queue = splitQueueMatches((await db.query(queueMatchSql, queueParams()))?.rows); }
+        catch (_) { queueAccounting.observe(null); }
+        if (queue && !queue.known.length && queue.distinctIds.length) {
+          insertedRow = await insertQueue(db, queue.distinctIds);
+          if (insertedRow.rowCount) return insertedRow;
+        }
+        if (queue) queueAccounting.observe(queue.known, { tenantId: tenant.tenantId });
       }
       return insertedRow;
     };
@@ -942,10 +1094,8 @@ async function persistDiscoveredCompanies(pool, store, {
     try { handled = await finishTicket(company, { state: 'handled', reason: 'queued',
       ...(admission.facilityDecision ? { evidence: { facilityDecision: admission.facilityDecision } } : {}) }, writeQueue); }
     catch (error) {
-      if (!ticketPass || !error.scoutQueueHeld) throw error;
-      counters.alreadyQueued += 1;
-      checkpointDeferred = true;
-      await finishTicket(company, error.scoutQueueOutcome);
+      if (!ticketPass || !(error.scoutQueueHeld || error.scoutAlreadyKnown)) throw error;
+      await resolveKnownIdentity(error);
       continue;
     }
     if (!handled.applied) { checkpointDeferred = true; continue; }
@@ -954,28 +1104,18 @@ async function persistDiscoveredCompanies(pool, store, {
     if (result.rowCount) {
       if (scoutContext.researchCandidateSink) counters.retainedForResearch += result.rowCount;
       else counters.admittedToEnrichment += 1;
-    }
-    else {
+    } else {
       counters.alreadyQueued += 1;
-      // Read-only observation of the same tenant-scoped duplicate predicate.
-      // Failure cannot change admission or reset retry/attempt controls.
-      try {
-        if (ticketPass) continue; // Already measured within the handling transaction.
-        const matched = await pool.query(`SELECT u.id, u.client_id,
-          ${require('./scoutQueueAccounting').ELIGIBILITY_SQL} AS eligibility_bucket
-          FROM scout_unenriched u
-          WHERE u.client_id=$1 AND (lower(u.domain)=lower($2) OR lower(trim(u.company))=lower(trim($3)))
-          AND NOT (u.source = 'max_buffer_replenishment'
-            AND COALESCE(u.enrichment_attempts, 0) = 0
-            AND NOT (lower(trim(u.vertical)) = ANY($4::text[])))`,
-        [tenant.clientId, domain, name, CANONICAL_ENRICHABLE_SCOUT_VERTICALS.map(v => v.toLowerCase()),
-          enrichmentVerticals(tenant, scoutContext)]);
-        queueAccounting.observe(matched.rows, { tenantId: tenant.tenantId });
-      } catch (_) { queueAccounting.observe(null); }
+      counters.previouslyKnown = (counters.previouslyKnown || 0) + 1;
     }
   }
 
   counters.queueMatches = queueAccounting.snapshot();
+  // Net-new = a durable row this pass created (enrichment queue or research
+  // ledger). Qualified-but-known identities are reported as previouslyKnown.
+  counters.previouslyKnown = Number(counters.previouslyKnown || 0);
+  counters.identityCollisions = Number(counters.identityCollisions || 0);
+  counters.netNewQualified = Number(counters.admittedToEnrichment || 0) + Number(counters.retainedForResearch || 0);
   counters.decisions = decisions;
   counters.websiteInvestigations = websiteInvestigations;
   clampCohortCounters(counters);
@@ -1240,7 +1380,8 @@ async function defaultScoutRampResearchScoped({
         await store.event('scout_replenishment_plan_reconsidered', [fingerprint, searchGeneration], {
           programId: program.id,
           ...discoveryBackoff,
-          reason: discoveryBackoff.reason === 'search_generation_exhausted_advance'
+          reason: ['search_generation_exhausted_advance', 'approved_search_plan_exhausted_recheck',
+            'repeated_zero_yield_rotate_search_resume'].includes(discoveryBackoff.reason)
             ? discoveryBackoff.reason : 'repeated_zero_yield_reconsider_plan',
         });
       }
@@ -1766,6 +1907,9 @@ async function runMaxOutboundControlLoop(options = {}) {
     newQualifiedInventory: Number(inventoryGrowth.newCleanInventoryAdded || 0),
     newQueueAdmissions: scout?.admissionMeasured ? Number(scout.discoveredQueued || 0) : null,
     deficitBefore: Number(plan.deficit || 0),
+    // SPEC-SCOUT-P0-007 scorecard. Only netNewCleanInventory (a durable
+    // inventory delta) can make a cycle "replenished"; the rest explain it.
+    scorecard: replenishmentScorecard(scout, Number(inventoryGrowth.newCleanInventoryAdded || 0)),
   };
   // Discovery holds raised inside the ramp are as durable as the pre-ramp ones.
   const rampHold = scout?.discovery?.kind === 'blocked' && scout.discovery.reason === 'scout_discovery_memory_required'
@@ -1889,6 +2033,8 @@ async function runMaxOutboundControlLoop(options = {}) {
     scoutInvoked: Boolean(scout),
     scoutPromoted: newPromotions,
     scoutQueued: Number(scout?.discoveredQueued || 0),
+    scoutPreviouslyKnown: Number(scout?.admission?.previouslyKnown || 0),
+    scoutNetNewQualified: Number(scout?.admission?.netNewQualified || 0),
     scoutRecovered: recoveredExisting,
     discoveryBlockedReason,
     scoutSearchFingerprint: searchFingerprint,
@@ -2027,6 +2173,7 @@ module.exports = {
   scoutSearchFingerprint,
   loadScoutDiscoveryBackoff,
   anchorDurableDiscoveryEnabled,
+  replenishmentScorecard,
   _test: {
     recordReplenishmentHold,
     searchGenerationExhausted,

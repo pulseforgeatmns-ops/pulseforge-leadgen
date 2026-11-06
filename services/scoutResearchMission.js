@@ -177,14 +177,28 @@ async function loadResearchMission(db, { id, missionHash, program, lock = true }
 // A company already queued for enrichment or already retained is not copied.
 async function retainCandidate(db, sink, candidate) {
   const nameKey = String(candidate.company || '').trim().toLowerCase();
+  const { canonicalDomainSql } = require('../packages/scout/identity/BusinessIdentity');
+  // Queue rows the caller proved to be a different same-name business
+  // (SPEC-SCOUT-P0-007) do not block retention; every other match does.
   return db.query(`INSERT INTO scout_research_candidates(tenant_id,research_mission_id,grant_id,cycle_number,company,name_key,domain,
       website_url,vertical,location,notes)
     SELECT '10',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10
     WHERE NOT EXISTS (SELECT 1 FROM scout_unenriched u WHERE u.client_id=10
-      AND (lower(u.domain)=lower($6) OR lower(trim(u.company))=$5))
+      AND (${canonicalDomainSql('u.domain')}=lower($6) OR lower(trim(u.company))=$5)
+      AND NOT (u.id::text = ANY($11::text[])))
     ON CONFLICT DO NOTHING RETURNING id`,
   [sink.researchMissionId, sink.grantId, sink.cycleNumber, String(candidate.company).trim(), nameKey, candidate.domain,
-    candidate.websiteUrl, candidate.vertical, candidate.location, candidate.notes]);
+    candidate.websiteUrl, candidate.vertical, candidate.location, candidate.notes,
+    (candidate.excludeQueueIds || []).map(String)]);
+}
+
+// Read-only: research-ledger rows sharing this candidate's domain or name key
+// (any grant, any mission), used to explain a retention that inserted nothing.
+async function findRetainedCandidate(db, { company, domain }) {
+  const { rows } = await db.query(`SELECT id,company,domain,location,grant_id,cycle_number FROM scout_research_candidates
+    WHERE tenant_id='10' AND (lower(domain)=lower($1) OR name_key=$2) ORDER BY id LIMIT 20`,
+  [String(domain || ''), String(company || '').trim().toLowerCase()]);
+  return rows;
 }
 
 // Reconciliation: an explicit operator step, never automatic. It only adds
@@ -238,7 +252,8 @@ async function applyReconciliation(pool, { researchMissionId, approvalRef, confi
         enrichment_attempts,last_attempt_at,notes)
         SELECT 10,$1,$2,$3,$4,$5,'max_buffer_replenishment',0,NULL,$6
         WHERE NOT EXISTS (SELECT 1 FROM scout_unenriched u WHERE u.client_id=10
-          AND (lower(u.domain)=lower($3) OR lower(trim(u.company))=lower(trim($1)))) RETURNING id`,
+          AND (${require('../packages/scout/identity/BusinessIdentity').canonicalDomainSql('u.domain')}=lower($3)
+            OR lower(trim(u.company))=lower(trim($1)))) RETURNING id`,
       [candidate.company, candidate.website_url || `https://${candidate.domain}`, candidate.domain, candidate.vertical, candidate.location,
         `${candidate.notes || ''} | reconciled from research mission ${researchMissionId}`.trim()]);
       if (queued.rows.length) outcome.queued += 1; else outcome.alreadyQueued += 1;
@@ -250,5 +265,5 @@ async function applyReconciliation(pool, { researchMissionId, approvalRef, confi
 }
 
 module.exports = { ID, targeting, targetingHash, buildResearchMission, researchSource, researchProgram, assertSchema,
-  previewResearchMission, installResearchMission, loadResearchMission, retainCandidate,
+  previewResearchMission, installResearchMission, loadResearchMission, retainCandidate, findRetainedCandidate,
   previewReconciliation, applyReconciliation };

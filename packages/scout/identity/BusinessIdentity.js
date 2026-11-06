@@ -195,7 +195,54 @@ function leadHasEstablishedIdentity(raw = {}) {
   return establishBusinessIdentity(raw).established;
 }
 
+/**
+ * SQL twin of normalizeDomain() for stored CRM/queue columns that may hold a
+ * bare domain, a www. host or a full URL. `column` must be a trusted SQL
+ * expression (never user input). Returns NULL for empty values.
+ */
+function canonicalDomainSql(column) {
+  return `NULLIF(split_part(split_part(split_part(split_part(regexp_replace(lower(btrim(COALESCE(${column},''))),`
+    + ` '^([a-z]+://)?(www\\.)?', ''), '/', 1), '?', 1), '#', 1), ':', 1), '')`;
+}
+
+const US_STATE_OR_ZIP = /^([a-z]{2}|\d{5}(-\d{4})?|[a-z]{2}\s+\d{5}(-\d{4})?|usa?|united states)$/;
+function localityTokens(value) {
+  return String(value || '').toLowerCase().split(/[,|;]/)
+    .map(part => part.replace(/\s+/g, ' ').trim())
+    // A street segment (house number) and state/zip/country segments say
+    // nothing about which town the business is in.
+    .filter(part => part.length >= 3 && !/\d/.test(part.split(' ')[0] || '') && !US_STATE_OR_ZIP.test(part))
+    .map(part => part.replace(/\s+([a-z]{2})(\s+\d{5}(-\d{4})?)?$/, '').trim())
+    .filter(Boolean);
+}
+
+/**
+ * True only when two location strings are both present and share no town.
+ * Unknown/partial location is never evidence of a different business.
+ */
+function localitiesConflict(a, b) {
+  const left = localityTokens(a), right = localityTokens(b);
+  if (!left.length || !right.length) return false;
+  return !left.some(x => right.some(y => x === y || x.includes(y) || y.includes(x)));
+}
+
+/**
+ * ADR-092 identity rule for a name match: two records with the same name are
+ * distinct businesses only when BOTH canonical domains are known and differ
+ * AND both localities are known and differ. A name alone never merges them;
+ * any missing evidence keeps them matched (fail toward "already known").
+ */
+function sameNameIsDistinctBusiness(known = {}, candidate = {}) {
+  const knownDomains = [known.domain, known.website].map(normalizeDomain).filter(Boolean);
+  const candidateDomain = normalizeDomain(candidate.domain || candidate.website);
+  if (!knownDomains.length || !candidateDomain || knownDomains.includes(candidateDomain)) return false;
+  return localitiesConflict(known.location, candidate.location);
+}
+
 module.exports = {
+  canonicalDomainSql,
+  localitiesConflict,
+  sameNameIsDistinctBusiness,
   IDENTITY_SIGNAL_TYPES,
   EXISTENCE_SIGNAL_TYPES,
   ENRICHMENT_SIGNAL_TYPES,

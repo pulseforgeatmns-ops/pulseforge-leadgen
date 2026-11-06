@@ -503,7 +503,8 @@ async function candidateAccounting(db, grant, cycles) {
     const result = row.result || {};
     const recorded = key => (Number.isSafeInteger(result[key]) ? result[key] : null);
     return { cycleNumber: row.cycle_number, state: row.state, acceptedCandidates: recorded('acceptedCandidates'),
-      retainedCandidates: recorded('retainedCandidates'), evaluatedCandidates: recorded('evaluatedCandidates') };
+      retainedCandidates: recorded('retainedCandidates'), evaluatedCandidates: recorded('evaluatedCandidates'),
+      previouslyKnownCandidates: recorded('previouslyKnownCandidates') };
   });
   const out = { retained: { total: retainedTotal.n, reconciled: retainedTotal.reconciled, listed: retainedRows.length,
     rows: retainedRows.map(row => ({ cycleNumber: row.cycle_number, company: row.company, domain: row.domain,
@@ -532,6 +533,11 @@ async function candidateAccounting(db, grant, cycles) {
   const awaitingTotal = AWAITING_EVIDENCE.reduce((sum, reason) => sum + (byReason[reason] || 0), 0);
   out.ledger = { scope: 'search_fingerprint', fingerprint: grant.search_fingerprint, total, byState, byReason,
     acceptedTickets, acceptedNotRetained: Math.max(0, acceptedTickets - retainedTotal.n),
+    // SPEC-SCOUT-P0-007: the ledger spans every pass on this fingerprint
+    // (earlier grants, ordinary Scout); `retained` is this grant's alone.
+    // Known identities resolve to already_queued, never to accepted.
+    previouslyKnownTickets: byReason.already_queued || 0,
+    ledgerSpansOtherPasses: true, grantCyclesConsumed: cycles.length,
     awaitingBusinessEvidence: { total: awaitingTotal, listed: awaiting.length, rows: awaiting.map(row => awaitingRow(row)) } };
   return out;
 }
