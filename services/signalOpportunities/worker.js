@@ -86,6 +86,10 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
    const cadence=cadenceProfile(calls,sources,asOf);await store.put('status','*','amplifier-cadence',{component:'amplifier-cadence',state:'PARTIAL',reason:'Rolling retained-feed history; not an announced schedule.',profiles:cadence,occurredAt:asOf,knownAt:asOf},{mutable:true});
    const counts=new Map();for(const c of recent)counts.set(c.tokenAddress,(counts.get(c.tokenAddress)||0)+1);
    const priority=[...counts].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,maxTokens).map(x=>x[0]);
+   const paperPositions=Object.keys((await paper.snapshot()).positions);
+   const previousOpportunities=await opportunities.list(asOf);
+   const urgent=[...new Set([...paperPositions,...previousOpportunities.filter(p=>p.opportunityState==='HOT'||p.opportunityState==='OPPORTUNITY').map(p=>p.tokenAddress)])];
+   const refreshCandidates=[...new Set([...urgent,...priority])];
    // The documented public endpoint accepts up to 30 addresses per request.
    // Round robin preserves coverage while sharing existing provider budgets.
    if(priority.length&&marketProvider){const batch=Array.from({length:Math.min(30,priority.length)},(_,i)=>priority[(rotation+i)%priority.length]);rotation=(rotation+batch.length)%priority.length;
