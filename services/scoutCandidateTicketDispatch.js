@@ -116,7 +116,7 @@ function queryProgressionDiagnostic(value) {
   if (!value) return null;
   const result = { status: ['observed_query_set_handled', 'pending_query_work', 'not_observed'].includes(value.status)
     ? value.status : 'not_observed',
-  ...Object.fromEntries(['observedQueries', 'handledQueries', 'fetchedQueries', 'replayedQueries',
+  ...Object.fromEntries(['observedQueries', 'handledQueries', 'fetchedQueries', 'replayedQueries', 'reusedQueries',
     'pendingAcknowledgements', 'unresolvedQueries'].map(key => [key,
     Number.isSafeInteger(value[key]) && value[key] >= 0 ? value[key] : null])) };
   if (value.continuation) {
@@ -125,7 +125,8 @@ function queryProgressionDiagnostic(value) {
       'continuation_token_invalid', 'page_provider_failure', 'page_provider_denied', 'cycle_page_budget_reached',
       'coverage_epoch_permission_required', 'coverage_epoch_not_started', 'coverage_epoch_expired',
       'coverage_epoch_manifest_changed', 'coverage_epoch_legacy_required'];
-    statuses.push('tenant_query_previously_searched','tenant_query_outcome_unconfirmed','tenant_query_low_novelty');
+    statuses.push('tenant_query_previously_searched','tenant_query_outcome_unconfirmed','tenant_query_low_novelty',
+      'tenant_query_evidence_partial');
     result.continuation = { maxNewPages: value.continuation.maxNewPages === 1 ? 1 : null,
       newPagesReserved: Number.isSafeInteger(value.continuation.newPagesReserved) && value.continuation.newPagesReserved >= 0
         && value.continuation.newPagesReserved <= 1 ? value.continuation.newPagesReserved : null, statuses: Object.fromEntries(statuses
@@ -133,7 +134,8 @@ function queryProgressionDiagnostic(value) {
       .map(key => [key, value.continuation.statuses[key]])) };
   }
   if (value.tenantMemory) result.tenantMemory=Object.fromEntries(
-    ['queriesSkipped','queriesUnconfirmed','lowNoveltyQueriesDeferred','detailsReused','detailsReserved'].map(key=>[key,
+    ['queriesSkipped','queriesUnconfirmed','lowNoveltyQueriesDeferred','detailsReused','detailsReserved',
+      'searchEvidenceReused','searchEvidenceCandidates','searchEvidencePartial','searchEvidenceUnavailable'].map(key=>[key,
       Number.isSafeInteger(value.tenantMemory[key]) && value.tenantMemory[key]>=0 ? value.tenantMemory[key] : null]));
   if (value.coverageEpochStatus === 'configuration_invalid') result.coverageEpochStatus = 'configuration_invalid';
   if (value.coverageApprovalManifest) {

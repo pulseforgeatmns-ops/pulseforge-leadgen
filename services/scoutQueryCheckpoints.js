@@ -58,6 +58,7 @@ function createCheckpointSession({ store, ticketStore = null, pageStore = null, 
   const skipped = new Set();
   const fetched = new Set();
   const replayed = new Set();
+  const reused = new Set();
   const rootPlans = new Map();
   const observedCheckpointRoots = new Set();
   const selectedPages = new Map();
@@ -83,6 +84,28 @@ function createCheckpointSession({ store, ticketStore = null, pageStore = null, 
       let key = rootKey;
       let plan = null;
       const sharedStatus = tenantMemory ? await tenantMemory.checkQuery(rootKey,query) : null;
+      if (sharedStatus==='tenant_query_previously_searched' && typeof tenantMemory.priorEvidence==='function') {
+        // SPEC-SCOUT-P0-008: another mission of this tenant already bought this
+        // exact query. Re-stage that confirmed evidence under this mission and
+        // transfer it through the unchanged ticket path, so this mission applies
+        // its own qualification to it. No provider request is made.
+        const own = await store.load(rootKey);
+        if (own?.state === 'handled') {
+          observed.add(rootKey); handled.add(rootKey); skipped.add(rootKey);
+          return { key: rootKey, handled: true, candidates: [] };
+        }
+        const evidence = own?.state === 'fetched' ? null : await tenantMemory.priorEvidence(rootKey, query);
+        if (own?.state === 'fetched' || evidence?.candidates.length) {
+          const row = own?.state === 'fetched' ? own : await store.stage(rootKey, evidence.candidates);
+          if (!row || !Array.isArray(row.candidates)) throw new Error('Reused search evidence staging was not confirmed');
+          observed.add(rootKey);
+          if (row.state === 'handled') { handled.add(rootKey); skipped.add(rootKey); return { key: rootKey, handled: true, candidates: [] }; }
+          const candidates = await transfer(rootKey, row.candidates);
+          reused.add(rootKey);
+          if (evidence?.partial) pageStatuses.set(rootKey, 'tenant_query_evidence_partial');
+          return { key: rootKey, handled: false, candidates, reusedSearchEvidence: true };
+        }
+      }
       if (sharedStatus) {
         observed.add(rootKey); pageStatuses.set(rootKey,sharedStatus);
         if (sharedStatus==='tenant_query_previously_searched') { handled.add(rootKey); skipped.add(rootKey); }
@@ -176,7 +199,7 @@ function createCheckpointSession({ store, ticketStore = null, pageStore = null, 
         ...(pageStore ? { continuation: { enabled: true, maxNewPages: 1, newPagesReserved, statuses: [...pageStatuses.values()].reduce((counts, status) => {
           counts[status] = (counts[status] || 0) + 1; return counts;
         }, {}) } } : {}),
-        fetchedQueries: fetched.size, replayedQueries: replayed.size, pendingAcknowledgements: pending.size,
+        fetchedQueries: fetched.size, replayedQueries: replayed.size, reusedQueries: reused.size, pendingAcknowledgements: pending.size,
         unresolvedQueries: unresolved.size,
         status: !observed.size ? 'not_observed' : handled.size !== observed.size || pending.size || unresolved.size
           ? 'pending_query_work' : 'observed_query_set_handled' };
