@@ -15,7 +15,10 @@ const REASONS = Object.freeze({
   blocked: ['contact_policy_hold', 'recovery_tenant_unsupported', 'provider_unavailable',
     'ownership_unresolved', 'identity_incomplete', 'queue_attempt_limit',
     'queue_unsupported_vertical', 'recovery_reservation_required', 'geography_unresolved',
-    'unresolved_business_evidence', 'business_evidence_dependency', 'business_evidence_not_authorized'],
+    'unresolved_business_evidence', 'business_evidence_dependency', 'business_evidence_not_authorized',
+    // SPEC-SCOUT-P0-007: a distinct same-name business the research ledger's
+    // name uniqueness cannot hold; diagnostic only, never counted as retained.
+    'research_identity_collision'],
 });
 const SCOPE_SQL = 'tenant_id=$1 AND search_fingerprint=$2 AND plan_version=$3 AND ticket_version=$4';
 const HEX = /^[a-f0-9]{64}$/;

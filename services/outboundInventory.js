@@ -10,6 +10,7 @@ const { anchorOutreachReviewValueSql } = require('../utils/anchorOutreachReview'
 
 const { governedContactReason, companyRecipientReason } = require('../utils/governedContactEligibility');
 const { normalizeDomain, canonicalOutboundEmailIneligibilityReason } = require('../utils/canonicalEmailEligibility');
+const { canonicalDomainSql, sameNameIsDistinctBusiness } = require('../packages/scout/identity/BusinessIdentity');
 
 const FUNNEL_STAGES = Object.freeze([
   'discovered',
@@ -30,6 +31,10 @@ const OWNERSHIP_KINDS = Object.freeze({
   CONTACT_POLICY_HOLD: 'canonical_contact_policy_hold',
   PRIOR_CONTACT: 'prior_contact_or_human_owned',
   AO_OWNED: 'ao_owned_alias',
+  // SPEC-SCOUT-P0-007: a CRM company record exists (by canonical domain,
+  // website or unambiguous name) but has no prospect row. It is a known
+  // business, never net-new inventory.
+  KNOWN_COMPANY: 'known_crm_company',
 });
 
 const STALE_OWNERSHIP_MS = 180 * 24 * 60 * 60 * 1000;
@@ -308,28 +313,40 @@ async function classifyInventoryOwnership(store, candidate = {}, opts = {}) {
   // Match the caller's contact policy without falling back to Anchor's rules
   // when a partial prospect projection omits the tenant or contact evidence.
   const contactPolicy = { ...opts.policy, tenantId };
-  const { rows } = await pool.query(`
+  const { rows: matched } = await pool.query(`
     SELECT p.id, p.company_id, p.client_id, p.email, p.email_verified, p.email_status, p.do_not_contact, p.enrichment_provenance,
       p.acquisition_metadata, to_jsonb(p)->>'contact_classification' AS contact_classification,
       COALESCE((to_jsonb(p)->>'is_synthetic')::boolean,false) AS is_synthetic,
       ${anchorOutreachReviewValueSql('p')} AS ao_outreach_review_required,
       p.assigned_ao_id, p.closer_id, p.last_contacted_at, p.last_reply_at,
-      p.service_area_match, p.vertical, c.name, c.domain, c.website,
+      p.service_area_match, p.vertical, c.id AS crm_company_id, c.name, c.domain, c.website, to_jsonb(c)->>'location' AS company_location,
       EXISTS(SELECT 1 FROM ao_prospect_tasks t WHERE t.client_id=$4 AND t.prospect_id=p.id) AS has_ao_task,
       EXISTS(SELECT 1 FROM touchpoints t WHERE t.client_id=$4 AND t.prospect_id=p.id
         AND t.action_type IN ('email_sent','sent','outbound_email','call','call_attempt','inbound_reply','reply','email_reply','reply_received')) AS prior_touch
     FROM prospects p
-    JOIN companies c ON c.id=p.company_id AND c.client_id=p.client_id
-    WHERE p.client_id=$4
+    RIGHT JOIN companies c ON c.id=p.company_id AND c.client_id=p.client_id
+    WHERE c.client_id=$4
       AND (
         ($1::text IS NOT NULL AND lower(p.email)=lower($1))
-        OR ($2::text IS NOT NULL AND lower(c.domain)=lower($2))
+        OR ($2::text IS NOT NULL AND (${canonicalDomainSql('c.domain')}=$2 OR ${canonicalDomainSql('c.website')}=$2))
         OR ($3::text <> '' AND lower(trim(c.name))=lower(trim($3)))
       )
     ORDER BY p.email_verified DESC NULLS LAST, p.updated_at DESC NULLS LAST
   `, [email || null, domain || null, company, clientId]);
+  const location = String(candidate.location || candidate.address || '').trim() || null;
+  // A name-only match is the same business unless both domains and both
+  // localities are known and differ (ADR-092). Email/domain matches always count.
+  const identity = { domain, location };
+  const sameBusiness = (matched || []).filter(row => (email && String(row.email || '').toLowerCase() === email)
+    || (domain && [row.domain, row.website].map(normalizeDomain).includes(domain))
+    || !sameNameIsDistinctBusiness({ domain: row.domain, website: row.website, location: row.company_location }, identity));
+  // SPEC-SCOUT-P0-007: the RIGHT JOIN also returns CRM companies that carry no
+  // prospect row (customers, imports). They are known businesses, not new.
+  const contactless = row => row.id == null && row.company_id == null && row.email == null;
+  const rows = sameBusiness.filter(row => !contactless(row));
+  const contactlessCompany = sameBusiness.find(contactless);
 
-  if (rows.some(row => row.client_id != null && String(row.client_id) !== tenantId)) {
+  if ((matched || []).some(row => row.client_id != null && String(row.client_id) !== tenantId)) {
     throw Object.assign(new Error('governed_outbound_tenant_mismatch'), {
       code: 'governed_outbound_tenant_mismatch',
     });
@@ -337,8 +354,10 @@ async function classifyInventoryOwnership(store, candidate = {}, opts = {}) {
 
   if (!rows.length) {
     const blocked = store?.candidateOwnership ? await store.candidateOwnership(candidate) : null;
-    return blocked
-      ? { kind: OWNERSHIP_KINDS.VALID_COLLISION, reason: blocked, recoverable: false }
+    if (blocked) return { kind: OWNERSHIP_KINDS.VALID_COLLISION, reason: blocked, recoverable: false };
+    return contactlessCompany
+      ? { kind: OWNERSHIP_KINDS.KNOWN_COMPANY, reason: 'existing_crm_company', recoverable: false,
+        companyId: contactlessCompany.crm_company_id != null ? String(contactlessCompany.crm_company_id) : null }
       : { kind: OWNERSHIP_KINDS.CLEAR, reason: null, recoverable: false };
   }
 
