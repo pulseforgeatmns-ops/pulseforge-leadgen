@@ -106,7 +106,8 @@ function anchorDurableDiscoveryEnabled(tenantId, env = process.env) {
 // budget: the current generation of the approved plan has no searchable query.
 function searchGenerationExhausted(snapshot) {
   if (!snapshot || !(snapshot.observedQueries > 0)) return false;
-  if (snapshot.fetchedQueries || snapshot.replayedQueries) return false;
+  // Reused cross-mission evidence is new work for this mission, not exhaustion.
+  if (snapshot.fetchedQueries || snapshot.replayedQueries || snapshot.reusedQueries) return false;
   const continuation = snapshot.continuation;
   if (!continuation || continuation.newPagesReserved) return false;
   const statuses = continuation.statuses || {};
@@ -1361,7 +1362,9 @@ async function defaultScoutRampResearchScoped({
         db: pool, tenantId: tenant.tenantId, fingerprint, coverageEpoch,
       });
       if (typeof pages.assertReady === 'function') await pages.assertReady();
-      if (require('./scoutTenantDiscoveryMemory').ENABLED_TENANTS.has(tenant.tenantId)) {
+      // SPEC-SCOUT-P0-008: Tenant 10 as before; other durable tenants only when
+      // explicitly opted in (readiness then fails closed without the schema).
+      if (require('./scoutTenantDiscoveryMemory').memoryTenantAllowed(tenant.tenantId)) {
         tenantMemory=(createTenantDiscoveryMemory || require('./scoutTenantDiscoveryMemory').createTenantDiscoveryMemory)({
           pool,tenantId:tenant.tenantId,fingerprint,
         });
