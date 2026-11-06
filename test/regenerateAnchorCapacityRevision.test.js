@@ -1,4 +1,6 @@
 'use strict';
+// Discovery uses a live-Scout stub: synthetic fixture missions cannot reach outreach (P0).
+const { liveScoutStub } = require('../packages/max/workspace/tests/amoTestRuntime');
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -47,7 +49,7 @@ async function preparedReadyMission() {
   const mission = engine.create({ tenantId: '10', objective: OBJECTIVE, targetSegment: 'Law Firms' });
   await advancePlanAfterApproval({ engine, mission, tenantId: '10', question: 'Approved.' });
   await advanceDiscoveryAfterApproval({
-    engine, mission, tenantId: '10', question: 'Approved.', allowFixtureFallback: true,
+    engine, mission, tenantId: '10', question: 'Approved.', runScout: liveScoutStub,
   });
   await advancePrioritizationAfterApproval({
     engine, mission: engine.get(mission.id, '10'), tenantId: '10', question: 'Approved.',

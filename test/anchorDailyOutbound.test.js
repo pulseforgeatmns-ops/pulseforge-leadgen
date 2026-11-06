@@ -1,4 +1,5 @@
 'use strict';
+const { liveScoutStub } = require('../packages/max/workspace/tests/amoTestRuntime');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { policy, clock, windowReason, candidateReason, nextAction, hash } = require('../packages/acquisition-mission/DailyOutboundPolicy');
@@ -92,7 +93,8 @@ test('canonical approval binds the daily manifest and plain execution cannot use
   const steps = require('../packages/max/workspace/AmoOperatorApproval');
   const engine = amo.createAcquisitionMissionEngine();
   const mission = engine.create({ tenantId: '10', objective: 'Acquire commercial cleaning customers in Manchester NH for law firms.', targetSegment: 'Law Firms' });
-  const opts = () => ({ engine, mission: engine.get(mission.id, '10'), tenantId: '10', question: 'Approved.', allowFixtureFallback: true, scoutCompanies: [] });
+  // Live-Scout stub for discovery: synthetic fixture missions cannot reach outreach (P0).
+  const opts = () => ({ engine, mission: engine.get(mission.id, '10'), tenantId: '10', question: 'Approved.', allowFixtureFallback: true, scoutCompanies: [], runScout: liveScoutStub });
   for (const step of ['advancePlanAfterApproval','advanceDiscoveryAfterApproval','advancePrioritizationAfterApproval',
     'advanceMaxPrioritization','advanceAcquisitionApproach','advancePaigeVariants','advanceEmmettCapacity']) await steps[step](opts());
   // Supply verified recipients to the in-memory fixture before its approval.

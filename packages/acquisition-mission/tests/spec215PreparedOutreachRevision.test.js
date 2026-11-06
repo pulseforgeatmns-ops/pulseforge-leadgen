@@ -1,4 +1,5 @@
 'use strict';
+const { liveScoutStub } = require('../../max/workspace/tests/amoTestRuntime');
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -32,8 +33,9 @@ async function preparedRuntime() {
   const engine = amo.createAcquisitionMissionEngine();
   const mission = engine.create({ tenantId: '10', objective: OBJECTIVE, targetSegment: 'Law Firms' });
   await advancePlanAfterApproval({ engine, mission, tenantId: '10', question: 'Approved.' });
+  // Live-Scout stub for discovery: synthetic fixture missions cannot reach outreach (P0).
   await advanceDiscoveryAfterApproval({
-    engine, mission, tenantId: '10', question: 'Approved. Begin Discovery.', allowFixtureFallback: true,
+    engine, mission, tenantId: '10', question: 'Approved. Begin Discovery.', runScout: liveScoutStub,
   });
   await advancePrioritizationAfterApproval({
     engine, mission: engine.get(mission.id, '10'), tenantId: '10', question: 'Approved prioritization.',

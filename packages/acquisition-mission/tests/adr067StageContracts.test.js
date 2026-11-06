@@ -1,4 +1,6 @@
 'use strict';
+// Discovery uses a live-Scout stub: synthetic fixture missions cannot reach outreach (P0).
+const { liveScoutStub } = require('../../max/workspace/tests/amoTestRuntime');
 
 /**
  * ADR-067 — Stage Contracts Are Authoritative.
@@ -125,7 +127,7 @@ describe('ADR-067 — Stage Contracts Are Authoritative', () => {
       engine,
       missionId: mission.id,
       tenantId: '10',
-      allowFixtureFallback: true,
+      allowFixtureFallback: true, runScout: liveScoutStub,
     });
 
     assert.equal(result.outcome, 'paused');
@@ -287,7 +289,7 @@ describe('ADR-067 — preserve artifact-bound execution authority', () => {
       objective: 'Acquire commercial cleaning customers in Manchester NH for law firms.',
       targetSegment: 'Law Firms',
     });
-    const input = { engine, missionId: mission.id, tenantId: '10', allowFixtureFallback: true };
+    const input = { engine, missionId: mission.id, tenantId: '10', allowFixtureFallback: true, runScout: liveScoutStub };
     const discovered = await runAutonomousProgression(input);
     assert.equal(discovered.progressionStage, PROGRESSION_STAGES.DISCOVERY_REVIEW);
     await require('../../max/workspace/AmoOperatorApproval').advancePrioritizationAfterApproval({

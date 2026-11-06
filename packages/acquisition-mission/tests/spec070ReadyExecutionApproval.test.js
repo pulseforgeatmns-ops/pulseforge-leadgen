@@ -1,4 +1,6 @@
 'use strict';
+// Discovery uses a live-Scout stub: synthetic fixture missions cannot reach outreach (P0).
+const { liveScoutStub } = require('../../max/workspace/tests/amoTestRuntime');
 
 /**
  * Canonical READY transition & artifact-bound execution approval.
@@ -65,7 +67,7 @@ describe('Canonical READY transition & execution approval', () => {
       mission,
       tenantId: '10',
       question: 'Approved. Begin Discovery.',
-      allowFixtureFallback: true,
+      runScout: liveScoutStub,
     });
     await advancePrioritizationAfterApproval({
       engine,
@@ -224,7 +226,7 @@ describe('Canonical READY transition & execution approval', () => {
   it('deliverability pause blocks PREPARE → READY', async () => {
     await advancePlanAfterApproval({ engine, mission, tenantId: '10', question: 'Approved.' });
     await advanceDiscoveryAfterApproval({
-      engine, mission, tenantId: '10', question: 'Approved.', allowFixtureFallback: true,
+      engine, mission, tenantId: '10', question: 'Approved.', runScout: liveScoutStub,
     });
     await advancePrioritizationAfterApproval({
       engine, mission: engine.get(mission.id, '10'), tenantId: '10', question: 'Approved.',

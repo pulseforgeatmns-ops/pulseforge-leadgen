@@ -10,8 +10,6 @@
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
-const http = require('node:http');
-const express = require('express');
 
 const amo = require('../../../acquisition-mission');
 const approval = require('../AmoOperatorApproval');
@@ -206,56 +204,63 @@ describe('A — governed restriction amendments', () => {
 });
 
 describe('A — amendment HTTP authorization', () => {
-  function serve(user) {
-    const app = express();
-    app.use(express.json());
-    app.use((req, _res, next) => {
-      req.session = { user, active_client_id: 10, save: (cb) => cb && cb() };
-      req.sessionID = 'sid_test';
-      next();
-    });
-    app.use(require('../../../../routes/acquisitionMissions'));
-    return new Promise((resolve) => {
-      const server = app.listen(0, '127.0.0.1', () => resolve(server));
-    });
-  }
+  // In-process only: this lane forbids sockets (denyWebsiteEvidenceNetwork),
+  // so the router is driven with mock req/res and the step-up consumer is stubbed.
+  const fresh = require('../../../../utils/freshConfirmation');
 
-  function post(server, body) {
-    const { port } = server.address();
+  function call(user, body) {
+    const router = require('../../../../routes/acquisitionMissions');
     const data = JSON.stringify(body);
     return new Promise((resolve, reject) => {
-      const req = http.request({ host: '127.0.0.1', port, method: 'POST',
+      const req = {
+        method: 'POST',
+        url: '/api/v1/amo/missions/mission_x/authorization/amendments',
+        originalUrl: '/api/v1/amo/missions/mission_x/authorization/amendments',
         path: '/api/v1/amo/missions/mission_x/authorization/amendments',
-        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } }, (res) => {
-        let text = '';
-        res.on('data', (c) => { text += c; });
-        res.on('end', () => resolve({ status: res.statusCode, body: text ? JSON.parse(text) : null }));
-      });
-      req.on('error', reject);
-      req.end(data);
+        headers: { 'content-type': 'application/json', 'content-length': String(Buffer.byteLength(data)), accept: 'application/json' },
+        body,
+        params: {},
+        query: {},
+        session: { user, active_client_id: 10, save: (cb) => cb && cb() },
+        sessionID: 'sid_test',
+        get(name) { return this.headers[String(name).toLowerCase()]; },
+        is(type) { return type === 'application/json' ? 'application/json' : false; },
+      };
+      const res = {
+        statusCode: 200,
+        headers: {},
+        status(code) { this.statusCode = code; return this; },
+        set(k, v) { this.headers[k] = v; return this; },
+        setHeader(k, v) { this.headers[k] = v; },
+        json(payload) { resolve({ status: this.statusCode, body: payload }); return this; },
+        redirect(url) { resolve({ status: 302, body: { redirect: url } }); },
+      };
+      router.handle(req, res, (err) => (err ? reject(err) : resolve({ status: 404, body: null })));
     });
   }
 
   it('a manager cannot lift, and an admin cannot lift without a fresh password confirmation', async () => {
-    const managerServer = await serve({ id: 8, role: 'manager', client_id: 10 });
+    const original = fresh.consume;
+    const consumed = [];
+    fresh.consume = async (_db, args) => { consumed.push(args); return false; };
     try {
-      const res = await post(managerServer, { lift: ['outreach'], reason: 'x' });
-      assert.equal(res.status, 403);
-      assert.equal(res.body.error, 'authorization_amendment_forbidden');
-    } finally { managerServer.close(); }
+      const manager = await call({ id: 8, role: 'manager', client_id: 10 }, { lift: ['outreach'], reason: 'x' });
+      assert.equal(manager.status, 403);
+      assert.equal(manager.body.error, 'authorization_amendment_forbidden');
+      assert.equal(consumed.length, 0, 'a manager never reaches the step-up');
 
-    const adminServer = await serve({ id: 7, role: 'admin', client_id: 10 });
-    try {
-      const res = await post(adminServer, { lift: ['outreach'], reason: 'x' });
-      assert.equal(res.status, 403);
-      assert.equal(res.body.error, 'fresh_confirmation_required');
-    } finally { adminServer.close(); }
+      const admin = await call({ id: 7, role: 'admin', client_id: 10 }, { lift: ['outreach'], reason: 'x' });
+      assert.equal(admin.status, 403);
+      assert.equal(admin.body.error, 'fresh_confirmation_required');
+      assert.equal(consumed.length, 1);
+      assert.equal(consumed[0].purpose, 'mission_authorization_amendment');
+      assert.equal(consumed[0].sessionId, 'sid_test');
 
-    const viewerServer = await serve({ id: 9, role: 'viewer', client_id: 10 });
-    try {
-      const res = await post(viewerServer, { add: ['content'], reason: 'x' });
-      assert.equal(res.status, 403);
-    } finally { viewerServer.close(); }
+      const viewer = await call({ id: 9, role: 'viewer', client_id: 10 }, { add: ['content'], reason: 'x' });
+      assert.equal(viewer.status, 403);
+    } finally {
+      fresh.consume = original;
+    }
   });
 });
 

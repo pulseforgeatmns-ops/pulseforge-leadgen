@@ -73,12 +73,7 @@ function executionApprovalMission(extra = {}) {
   };
 }
 
-async function liveScoutStub() {
-  const result = require('../AmoOperatorApproval').fixtureScoutDiscoveryResult();
-  delete result.provenance;
-  delete result.payload.provenance;
-  return result;
-}
+const { liveScoutStub } = require('./amoTestRuntime');
 
 async function preparedRuntime() {
   const engine = amo.createAcquisitionMissionEngine();
