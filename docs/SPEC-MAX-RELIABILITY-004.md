@@ -145,8 +145,15 @@ Stage → class: Scout → `provider_research`; Paige → `content`; Penny →
 `paid_media`; Emmett `execute` → `outreach`, other Emmett → `outreach_preparation`;
 Operator `execution_approval` → `outreach_authorization`; Max → `planning`.
 
-- **Creation:** `createMission` stores constraints from `input.authorizationConstraints`
-  and the objective; the Max AMO handoff extracts them from the operator's raw text.
+- **Creation:** `createMission` stores only explicit `input.authorizationConstraints`.
+  They are extracted from the operator's own words at the surfaces: the Max AMO
+  handoff (raw request text) and `POST /api/v1/amo/missions` (objective field).
+  The engine core never infers them from objective text, because governed
+  automation reuses approved objectives whose wording must not become prohibitions.
+- **Creation never replaces a mission:** `Engine.create` refuses an existing id;
+  `runtime.create` also checks durable ids across tenants (`amo_mission_exists`,
+  409). The REST create route takes an allowlist of fields; `id`, plan approval,
+  version, provenance and authorization are never read from the request body.
 - **Monotonic:** `mergeAuthorizationConstraints` only adds (and preserves
   `revision` + amendment history). A resumed request with new restrictions
   tightens and persists. Nothing in Max can loosen them; the only way is a
@@ -174,6 +181,7 @@ Operator `execution_approval` → `outreach_authorization`; Max → `planning`.
 | Rule | Where enforced |
 |---|---|
 | Admin or manager session only; Max / autonomous / client / anonymous refused | route role gate + module `assertApprover` |
+| Never from an impersonated session | route (`isImpersonating`) |
 | Any **loosening** (lift, or ending review-only) requires an **admin** | route + module |
 | Loosening requires a fresh, single-use password step-up on the same session (`POST /api/v1/auth/fresh-confirmation`, purpose `mission_authorization_amendment`) | route (`freshConfirmation.consume`, atomic in SQL) |
 | Bound to the reviewed `constraintsHash`; a changed view → `409 authorization_amendment_stale` | TME preconditions (re-read inside the transaction) |
