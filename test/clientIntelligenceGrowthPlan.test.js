@@ -208,6 +208,16 @@ describe('SPEC-088 Growth Plan continuation', () => {
     assert.match(ui, /Finish Review/);
     assert.match(ui, /Choose Next Objective/);
     assert.doesNotMatch(ui, /Mark Objectives Reviewed/);
+    assert.match(ui, /Accepted Growth Validation Plan/);
+    assert.match(
+      ui,
+      /state\.firstGrowthPlanPreview\s*\?\s*renderFirstGrowthPlanPreview/
+    );
+    assert.match(ui, /report\.executiveSummary\s*\|\|\s*report\.summary/);
+    assert.match(
+      ui,
+      /No additional setup priorities identified for the current approved scope/
+    );
     assert.match(
       ui,
       /no campaign, prospect list, or account changes begin without operator approval/i

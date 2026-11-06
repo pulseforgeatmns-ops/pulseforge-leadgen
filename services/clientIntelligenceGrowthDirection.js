@@ -2032,29 +2032,58 @@ function genericValidationSections(segment, ctx) {
     proof: {
       label: `Credibility proof ${name} should show`,
       body:
-        'Clear service scope, clear response-time expectation, references if available, defined service area, and a professional walkthrough or estimate process.',
+        'Evidence that the business understands this segment, a clear qualification standard, relevant proof of experience, and a specific next step that fits the approved Blueprint.',
     },
     earlySignals: {
       label: 'Early signals worth continuing',
       bullets: [
-        'Qualified replies mentioning current vendor frustration',
-        'Walkthrough or estimate requests from qualified accounts',
-        'Interest in recurring weekly or multiple-times-per-week service',
-        'Questions about reliability, process, or responsiveness',
-        'Interest that does not immediately collapse into lowest-price shopping',
+        'Verified evidence that the prospect matches the approved segment',
+        'A current or recent need aligned with the business offer',
+        'A reachable decision-maker or operator with verified contact information',
+        'Enough public evidence to assess fit without inventing unknowns',
+        'Operator acceptance that the prospect is worth a next step',
       ],
     },
     first30Days: {
       label: 'Successful first 30 days of validation',
       body:
-        `A successful first 30 days would mean ${name} gets a small number of qualified conversations in this segment, at least one walkthrough or estimate request, and clearer evidence of which sub-types respond best.`,
+        `A successful first validation period would give ${name} a bounded batch of decision-ready prospects, operator acceptance or rejection feedback, and clearer evidence about which sub-types deserve continued investment.`,
     },
     cautions: {
       label: 'Cautions',
       body: ctx.avoidPhrase
-        ? `Stay selective. Watch the Blueprint avoid constraint (${ctx.avoidPhrase}) and do not chase accounts that are operationally too complex or price-only.`
-        : 'Stay selective. Avoid price-only prospects and opportunities that would strain service quality.',
+        ? `Stay selective. Apply the Blueprint avoid constraint (${ctx.avoidPhrase}) and label unknowns instead of treating weak evidence as fit.`
+        : 'Stay selective. Label unknowns, preserve the approved scope, and do not treat weak evidence as qualified fit.',
     },
+  };
+}
+
+function explicitValidationBatch(userMessage) {
+  const text = String(userMessage || '').replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  const batch = text.match(
+    /(?:produce|find|identify|review|deliver|build)\s+(?:a\s+(?:batch|list)\s+of\s+)?(\d{1,4})\s+(?:new\s+)?(?:decision[- ]ready\s+|qualified\s+)?(?:borrower\s+|buyer\s+|capital\s+partner\s+)?prospect(?:s|\s+records)?/i
+  );
+  if (!batch) return null;
+  const batchSize = Number(batch[1]);
+  if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 1000) {
+    return null;
+  }
+  const accepted = text.match(
+    /accept(?:s|ed)?\s+(?:at\s+least\s+)?(\d{1,4})\s+(?:of|out\s+of)\s+(?:the\s+)?(\d{1,4})/i
+  );
+  const acceptedCount = accepted && Number(accepted[2]) === batchSize
+    ? Number(accepted[1])
+    : null;
+  const prospectingOnly =
+    /prospecting\s+(?:and\s+qualification\s+)?only|prospect\s+only|do\s+not\s+(?:initiate\s+)?outreach|no\s+(?:automated\s+)?outreach/i.test(text);
+  return {
+    batchSize,
+    acceptedCount:
+      acceptedCount && acceptedCount > 0 && acceptedCount <= batchSize
+        ? acceptedCount
+        : null,
+    prospectingOnly,
   };
 }
 
@@ -2116,6 +2145,19 @@ function buildValidationTarget(growthDirection, blueprint, opts = {}) {
   const content = isPropertyManager
     ? propertyManagerValidationSections(ctx)
     : genericValidationSections(focusSegment, ctx);
+  const explicitBatch = explicitValidationBatch(opts.userMessage);
+  if (explicitBatch && content.first30Days) {
+    const acceptance = explicitBatch.acceptedCount
+      ? ` Success means the operator accepts at least ${explicitBatch.acceptedCount} of ${explicitBatch.batchSize} as worth a next step.`
+      : '';
+    const scope = explicitBatch.prospectingOnly
+      ? ' This phase is prospecting and qualification only; no outreach is authorized.'
+      : '';
+    content.first30Days.body =
+      `Produce ${explicitBatch.batchSize} decision-ready prospect records.` +
+      acceptance +
+      scope;
+  }
 
   const title = isPropertyManager
     ? 'Property Manager Validation Target'
@@ -2225,8 +2267,8 @@ function previewWhySecondary(secondaryDisplay, businessName) {
   }
   if (/professional office/i.test(String(secondaryDisplay))) {
     return (
-      `Professional offices are a strong backup because they have clear recurring needs and may move faster to walkthroughs, ` +
-      `but account expansion may be smaller than property management relationships.`
+      `Professional offices remain a plausible backup because the segment can often be qualified from public evidence and may move faster to a concrete next step, ` +
+      `but it should remain behind the primary segment until comparative evidence is clearer.`
     );
   }
   return (
@@ -2289,11 +2331,11 @@ function previewEarlySignals(validationTarget, primaryDisplay) {
 
   const label = displaySegmentName(primaryDisplay || 'the focus segment');
   return [
-    `Qualified replies mentioning current vendor frustration in ${label.toLowerCase()}`,
-    'Walkthrough or estimate requests from qualified accounts',
-    'Interest in recurring weekly or multiple-times-per-week service',
-    'Questions about reliability, process, or responsiveness',
-    'Interest that does not immediately collapse into lowest-price shopping',
+    `Verified evidence that the prospect matches ${label.toLowerCase()}`,
+    'A current or recent need aligned with the approved business offer',
+    'A reachable decision-maker or operator with verified contact information',
+    'Enough evidence to assess fit without inventing unknowns',
+    'Operator acceptance that the prospect is worth a next step',
   ];
 }
 
@@ -2372,12 +2414,12 @@ function buildFirstGrowthPlanPreview(growthDirection, blueprint, opts = {}) {
       validationTarget.sections &&
       validationTarget.sections.proof &&
       validationTarget.sections.proof.body) ||
-    'Clear service scope, clear response-time expectation, references if available, defined service area, and a professional walkthrough or estimate process.';
+    'Evidence that the business understands this segment, a clear qualification standard, relevant proof of experience, and a specific next step that fits the approved Blueprint.';
 
   const primaryHuman = humanizeSegmentLabel(primaryDisplay);
   const nextStep = /property manager/i.test(String(primaryDisplay))
     ? `Before building a campaign or prospect list, ${businessName} should confirm credibility proof: service checklist, photos or examples, clear response-time expectation, service area, and walkthrough/estimate process.`
-    : `Before building a campaign or prospect list, ${businessName} should confirm credibility proof and the walkthrough/estimate process for ${primaryHuman}.`;
+    : `Before building a campaign or prospect list, ${businessName} should run a bounded, review-only validation of ${primaryHuman}, preserve source evidence, and record operator acceptance or rejection.`;
 
   const earlySignals = previewEarlySignals(validationTarget, primaryDisplay);
 
@@ -2530,13 +2572,24 @@ function buildGrowthInfrastructureHandoffContext(
     gd.primaryArea ||
     splitGeography(sectionSummary(sections, 'targetMarkets'), null).primaryArea ||
     null;
-  const proofNeeded = [
-    'service checklist',
-    'photos/examples',
-    'clear response-time expectation',
-    'service area',
-    'walkthrough/estimate process',
-  ];
+  const businessContext = [
+    sectionSummary(sections, 'identity'),
+    sectionSummary(sections, 'services'),
+  ].join(' ').toLowerCase();
+  const cleaningContext = /\b(?:cleaning|janitorial)\b/.test(businessContext);
+  const proofNeeded = cleaningContext
+    ? [
+        'service checklist',
+        'photos/examples',
+        'clear response-time expectation',
+        'service area',
+        'walkthrough/estimate process',
+      ]
+    : [
+        (preview && preview.credibility_proof_needed) ||
+          (validation && validation.credibility_proof_needed) ||
+          'Business-specific qualification evidence from the approved Blueprint',
+      ];
 
   return {
     businessName,
@@ -2545,8 +2598,11 @@ function buildGrowthInfrastructureHandoffContext(
     targetMarket,
     primarySegment,
     secondarySegment,
-    conversionGoal:
-      'qualified conversations, walkthroughs, estimate requests',
+    conversionGoal: cleaningContext
+      ? 'qualified conversations, walkthroughs, estimate requests'
+      : ((preview && preview.successful_first_30_days) ||
+        (validation && validation.first_30_day_success_definition) ||
+        'a bounded batch of decision-ready prospects with operator acceptance feedback'),
     proofNeeded,
     noCampaignOrProspectListYet: true,
     approvedBlueprintId: (blueprint && blueprint.id) || null,

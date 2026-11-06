@@ -610,6 +610,14 @@
 .pf-focused-workspace .sidebar, .pf-focused-workspace .hamburger, .pf-focused-workspace #menuBtn { display: none !important; }
 .pf-focused-workspace .content-col { grid-column: 1 / -1; }
 .pf-living-shell a:focus-visible, .pf-living-shell summary:focus-visible, .pf-living-shell select:focus-visible { outline: 2px solid var(--pf-gold); outline-offset: 4px; }
+/* The dashboard owns the viewport. Refined Pipeline must shrink into its
+   center-column slot and become that slot's scrollport, especially on tablets. */
+#pipelineArea.pf-refined {
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+}
 @media (max-width: 1150px) {
   .pf-shell-nav.pf-living-shell { gap: 18px; padding-inline: 3%; }
   .pf-living-shell .pf-nav-group { gap: 10px; }

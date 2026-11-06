@@ -106,6 +106,43 @@ const ANCHOR_BLUEPRINT = {
   },
 };
 
+const CAPITAL_MATCHING_BLUEPRINT = {
+  id: 'bp-capital-matching',
+  version: '1.0',
+  status: 'approved',
+  sections: {
+    identity: {
+      summary: 'A private-lending and capital-matching business.',
+    },
+    services: {
+      summary:
+        'The business qualifies asset-backed real-estate operators seeking rehabilitation or equity-gap capital.',
+    },
+    idealCustomers: {
+      summary:
+        'Active real-estate operators with identifiable collateral, recent projects, sufficient assets, and a credible exit plan.',
+    },
+    avoidCustomers: {
+      summary:
+        'Avoid inactive operators, unclear collateral, distressed borrowers, and deals without a credible exit.',
+    },
+    targetMarkets: {
+      summary: 'Nationwide United States.',
+    },
+    competitiveAdvantages: {
+      summary:
+        'Flexible asset-backed capital with fewer administrative hoops than institutional lenders.',
+    },
+    campaignGoals: {
+      summary: 'Build a repeatable pipeline of decision-ready borrower prospects.',
+    },
+    successMetrics: {
+      summary:
+        'Measure verified records, operator acceptance, credible matches, and progression into diligence.',
+    },
+  },
+};
+
 const ANSWERS = [
   'Aji Home Services',
   'Residential cleaning',
@@ -327,6 +364,65 @@ describe('Initial Growth Direction artifact', () => {
       resolved.paragraphs.join('\n'),
       /customers who The business|prefers to avoid/i
     );
+  });
+});
+
+describe('cross-industry Growth Validation defaults', () => {
+  it('keeps capital-matching plans Blueprint-grounded and preserves an explicit batch target', () => {
+    const gd = {
+      businessName: 'LA Endeavors',
+      firstFocus: 'short-term asset-backed capital matching',
+      primaryArea: 'United States (nationwide)',
+      segmentsToInspect: ['active real-estate operators and borrowers'],
+      blueprintId: CAPITAL_MATCHING_BLUEPRINT.id,
+      blueprintVersion: CAPITAL_MATCHING_BLUEPRINT.version,
+    };
+    const userMessage =
+      'Produce 10 new decision-ready borrower prospects. Success means Levi accepts at least 6 of the 10 as worth contacting. Prospecting and qualification only. Do not initiate outreach.';
+    const target = buildValidationTarget(gd, CAPITAL_MATCHING_BLUEPRINT, {
+      focusSegment: 'active real-estate operators and borrowers',
+      userMessage,
+    });
+    assert.match(target.first_30_day_success_definition, /Produce 10/i);
+    assert.match(target.first_30_day_success_definition, /at least 6 of 10/i);
+    assert.match(target.first_30_day_success_definition, /no outreach is authorized/i);
+
+    const decision = buildFirstSegmentDecision({
+      primary: 'active_real_estate_operators_and_borrowers',
+      secondary: null,
+      held: ['individual_private_lenders_and_investors'],
+      deprioritized: ['institutional_lending_groups'],
+      primaryDisplay: 'active real-estate operators and borrowers',
+      secondaryDisplay: null,
+    });
+    const preview = buildFirstGrowthPlanPreview(
+      gd,
+      CAPITAL_MATCHING_BLUEPRINT,
+      {
+        growthState: {
+          primary_segment: 'active_real_estate_operators_and_borrowers',
+          validation_target: target,
+          first_segment_decision: decision,
+        },
+      }
+    );
+    const handoff = buildGrowthInfrastructureHandoffContext(
+      {
+        primary_segment: 'active_real_estate_operators_and_borrowers',
+        validation_target: target,
+        first_segment_decision: decision,
+        first_growth_plan_preview: preview,
+      },
+      CAPITAL_MATCHING_BLUEPRINT,
+      gd
+    );
+    const rendered = JSON.stringify({ target, preview, handoff });
+    assert.doesNotMatch(
+      rendered,
+      /walkthrough|estimate request|vendor frustration|weekly service|service area|lowest-price/i
+    );
+    assert.match(rendered, /decision-ready prospect/i);
+    assert.match(rendered, /operator acceptance/i);
   });
 });
 
