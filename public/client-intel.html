@@ -1800,6 +1800,37 @@
       );
     }
 
+    function renderFirstGrowthPlanPreview(preview) {
+      if (!preview) return '';
+      const signals = Array.isArray(preview.early_signals)
+        ? preview.early_signals.filter(Boolean)
+        : [];
+      return (
+        '<div class="growth-direction" id="firstGrowthPlanPreview">' +
+          '<p class="growth-kicker">Accepted Growth Validation Plan</p>' +
+          '<h4>' + escapeHtml(preview.recommended_first_segment || preview.title || 'First growth focus') + '</h4>' +
+          (preview.first_subtype_to_test
+            ? '<p><strong>First subtype to test:</strong> ' + escapeHtml(preview.first_subtype_to_test) + '</p>'
+            : '') +
+          (preview.why_this_segment
+            ? '<p>' + escapeHtml(preview.why_this_segment) + '</p>'
+            : '') +
+          (signals.length
+            ? '<p><strong>Qualification signals</strong></p>' + renderListBlock(signals, '—')
+            : '') +
+          (preview.successful_first_30_days
+            ? '<p><strong>Validation target:</strong> ' + escapeHtml(preview.successful_first_30_days) + '</p>'
+            : '') +
+          (preview.next_step_before_campaign
+            ? '<p><strong>Next step:</strong> ' + escapeHtml(preview.next_step_before_campaign) + '</p>'
+            : '') +
+          '<p class="growth-disclaimer">' +
+            escapeHtml(preview.confidence || 'Directional, not market-validated.') +
+          '</p>' +
+        '</div>'
+      );
+    }
+
     function formatOwnerLabel(owner) {
       if (GrowthWorkspacePanel.formatOwnerLabel) {
         return GrowthWorkspacePanel.formatOwnerLabel(owner);
@@ -1831,19 +1862,14 @@
     function renderReadinessReport(report) {
       if (!report) return '';
       const titles = report.sectionTitles || {};
-      const priorities = report.topSetupPriorities || [
-        'Confirm domain + website connection',
-        'Confirm branded email + SPF/DKIM/DMARC',
-        'Confirm website phone/email/form + clear estimate/walkthrough CTA',
-        'Confirm GBP, reviews, and photos',
-        'Confirm lead tracking and follow-up process',
-      ];
-      const priorityHtml =
-        '<ul class="completion-checks">' +
-        priorities
-          .map((p) => '<li>' + escapeHtml(p) + '</li>')
-          .join('') +
-        '</ul>';
+      const priorities = Array.isArray(report.topSetupPriorities)
+        ? report.topSetupPriorities.filter(Boolean)
+        : [];
+      const priorityHtml = priorities.length
+        ? '<ul class="completion-checks">' +
+          priorities.map((p) => '<li>' + escapeHtml(p) + '</li>').join('') +
+          '</ul>'
+        : '<p class="blueprint-empty">No additional setup priorities identified for the current approved scope.</p>';
       const seq = (report.recommendedSetupSequence || []).slice(0, 8);
       const seqHtml = seq.length
         ? '<ol class="completion-checks">' +
@@ -1857,7 +1883,8 @@
         : '<p class="blueprint-empty">Answer more questions to build the setup sequence.</p>';
       const summary =
         report.executiveSummary ||
-        'Before outreach, the business should confirm three things: prospects can reach the business, trust signals are visible, and every inquiry can be tracked and followed up.';
+        report.summary ||
+        'Readiness is evaluated against the approved Blueprint and current operator-authorized scope.';
       return (
         '<div class="growth-direction" id="growthInfrastructureReadinessReport">' +
           '<p class="growth-kicker">Growth Infrastructure Readiness Report</p>' +
@@ -3489,9 +3516,11 @@
           renderCurrentTaskCard(plan, {
             guidanceOpen: Boolean(state.taskGuidanceOpen),
           }) +
-          (plan && plan.artifacts && plan.artifacts.hasInitialGrowthDirection
-            ? renderGrowthDirection(state.initialGrowthDirection)
-            : '') +
+          (state.firstGrowthPlanPreview
+            ? renderFirstGrowthPlanPreview(state.firstGrowthPlanPreview)
+            : (plan && plan.artifacts && plan.artifacts.hasInitialGrowthDirection
+              ? renderGrowthDirection(state.initialGrowthDirection)
+              : '')) +
           '<p class="growth-disclaimer">' +
             'Readiness Report is available as a tab. Resume always opens the first incomplete task.' +
           '</p>' +
