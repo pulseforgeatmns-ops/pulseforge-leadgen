@@ -11,6 +11,14 @@ const { assertAoProspectRoutingSchemaContract } = require('./helpers/aoProspectR
 const root = path.join(__dirname, '..');
 const migration = fs.readFileSync(path.join(root, 'migrations', '2026-09-22-ao-prospect-routing.sql'), 'utf8');
 const rollback = fs.readFileSync(path.join(root, 'migrations', '2026-09-22-ao-prospect-routing.rollback.sql'), 'utf8');
+// AO CRM columns (ao_current_status, ao_next_action, ao_disqualification_reason)
+// are read by the shared AO working-eligibility predicate (#1060/#1064).
+// Apply the real migration in its chronological place instead of hand-adding columns.
+const aoCommandCenterMigration = fs.readFileSync(
+  path.join(root, 'migrations', '2026-09-24-ao-spec-005-command-center.sql'),
+  'utf8'
+);
+const aoCrmMigration = fs.readFileSync(path.join(root, 'migrations', '2026-09-28-ao-crm-001.sql'), 'utf8');
 const dispositionMigration = fs.readFileSync(
   path.join(root, 'migrations', '2026-10-05-ao-queue-dead-001.sql'),
   'utf8'
@@ -124,6 +132,8 @@ test('AO routing enforces tenant ownership, active uniqueness, suppression, and 
     await seed(db);
     await db.query(migration);
     await db.query(migration);
+    await db.query(aoCommandCenterMigration);
+    await db.query(aoCrmMigration);
     await db.query(dispositionMigration);
     await db.query(rosterMigration);
     await assertAoProspectRoutingSchemaContract(db);
@@ -224,6 +234,22 @@ test('AO routing enforces tenant ownership, active uniqueness, suppression, and 
     assert.equal(saved.evaluation.next_action, 'AO_FOLLOW_UP');
     assert.equal((await db.query('SELECT status FROM ao_prospect_tasks WHERE id=$1', [task.id])).rows[0].status, 'completed');
 
+  } finally {
+    await db.end();
+    await postgres.stop();
+  }
+});
+
+// The routing rollback is verified on its own schema: once later migrations
+// (AO command center, AO CRM) depend on its index, rolling back 2026-09-22
+// alone is invalid by design — rollbacks run newest-first.
+test('AO routing rollback preserves Max next_action_due_at', { timeout: 180000 }, async () => {
+  const postgres = await startDisposablePostgres('ao-routing-rollback-');
+  const db = new Pool({ connectionString: postgres.connectionString });
+  try {
+    await baseSchema(db);
+    await seed(db);
+    await db.query(migration);
     await db.query(rollback);
     const columns = (await db.query(`SELECT column_name FROM information_schema.columns
       WHERE table_name='prospects' AND column_name='next_action_due_at'`)).rows;
@@ -245,6 +271,8 @@ test('AO routing respects disposition_status independently of generic status', {
     await baseSchema(db);
     await seed(db);
     await db.query(migration);
+    await db.query(aoCommandCenterMigration);
+    await db.query(aoCrmMigration);
     await db.query(dispositionMigration);
     await db.query(rosterMigration);
     await assertAoProspectRoutingSchemaContract(db);
