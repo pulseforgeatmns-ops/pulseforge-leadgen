@@ -92,10 +92,11 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
    const refreshCandidates=[...new Set([...urgent,...priority])];
    // The documented public endpoint accepts up to 30 addresses per request.
    // Round robin preserves coverage while sharing existing provider budgets.
-   if(refreshCandidates.length&&marketProvider){const reserved=urgent.slice(0,10),pool=refreshCandidates.filter(ca=>!reserved.includes(ca)),slots=Math.min(30-reserved.length,pool.length),batch=[...reserved,...Array.from({length:slots},(_,i)=>pool[(rotation+i)%pool.length])];rotation=pool.length?(rotation+slots)%pool.length:0;
+   const marketRefresh={requested:0,returned:0,fresh:0,stale:0,invalid:0,providerFailed:false};
+   if(refreshCandidates.length&&marketProvider){const reserved=urgent.slice(0,10),pool=refreshCandidates.filter(ca=>!reserved.includes(ca)),slots=Math.min(30-reserved.length,pool.length),batch=[...reserved,...Array.from({length:slots},(_,i)=>pool[(rotation+i)%pool.length])];rotation=pool.length?(rotation+slots)%pool.length:0;marketRefresh.requested=batch.length;
     try{const snapshots=marketProvider.getSnapshots?await marketProvider.getSnapshots(batch):[await marketProvider.getSnapshot({tokenAddress:batch[0]})];
-     for(const snapshot of snapshots)if(batch.includes(snapshot.tokenAddress))await store.put('observation',snapshot.tokenAddress,hash([snapshot.tokenAddress,snapshot.observedAt]),snapshot);
-    }catch{}
+     for(const snapshot of snapshots)if(batch.includes(snapshot.tokenAddress)){marketRefresh.returned++;const age=Date.parse(now().toISOString())-Date.parse(snapshot.observedAt),knownAge=Date.parse(now().toISOString())-Date.parse(snapshot.knownAt);if(!Number.isFinite(age)||!Number.isFinite(knownAge)||age<0||knownAge<0)marketRefresh.invalid++;else if(age>90000||knownAge>90000)marketRefresh.stale++;else marketRefresh.fresh++;await store.put('observation',snapshot.tokenAddress,hash([snapshot.tokenAddress,snapshot.observedAt]),snapshot);}
+    }catch{marketRefresh.providerFailed=true;}
    }
    failureStage='OPPORTUNITY_EVALUATION';const old=await opportunities.list(asOf),tokens=[...new Set([...priority,...old.map(p=>p.tokenAddress)])].slice(0,200);
    const paperAudit={evaluated:0,entries:0,exits:0,blocked:{}};
@@ -121,7 +122,7 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
    }
    if(transportTestId&&transports.every(t=>t.ready))await opportunities.enqueueTransportTest(transportTestId);
    await deliver(opportunities,transports);
-   failureStage='PAPER_STATUS';const paperAccount=await paper.snapshot();await store.put('status','*','paper-account',{component:'paper-account',state:'OBSERVED',version:require('./paperAccount').VERSION,config:require('./paperAccount').CONFIG,account:paperAccount,audit:paperAudit,reason:'Prospective simulated execution only. No real orders or wallet access.',occurredAt:asOf,knownAt:asOf},{mutable:true});
+   failureStage='PAPER_STATUS';const paperAccount=await paper.snapshot();await store.put('status','*','paper-account',{component:'paper-account',state:'OBSERVED',version:require('./paperAccount').VERSION,config:require('./paperAccount').CONFIG,account:paperAccount,audit:paperAudit,marketRefresh,reason:'Prospective simulated execution only. No real orders or wallet access.',occurredAt:asOf,knownAt:asOf},{mutable:true});
    const at=now().toISOString();await store.put('status','*','opportunity-capacity',{component:'opportunity-capacity',state:counts.size>maxTokens?'PARTIAL':'OBSERVED',
      discoveredTokens:counts.size,evaluatedTokens:tokens.length,marketEnrichmentLimit:maxTokens,deferredTokens:Math.max(0,counts.size-maxTokens),
      sourceCandidateCount:SOURCES.length,liveSources:sources.filter(s=>s.active).length,requiredLiveSources:10,
