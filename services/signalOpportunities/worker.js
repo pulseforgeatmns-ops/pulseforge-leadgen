@@ -92,7 +92,7 @@ function createOpportunityWorker({store,opportunities,feed,marketProvider,transp
    const refreshCandidates=[...new Set([...urgent,...priority])];
    // The documented public endpoint accepts up to 30 addresses per request.
    // Round robin preserves coverage while sharing existing provider budgets.
-   if(priority.length&&marketProvider){const batch=Array.from({length:Math.min(30,priority.length)},(_,i)=>priority[(rotation+i)%priority.length]);rotation=(rotation+batch.length)%priority.length;
+   if(refreshCandidates.length&&marketProvider){const reserved=urgent.slice(0,10),pool=refreshCandidates.filter(ca=>!reserved.includes(ca)),slots=Math.min(30-reserved.length,pool.length),batch=[...reserved,...Array.from({length:slots},(_,i)=>pool[(rotation+i)%pool.length])];rotation=pool.length?(rotation+slots)%pool.length:0;
     try{const snapshots=marketProvider.getSnapshots?await marketProvider.getSnapshots(batch):[await marketProvider.getSnapshot({tokenAddress:batch[0]})];
      for(const snapshot of snapshots)if(batch.includes(snapshot.tokenAddress))await store.put('observation',snapshot.tokenAddress,hash([snapshot.tokenAddress,snapshot.observedAt]),snapshot);
     }catch{}
