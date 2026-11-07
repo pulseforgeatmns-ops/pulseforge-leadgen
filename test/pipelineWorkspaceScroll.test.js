@@ -28,11 +28,14 @@ function cssBody(source, selector) {
 test('active Pipeline makes the document the vertical scrollport', () => {
   const documentScroll = cssBody(shell, 'html.pf-pipeline-page-scroll,\nbody.pf-pipeline-page-scroll');
   const pipeline = cssBody(shell, 'body.pf-pipeline-page-scroll #pipelineArea.pf-refined');
+  const workspace = cssBody(shell, 'body.pf-pipeline-page-scroll #pipelineArea.pf-refined > .pf-workspace');
 
   assert.match(documentScroll, /height:\s*auto\s*;/);
   assert.match(documentScroll, /overflow-y:\s*auto\s*!important\s*;/);
   assert.match(pipeline, /min-height:\s*0\s*!important\s*;/);
   assert.match(pipeline, /overflow-y:\s*visible\s*!important\s*;/);
+  assert.match(workspace, /max-height:\s*none\s*;/);
+  assert.match(workspace, /overflow:\s*visible\s*;/);
 });
 
 test('Pipeline page-scroll mode removes clipping from the dashboard flex chain', () => {
