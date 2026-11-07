@@ -1,4 +1,6 @@
 'use strict';
+// Discovery uses a live-Scout stub: synthetic fixture missions cannot reach outreach (P0).
+const { liveScoutStub } = require('../../max/workspace/tests/amoTestRuntime');
 
 /**
  * ADR-067 — Stage Contracts Are Authoritative.
@@ -125,7 +127,7 @@ describe('ADR-067 — Stage Contracts Are Authoritative', () => {
       engine,
       missionId: mission.id,
       tenantId: '10',
-      allowFixtureFallback: true,
+      allowFixtureFallback: true, runScout: liveScoutStub,
     });
 
     assert.equal(result.outcome, 'paused');
@@ -287,7 +289,7 @@ describe('ADR-067 — preserve artifact-bound execution authority', () => {
       objective: 'Acquire commercial cleaning customers in Manchester NH for law firms.',
       targetSegment: 'Law Firms',
     });
-    const input = { engine, missionId: mission.id, tenantId: '10', allowFixtureFallback: true };
+    const input = { engine, missionId: mission.id, tenantId: '10', allowFixtureFallback: true, runScout: liveScoutStub };
     const discovered = await runAutonomousProgression(input);
     assert.equal(discovered.progressionStage, PROGRESSION_STAGES.DISCOVERY_REVIEW);
     await require('../../max/workspace/AmoOperatorApproval').advancePrioritizationAfterApproval({
@@ -300,6 +302,13 @@ describe('ADR-067 — preserve artifact-bound execution authority', () => {
       source: amo.EXECUTION_SOURCES.APPROVAL_BUTTON,
       intent: amo.EXECUTION_INTENTS.APPROVE_EXECUTION,
       missionId: mission.id, operatorId: 'operator-1', stage: STAGES.READY,
+      // P0 — the approval names the prepared-package revision the operator reviewed.
+      payload: {
+        expectedPreparedArtifactRevision: amo.computePreparedArtifactRevision(
+          mission.id, engine.inspect(mission.id, { tenantId: '10' }).contributions),
+        expectedPreparedContentDigest: amo.computePreparedContentDigest(
+          mission.id, engine.inspect(mission.id, { tenantId: '10' }).contributions),
+      },
     });
     await amo.routeExecutionRequest(request, { engine, tenantId: '10' });
     return { engine, mission, snapshot: engine.inspect(mission.id, { tenantId: '10' }) };

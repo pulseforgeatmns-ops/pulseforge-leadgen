@@ -17,7 +17,16 @@ const { createTestAmoRuntime } = require('./amoTestRuntime');
 const approval = require('../AmoOperatorApproval');
 const realAdvance = approval.advanceDiscoveryAfterApproval;
 let fixtureCalls = 0;
-approval.advanceDiscoveryAfterApproval = input => realAdvance({ ...input, runScout: async () => { fixtureCalls += 1; return approval.fixtureScoutDiscoveryResult(); } });
+// The injected runScout stands in for a LIVE provider. The built-in fixture now
+// self-labels as synthetic (P0 reliability), so strip that label here: this
+// suite verifies request/response identity, not provider provenance.
+const liveScoutStub = () => {
+  const result = approval.fixtureScoutDiscoveryResult();
+  delete result.provenance;
+  delete result.payload.provenance;
+  return result;
+};
+approval.advanceDiscoveryAfterApproval = input => realAdvance({ ...input, runScout: async () => { fixtureCalls += 1; return liveScoutStub(); } });
 after(() => { approval.advanceDiscoveryAfterApproval = realAdvance; });
 const { advancePlanAfterApproval } = require('../AmoOperatorApproval');
 const {

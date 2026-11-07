@@ -18,6 +18,19 @@ function createTestAmoRuntime(opts = {}) {
   });
 }
 
+/**
+ * Test stand-in for a LIVE Scout provider (injected as `runScout`). The built-in
+ * fixture fallback self-labels `provenance: 'synthetic_fixture'` and synthetic
+ * missions can never reach outreach (P0 synthetic isolation), so suites that
+ * scaffold a mission through to execution must model live discovery explicitly.
+ */
+async function liveScoutStub() {
+  const result = require('../AmoOperatorApproval').fixtureScoutDiscoveryResult();
+  delete result.provenance;
+  if (result.payload) delete result.payload.provenance;
+  return result;
+}
+
 function runtimeProviderFromEngine(engine) {
   const runtime = createTestAmoRuntime({ engine });
   return () => runtime;
@@ -42,6 +55,7 @@ function createHydratingTestRuntime(sourceEngine, opts = {}) {
 }
 
 module.exports = {
+  liveScoutStub,
   createTestAmoRuntime,
   runtimeProviderFromEngine,
   installTestAmoRuntime,

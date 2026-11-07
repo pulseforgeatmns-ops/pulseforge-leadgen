@@ -487,6 +487,16 @@ async function admitMissionBoundCandidate(pool, candidate, {
  * @returns {Promise<{ results: object[], byCandidateId: Map<string, object> }>}
  */
 async function admitMissionBoundCandidates(pool, mission, contributions = [], opts = {}) {
+  // P0 — synthetic (fixture) discovery must never become CRM inventory.
+  const synthetic = (mission && mission.syntheticEvidence) ||
+    (contributions || []).some((row) => row && row.kind === 'discovery' &&
+      row.payload && row.payload.provenance === 'synthetic_fixture');
+  if (synthetic) {
+    const err = new Error('Mission discovery is synthetic (fixture) data; CRM admission is refused.');
+    err.code = 'synthetic_evidence_blocked';
+    err.missionId = mission && mission.id;
+    throw err;
+  }
   const clientId = Number(opts.clientId || mission.clientId || mission.client_id);
   const missionId = mission.id || opts.missionId;
   const dryRun = Boolean(opts.dryRun);
