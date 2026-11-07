@@ -112,6 +112,14 @@ describe('Living Command Deck — domain priority', () => {
         .summary.compressed,
       'Investor network steady'
     );
+    const borrowerDrawer = privateLending.domains.find(
+      (domain) => domain.id === DOMAIN_IDS.ACQUISITION
+    ).drawer;
+    assert.equal(borrowerDrawer.snapshot.title, 'Borrower pipeline');
+    assert.deepEqual(
+      borrowerDrawer.snapshot.metrics.map((item) => item.label),
+      ['Open prospects', 'New in 24h', 'Warm', 'Booked']
+    );
 
     const generic = await composeSpatialOverview({
       model,
@@ -121,6 +129,24 @@ describe('Living Command Deck — domain priority', () => {
       generic.domains.map((domain) => domain.label),
       ['Content', 'Acquisition', 'Clients', 'Campaigns']
     );
+  });
+
+  it('puts live pipeline counts into the acquisition bubble drawer', async () => {
+    const overview = await composeSpatialOverview({
+      model: {
+        meta: { generatedAt: '2026-11-07T13:00:00.000Z' },
+        livingBrief: { pipeline: { total: 16, new24h: 0, warm: 0, booked: 0 } },
+        operations: { missions: [] },
+      },
+      tenantProfile: { name: 'LA Endeavors', vertical: 'private_lending' },
+    });
+    const acquisition = overview.domains.find((domain) => domain.id === DOMAIN_IDS.ACQUISITION);
+    assert.deepEqual(acquisition.drawer.snapshot.metrics, [
+      { label: 'Open prospects', value: 16 },
+      { label: 'New in 24h', value: 0 },
+      { label: 'Warm', value: 0 },
+      { label: 'Booked', value: 0 },
+    ]);
   });
 
   it('records explainable Normal → Elevated transition', async () => {

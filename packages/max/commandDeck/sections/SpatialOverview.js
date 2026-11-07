@@ -78,6 +78,58 @@ function personalizeSummary(domainId, summary, presentation) {
   return { ...summary, lines, compressed };
 }
 
+function metric(label, value) {
+  if (value == null || value === '') return { label, value: null };
+  return {
+    label,
+    value: Number.isFinite(Number(value)) ? Number(value) : null,
+  };
+}
+
+function buildDomainSnapshot(domainId, signals, model, presentation) {
+  const isPrivateLending = Boolean(presentation);
+  if (domainId === DOMAIN_IDS.ACQUISITION) {
+    const pipeline = (model.livingBrief && model.livingBrief.pipeline) || {};
+    return {
+      title: isPrivateLending ? 'Borrower pipeline' : 'Prospect pipeline',
+      metrics: [
+        metric('Open prospects', pipeline.total),
+        metric('New in 24h', pipeline.new24h),
+        metric('Warm', pipeline.warm),
+        metric('Booked', pipeline.booked),
+      ],
+    };
+  }
+  if (domainId === DOMAIN_IDS.CONTENT) {
+    const pending = signals.pendingRecommendations || [];
+    return {
+      title: isPrivateLending ? 'Market monitoring' : 'Content intelligence',
+      metrics: [
+        metric('Recommendations', signals.pendingCount || 0),
+        metric('Needs decision', pending.filter((item) => item.requiresOperatorDecision).length),
+      ],
+    };
+  }
+  if (domainId === DOMAIN_IDS.CLIENTS) {
+    return {
+      title: isPrivateLending ? 'Capital network' : 'Client objectives',
+      metrics: [
+        metric('Tracked objectives', (signals.objectives || []).length),
+        metric('Needs attention', signals.needsAttention || 0),
+      ],
+    };
+  }
+  const campaign = signals.summary || {};
+  return {
+    title: isPrivateLending ? 'Deal activity' : 'Campaign activity',
+    metrics: [
+      metric('Active', campaign.active || 0),
+      metric('Awaiting you', campaign.awaitingOperator || 0),
+      metric('Recent / historical', campaign.historicalContained || 0),
+    ],
+  };
+}
+
 /**
  * @param {object} input
  * @param {object} input.model - composed CommandDeckModel (partial)
@@ -133,7 +185,10 @@ async function composeSpatialOverview(input = {}) {
       buildDomainSummary(domainId, signals),
       presentation
     );
-    const drawer = buildDomainDrawer(domainId, signals);
+    const drawer = {
+      ...buildDomainDrawer(domainId, signals),
+      snapshot: buildDomainSnapshot(domainId, signals, model, presentation),
+    };
     const hasNewIntelligence =
       Boolean(reconciled.transition) ||
       (elevation && priority !== PRIORITY_STATES.MONITORED && priority !== PRIORITY_STATES.NORMAL);
@@ -317,4 +372,5 @@ module.exports = {
   VERTICAL_PRESENTATIONS,
   presentationForTenant,
   personalizeSummary,
+  buildDomainSnapshot,
 };
