@@ -635,6 +635,10 @@ body.pf-pipeline-page-scroll #pipelineArea.pf-refined {
   min-height: 0 !important;
   overflow-y: visible !important;
 }
+body.pf-pipeline-page-scroll #pipelineArea.pf-refined > .pf-workspace {
+  max-height: none;
+  overflow: visible;
+}
 @media (max-width: 1150px) {
   .pf-shell-nav.pf-living-shell { gap: 18px; padding-inline: 3%; }
   .pf-living-shell .pf-nav-group { gap: 10px; }
