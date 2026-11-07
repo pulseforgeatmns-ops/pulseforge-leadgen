@@ -48,6 +48,22 @@ function affirmativeSentences(question) {
 }
 
 /**
+ * Owner-independent: does the operator's affirmative (non-negated, non-question)
+ * text command work to be executed? Used where a turn is answered without any
+ * dispatch, so the reply can say plainly that nothing ran.
+ * @param {string} question
+ * @returns {string|null} signal
+ */
+function detectExecutionCommand(question) {
+  for (const sentence of affirmativeSentences(question)) {
+    if (INTERROGATIVE_RE.test(sentence) || /\?\s*$/.test(sentence)) continue;
+    if (IMPERATIVE_EXECUTION_RE.test(sentence)) return 'imperative_execution';
+    if (isMissionExecutionCommand(sentence)) return 'mission_execution_command';
+  }
+  return null;
+}
+
+/**
  * @param {{ claimedOwner: string, reason: string, question: string }} input
  * @returns {{ claimedOwner: string, reason: string, executionExpected: boolean, signal: string|null }}
  */
@@ -106,5 +122,6 @@ function buildFallbackBlockedResponse(fallback) {
 module.exports = {
   ACTIONABLE_OWNERS,
   assessFallback,
+  detectExecutionCommand,
   buildFallbackBlockedResponse,
 };

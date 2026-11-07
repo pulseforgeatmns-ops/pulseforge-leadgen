@@ -634,6 +634,7 @@ class WorkspaceEngine {
       const sessionConfigTurn = buildSessionConfigurationResponse({
         sessionState,
         changed: sessionStateResolution.changed,
+        question,
         messageClassification,
       });
       session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
