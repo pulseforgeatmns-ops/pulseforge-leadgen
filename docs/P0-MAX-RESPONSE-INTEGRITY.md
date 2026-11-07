@@ -164,3 +164,44 @@ Also fixed: a rolled-back execution approval used to be labelled "Discovery coul
   outbound: identical results before and after (one flaky rerun confirmed). Two existing tests now pass the reviewed
   revision when they approve through the router (`adr067StageContracts`, `spec070ReadyExecutionApproval`).
 - Acceptance S8 step 1 updated to approve with the reviewed revision.
+
+---
+
+## 8. Complete-content approval binding (`33ed2d9`)
+
+### Finding
+`computePreparedArtifactRevision` hashes the Max/Paige/Emmett contribution ids, the queue count, the **first 25** target ids,
+the governor outcome and the sender email/domain. It does not hash recipient addresses, per-target sendable/DNC flags,
+copy bindings, Paige copy content or the sender name. At send time, `buildExecutionBundle` reads the **live** queue and copy.
+Any rewrite under the same contribution id therefore kept an existing approval: through `store.updateContribution`, or
+through the durable `persistContribution` upsert `ON CONFLICT (id) DO UPDATE SET payload`. The rewrite could change target 26
+onwards, any target's address or flags, or the copy. No current code path performs such a rewrite. The gap is real but
+latent, which makes the fix defense in depth.
+
+### Correction
+- `computePreparedContentDigest`: a canonical digest (sorted keys at every depth, stable across JSONB round trips) of every
+  queue item in send order (all positions, duplicates included), the full Paige artifact, the full sender identity and the
+  governor outcome.
+- New approvals store `preparedContentDigest`. `findValidExecutionApproval` and the send-time `verifyArtifactRevision` void
+  an approval whose digest no longer matches.
+- **The package revision id is deliberately unchanged.** Governed envelopes, Anchor recovery approvals, CRM-preparation
+  receipts, evidence and schedules store and compare it. Changing its format would fail every existing governed envelope
+  at deploy and leave every READY mission with a consumed approval SPEC-136-inconsistent (skipped on hydrate). Legacy
+  approvals (no digest) keep revision-only semantics; they are listed by the pre-deploy inventory (checklist R.4).
+- Review binding: human-facing approvals carry both `expectedPreparedArtifactRevision` and `expectedPreparedContentDigest`.
+
+### Protected after the fix (new approvals)
+Approved content (full Paige artifact and per-target copy binding), sender identity (email, domain, name), recipient scope
+(every target, address, order, duplicates, sendable/DNC), send count (`queueCount`, `plannedSendCount`, plus the queue
+itself). Tests: `p0PreparedArtifactRevision.test.js` (16).
+
+### Remaining limits (not changed in the freeze)
+- An in-place rewrite of a package **after** a new (digest-bearing) approval voids it, and the mission then fails SPEC-136
+  consistency (READY, no pending decision, no valid approval). That fails closed (nothing can send), but it needs
+  engineering recovery. No code path performs such a rewrite.
+- Legacy approvals that exist before deploy keep the prefix-only binding until revised or re-approved.
+- Pre-existing: send dedupe is keyed by `(mission, prospect, revision)`. After any **legitimate** revision (SPEC-215) and
+  re-approval, the canonical EXECUTE path could send the first touch again to a prospect already reached under the earlier
+  revision. The governed daily path tracks per-candidate sends separately. A mission-and-prospect guard was prototyped but
+  not shipped, to keep the send path unchanged during the freeze. Recommended as the first post-release change.
+- Missing-approval refusals are classified `failed`, not `blocked` (zero sends either way).

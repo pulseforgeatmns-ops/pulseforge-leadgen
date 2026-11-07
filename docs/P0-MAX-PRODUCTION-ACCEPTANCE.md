@@ -216,9 +216,9 @@ separately authorized mechanism (out of scope for this PR).
 Additional preconditions: no `syntheticEvidence` on the mission; canonical
 sender for `T` resolves (no `canonical_sender_*` block).
 1. Approve execution explicitly, bound to the reviewed package:
-   `POST …/execute` `{"intent":"APPROVE_EXECUTION","payload":{"expectedPreparedArtifactRevision":"<executionReview.preparedArtifactRevision>"}}`
-   using the revision from the same `GET` the two operators confirmed. A missing
-   or outdated revision is refused (`tme_execution_approval_unreviewed` /
+   `POST …/execute` `{"intent":"APPROVE_EXECUTION","payload":{"expectedPreparedArtifactRevision":"<executionReview.preparedArtifactRevision>","expectedPreparedContentDigest":"<executionReview.preparedContentDigest>"}}`
+   using both values from the same `GET` the two operators confirmed. A missing
+   or outdated value is refused (`tme_execution_approval_unreviewed` /
    `tme_execution_approval_stale`), and nothing is approved. Approval alone sends nothing.
 2. `POST …/execute` `{"intent":"EXECUTE_OUTBOUND","payload":{"maxSends":1}}`
    (the router reads `payload.maxSends`).

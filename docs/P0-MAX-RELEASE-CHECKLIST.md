@@ -1,10 +1,59 @@
 # P0 Max Reliability — Release Checklist (PR #1065)
 
 Status: **release candidate, not authorized.** Companion to
-`docs/SPEC-MAX-RELIABILITY-004.md` and `docs/P0-MAX-PRODUCTION-ACCEPTANCE.md`.
+`docs/SPEC-MAX-RELIABILITY-004.md`, `docs/P0-MAX-PRODUCTION-ACCEPTANCE.md` and
+`docs/P0-MAX-RESPONSE-INTEGRITY.md`.
 
-Base: `main` @ `43427e7`. The release candidate is the PR HEAD whose GitHub
-checks are all green (record the exact SHA in §6 at sign-off).
+Base: `main` @ `f129c74` (merged into the PR branch 2026-11-07). The release
+candidate is the PR HEAD whose GitHub checks are all green (record the exact
+SHA in §6 at sign-off).
+
+## R. Release-candidate addendum (2026-11-07)
+
+Commits added after `5b2db0c`/`f49e4fe` (all reviewed in `docs/P0-MAX-RESPONSE-INTEGRITY.md`):
+`9829760` response integrity, `d849a49` execution-intent routing, `6bfc3b0`
+review-bound execution approval, `33ed2d9` complete-content approval binding,
+then a merge of `main` (`f129c74`, Pipeline UI only).
+
+**R.1 Migrations.** None. No migration file, no new table or column, startup DDL unchanged.
+New approval fields (`preparedContentDigest`) and pending-decision fields
+(`missionId`, `preparedArtifactRevision`, `preparedContentDigest`) are additive JSON in
+existing `acquisition_mission_contributions.payload` / `acquisition_missions.payload`.
+The unapplied operator migrations noted in §0.2 are pre-existing and not required.
+
+**R.2 Production configuration.** None. No environment variable, feature flag or
+Railway setting changes. Merge = deploy for **two** services that build from `main`:
+`pulseforge-leadgen` and `max-decay-daily`.
+
+**R.3 API behaviour change.** `APPROVE_EXECUTION` from any human-facing source (chat,
+approval button, command deck, voice, API) must carry `expectedPreparedArtifactRevision`
+and `expectedPreparedContentDigest` (from `executionReview`). Audit of production callers:
+| Caller | Status |
+|---|---|
+| Max chat | supplies both from the package this session rendered |
+| Mission Workspace UI (`public/acquisition-missions.html`) | has no execution-approval button, so unaffected |
+| `POST /api/v1/amo/missions/:id/execute` (external/manual) | must pass both; no in-repo caller |
+| Governed daily outbound / Anchor email recovery (`services/governedOutboundAdapters.js`) | exempt: passes `governedApproval`, keeps its snapshot-hash + manifest binding; REST cannot inject `governedApproval` |
+| `scripts/executeAnchorOneOutbound.js`, `regenerateAnchorCapacityRevision.js`, `regenerateAnchorPaigeCopyRevision.js` | updated to bind to the state they just inspected |
+| `services/anchorScopedResumeCrmPreparation.js` | allow-lists intents; never `APPROVE_EXECUTION` |
+| `/api/actions/:id/execute` | marks an `agent_actions` row done; unrelated |
+
+**R.4 Pre-deployment checks (read-only, authorized operator).**
+1. GitHub: PR CI gate and every planned job green on the exact HEAD to merge.
+2. Confirm production still runs the rollback target (§6) and no deploy is in progress.
+3. Read-only SQL (acceptance §1.2/§1.3): schema present; `api_spend_policies` row for `google_places` recorded.
+4. Read-only inventory of missions at READY with a consumed execution approval (they keep
+   legacy revision-only binding until re-approved; record them):
+   (the `payload` column holds the whole contribution row; approval fields are under `payload->'payload'`)
+   `SELECT mission_id, tenant_id, payload->'payload'->>'preparedArtifactRevision' AS revision FROM acquisition_mission_contributions WHERE specialist='operator' AND kind='approval' AND payload->'payload'->>'action'='execution_approved' AND payload->'payload'->>'preparedContentDigest' IS NULL AND COALESCE((payload->'payload'->>'invalidated')::boolean,false)=false;`
+5. Governed outbound state recorded (last 3 days of `acquisition_outbound_events`), and outbound mode per tenant recorded.
+6. Known pre-existing hydrate skip (`mission_30b36f10-…`) noted so it is not mistaken for a regression.
+
+**R.5 Rollback.** Redeploy `pulseforge-leadgen` deployment `88837730-a603-48b8-bca5-2f5b3c183ef4`
+(`f129c74`) and `max-decay-daily` deployment `002d91c2-c237-450b-bf63-6030557a373f` (`f129c74`)
+in Railway. No data rollback: the new JSON fields are ignored by the previous code. After a
+rollback, approvals created by this release remain valid under the previous revision-only
+check, and chat/API approvals are no longer review-bound. Hold execution approvals until re-deploy.
 
 ---
 
@@ -161,6 +210,6 @@ Trigger on any §5 rollback condition.
 | GitHub checks | | |
 | Code review approval | | |
 | Schema check result | | |
-| Previous production SHA (rollback target) | `43427e7` (Railway deployment `c773084a-a679-4402-91a1-b5620737b2d7`) | Railway metadata, 2026-11-06 |
+| Previous production SHA (rollback target) | `f129c74`: `pulseforge-leadgen` deployment `88837730-a603-48b8-bca5-2f5b3c183ef4`, `max-decay-daily` deployment `002d91c2-c237-450b-bf63-6030557a373f` (superseded `43427e7` / `c773084a-…`) | Railway metadata, 2026-11-07 |
 | Production database | `amused-harmony/Postgres` via `shinkansen.proxy.rlwy.net:43478` (§0.1) | Railway network-flow + DNS logs, 2026-11-06 |
 | Deploy authorization (A1) | | |
