@@ -382,6 +382,15 @@ async function routeIntent({
       question,
       ...(maxSends != null ? { maxSends } : {}),
       ...(prospectId ? { prospectId } : {}),
+      // P0 — bind an approval to the prepared package this run probed and printed.
+      ...(intent === EXECUTION_INTENTS.APPROVE_EXECUTION
+        ? {
+          expectedPreparedArtifactRevision: amo.computePreparedArtifactRevision(
+            missionId, engine.store.listContributions(missionId)),
+          expectedPreparedContentDigest: amo.computePreparedContentDigest(
+            missionId, engine.store.listContributions(missionId)),
+        }
+        : {}),
     },
   });
   const routed = await routeExecutionRequest(request, {

@@ -150,6 +150,12 @@ async function ensureExecutionApproval({ runtime, engine, missionId, mission, te
     stage: STAGES.READY,
     question: 'Authorize prepared bundle for Paige copy revision preflight (no send).',
     permissions: { canExecute: true, role: 'operator' },
+    // P0 — bind the approval to the exact prepared package this run just inspected.
+    payload: {
+      question: 'Authorize prepared bundle for Paige copy revision preflight (no send).',
+      expectedPreparedArtifactRevision: amo.computePreparedArtifactRevision(missionId, snapshot.contributions || []),
+      expectedPreparedContentDigest: amo.computePreparedContentDigest(missionId, snapshot.contributions || []),
+    },
   });
 
   const routed = await routeExecutionRequest(request, {

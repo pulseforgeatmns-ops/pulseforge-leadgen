@@ -141,6 +141,7 @@ const {
   buildExecutionReview,
   buildPendingExecutionDecision,
   computePreparedArtifactRevision,
+  computePreparedContentDigest,
 } = require('../../acquisition-mission/ExecutionApproval');
 const { EXECUTION_SOURCES } = require('../../acquisition-mission/ExecutionRequest');
 
@@ -3021,15 +3022,19 @@ function validateExecutionPreconditions({ mission, engine, tenantId }, review = 
   // P0 — a "yes" binds to the exact prepared package the operator was shown.
   // Chat approvals must carry the revision this session displayed; any surface
   // that supplies one is held to it. A changed package needs a fresh review.
-  if (review.required || review.expectedRevision) {
+  if (review.required || review.expectedRevision || review.expectedContentDigest) {
     const currentRevision = computePreparedArtifactRevision(mission.id, snapshot.contributions || []);
-    if (!review.expectedRevision) {
+    const currentDigest = computePreparedContentDigest(mission.id, snapshot.contributions || []);
+    if (!review.expectedRevision || (review.required && !review.expectedContentDigest)) {
       throw planningError(
         'tme_execution_approval_unreviewed',
         'The prepared outreach has not been shown in this conversation yet. Review it before authorizing.'
       );
     }
-    if (review.expectedRevision !== currentRevision) {
+    if (
+      review.expectedRevision !== currentRevision
+      || (review.expectedContentDigest && review.expectedContentDigest !== currentDigest)
+    ) {
       throw planningError(
         'tme_execution_approval_stale',
         'The prepared outreach changed after it was shown. Review the current package before authorizing.'
@@ -3144,6 +3149,10 @@ async function advanceExecutionAfterApproval(input = {}) {
       expectedRevision:
         (executionRequest && executionRequest.payload && executionRequest.payload.expectedPreparedArtifactRevision)
         || input.expectedPreparedArtifactRevision
+        || null,
+      expectedContentDigest:
+        (executionRequest && executionRequest.payload && executionRequest.payload.expectedPreparedContentDigest)
+        || input.expectedPreparedContentDigest
         || null,
     }),
     execute: async ({ mission: current }) => ({

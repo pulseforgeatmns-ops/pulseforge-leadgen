@@ -84,7 +84,41 @@ function findLatestScoutDiscovery(contributions = [], mission = null) {
 }
 
 /**
+ * P0 — canonical JSON: object keys sorted at every depth, arrays keep order.
+ * Stable across in-memory objects and PostgreSQL JSONB round trips (which
+ * reorder keys), so a revision computed before and after a restart matches.
+ */
+function canonicalJson(value) {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value === undefined ? null : value);
+  }
+  if (value instanceof Date) return JSON.stringify(value.toISOString());
+  if (Array.isArray(value)) return `[${value.map((v) => (v === undefined ? 'null' : canonicalJson(v))).join(',')}]`;
+  const keys = Object.keys(value).filter((k) => value[k] !== undefined && typeof value[k] !== 'function').sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(value[k])}`).join(',')}}`;
+}
+
+const PREPARED_CONTENT_DIGEST_VERSION = 1;
+
+function digest(value) {
+  return crypto.createHash('sha256').update(canonicalJson(value)).digest('hex');
+}
+
+/**
+ * P0 — the complete authorized recipient set, in send order. Every queue item
+ * (every position, duplicates included) is hashed in full: target identity,
+ * recipient address, sendable/DNC flags and its Paige copy binding. Order is
+ * part of the authorization because a capped send (maxSends) follows it.
+ */
+function canonicalQueueTargets(queueItems = []) {
+  return queueItems.map((item) => (item && typeof item === 'object' ? JSON.parse(canonicalJson(item)) : item));
+}
+
+/**
  * Deterministic revision from canonical contribution IDs and prepared queue state.
+ * This is the package identifier stored by governed envelopes, receipts and
+ * evidence; its format is unchanged. Complete content is bound separately by
+ * computePreparedContentDigest.
  */
 function computePreparedArtifactBinding(missionId, contributions = [], mission = null) {
   const missionRef = mission || { id: missionId };
@@ -123,6 +157,43 @@ function computePreparedArtifactRevision(missionId, contributions = []) {
     .update(JSON.stringify(binding))
     .digest('hex')
     .slice(0, 16);
+}
+
+/**
+ * P0 — complete, canonical digest of everything an execution approval
+ * authorizes: every queue item in send order (all positions, duplicates
+ * included — target identity, recipient address, sendable/DNC flags, copy
+ * binding), the full approved Paige copy, the full sender identity, the
+ * governor outcome and the outreach sequence. Approvals store it; an approval
+ * whose stored digest no longer matches is void.
+ */
+function computePreparedContentDigest(missionId, contributions = []) {
+  const missionRef = { id: missionId };
+  const max = findMaxPrioritization(contributions, missionRef);
+  const paige = findPaigeVariants(contributions, missionRef);
+  const emmett = findEmmettCapacity(contributions, missionRef);
+  const emmettPayload = emmett ? unwrapSpecialistPayload(emmett) : {};
+  const paigePayload = paige ? unwrapSpecialistPayload(paige) : {};
+  const queueItems = Array.isArray(emmettPayload.queue?.items) ? emmettPayload.queue.items : [];
+  return digest({
+    version: PREPARED_CONTENT_DIGEST_VERSION,
+    missionId,
+    maxContributionId: max?.id || null,
+    paigeContributionId: paige?.id || null,
+    emmettContributionId: emmett?.id || null,
+    queue: canonicalQueueTargets(queueItems),
+    paige: paige ? paigePayload : null,
+    senderIdentity: emmettPayload.senderIdentity || null,
+    senderName: emmettPayload.senderName || null,
+    governorOutcome: (emmettPayload.governor && emmettPayload.governor.outcome) || null,
+  }).slice(0, 32);
+}
+
+/** Legacy approvals (no stored digest) keep their revision-only semantics. */
+function approvalContentMatches(approval, missionId, contributions = []) {
+  const stored = approval && approval.payload && approval.payload.preparedContentDigest;
+  if (!stored) return true;
+  return stored === computePreparedContentDigest(missionId, contributions);
 }
 
 /**
@@ -237,7 +308,10 @@ function findValidExecutionApproval(contributions = [], missionId) {
   const approvals = findExecutionApprovals(contributions);
   for (let i = approvals.length - 1; i >= 0; i -= 1) {
     const approval = approvals[i];
-    if (approval.payload && approval.payload.preparedArtifactRevision === revision) {
+    if (
+      approval.payload && approval.payload.preparedArtifactRevision === revision
+      && approvalContentMatches(approval, missionId, contributions)
+    ) {
       return approval;
     }
   }
@@ -272,6 +346,7 @@ function buildExecutionApprovalPayload(mission, contributions = [], input = {}) 
     stage: STAGES.READY,
     missionId: mission.id,
     preparedArtifactRevision: revision,
+    preparedContentDigest: computePreparedContentDigest(mission.id, contributions),
     maxContributionId: binding.maxContributionId,
     paigeContributionId: binding.paigeContributionId,
     emmettContributionId: binding.emmettContributionId,
@@ -332,6 +407,7 @@ function buildExecutionReview(mission, contributions = []) {
     missionId: mission.id,
     stage: mission.stage,
     preparedArtifactRevision: computePreparedArtifactRevision(mission.id, contributions),
+    preparedContentDigest: computePreparedContentDigest(mission.id, contributions),
     artifactBinding: computePreparedArtifactBinding(mission.id, contributions),
     targets,
     communication: {
@@ -377,6 +453,7 @@ function buildPendingExecutionDecision(mission, contributions = []) {
     // reviews. An approval is refused if they change before it is consumed.
     missionId: mission.id,
     preparedArtifactRevision: computePreparedArtifactRevision(mission.id, contributions),
+    preparedContentDigest: computePreparedContentDigest(mission.id, contributions),
     prompt: 'Authorize external execution of prepared outreach?',
     description: 'Review prepared variants, queue, and deliverability before authorizing send.',
     executionReview: buildExecutionReview(mission, contributions),
@@ -403,6 +480,9 @@ function canAdvertiseExecutionApproval(mission, contributions = [], extras = {})
 }
 
 module.exports = {
+  canonicalJson,
+  computePreparedContentDigest,
+  approvalContentMatches,
   EXECUTION_APPROVAL_ACTION,
   findLatestContribution,
   findMaxPrioritization,

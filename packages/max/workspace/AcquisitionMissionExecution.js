@@ -283,6 +283,12 @@ function presentedExecutionRevision(session, missionId) {
   return presented.revision || null;
 }
 
+function presentedExecutionContentDigest(session, missionId) {
+  const presented = session && session.context && session.context.presentedExecutionDecision;
+  if (!presented || presented.missionId !== missionId) return null;
+  return presented.contentDigest || null;
+}
+
 /**
  * Record which execution-approval package (if any) a turn displayed for the
  * session's bound mission. Only a mission turn that rendered the pending
@@ -305,6 +311,7 @@ function recordPresentedExecutionDecision(session, result) {
     session.context.presentedExecutionDecision = {
       missionId: mission.id,
       revision: pending.preparedArtifactRevision,
+      contentDigest: pending.preparedContentDigest || null,
     };
     return;
   }
@@ -336,7 +343,10 @@ async function submitChatExecutionRequest(input, {
     question,
     permissions: { canExecute: true },
     ...(intent === EXECUTION_INTENTS.APPROVE_EXECUTION
-      ? { payload: { expectedPreparedArtifactRevision: presented } }
+      ? { payload: {
+        expectedPreparedArtifactRevision: presented,
+        expectedPreparedContentDigest: presentedExecutionContentDigest(input.session, mission.id),
+      } }
       : {}),
   });
   return routeExecutionRequest(request, {

@@ -303,8 +303,12 @@ describe('ADR-067 — preserve artifact-bound execution authority', () => {
       intent: amo.EXECUTION_INTENTS.APPROVE_EXECUTION,
       missionId: mission.id, operatorId: 'operator-1', stage: STAGES.READY,
       // P0 — the approval names the prepared-package revision the operator reviewed.
-      payload: { expectedPreparedArtifactRevision: amo.computePreparedArtifactRevision(
-        mission.id, engine.inspect(mission.id, { tenantId: '10' }).contributions) },
+      payload: {
+        expectedPreparedArtifactRevision: amo.computePreparedArtifactRevision(
+          mission.id, engine.inspect(mission.id, { tenantId: '10' }).contributions),
+        expectedPreparedContentDigest: amo.computePreparedContentDigest(
+          mission.id, engine.inspect(mission.id, { tenantId: '10' }).contributions),
+      },
     });
     await amo.routeExecutionRequest(request, { engine, tenantId: '10' });
     return { engine, mission, snapshot: engine.inspect(mission.id, { tenantId: '10' }) };

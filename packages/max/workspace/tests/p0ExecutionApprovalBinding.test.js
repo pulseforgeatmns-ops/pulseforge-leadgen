@@ -55,6 +55,9 @@ function approved(engine, mission) {
 function revision(engine, mission) {
   return amo.computePreparedArtifactRevision(mission.id, contributions(engine, mission));
 }
+function contentDigest(engine, mission) {
+  return amo.computePreparedContentDigest(mission.id, contributions(engine, mission));
+}
 function changePackage(engine, mission) {
   engine.contribute(mission.id, {
     specialist: amo.SPECIALISTS.PAIGE,
@@ -234,6 +237,14 @@ describe('P0 approval binding — API surface and tenant', () => {
     });
   }
 
+  it('API/button approval with the revision but no content digest is refused', async () => {
+    const { engine, mission } = await readyMission();
+    const routed = await amo.routeExecutionRequest(
+      approveRequest(mission, { expectedPreparedArtifactRevision: revision(engine, mission) }), { engine, tenantId: TENANT });
+    assert.equal(routed.executionResult.error.code, 'tme_execution_approval_unreviewed');
+    assert.equal(approved(engine, mission), false);
+  });
+
   it('API/button approval without the reviewed revision is refused', async () => {
     const { engine, mission } = await readyMission();
     const routed = await amo.routeExecutionRequest(approveRequest(mission), { engine, tenantId: TENANT });
@@ -244,10 +255,10 @@ describe('P0 approval binding — API surface and tenant', () => {
 
   it('API/button approval naming an outdated revision is refused', async () => {
     const { engine, mission } = await readyMission();
-    const reviewed = revision(engine, mission);
+    const reviewed = { expectedPreparedArtifactRevision: revision(engine, mission), expectedPreparedContentDigest: contentDigest(engine, mission) };
     changePackage(engine, mission);
     const routed = await amo.routeExecutionRequest(
-      approveRequest(mission, { expectedPreparedArtifactRevision: reviewed }), { engine, tenantId: TENANT });
+      approveRequest(mission, reviewed), { engine, tenantId: TENANT });
     assert.equal(routed.executionResult.error.code, 'tme_execution_approval_stale');
     assert.equal(approved(engine, mission), false);
   });
@@ -256,7 +267,8 @@ describe('P0 approval binding — API surface and tenant', () => {
     const { engine, mission } = await readyMission();
     const current = revision(engine, mission);
     const routed = await amo.routeExecutionRequest(
-      approveRequest(mission, { expectedPreparedArtifactRevision: current }), { engine, tenantId: TENANT });
+      approveRequest(mission, { expectedPreparedArtifactRevision: current, expectedPreparedContentDigest: contentDigest(engine, mission) }),
+      { engine, tenantId: TENANT });
     assert.equal(routed.action, 'execution_approved');
     const approval = amo.findValidExecutionApproval(contributions(engine, mission), mission.id);
     assert.equal(approval.payload.preparedArtifactRevision, current);
@@ -267,7 +279,7 @@ describe('P0 approval binding — API surface and tenant', () => {
     const { engine, mission } = await readyMission();
     await assert.rejects(
       amo.routeExecutionRequest(
-        approveRequest(mission, { expectedPreparedArtifactRevision: revision(engine, mission) }),
+        approveRequest(mission, { expectedPreparedArtifactRevision: revision(engine, mission), expectedPreparedContentDigest: contentDigest(engine, mission) }),
         { engine, tenantId: '2' },
       ),
       /does not belong to this tenant/,

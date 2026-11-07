@@ -19,6 +19,7 @@ const {
   findEmmettCapacity,
   findMaxPrioritization,
   computePreparedArtifactRevision,
+  approvalContentMatches,
 } = require('./ExecutionApproval');
 const { unwrapSpecialistPayload } = require('./ContributionSupersession');
 const { specialistContext } = require('./Lifecycle');
@@ -150,6 +151,15 @@ function verifyArtifactRevision(missionId, contributions = [], approval) {
     return {
       ok: false,
       reason: 'Prepared artifacts changed since execution approval. Re-approve before sending.',
+      currentRevision,
+      approvedRevision,
+    };
+  }
+  // P0 — complete content (every target, copy, sender) must still match.
+  if (!approvalContentMatches(approval, missionId, contributions)) {
+    return {
+      ok: false,
+      reason: 'Prepared content changed since execution approval. Re-approve before sending.',
       currentRevision,
       approvedRevision,
     };
