@@ -101,6 +101,14 @@ describe('SPEC-097A Intelligence Field UI contracts', () => {
     assert.match(css, /cd-domain-open/);
   });
 
+  it('gives every domain drawer live detail and context-specific actions', () => {
+    assert.match(html, /id="cdDomainOpenWorkspace"/);
+    assert.match(spatialJs, /renderDomainSnapshot/);
+    assert.match(spatialJs, /Review pipeline/);
+    assert.match(css, /\.cd-domain-metrics/);
+    assert.match(css, /\.cd-domain-footer \[hidden\]/);
+  });
+
   it('exposes screen-reader priority semantics on domain nodes', () => {
     assert.match(spatialJs, /buildNodeAriaLabel/);
     assert.match(spatialJs, /cd-spatial-node-priority/);

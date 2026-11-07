@@ -93,6 +93,7 @@
     els.drawerBody = document.getElementById('cdDomainDrawerBody');
     els.drawerDiscuss = document.getElementById('cdDomainDiscussMax');
     els.drawerReview = document.getElementById('cdDomainReviewContent');
+    els.drawerOpen = document.getElementById('cdDomainOpenWorkspace');
     els.explain = document.getElementById('cdPriorityExplain');
     els.explainBody = document.getElementById('cdPriorityExplainBody');
     els.recentSelect = document.getElementById('cdRecentConversations');
@@ -756,11 +757,19 @@
     }
     if (els.drawerBody) els.drawerBody.innerHTML = renderDrawerBody(domain);
     if (els.drawerReview) {
-      els.drawerReview.hidden = domainId !== 'content';
+      const recommendations = (domain.drawer && domain.drawer.recommendations) || [];
+      els.drawerReview.hidden = domainId !== 'content' || recommendations.length === 0;
       els.drawerReview.onclick = () => {
         closeDomainDrawer();
         document.dispatchEvent(new CustomEvent('pulseforge:content-review'));
       };
+    }
+    if (els.drawerOpen) {
+      const action = primaryWorkspaceAction(domainId);
+      els.drawerOpen.hidden = !action;
+      els.drawerOpen.textContent = action ? action.label : '';
+      if (action) els.drawerOpen.href = action.href;
+      else els.drawerOpen.removeAttribute('href');
     }
 
     els.drawer.hidden = false;
@@ -817,11 +826,15 @@
     const drawer = domain.drawer || {};
     const parts = [];
 
+    if (drawer.snapshot) {
+      parts.push(renderDomainSnapshot(drawer.snapshot));
+    }
+
     if (domain.summary && domain.summary.lines.length) {
       parts.push(
-        `<ul class="cd-domain-summary">${domain.summary.lines
+        `<section class="cd-domain-group"><h3 class="cd-domain-group-title">What Max sees</h3><ul class="cd-domain-summary">${domain.summary.lines
           .map((l) => `<li>${esc(l)}</li>`)
-          .join('')}</ul>`
+          .join('')}</ul></section>`
       );
     }
 
@@ -843,6 +856,35 @@
     }
 
     return parts.join('') || '<p class="cd-domain-empty">No additional detail right now.</p>';
+  }
+
+  function renderDomainSnapshot(snapshot) {
+    const metrics = (snapshot.metrics || []).filter((item) => item && item.value != null);
+    if (!metrics.length) return '';
+    return `
+      <section class="cd-domain-overview">
+        <h3 class="cd-domain-group-title">${esc(snapshot.title || 'Current view')}</h3>
+        <div class="cd-domain-metrics">
+          ${metrics.map((item) => `
+            <div class="cd-domain-metric">
+              <strong>${esc(item.value)}</strong>
+              <span>${esc(item.label)}</span>
+            </div>`).join('')}
+        </div>
+      </section>`;
+  }
+
+  function primaryWorkspaceAction(domainId) {
+    if (domainId === 'acquisition') {
+      return { label: 'Review pipeline', href: '/dashboard#pf-tab=pipeline' };
+    }
+    if (domainId === 'clients') {
+      return { label: 'View My Business', href: '/client-intel' };
+    }
+    if (domainId === 'campaigns') {
+      return { label: 'View pipeline', href: '/dashboard#pf-tab=pipeline' };
+    }
+    return null;
   }
 
   function renderCampaignGroups(groups) {
