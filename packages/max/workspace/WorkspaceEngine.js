@@ -436,6 +436,11 @@ class WorkspaceEngine {
     );
     try {
       const result = await this._askProduction(input, shadow);
+      // P0 — remember which execution-approval package this session was shown.
+      acquisitionMissionExecution.recordPresentedExecutionDecision(
+        result && result.sessionId ? this._sessions.get(result.sessionId) : null,
+        result
+      );
       completeShadow(shadow, result);
       return result;
     } catch (error) {

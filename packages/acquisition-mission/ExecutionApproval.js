@@ -373,6 +373,10 @@ function buildPendingExecutionDecision(mission, contributions = []) {
   return {
     stage: STAGES.READY,
     kind: OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL,
+    // P0 — the decision is bound to the exact prepared artifacts the operator
+    // reviews. An approval is refused if they change before it is consumed.
+    missionId: mission.id,
+    preparedArtifactRevision: computePreparedArtifactRevision(mission.id, contributions),
     prompt: 'Authorize external execution of prepared outreach?',
     description: 'Review prepared variants, queue, and deliverability before authorizing send.',
     executionReview: buildExecutionReview(mission, contributions),

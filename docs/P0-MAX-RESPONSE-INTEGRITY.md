@@ -134,3 +134,33 @@ but it is an outbound-gate behaviour change, and production acceptance S6/S8 mus
 This is a separate, narrowly scoped commit stacked on `9829760`. It cannot target `main` alone, because it depends on
 #1065 (`RoutingFallbackIntegrity`, `NegatedDirective`, execution-evidence states). Merging #1065 deploys it,
 so both commits should be folded into #1065 before that merge and reviewed as distinct commits.
+
+---
+
+## 7. Final authorization review (before integration into #1065)
+
+### Findings
+| Check | Result |
+|---|---|
+| Phrase scope | At an execution decision, "launch the campaign" or "send the emails" resolves only `APPROVE_EXECUTION`. That step never sends: the mission stays at READY, the prose says "Prepared — not sent", and chat never produces `EXECUTE_OUTBOUND`. "Run Scout", "approve the plan" and "approve prioritization" are refused as mismatched. A bare "Go ahead" authorizes nothing. At plan or discovery decisions, outbound wording never approves (section 6) |
+| Preparation / authorization / sending | Preparation is Paige and Emmett contributions; it creates no approval. Authorization (`APPROVE_EXECUTION`) makes the prepared sends **eligible** (`ExecutionApproval.buildExecutionReview`: "become eligible for provider execution"). Actual sending is `EXECUTE_OUTBOUND` only, reached from the governed outbound adapter or an explicit API call. It requires a valid revision-bound approval, otherwise `tme_execution_not_approved` with zero sends. "Scheduling" and "activation" are the governed daily envelope / outbound program state, outside chat. Chat cannot set either |
+| Tenant / mission / action / scope | Tenant: engine reads are tenant-scoped (`amo_tenant_mismatch`) for chat and API. Mission: the approval payload carries `missionId`, and the session's presented revision is per mission. Action: the CER intent comes from the resolved pending-decision kind (section 6 mismatch guard). Scope: the approval freezes `preparedArtifactRevision`, which hashes the Max/Paige/Emmett contribution ids, queue targets (first 25), queue count, governor outcome and sender. The approval also records `plannedSendCount` |
+| **Gap found, fixed:** binding to the *reviewed* decision | The engine re-derives the pending execution decision on every contribution. So a "yes" was evaluated against whatever package was current at commit time, which could be one the operator never saw. **Fix:** every human-facing surface (chat, approval button, command deck, voice, API) must name the reviewed `expectedPreparedArtifactRevision`, and it is checked inside the TME stage. Chat supplies the revision this session last **rendered** (`## Execution Ready` block); a turn that only mentions the decision does not count. Missing → `tme_execution_approval_unreviewed`; changed → `tme_execution_approval_stale`. Both are rolled back, reported as `blocked`, and answered with "Not executed: … Nothing was approved or sent." plus the current package. The governed daily path keeps its own snapshot-hash binding |
+| Stale reuse | A consumed approval stops counting once the package changes (`findValidExecutionApproval` is revision-bound), and `EXECUTE_OUTBOUND` is then refused. A refused approval leaves the pending decision intact |
+
+Also fixed: a rolled-back execution approval used to be labelled "Discovery could not execute". It now reads "Execution approval".
+
+### Known limits (nonblocking, unchanged)
+- The revision hashes only the first 25 queue target ids (plus the total count).
+- The REST caller still chooses `source`. Every human source now requires the revision. Direct in-process calls to
+  `advanceExecutionAfterApproval` without an execution request (operator scripts such as `executeAnchorOneOutbound`)
+  are unchanged and remain separately operator-approved.
+- An execution request refused for a missing approval is classified `failed`, not `blocked`. It is still a refusal with zero sends.
+
+### Regression results
+- `p0ExecutionApprovalBinding.test.js` 16/16 (6 fail before the fix); `p0ExecutionIntentRouting` 31/31; `p0MaxResponseIntegrity` 22/22.
+- `test:max:unit` 1750/1750; `test:max` 1769/1769; fixtures 20/20; `test:decision` 107/107.
+- `test:amo` 498/544, the identical failure set before and after. 96 `test/` files that touch missions, approvals or
+  outbound: identical results before and after (one flaky rerun confirmed). Two existing tests now pass the reviewed
+  revision when they approve through the router (`adr067StageContracts`, `spec070ReadyExecutionApproval`).
+- Acceptance S8 step 1 updated to approve with the reviewed revision.

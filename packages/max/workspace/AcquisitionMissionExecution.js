@@ -273,6 +273,44 @@ async function maybeChainPlanningAfterClarification(input, state = {}) {
   return { action, executionResult, snapshot, executionRequest };
 }
 
+/**
+ * P0 — the prepared-package revision last shown to this session for a mission.
+ * Recorded by WorkspaceEngine after each turn (recordPresentedExecutionDecision).
+ */
+function presentedExecutionRevision(session, missionId) {
+  const presented = session && session.context && session.context.presentedExecutionDecision;
+  if (!presented || presented.missionId !== missionId) return null;
+  return presented.revision || null;
+}
+
+/**
+ * Record which execution-approval package (if any) a turn displayed for the
+ * session's bound mission. Only a mission turn that rendered the pending
+ * execution decision counts as "shown"; anything else clears the record.
+ */
+function recordPresentedExecutionDecision(session, result) {
+  if (!session || !session.context || typeof session.context !== 'object') return;
+  const boundMissionId = session.context.acquisitionMissionId || session.context.missionId || null;
+  const mission = result && result.mission;
+  const metadata = (result && result.structured && result.structured.metadata) || {};
+  const missionTurn = metadata.acquisitionMission === true || metadata.pendingDecisionTurnOwnership === true;
+  const pending = mission && mission.pendingOperatorDecision;
+  // "Shown" means the turn rendered the package itself, not just the prompt.
+  const renderedPackage = /(?:^|\n)\s*(?:## )?Execution Ready\b/.test(String((result && result.prose) || ''));
+  if (
+    missionTurn && renderedPackage &&
+    mission && boundMissionId && mission.id === boundMissionId &&
+    pending && pending.kind === 'execution_approval' && pending.preparedArtifactRevision
+  ) {
+    session.context.presentedExecutionDecision = {
+      missionId: mission.id,
+      revision: pending.preparedArtifactRevision,
+    };
+    return;
+  }
+  if (missionTurn || !boundMissionId) session.context.presentedExecutionDecision = null;
+}
+
 async function submitChatExecutionRequest(input, {
   intent,
   mission,
@@ -282,6 +320,10 @@ async function submitChatExecutionRequest(input, {
   audit,
 }) {
   const executionPolicy = resolveExecutionPolicy(input);
+  // P0 — an execution approval binds to the package revision this session displayed.
+  const presented = intent === EXECUTION_INTENTS.APPROVE_EXECUTION
+    ? presentedExecutionRevision(input.session, mission.id)
+    : null;
   const request = createExecutionRequestFromChat({
     intent,
     missionId: mission.id,
@@ -293,6 +335,9 @@ async function submitChatExecutionRequest(input, {
     runtimeOwner: resolveMissionRuntimeOwner(mission),
     question,
     permissions: { canExecute: true },
+    ...(intent === EXECUTION_INTENTS.APPROVE_EXECUTION
+      ? { payload: { expectedPreparedArtifactRevision: presented } }
+      : {}),
   });
   return routeExecutionRequest(request, {
     engine,
@@ -391,6 +436,62 @@ function readyExecutionApprovalPrompt(review) {
   return 'Authorize external execution of this prepared outreach?';
 }
 
+const EXECUTION_REVIEW_REFUSALS = new Set([
+  'tme_execution_approval_unreviewed',
+  'tme_execution_approval_stale',
+]);
+
+/** Shared "## Execution Ready" package block (same shape as the SPEC-211 clarify). */
+function formatExecutionPackageBlock(review) {
+  return [
+    '## Execution Ready',
+    '',
+    '**Targets**',
+    summarizeReadyExecutionTargets(review),
+    '',
+    '**Channel**',
+    '• Email',
+    '',
+    '**Message**',
+    summarizeReadyExecutionMessage(review),
+    '',
+    '**Outbound Plan**',
+    summarizeReadyExecutionQueue(review),
+    '',
+    '**Safety / Delivery**',
+    summarizeReadyExecutionSafety(review),
+  ].join('\n');
+}
+
+function buildExecutionReviewRefusal({ err, mission, snapshot }) {
+  const current = (snapshot && snapshot.mission) || mission || {};
+  const review = ensureReadyExecutionReview(snapshot, current);
+  const prose = [
+    `Not executed: ${err.message} Nothing was approved or sent.`,
+    review ? formatExecutionPackageBlock(review) : null,
+    readyExecutionApprovalPrompt(review),
+  ].filter(Boolean).join('\n\n');
+  const structured = buildStructuredResponse({
+    answer: prose,
+    reasoning: [],
+    supportingEvidence: [],
+    contradictingEvidence: [],
+    confidence: 1,
+    nextInvestigations: [],
+    recommendedActions: [],
+    confidenceContributors: ['p0_execution_approval_binding'],
+    timelineReferences: [],
+    relatedEntities: [{ id: current.id, type: 'acquisition_mission', name: current.objective || current.id }],
+    metadata: { acquisitionMission: true, strictOutputShape: true },
+  });
+  Object.assign(structured.metadata, {
+    executionState: 'blocked',
+    executionVerified: false,
+    blocker: err.code,
+  });
+  return { structured, prose, executionReviewRefusal: err.code };
+}
+
 function buildReadyExecutionPresentation({ mission, snapshot }) {
   const review = ensureReadyExecutionReview(snapshot, mission);
   if (!review) {
@@ -465,11 +566,18 @@ function buildExecutionMissionResponse({
 
   if (executionResult && executionResult.rolledBack) {
     const err = executionResult.error || {};
+    // P0 — an execution approval refused for review/currency re-shows the
+    // current package and says plainly that nothing was approved or sent.
+    if (action === 'execution_approved' && EXECUTION_REVIEW_REFUSALS.has(err.code)) {
+      return buildExecutionReviewRefusal({ err, mission, snapshot });
+    }
     const stageName = action === 'plan_approved'
       ? 'Mission plan'
       : action === 'prioritization_approved'
         ? 'Prioritization'
-        : 'Discovery';
+        : action === 'execution_approved'
+          ? 'Execution approval'
+          : 'Discovery';
     const providerDiagnostics =
       (err.details && Array.isArray(err.details.providerExecution) && err.details.providerExecution.length)
         ? formatProviderExecutionProse(err.details.providerExecution)
@@ -496,7 +604,9 @@ function buildExecutionMissionResponse({
         ? 'Approve mission plan?'
         : action === 'prioritization_approved'
           ? 'Approve prioritization?'
-          : 'Approve discovery?',
+          : action === 'execution_approved'
+            ? 'Authorize external execution of prepared outreach?'
+            : 'Approve discovery?',
       evidenceStatus,
       sources: ['acquisition_mission', 'tme'],
       includeReasoningMarker: false,
@@ -1608,6 +1718,8 @@ function buildSyntheticBlockedTurn({ mission, action, intent }) {
  */
 function applyExecutionTruth(response, execution) {
   if (!response || !execution) return response;
+  // A review-gate refusal is blocked (nothing ran), not a specialist failure.
+  if (response.executionReviewRefusal) return response;
   const structured = response.structured || {};
   structured.metadata = {
     ...(structured.metadata || {}),
@@ -1651,6 +1763,8 @@ function applyExecutionTruth(response, execution) {
 }
 
 module.exports = {
+  presentedExecutionRevision,
+  recordPresentedExecutionDecision,
   applyExecutionTruth,
   detectExecutionAction,
   buildExecutionMissionResponse,

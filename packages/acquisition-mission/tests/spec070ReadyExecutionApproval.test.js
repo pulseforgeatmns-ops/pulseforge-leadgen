@@ -144,6 +144,9 @@ describe('Canonical READY transition & execution approval', () => {
       missionId: mission.id,
       operatorId: 'operator-1',
       stage: STAGES.READY,
+      // P0 — the approval names the prepared-package revision the operator reviewed.
+      payload: { expectedPreparedArtifactRevision: computePreparedArtifactRevision(
+        mission.id, engine.inspect(mission.id, { tenantId: '10' }).contributions) },
     });
 
     const routed = await routeExecutionRequest(request, {
