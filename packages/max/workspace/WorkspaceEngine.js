@@ -1,5 +1,7 @@
 'use strict';
 const { assessFallback, buildFallbackBlockedResponse } = require('./RoutingFallbackIntegrity');
+const { hasExecutionCommandDirective } = require('./SessionDirectiveRegistry');
+const { stripNegatedDirectives } = require('./NegatedDirective');
 
 const { normalizeContext } = require('./ContextEnvelope');
 const { buildOpeningState } = require('./OpeningStateBuilder');
@@ -2900,10 +2902,13 @@ class WorkspaceEngine {
       // P0 — the structured decision asked for mission execution but no owner
       // could claim it (e.g. no mission in this workspace). Record it so a
       // generic answer cannot stand in for the expected execution.
+      // An explicit execution command ("go ahead and launch the campaign")
+      // that no owner claimed is held to the same rule.
       if (
         !routingFallbacks.length &&
         objectiveResolution &&
-        objectiveResolution.primaryObjective === PRIMARY_OBJECTIVES.MISSION_EXECUTION
+        (objectiveResolution.primaryObjective === PRIMARY_OBJECTIVES.MISSION_EXECUTION ||
+          hasExecutionCommandDirective(stripNegatedDirectives(question)))
       ) {
         routingFallbacks.push(assessFallback({
           claimedOwner: WORKSPACE_OWNERS.ACTIVE_MISSION,

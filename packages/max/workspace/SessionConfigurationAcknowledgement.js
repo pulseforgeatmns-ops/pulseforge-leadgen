@@ -15,14 +15,14 @@ const {
   formatSessionInspection,
   formatExecutionPolicyLabel,
 } = require('./SessionStateManager');
-const { matchDirectives } = require('./SessionDirectiveRegistry');
+const { hasExecutionCommandDirective } = require('./SessionDirectiveRegistry');
 const { stripNegatedDirectives } = require('./NegatedDirective');
 const { detectExecutionCommand } = require('./RoutingFallbackIntegrity');
 
-/** Session directives whose wording is an instruction to execute work. */
-const EXECUTION_INTENT_DIRECTIVES = new Set(['execution_normal', 'execution_autonomous']);
-
 /**
+ * Defense in depth: operational execution commands are routed away from this
+ * path by the classifier (P0 execution-intent routing). If one still arrives
+ * here, it is answered as "Not executed", never as an acknowledgement.
  * @param {string} question
  * @returns {string|null} signal naming why execution was expected
  */
@@ -33,8 +33,7 @@ function detectUnexecutedCommand(question) {
     .split(/(?<=[.!?])\s+|\n+/)
     .map((s) => stripNegatedDirectives(s))
     .join('\n');
-  const directive = matchDirectives(affirmative).find((d) => EXECUTION_INTENT_DIRECTIVES.has(d.id));
-  if (directive) return `session_directive:${directive.id}`;
+  if (hasExecutionCommandDirective(affirmative)) return 'execution_command';
   return detectExecutionCommand(text);
 }
 
@@ -58,10 +57,10 @@ function formatSessionConfigurationAcknowledgement(state, input = {}) {
     );
   }
   if (input.changed === false) {
-    return 'Acknowledged. No session settings changed. Nothing was executed.';
+    return 'Acknowledged. No session settings changed. No operational work was executed.';
   }
   const inspection = formatSessionInspection(state);
-  return `Acknowledged.\n\n${inspection.replace(/^Current Session\n\n/, '')}`;
+  return `Acknowledged. Session settings updated. No operational work was executed.\n\n${inspection.replace(/^Current Session\n\n/, '')}`;
 }
 
 /**

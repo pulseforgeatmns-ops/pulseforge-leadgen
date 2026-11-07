@@ -41,32 +41,27 @@ function seedMission(tenantId = '10') {
   return { amoEngine, mission, runtime: createTestAmoRuntime({ engine: amoEngine }) };
 }
 
-const EXECUTION_COMMANDS_READ_AS_SETTINGS = [
-  "Let's run it",
-  'Go ahead and run Scout',
-  "Let's proceed",
-  'Go ahead and approve',
-  'Resume execution',
-  "Let's launch",
-  'Go ahead and launch the campaign',
-  'Execute autonomously',
-  'Stop theorizing',
-];
+// Setting-like phrases that remain session configuration: the setting applies
+// and Max says plainly that nothing ran. Operational commands ("let's run it",
+// "go ahead and launch the campaign") no longer take this path at all — see
+// p0ExecutionIntentRouting.test.js.
+const SETTING_PHRASES_WITH_EXECUTION_WORDING = ['Resume execution', 'Execute autonomously'];
+const PURE_SETTING_PHRASES = ['Enable execution', 'Stop theorizing'];
 
 describe('P0 response integrity — session-setting turns never masquerade as execution', () => {
   beforeEach(() => amo.clearExecutionRouterAudit());
 
   it('detects execution commands but not negated or pure settings', () => {
-    for (const q of EXECUTION_COMMANDS_READ_AS_SETTINGS) {
+    for (const q of [...SETTING_PHRASES_WITH_EXECUTION_WORDING, "Let's run it", 'Go ahead and launch the campaign']) {
       assert.ok(detectUnexecutedCommand(q), `expected execution signal for: ${q}`);
     }
-    for (const q of ["Don't execute anything.", 'Be concise.', 'Read-only mode', 'Explain your reasoning naturally.']) {
+    for (const q of ["Don't execute anything.", 'Be concise.', 'Read-only mode', 'Explain your reasoning naturally.', ...PURE_SETTING_PHRASES]) {
       assert.equal(detectUnexecutedCommand(q), null, `unexpected execution signal for: ${q}`);
     }
   });
 
-  for (const question of EXECUTION_COMMANDS_READ_AS_SETTINGS) {
-    it(`"${question}" with no mission → explicit Not executed, nothing dispatched`, async () => {
+  for (const question of SETTING_PHRASES_WITH_EXECUTION_WORDING) {
+    it(`"${question}" with no mission → session setting answered "Not executed", nothing dispatched`, async () => {
       const engine = createWorkspaceEngine();
       const opened = await engine.open({ tenantId: '10' });
       const result = await engine.ask({ sessionId: opened.sessionId, question });
@@ -82,19 +77,18 @@ describe('P0 response integrity — session-setting turns never masquerade as ex
     });
   }
 
-  it('active mission + "Go ahead and launch the campaign" does not claim work and leaves the mission untouched', async () => {
-    const { amoEngine, mission, runtime } = seedMission('10');
-    const before = JSON.stringify(amoEngine.get(mission.id));
-    const engine = createWorkspaceEngine({ acquisitionMissionRuntime: runtime });
-    const opened = await engine.open({ tenantId: '10', missionId: mission.id, acquisitionMissionId: mission.id });
-    const result = await engine.ask({ sessionId: opened.sessionId, question: 'Go ahead and launch the campaign' });
-
-    assert.equal(result.resolution.action, 'session_configured', 'precondition: session-setting bypass');
-    assert.match(result.prose, /^Not executed:/);
-    assert.match(result.prose, /No specialist was dispatched/);
-    assert.equal(amo.listExecutionRouterAudit().length, 0);
-    assert.equal(JSON.stringify(amoEngine.get(mission.id)), before, 'mission state must not change');
-  });
+  for (const question of PURE_SETTING_PHRASES) {
+    it(`"${question}" → acknowledged setting that states no operational work ran`, async () => {
+      const engine = createWorkspaceEngine();
+      const opened = await engine.open({ tenantId: '10' });
+      const result = await engine.ask({ sessionId: opened.sessionId, question });
+      assert.equal(result.resolution.action, 'session_configured');
+      assert.match(result.prose, /^Acknowledged\..*No operational work was executed\./);
+      assert.notEqual(result.prose.trim(), 'Acknowledged.');
+      assert.equal(result.structured.metadata.executionState, 'not_executed');
+      assert.equal(amo.listExecutionRouterAudit().length, 0);
+    });
+  }
 
   it('repeated pure setting: unchanged state is stated, not a bare "Acknowledged."', async () => {
     const engine = createWorkspaceEngine();
@@ -103,7 +97,7 @@ describe('P0 response integrity — session-setting turns never masquerade as ex
     const second = await engine.ask({ sessionId: opened.sessionId, question: 'For the rest of this conversation: be concise.' });
     assert.equal(second.resolution.action, 'session_configured');
     assert.notEqual(second.prose.trim(), 'Acknowledged.');
-    assert.match(second.prose, /No session settings changed\. Nothing was executed\./);
+    assert.match(second.prose, /No session settings changed\. No operational work was executed\./);
     assert.equal(second.structured.metadata.executionState, 'not_executed');
   });
 
@@ -114,7 +108,7 @@ describe('P0 response integrity — session-setting turns never masquerade as ex
       sessionId: opened.sessionId,
       question: "For the rest of this conversation: Don't execute anything.",
     });
-    assert.match(result.prose, /^Acknowledged\./);
+    assert.match(result.prose, /^Acknowledged\. Session settings updated\. No operational work was executed\./);
     assert.match(result.prose, /Execution Policy\s+Read Only/);
     assert.equal(result.resolution.reason, 'session_configuration_acknowledged');
     const state = getSessionState(engine._sessions.get(opened.sessionId));
@@ -132,10 +126,12 @@ describe('P0 response integrity — session-setting turns never masquerade as ex
   });
 
   it('builder marks every session-configuration turn as not executed', () => {
+    // Defense in depth: even if an operational command reached this builder,
+    // it could only be answered "Not executed".
     const out = buildSessionConfigurationResponse({ sessionState: null, changed: false, question: "Let's execute" });
     assert.match(out.prose, /^Not executed:/);
     assert.equal(out.structured.metadata.executionExpected, true);
-    assert.match(out.structured.metadata.executionSignal, /execution_normal/);
+    assert.equal(out.structured.metadata.executionSignal, 'execution_command');
   });
 });
 

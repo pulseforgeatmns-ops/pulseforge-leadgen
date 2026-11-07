@@ -19,6 +19,7 @@
 const { stripNegatedDirectives } = require('./NegatedDirective');
 const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
 const { buildStructuredResponse } = require('./WorkspaceTypes');
+const { EXECUTION_COMMAND_RE } = require('./SessionDirectiveRegistry');
 
 const ACTIONABLE_OWNERS = new Set([
   'active_mission',
@@ -59,6 +60,7 @@ function detectExecutionCommand(question) {
     if (INTERROGATIVE_RE.test(sentence) || /\?\s*$/.test(sentence)) continue;
     if (IMPERATIVE_EXECUTION_RE.test(sentence)) return 'imperative_execution';
     if (isMissionExecutionCommand(sentence)) return 'mission_execution_command';
+    if (EXECUTION_COMMAND_RE.test(sentence)) return 'execution_command';
   }
   return null;
 }
@@ -76,6 +78,7 @@ function assessFallback(input = {}) {
     if (INTERROGATIVE_RE.test(sentence) || /\?\s*$/.test(sentence)) continue;
     if (IMPERATIVE_EXECUTION_RE.test(sentence)) return { ...base, executionExpected: true, signal: 'imperative_execution' };
     if (isMissionExecutionCommand(sentence)) return { ...base, executionExpected: true, signal: 'mission_execution_command' };
+    if (EXECUTION_COMMAND_RE.test(sentence)) return { ...base, executionExpected: true, signal: 'execution_command' };
     if (claimedOwner === 'specialist_scout' && SCOUT_DISCOVERY_RE.test(sentence)) {
       return { ...base, executionExpected: true, signal: 'scout_discovery_command' };
     }

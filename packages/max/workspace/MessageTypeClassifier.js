@@ -29,6 +29,7 @@ const {
   isInterpretableSessionConfiguration,
   SESSION_CONFIGURATION_THRESHOLD,
   matchFieldDirectives,
+  isOperationalExecutionCommand,
 } = require('./SessionDirectiveRegistry');
 const {
   isMissionExecutionCommand,
@@ -282,6 +283,8 @@ function isSessionConfigurationMessage(text) {
   if (isSessionResetRequest(q)) return true;
 
   const signals = detectSessionDirectiveSignals(q);
+  // P0 — an execution request is never consumed as a session setting.
+  if (isOperationalExecutionCommand(stripNegatedDirectives(q), signals)) return false;
   return isInterpretableSessionConfiguration(q, signals);
 }
 

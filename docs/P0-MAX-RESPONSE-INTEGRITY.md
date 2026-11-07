@@ -86,3 +86,51 @@ Regression tests: `packages/max/workspace/tests/p0MaxResponseIntegrity.test.js`,
 
 Nonblocking (not changed, feature freeze): `routes/maxWorkspace.js` `/open` returns raw `err.message` on 500.
 `/api/max/ask` (legacy) was not reviewed in this pass.
+
+---
+
+## 6. Follow-up: execution-intent routing
+
+The commit after `9829760` covers this.
+
+### Root cause
+1. `SessionDirectiveRegistry.js` `execution_normal` has standalone aliases. Some are real settings
+   ("enable execution", "stop theorizing"). Others are **operational commands**
+   ("let's / go ahead and run | launch | proceed | approve | execute", "time to execute").
+2. `MessageTypeClassifier.isSessionConfigurationMessage` treated any interpretable directive as configuration.
+   It had no carve-out for commands.
+3. `OperatorObjectiveResolutionEngine.extractSegmentCandidates` then:
+   - suppressed the `MISSION_EXECUTION` candidate whenever the text was "session configuration" and no mission was active
+     (`!(isSessionConfigurationMessage && !hasActiveMission)`);
+   - never produced it for "launch the campaign", even with an active mission, because `launch` / `campaign` are not in
+     `MISSION_EXECUTION_COMMAND_RES`.
+4. With `WORKSPACE_OPERATION` as the only candidate, the turn took the session-setting bypass.
+
+A second defect was hidden behind the first. `PendingDecisionResolver` treats `go ahead` / `proceed` / `send` as "yes"
+to **whatever** decision is pending. So once routed, "Go ahead and send the emails" would have approved a pending
+*plan* or *discovery* decision.
+
+### Correction (no schema, no config, no new execution path)
+| Case | Behaviour | Where |
+|---|---|---|
+| 1. Explicit request | `isOperationalExecutionCommand` (no session scope, no reset) is never session configuration. With an active mission it binds to `MISSION_EXECUTION`, which reaches the existing pending-decision resolver → CER → `routeExecutionRequest` → TME, with authorization constraints and audit unchanged. With no mission it gets an explicit "Not executed: there is no mission…" (the PR #1065 routing-fallback guard, extended to these commands) | `SessionDirectiveRegistry.js`, `MessageTypeClassifier.js`, `OperatorObjectiveResolutionEngine.js`, `RoutingFallbackIntegrity.js`, `WorkspaceEngine.js` |
+| 2. Contextual approval | Resolves only against the pending decision. If the words **name** an action (outbound / discovery / plan / prioritization / investigation) that does not match the pending kind, the decision is not approved: "Not executed: you asked for X, but that is not the decision waiting on you…" and the pending decision is re-asked. Generic approvals ("go ahead", "let's run it") behave as before. Plan approval also accepts "discovery", because it only advances to the discovery decision | `PendingDecisionResolver.js`, `PendingDecisionTurn.js` |
+| 3. Real setting | Setting applied. "Acknowledged. Session settings updated. No operational work was executed." plus the snapshot. When unchanged, it says so | `SessionConfigurationAcknowledgement.js` |
+
+**Behaviour change to review.** "Go ahead and launch the campaign" or "Go ahead and send the emails", sent while an
+**execution approval** is pending, now reaches `classifyExecutionApproval`. It approves outbound exactly like
+"Go ahead, send it" already did. Before, it was swallowed as a setting. That is the governed path working as designed,
+but it is an outbound-gate behaviour change, and production acceptance S6/S8 must exercise it.
+
+### Regression results (Node 22, no network)
+- `p0ExecutionIntentRouting.test.js`: 31/31. 21 fail on `9829760`.
+- `p0MaxResponseIntegrity.test.js`: 22/22 (updated for the new routing).
+- `test:max:unit` 1734/1734; `test:max` 1753/1753; `test:max:fixtures` 20/20; `test:decision` 107/107.
+- PostgreSQL 16 (disposable): `test:max:expectations:postgres` 44/44; `test:max:attention:postgres` 33/33.
+- P0 readiness, gaps and recovery, tenant workspace, and Anchor daily outbound: 90/90.
+- `test:amo` 498/544: the **identical** 46-failure set before and after. Pre-existing stale fixtures; not run by CI.
+
+### Placement
+This is a separate, narrowly scoped commit stacked on `9829760`. It cannot target `main` alone, because it depends on
+#1065 (`RoutingFallbackIntegrity`, `NegatedDirective`, execution-evidence states). Merging #1065 deploys it,
+so both commits should be folded into #1065 before that merge and reviewed as distinct commits.

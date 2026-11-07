@@ -45,6 +45,7 @@ const {
 } = require('./MessageTypeClassifier');
 const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
 const { stripNegatedDirectives } = require('./NegatedDirective');
+const { hasExecutionCommandDirective } = require('./SessionDirectiveRegistry');
 
 const MISSION_CREATION_RES = [
   /\bcreate (?:a )?(?:new )?mission\b/i,
@@ -239,7 +240,10 @@ function extractSegmentCandidates(segment, segmentIndex, input = {}) {
     (isMissionExecutionMessage(q, input) ||
       matchesAny(q, MISSION_EXECUTION_RES) ||
       (isMissionExecutionCommand(q) && hasActiveMission) ||
-      (isApprovalMessage(q) && hasActiveMission)) &&
+      (isApprovalMessage(q) && hasActiveMission) ||
+      // P0 — "go ahead and launch the campaign" binds to the active mission;
+      // the mission runtime decides against its pending decision and gates.
+      (hasActiveMission && hasExecutionCommandDirective(affirmative))) &&
     !(isSessionConfigurationMessage(q) && !hasActiveMission)
   ) {
     candidates.push({

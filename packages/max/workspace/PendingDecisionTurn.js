@@ -137,6 +137,12 @@ function buildClarifyProse(question, resolution, snapshot) {
       }
     }
     prefix = ambiguousPrefix;
+    if (Array.isArray(resolution.requestedActionMismatch) && resolution.requestedActionMismatch.length) {
+      prefix =
+        `Not executed: you asked for ${resolution.requestedActionMismatch.join(' / ')}, ` +
+        'but that is not the decision waiting on you. Nothing was approved or dispatched.\n\n' +
+        'The pending decision is below — answer it explicitly to proceed.\n\n';
+    }
   }
 
   return `${prefix}${reviewProse}${prompt}`.trim();
