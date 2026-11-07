@@ -610,13 +610,30 @@
 .pf-focused-workspace .sidebar, .pf-focused-workspace .hamburger, .pf-focused-workspace #menuBtn { display: none !important; }
 .pf-focused-workspace .content-col { grid-column: 1 / -1; }
 .pf-living-shell a:focus-visible, .pf-living-shell summary:focus-visible, .pf-living-shell select:focus-visible { outline: 2px solid var(--pf-gold); outline-offset: 4px; }
-/* The dashboard owns the viewport. Refined Pipeline must shrink into its
-   center-column slot and become that slot's scrollport, especially on tablets. */
-#pipelineArea.pf-refined {
-  min-height: 0 !important;
+/* Pipeline uses the document as its vertical scrollport. The Kanban remains
+   horizontally scrollable, but the header, metrics, board, and intelligence
+   move together as one page on desktop and tablet layouts. */
+html.pf-pipeline-page-scroll,
+body.pf-pipeline-page-scroll {
+  height: auto;
+  min-height: 100%;
   overflow-y: auto !important;
-  overscroll-behavior-y: contain;
-  -webkit-overflow-scrolling: touch;
+}
+body.pf-pipeline-page-scroll { min-height: 100vh; }
+body.pf-pipeline-page-scroll .content-col,
+body.pf-pipeline-page-scroll .main,
+body.pf-pipeline-page-scroll .center-col {
+  overflow: visible;
+}
+body.pf-pipeline-page-scroll .main { flex: 0 0 auto; min-height: auto; }
+body.pf-pipeline-page-scroll .center-col > .pipeline-area {
+  flex: 0 0 auto;
+  min-height: 0 !important;
+  overflow-y: visible !important;
+}
+body.pf-pipeline-page-scroll #pipelineArea.pf-refined {
+  min-height: 0 !important;
+  overflow-y: visible !important;
 }
 @media (max-width: 1150px) {
   .pf-shell-nav.pf-living-shell { gap: 18px; padding-inline: 3%; }
