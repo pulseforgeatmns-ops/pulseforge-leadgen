@@ -50,6 +50,7 @@ const { maybeHandleOperationalInspectionTurn } = require('./OperationalInspectio
 const {
   recordOperationalEvidence,
   maybeHandleOperationalAnalysisTurn,
+  clearOperationalFocus,
 } = require('./OperationalEvidenceContinuity');
 const {
   resolveActiveMissionLock,
@@ -639,6 +640,8 @@ class WorkspaceEngine {
         // P0 #1089 — the inspection's evidence stays available to follow-up
         // analysis in this conversation (tenant-bound, aggregates only).
         if (operationalTurn.snapshot && !operationalTurn.snapshot.refused) {
+          // A new inspection starts a new analytical thread: no mission referent.
+          clearOperationalFocus(session);
           recordOperationalEvidence(session, operationalTurn.snapshot, {
             tenantName: (operationalTurn.snapshot.scope && operationalTurn.snapshot.scope.self && operationalTurn.snapshot.scope.self.name) || null,
             recordedAt: operationalTurn.snapshot.asOf,
@@ -677,6 +680,9 @@ class WorkspaceEngine {
           envelopeSwitch,
         });
       }
+      // Any other owner takes this turn: the analytical referent ("it", "this
+      // mission") does not carry across it into later turns.
+      clearOperationalFocus(session);
     }
 
     // SPEC-167 — Operator Objective Resolution precedes routing (ADR-087).
