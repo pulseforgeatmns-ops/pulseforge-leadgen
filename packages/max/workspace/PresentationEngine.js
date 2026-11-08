@@ -189,6 +189,21 @@ class PresentationEngine {
       };
     }
 
+    // P0 #1087 — operational inspection is a persisted-state report; never rephrase
+    // (a model rewrite could invent progress or drop unavailable-source disclosures).
+    if (metadata.operationalInspection === true) {
+      prose = structured.answer ? String(structured.answer).trim() : '';
+      return {
+        prose,
+        structured,
+        metadata: {
+          ...metadata,
+          presentation: 'operational_inspection',
+        },
+        presentation: 'operational_inspection',
+      };
+    }
+
     // SPEC-149 — session configuration acknowledgement is already the operator artifact.
     if (metadata.sessionConfiguration === true) {
       prose = structured.answer ? String(structured.answer).trim() : '';

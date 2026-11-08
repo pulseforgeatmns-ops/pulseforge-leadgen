@@ -46,6 +46,7 @@ const {
 } = require('./AcquisitionOwnership');
 const acquisitionMissionExecution = require('./AcquisitionMissionExecution');
 const { maybeHandleOperatorStatusQuery } = require('./OperatorStatusQueryRouter');
+const { maybeHandleOperationalInspectionTurn } = require('./OperationalInspection');
 const {
   resolveActiveMissionLock,
   guardExecutionDomain,
@@ -62,7 +63,7 @@ const {
 } = require('../operatorCognition');
 const { analyzeOperatorIntent } = require('./OperatorIntent');
 const { resolveConversationContract } = require('./ConversationContractEngine');
-const { resolveSessionState } = require('./SessionStateManager');
+const { resolveSessionState, getCurrentState: getCurrentSessionState } = require('./SessionStateManager');
 const { MESSAGE_TYPES } = require('./MessageType');
 const {
   resolveMessageType,
@@ -295,6 +296,8 @@ class WorkspaceEngine {
     this._scoutAcquisitionOpts = options.scoutAcquisitionOpts || null;
     this._operatorContextOpts = options.operatorContextOpts || null;
     this._operatingEvidenceOpts = options.operatingEvidenceOpts || null;
+    // P0 #1087 — operational inspection data access (tests inject pool/loaders).
+    this._operationalInspectionOpts = options.operationalInspectionOpts || null;
     this._operatingUpdateOpts = options.operatingUpdateOpts || null;
     this._runtimeProvider =
       options.runtimeProvider ||
@@ -524,6 +527,99 @@ class WorkspaceEngine {
       return { ...navigation, sessionId: session.id, structured, context: session.context,
         route: ROUTE_KINDS.INTELLIGENCE, executionDomain: EXECUTION_DOMAINS.WORKSPACE,
         workspaceOwnership: { owner: reviewIntent.kind, reason: 'explicit_review_request', confidence: 1, specialist: null } };
+    }
+
+    // P0 #1087 — read-only operational inspection precedes objective resolution,
+    // session-state directives, the compound planner, mission-first continuation,
+    // pending decisions, AMO execution, and reasoning fallback. It reads persisted
+    // tenant state only. Running before session-state resolution keeps a turn-level
+    // "read only" qualifier from becoming a sticky session execution policy (which
+    // would silently block the operator's later approvals). The only session
+    // writes are the operator/Max transcript messages.
+    if (!miepInternal) {
+      const operationalTurn = await maybeHandleOperationalInspectionTurn({
+        question,
+        session,
+        opts: this._operationalInspectionOpts || {},
+        acquisitionMissionRuntime: (() => {
+          try { return this._resolveAmoRuntime(); } catch (_) { return null; }
+        })(),
+      });
+      if (operationalTurn) {
+        askPathTrace.traceBranch('owner_pipeline:operational_inspection', {
+          reason: operationalTurn.reason,
+          mutationBoundary: operationalTurn.snapshot ? operationalTurn.snapshot.mutationBoundary : null,
+        });
+        const presentedOperational = await this._presentation.present(operationalTurn.structured);
+        const proseOperational = presentedOperational.prose || operationalTurn.prose;
+        this._sessions.appendMessage(session.id, {
+          role: 'max',
+          text: proseOperational,
+          structured: operationalTurn.structured,
+        });
+        askPathTrace.traceEarlyReturn('WorkspaceEngine.ask', 'operational_inspection', {
+          responseOwner: 'operational_inspection',
+          pipeline: 'OperationalInspection',
+        });
+        const inspectionSessionState = getCurrentSessionState(session);
+        const ownership = {
+          owner: 'operational_inspection',
+          reason: operationalTurn.reason,
+          confidence: 1,
+          specialist: null,
+          fallback: false,
+        };
+        return attachRoutingTrace(
+          {
+            sessionId: session.id,
+            prose: proseOperational,
+            structured: operationalTurn.structured,
+            metadata: {
+              ...(presentedOperational.metadata || {}),
+              sessionState: inspectionSessionState,
+            },
+            operationalSnapshot: operationalTurn.structured.metadata.operationalSnapshot || null,
+            suggestions: [],
+            recommendedActions: [],
+            contextSwitch: envelopeSwitch,
+            domainSwitch: null,
+            context: session.context,
+            presentation: presentedOperational.presentation,
+            route: ROUTE_KINDS.INTELLIGENCE,
+            mission: null,
+            resolution: { action: 'operational_inspected', reason: operationalTurn.reason },
+            executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+            interrogation: null,
+            conversationIntent: null,
+            conversationSubject: null,
+            messageClassification: null,
+            sessionState: inspectionSessionState,
+            domainDecision: {
+              domain: EXECUTION_DOMAINS.WORKSPACE,
+              reason: operationalTurn.reason,
+              missionType: null,
+              missionIntent: null,
+              confidence: 1,
+              previousDomain: session.previousExecutionDomain || null,
+              domainSwitched: false,
+            },
+            executionContext: {
+              domain: EXECUTION_DOMAINS.WORKSPACE,
+              routeKind: ROUTE_KINDS.INTELLIGENCE,
+              reason: operationalTurn.reason,
+              missionType: null,
+              missionId: null,
+            },
+            workspaceOwnership: ownership,
+          },
+          {
+            pipeline: 'OperationalInspection',
+            claimedBy: 'operational_inspection',
+            sessionState: inspectionSessionState,
+            workspaceOwnership: ownership,
+          }
+        );
+      }
     }
 
     // SPEC-167 — Operator Objective Resolution precedes routing (ADR-087).
