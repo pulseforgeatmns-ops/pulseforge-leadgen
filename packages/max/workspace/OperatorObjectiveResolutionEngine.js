@@ -236,11 +236,16 @@ function extractSegmentCandidates(segment, segmentIndex, input = {}) {
         (input.session.context.missionId || input.session.context.acquisitionMissionId))
   );
 
+  // P0 #1089 — "Do not approve or resume missions" is a constraint. Execution
+  // and approval language is read from the affirmative text only; a segment
+  // that is nothing but a prohibition never selects mission execution.
+  const executionText = affirmative || '';
   if (
-    (isMissionExecutionMessage(q, input) ||
-      matchesAny(q, MISSION_EXECUTION_RES) ||
-      (isMissionExecutionCommand(q) && hasActiveMission) ||
-      (isApprovalMessage(q) && hasActiveMission) ||
+    executionText &&
+    (isMissionExecutionMessage(executionText, input) ||
+      matchesAny(executionText, MISSION_EXECUTION_RES) ||
+      (isMissionExecutionCommand(executionText) && hasActiveMission) ||
+      (isApprovalMessage(executionText) && hasActiveMission) ||
       // P0 — "go ahead and launch the campaign" binds to the active mission;
       // the mission runtime decides against its pending decision and gates.
       (hasActiveMission && hasExecutionCommandDirective(affirmative))) &&

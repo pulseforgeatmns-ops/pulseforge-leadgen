@@ -48,6 +48,10 @@ const acquisitionMissionExecution = require('./AcquisitionMissionExecution');
 const { maybeHandleOperatorStatusQuery } = require('./OperatorStatusQueryRouter');
 const { maybeHandleOperationalInspectionTurn } = require('./OperationalInspection');
 const {
+  recordOperationalEvidence,
+  maybeHandleOperationalAnalysisTurn,
+} = require('./OperationalEvidenceContinuity');
+const {
   resolveActiveMissionLock,
   guardExecutionDomain,
   isExplicitMissionExit,
@@ -452,6 +456,91 @@ class WorkspaceEngine {
     }
   }
 
+  /**
+   * P0 #1087 / #1089 — shared early return for the read-only operational owners
+   * (inspection and analysis). Writes only the Max transcript message.
+   */
+  async _operationalOwnerResult({ session, turn, owner, pipeline, action, mutationBoundary, envelopeSwitch }) {
+    askPathTrace.traceBranch(`owner_pipeline:${owner}`, {
+      reason: turn.reason,
+      mutationBoundary: mutationBoundary || null,
+      evidence: turn.structured && turn.structured.metadata
+        ? turn.structured.metadata.operationalEvidenceContinuity || null
+        : null,
+    });
+    const presented = await this._presentation.present(turn.structured);
+    const prose = presented.prose || turn.prose;
+    this._sessions.appendMessage(session.id, {
+      role: 'max',
+      text: prose,
+      structured: turn.structured,
+    });
+    askPathTrace.traceEarlyReturn('WorkspaceEngine.ask', owner, {
+      responseOwner: owner,
+      pipeline,
+    });
+    const currentSessionState = getCurrentSessionState(session);
+    const ownership = {
+      owner,
+      reason: turn.reason,
+      confidence: 1,
+      specialist: null,
+      fallback: false,
+    };
+    const metadata = turn.structured.metadata || {};
+    return attachRoutingTrace(
+      {
+        sessionId: session.id,
+        prose,
+        structured: turn.structured,
+        metadata: {
+          ...(presented.metadata || {}),
+          sessionState: currentSessionState,
+        },
+        operationalSnapshot: metadata.operationalSnapshot || null,
+        operationalEvidence: metadata.operationalEvidenceContinuity || null,
+        suggestions: [],
+        recommendedActions: [],
+        contextSwitch: envelopeSwitch,
+        domainSwitch: null,
+        context: session.context,
+        presentation: presented.presentation,
+        route: ROUTE_KINDS.INTELLIGENCE,
+        mission: null,
+        resolution: { action, reason: turn.reason },
+        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+        interrogation: null,
+        conversationIntent: null,
+        conversationSubject: null,
+        messageClassification: null,
+        sessionState: currentSessionState,
+        domainDecision: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          reason: turn.reason,
+          missionType: null,
+          missionIntent: null,
+          confidence: 1,
+          previousDomain: session.previousExecutionDomain || null,
+          domainSwitched: false,
+        },
+        executionContext: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          routeKind: ROUTE_KINDS.INTELLIGENCE,
+          reason: turn.reason,
+          missionType: null,
+          missionId: null,
+        },
+        workspaceOwnership: ownership,
+      },
+      {
+        pipeline,
+        claimedBy: owner,
+        sessionState: currentSessionState,
+        workspaceOwnership: ownership,
+      }
+    );
+  }
+
   async _askProduction(input, shadow = null) {
     if (!input || !String(input.question || '').trim()) {
       throw new Error('question is required');
@@ -537,88 +626,56 @@ class WorkspaceEngine {
     // would silently block the operator's later approvals). The only session
     // writes are the operator/Max transcript messages.
     if (!miepInternal) {
+      const acquisitionMissionRuntime = (() => {
+        try { return this._resolveAmoRuntime(); } catch (_) { return null; }
+      })();
       const operationalTurn = await maybeHandleOperationalInspectionTurn({
         question,
         session,
         opts: this._operationalInspectionOpts || {},
-        acquisitionMissionRuntime: (() => {
-          try { return this._resolveAmoRuntime(); } catch (_) { return null; }
-        })(),
+        acquisitionMissionRuntime,
       });
       if (operationalTurn) {
-        askPathTrace.traceBranch('owner_pipeline:operational_inspection', {
-          reason: operationalTurn.reason,
-          mutationBoundary: operationalTurn.snapshot ? operationalTurn.snapshot.mutationBoundary : null,
-        });
-        const presentedOperational = await this._presentation.present(operationalTurn.structured);
-        const proseOperational = presentedOperational.prose || operationalTurn.prose;
-        this._sessions.appendMessage(session.id, {
-          role: 'max',
-          text: proseOperational,
-          structured: operationalTurn.structured,
-        });
-        askPathTrace.traceEarlyReturn('WorkspaceEngine.ask', 'operational_inspection', {
-          responseOwner: 'operational_inspection',
-          pipeline: 'OperationalInspection',
-        });
-        const inspectionSessionState = getCurrentSessionState(session);
-        const ownership = {
+        // P0 #1089 — the inspection's evidence stays available to follow-up
+        // analysis in this conversation (tenant-bound, aggregates only).
+        if (operationalTurn.snapshot && !operationalTurn.snapshot.refused) {
+          recordOperationalEvidence(session, operationalTurn.snapshot, {
+            tenantName: (operationalTurn.snapshot.scope && operationalTurn.snapshot.scope.self && operationalTurn.snapshot.scope.self.name) || null,
+            recordedAt: operationalTurn.snapshot.asOf,
+          });
+        }
+        return this._operationalOwnerResult({
+          session,
+          turn: operationalTurn,
           owner: 'operational_inspection',
-          reason: operationalTurn.reason,
-          confidence: 1,
-          specialist: null,
-          fallback: false,
-        };
-        return attachRoutingTrace(
-          {
-            sessionId: session.id,
-            prose: proseOperational,
-            structured: operationalTurn.structured,
-            metadata: {
-              ...(presentedOperational.metadata || {}),
-              sessionState: inspectionSessionState,
-            },
-            operationalSnapshot: operationalTurn.structured.metadata.operationalSnapshot || null,
-            suggestions: [],
-            recommendedActions: [],
-            contextSwitch: envelopeSwitch,
-            domainSwitch: null,
-            context: session.context,
-            presentation: presentedOperational.presentation,
-            route: ROUTE_KINDS.INTELLIGENCE,
-            mission: null,
-            resolution: { action: 'operational_inspected', reason: operationalTurn.reason },
-            executionDomain: EXECUTION_DOMAINS.WORKSPACE,
-            interrogation: null,
-            conversationIntent: null,
-            conversationSubject: null,
-            messageClassification: null,
-            sessionState: inspectionSessionState,
-            domainDecision: {
-              domain: EXECUTION_DOMAINS.WORKSPACE,
-              reason: operationalTurn.reason,
-              missionType: null,
-              missionIntent: null,
-              confidence: 1,
-              previousDomain: session.previousExecutionDomain || null,
-              domainSwitched: false,
-            },
-            executionContext: {
-              domain: EXECUTION_DOMAINS.WORKSPACE,
-              routeKind: ROUTE_KINDS.INTELLIGENCE,
-              reason: operationalTurn.reason,
-              missionType: null,
-              missionId: null,
-            },
-            workspaceOwnership: ownership,
-          },
-          {
-            pipeline: 'OperationalInspection',
-            claimedBy: 'operational_inspection',
-            sessionState: inspectionSessionState,
-            workspaceOwnership: ownership,
-          }
-        );
+          pipeline: 'OperationalInspection',
+          action: 'operational_inspected',
+          mutationBoundary: operationalTurn.snapshot ? operationalTurn.snapshot.mutationBoundary : null,
+          envelopeSwitch,
+        });
+      }
+
+      // P0 #1089 — an analytical follow-up over operational evidence keeps the
+      // operational owner. It precedes objective resolution, session-state
+      // directives, mission-first continuation, pending decisions, and AMO
+      // execution: a pending approval is context for this turn, not its owner.
+      const analysisTurn = await maybeHandleOperationalAnalysisTurn({
+        question,
+        session,
+        opts: this._operationalInspectionOpts || {},
+        acquisitionMissionRuntime,
+        clientIntelligenceService: this._clientIntelligenceService,
+      });
+      if (analysisTurn) {
+        return this._operationalOwnerResult({
+          session,
+          turn: analysisTurn,
+          owner: 'operational_analysis',
+          pipeline: 'OperationalEvidenceContinuity',
+          action: 'operational_analyzed',
+          mutationBoundary: analysisTurn.mutationBoundary || null,
+          envelopeSwitch,
+        });
       }
     }
 

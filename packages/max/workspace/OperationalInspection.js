@@ -107,6 +107,15 @@ function isOperationalInspectionRequest(question) {
   return detectOperationalInspection(question).matched;
 }
 
+/**
+ * P0 #1089 — true when the affirmative (negation-stripped) text still carries
+ * an action command. Shared with the analytical follow-up contract so both
+ * operational owners decline the same commands.
+ */
+function hasAffirmativeActionCommand(question) {
+  return ACTION_COMMAND.test(stripNegatedDirectives(String(question || '')));
+}
+
 // ---------------------------------------------------------------------------
 // Read-only data access
 // ---------------------------------------------------------------------------
@@ -484,6 +493,22 @@ function resolveNamedClientScope(question, tenantId, directory) {
   return { ok: true, check: mentionsSelf ? 'matched' : 'not_named', named: null, self };
 }
 
+/**
+ * P0 #1089 — named-client authorization for a turn that reuses evidence
+ * already in the session. Reads only the client directory (read-only guard).
+ */
+async function checkNamedClientScope({ question, tenantId, opts = {} } = {}) {
+  const boundary = { enforced: true, reads: 0, writesBlocked: 0 };
+  const rawPool = resolvePool(opts);
+  const db = rawPool ? readOnlyQueryable(rawPool, boundary) : null;
+  const loaders = opts.loaders || {};
+  const directory = await safe(
+    () => (loaders.loadClientDirectory || loadClientDirectory)({ db, tenantId: String(tenantId) }),
+    { available: false, rows: [] }
+  );
+  return { scope: resolveNamedClientScope(question, String(tenantId), directory), mutationBoundary: boundary };
+}
+
 // ---------------------------------------------------------------------------
 // Classification (documented criteria)
 // ---------------------------------------------------------------------------
@@ -850,6 +875,11 @@ module.exports = {
   CATEGORIES,
   detectOperationalInspection,
   isOperationalInspectionRequest,
+  hasAffirmativeActionCommand,
+  checkNamedClientScope,
+  tenantBlockers,
+  countByCategory,
+  refusalTurn,
   readOnlyQueryable,
   classifyMission,
   loadOperationalSnapshot,

@@ -44,3 +44,6 @@ Blockers per mission: persisted `blockers`, pending operator decision, synthetic
 - The Anchor outbound gate is the only tenant-specific gate read; other governed state (research-only grants, scoped resumes) is not yet summarized.
 - Named-client refusal depends on the `clients` directory being readable; when it is not, the session tenant is still enforced and the check is reported as `unavailable` in the snapshot.
 - Sticky session `read_only` from an explicit "use read-only mode" directive is unchanged (intended); only inspection turns no longer set it.
+
+## Follow-up turns (P0 #1089)
+Inspection evidence is recorded on the session and analytical follow-ups over it ("Using the operational evidence you just retrieved …") are owned by `OperationalEvidenceContinuity.js`, ahead of pending decisions. See `docs/P0-MAX-MULTI-TURN-REASONING-1089.md`.

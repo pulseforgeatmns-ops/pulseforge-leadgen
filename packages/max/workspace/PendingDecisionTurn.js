@@ -27,12 +27,15 @@ const {
   readyExecutionApprovalPrompt,
 } = require('./AcquisitionMissionExecution');
 const askPathTrace = require('./audit/AskPathTrace');
+const { stripNegatedDirectives } = require('./NegatedDirective');
 const { resolveAcquisitionActiveMission } = require('./ActiveMissionGuard');
 const { resolveAcquisitionMissionRuntime } = require('./WorkspaceMissionInspection');
 const { logPendingDecisionCaptureGuardError } = require('./pendingDecisionCaptureGuard');
 
 function contextualPendingAnswer(question, resolution, snapshot) {
-  const q = String(question || '').trim();
+  // P0 #1089 — match the operator's affirmative wording; "why … do not approve"
+  // must not be answered as "why should I approve".
+  const q = stripNegatedDirectives(String(question || '').trim()) || String(question || '').trim();
   const mission = snapshot && snapshot.mission ? snapshot.mission : null;
   const prompt =
     resolution.prompt ||
