@@ -178,5 +178,113 @@
     "expected_route": "conversation",
     "label_status": "unreviewed",
     "legacy_route": null
+  },
+  {
+    "id": "question_publish",
+    "category": "clarification",
+    "provenance": "synthetic",
+    "operator_message": "Should I approve publishing this post?",
+    "expected_route": "clarification",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "question_vendor",
+    "category": "clarification",
+    "provenance": "synthetic",
+    "operator_message": "What are the risks if I approve the vendor contract?",
+    "expected_route": "conversation",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "inspect_pending",
+    "category": "inspection",
+    "provenance": "synthetic",
+    "operator_message": "Before deciding, show me exactly what this pending approval would change.",
+    "expected_route": "inspection",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "unbound_reject",
+    "category": "clarification",
+    "provenance": "synthetic",
+    "operator_message": "No, reject that.",
+    "expected_route": "clarification",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "unbound_yes",
+    "category": "clarification",
+    "provenance": "synthetic",
+    "operator_message": "Yes, go ahead.",
+    "expected_route": "clarification",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "question_requires_detail",
+    "category": "clarification",
+    "provenance": "synthetic",
+    "operator_message": "Can you explain which customers would receive the outreach before I approve anything?",
+    "expected_route": "intelligence",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "explicit_readonly",
+    "category": "status",
+    "provenance": "synthetic",
+    "operator_message": "Status only: don't approve, send, or modify anything.",
+    "expected_route": "inspection",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "question_and_hold",
+    "category": "inspection",
+    "provenance": "synthetic",
+    "operator_message": "Please inspect the pending mission; do not treat this as approval.",
+    "expected_route": "inspection",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "approval_reason",
+    "category": "clarification",
+    "provenance": "synthetic",
+    "operator_message": "Why are you asking me to approve it?",
+    "expected_route": "conversation",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "ads_report_only",
+    "category": "briefing",
+    "provenance": "synthetic",
+    "operator_message": "Give me a report on our search campaign spend and conversions, no changes.",
+    "expected_route": "intelligence",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "ask_social_publish",
+    "category": "clarification",
+    "provenance": "synthetic",
+    "operator_message": "Should Paige publish this draft or revise it first?",
+    "expected_route": "conversation",
+    "label_status": "unreviewed",
+    "legacy_route": null
+  },
+  {
+    "id": "refuse_execution",
+    "category": "conversation",
+    "provenance": "synthetic",
+    "operator_message": "I am not authorizing anything today. Let's discuss next steps.",
+    "expected_route": "conversation",
+    "label_status": "unreviewed",
+    "legacy_route": null
   }
 ]
