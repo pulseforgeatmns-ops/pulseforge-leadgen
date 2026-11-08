@@ -158,8 +158,17 @@ test('scheduled Anchor cycles buy each approved query once, reuse known business
   assert.notEqual(missionA.id, missionB.id);
   const replaced = await cycle(missionB);
   assert.deepEqual(replaced.calls, [], 'cross-mission memory survives restart and mission replacement');
-  assert.equal(replaced.result.searchGenerationExhausted, true);
-  assert.ok(replaced.result.queryProgression.tenantMemory.queriesSkipped >= 8);
+  // SPEC-SCOUT-P0-008: mission B re-evaluates mission A's purchased evidence
+  // under its own criteria (no provider call) before it can be exhausted.
+  assert.equal(replaced.result.searchGenerationExhausted, false);
+  const memory = replaced.result.queryProgression.tenantMemory;
+  assert.ok(memory.searchEvidenceReused > 0 && memory.searchEvidenceCandidates > 0, JSON.stringify(memory));
+  assert.equal(memory.searchEvidenceReused + memory.searchEvidenceUnavailable, 8, 'every approved query was covered once');
+  assert.equal(replaced.result.queryProgression.reusedQueries, memory.searchEvidenceReused);
   assert.equal((await queued()).length, rows.length, 'no duplicate businesses after replacement');
+  const replacedAgain = await cycle(missionB);
+  assert.deepEqual(replacedAgain.calls, [], 'reused evidence is handled once; nothing is bought afterwards');
+  assert.equal(replacedAgain.result.searchGenerationExhausted, true);
+  assert.equal((await queued()).length, rows.length);
   assert.equal(typeof searchGenerationExhausted, 'function');
 });

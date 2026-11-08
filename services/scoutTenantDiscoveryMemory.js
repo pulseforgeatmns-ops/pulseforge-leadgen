@@ -5,10 +5,22 @@
 const { randomUUID } = require('node:crypto');
 const { PLAN_VERSION, queryIdentity } = require('./scoutQueryCheckpoints');
 const ENABLED_TENANTS = new Set(['10']);
+// SPEC-SCOUT-P0-008: any tenant on the durable candidate-ticket path may opt
+// in by explicit tenant id. The durable path is a prerequisite: only it keeps
+// complete, membership-backed search evidence that a later mission can reuse.
+const durableTenants = () => require('./scoutCandidateTicketDispatch').ENABLED_TENANTS;
+const optedInTenants = env => new Set(String(env.SCOUT_TENANT_DISCOVERY_MEMORY_TENANTS || '')
+  .split(',').map(value => value.trim()).filter(value => /^[1-9][0-9]{0,9}$/.test(value)));
 // Separate from the global durable-candidate flag: rollout must not opt other
 // tenants into a different discovery path. Neither flag grants provider access.
-const isTenantDiscoveryMemoryEnabled = (tenantId, env = process.env) =>
-  ENABLED_TENANTS.has(String(tenantId)) && env.SCOUT_ANCHOR_DISCOVERY_MEMORY_ENABLED === 'true';
+const isTenantDiscoveryMemoryEnabled = (tenantId, env = process.env) => {
+  const tenant = String(tenantId);
+  if (ENABLED_TENANTS.has(tenant)) return env.SCOUT_ANCHOR_DISCOVERY_MEMORY_ENABLED === 'true';
+  return durableTenants().has(tenant) && optedInTenants(env).has(tenant);
+};
+// Tenant 10 binds as before. Another tenant binds only when explicitly opted in.
+const memoryTenantAllowed = (tenantId, env = process.env) =>
+  ENABLED_TENANTS.has(String(tenantId)) || isTenantDiscoveryMemoryEnabled(tenantId, env);
 const fail = code => Object.assign(new Error(code), { code, retryAllowed:false });
 const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 512;
 
@@ -30,11 +42,12 @@ function businessObservation(raw) {
       businessStatus: typeof raw.businessStatus === 'string' ? raw.businessStatus : null } : {}) };
 }
 
-function createTenantDiscoveryMemory({ pool, tenantId, fingerprint }) {
+function createTenantDiscoveryMemory({ pool, tenantId, fingerprint, env = process.env }) {
   const tenant = String(tenantId);
-  if (!ENABLED_TENANTS.has(tenant) || !pool?.query || !pool?.connect || !validId(fingerprint))
+  if (!memoryTenantAllowed(tenant, env) || !pool?.query || !pool?.connect || !validId(fingerprint))
     throw fail('scout_tenant_memory_binding_required');
-  const counts = { queriesSkipped:0, queriesUnconfirmed:0, lowNoveltyQueriesDeferred:0, detailsReused:0, detailsReserved:0 };
+  const counts = { queriesSkipped:0, queriesUnconfirmed:0, lowNoveltyQueriesDeferred:0, detailsReused:0, detailsReserved:0,
+    searchEvidenceReused:0, searchEvidenceCandidates:0, searchEvidencePartial:0, searchEvidenceUnavailable:0 };
   async function assertReady() {
     try {
       await pool.query('SELECT tenant_id,query_key,root_query_key,query_text,search_fingerprint,claimed_at FROM scout_tenant_query_owners LIMIT 0');
@@ -48,8 +61,16 @@ function createTenantDiscoveryMemory({ pool, tenantId, fingerprint }) {
         if (!rows.some(r=>r.relation===relation && JSON.stringify(r.columns)===JSON.stringify(['tenant_id',key])))
           throw fail('scout_tenant_memory_identity_required');
       }
+      // The original memory schema admits only Tenant 10. Another tenant needs
+      // the separately approved all-tenant migration; fail before any provider work.
+      if (tenant !== '10') {
+        const limited = await pool.query(`SELECT 1 FROM pg_constraint WHERE contype='c'
+          AND conrelid IN ('scout_tenant_query_owners'::regclass,'scout_tenant_place_observations'::regclass)
+          AND pg_get_constraintdef(oid) LIKE '%tenant_id = ''10''%' LIMIT 1`);
+        if (limited.rows.length) throw fail('scout_tenant_memory_tenant_schema_required');
+      }
     } catch (error) {
-      if (error.code === 'scout_tenant_memory_identity_required') throw error;
+      if (['scout_tenant_memory_identity_required','scout_tenant_memory_tenant_schema_required'].includes(error.code)) throw error;
       throw fail('scout_tenant_memory_schema_required');
     }
   }
@@ -104,6 +125,50 @@ function createTenantDiscoveryMemory({ pool, tenantId, fingerprint }) {
         VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,[tenant,keys[0],key,query,fingerprint]);
       return queryStatus(db,key,query);
     });
+  }
+  // SPEC-SCOUT-P0-008: coverage is reusable, not just skippable. Returns the
+  // tenant's own durable evidence for this exact query identity (provider,
+  // plan version, normalized text incl. geography, website requirement) from
+  // other missions, or null. Only confirmed responses count: fetched/handled
+  // checkpoints, and continuation pages in state 'fetched'. Reserved/blocked
+  // pages are reported as partial and are never bought or treated as complete.
+  async function priorEvidence(key, query) {
+    queryKeys(key, query);
+    const {rows} = await pool.query(`WITH sources AS (
+        SELECT search_fingerprint,query_key FROM scout_query_checkpoints
+         WHERE tenant_id=$1 AND query_key=$2 AND plan_version=$3 AND search_fingerprint<>$4
+        UNION SELECT search_fingerprint,query_key FROM scout_query_pages
+         WHERE tenant_id=$1 AND root_query_key=$2 AND search_fingerprint<>$4 AND state='fetched')
+      SELECT c.search_fingerprint,c.query_key,c.candidates,c.fetched_at
+        FROM sources s JOIN scout_query_checkpoints c
+          ON c.tenant_id=$1 AND c.search_fingerprint=s.search_fingerprint AND c.query_key=s.query_key
+       WHERE c.plan_version=$3 AND c.state IN ('fetched','handled')
+       ORDER BY c.fetched_at,c.search_fingerprint,c.query_key`,[tenant,key,PLAN_VERSION,fingerprint]);
+    if (!rows.length) { counts.searchEvidenceUnavailable++; return null; }
+    const partial = (await pool.query(`SELECT 1 FROM scout_query_pages WHERE tenant_id=$1 AND root_query_key=$2
+      AND search_fingerprint<>$3 AND state<>'fetched' LIMIT 1`,[tenant,key,fingerprint])).rows.length>0;
+    const seen = new Set(), candidates = [];
+    for (const row of rows) {
+      if (!Array.isArray(row.candidates)) throw fail('scout_tenant_memory_evidence_invalid');
+      for (const raw of row.candidates) {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw fail('scout_tenant_memory_evidence_invalid');
+        for (const field of ['tenantId','tenant_id','clientId','client_id'])
+          if (raw[field] != null && String(raw[field]) !== tenant) throw fail('scout_tenant_memory_evidence_tenant_mismatch');
+        const identity = raw.placeId || raw.place_id || JSON.stringify(raw);
+        if (seen.has(identity)) continue;
+        seen.add(identity);
+        const { _scoutTicketRefs, ...evidence } = raw;
+        candidates.push({ ...evidence, searchEvidenceReuse: { sourceSearchFingerprint: row.search_fingerprint,
+          sourceQueryKey: row.query_key } });
+      }
+    }
+    // A handled checkpoint from a non-ticket session no longer holds its payload;
+    // that is coverage without reusable evidence, never "complete and empty".
+    if (!candidates.length) { counts.searchEvidenceUnavailable++; return { candidates, partial,
+      sourceFingerprints: [...new Set(rows.map(row => row.search_fingerprint))] }; }
+    counts.searchEvidenceReused++; counts.searchEvidenceCandidates += candidates.length;
+    if (partial) counts.searchEvidencePartial++;
+    return { candidates, partial, sourceFingerprints: [...new Set(rows.map(row => row.search_fingerprint))] };
   }
   async function continuationStatus(rootKey) {
     const row=(await pool.query(`SELECT c.candidates FROM scout_query_pages p JOIN scout_query_checkpoints c
@@ -172,7 +237,7 @@ function createTenantDiscoveryMemory({ pool, tenantId, fingerprint }) {
       RETURNING place_id`,[tenant,claim.placeId,fingerprint,claim.reservationId,candidate?'observed':'uncertain',candidate ? JSON.stringify(candidate) : null]);
     if (result.rows.length!==1) throw fail('scout_tenant_memory_observation_unconfirmed');
   }
-  return { tenantId:tenant, fingerprint, assertReady, checkQuery, reserveQuery, continuationStatus, claimPlace, finishPlace,
+  return { tenantId:tenant, fingerprint, assertReady, checkQuery, reserveQuery, priorEvidence, continuationStatus, claimPlace, finishPlace,
     snapshot:()=>({...counts}) };
 }
-module.exports={ENABLED_TENANTS,isTenantDiscoveryMemoryEnabled,businessObservation,createTenantDiscoveryMemory};
+module.exports={ENABLED_TENANTS,isTenantDiscoveryMemoryEnabled,memoryTenantAllowed,businessObservation,createTenantDiscoveryMemory};
