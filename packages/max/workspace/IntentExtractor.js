@@ -49,7 +49,7 @@ const REFLECTION_RES = [
 /** Operator constraints — not actionable intents (desk workflows, safety rails). */
 const NEGATION_OR_CONSTRAINT_RES = [
   /\b(?:don'?t|do not)\s+create (?:a )?mission\b/i,
-  /\b(?:don'?t|do not)\s+(?:launch|execute|approve|print|mail)\b/i,
+  /\b(?:don'?t|do not)\s+(?:launch|execute|approve|print|mail|change|initiate|send|archive|delete|modify)\b/i,
   /\b(?:don'?t|do not)\s+(?:include|show|add)\b/i,
   /\bno mission creation\b/i,
   /\bwithout creating (?:a )?mission\b/i,
@@ -122,6 +122,14 @@ function classifySegmentIntent(segment, segmentIndex, input = {}) {
   const text = normalizeText(segment);
   if (!text) return null;
   if (isNegationOrConstraintSegment(text)) return null;
+
+  // Status-report requests are reads, not session policy changes.
+  if (/\b(?:read[ -]?only\s+)?(?:operational|business|mission)\s+status\s+report\b/i.test(text) ||
+      /\b(?:identify|summarize|distinguish|list)\s+(?:the\s+)?(?:current\s+)?(?:mission\s+state|active\s+execution\s+blockers|supporting\s+evidence|active\s+business\s+missions)\b/i.test(text)) {
+    return buildDetectedIntent(INTENT_TYPES.BUSINESS_REASONING, {
+      confidence: 0.95, segment: text, segmentIndex, sourceText: text,
+    });
+  }
 
   if (isSessionInspectionQuestion(text)) {
     return buildDetectedIntent(INTENT_TYPES.INSPECTION, {
