@@ -279,6 +279,10 @@ function isSessionConfigurationMessage(text) {
   const q = normalizeText(text);
   if (!q) return false;
   if (isSessionInspectionQuestion(q)) return false;
+  // A read-only constraint on an operational inspection is not a request to
+  // reconfigure the session. Keep the requested inspection as the objective.
+  if (/\b(?:status report|mission (?:status|state|progress|health|blockers?)|execution blockers?|current mission state)\b/i.test(q) &&
+      /\b(?:give me|show me|identify|report|summari[sz]e|what(?:'s| is)|where are we)\b/i.test(q)) return false;
 
   if (isSessionResetRequest(q)) return true;
 
