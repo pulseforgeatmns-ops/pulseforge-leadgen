@@ -20,6 +20,23 @@ function createShadowPool(env = process.env) {
   });
 }
 
+// Only fixed diagnostic categories leave this module; never log driver messages,
+// SQL statements, connection strings, or user data.
+function persistenceFailureReason(error) {
+  switch (error?.code) {
+    case '42P01': return 'schema_table_missing';
+    case '42703': return 'schema_column_missing';
+    case '42501': return 'database_permission_denied';
+    case '28P01': return 'database_auth_failed';
+    case '3D000': return 'database_missing';
+    case '53300': return 'database_connections_exhausted';
+    case '57014': return 'database_query_timeout';
+    case 'ECONNREFUSED': case 'ENOTFOUND': case 'ETIMEDOUT':
+    case 'ECONNRESET': return 'database_connection_failed';
+    default: return 'write_failed';
+  }
+}
+
 function createShadowEventSink({ env = process.env, createPool = createShadowPool,
   warn = row => console.warn('[DECISION_SHADOW_PERSISTENCE]', JSON.stringify(row)) } = {}) {
   const enabled = env.DECISION_SHADOW_ENABLED === 'true' && env.DECISION_SHADOW_PERSIST_ENABLED !== 'false';
@@ -56,7 +73,7 @@ function createShadowEventSink({ env = process.env, createPool = createShadowPoo
         }
         await insertShadowEvent(pool, row);
         counts.persisted += 1;
-      }).catch(() => { counts.failed += 1; warning('write_failed'); });
+      }).catch(error => { counts.failed += 1; warning(persistenceFailureReason(error)); });
       pending.add(task);
       task.then(() => pending.delete(task));
     },
@@ -70,4 +87,4 @@ function createShadowEventSink({ env = process.env, createPool = createShadowPoo
 let defaultSink;
 function getDefaultShadowEventSink() { return defaultSink ||= createShadowEventSink(); }
 
-module.exports = { createShadowEventSink, createShadowPool, getDefaultShadowEventSink };
+module.exports = { createShadowEventSink, createShadowPool, getDefaultShadowEventSink, persistenceFailureReason };
