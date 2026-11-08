@@ -123,7 +123,7 @@ function classifySegmentIntent(segment, segmentIndex, input = {}) {
   if (!text) return null;
   if (isNegationOrConstraintSegment(text)) return null;
 
-  if (isSessionInspectionQuestion(text)) {
+  // A business-status inspection is a read, not a session-policy change or\n  // an instruction to execute. "Read-only" is a constraint here.\n  if (/\\b(?:read[ -]?only\\s+)?(?:operational|business|mission)\\s+status\\s+report\\b/i.test(text) ||\n      /\\b(?:identify|summarize|distinguish|list)\\s+(?:the\\s+)?(?:current\\s+)?(?:mission\\s+state|active\\s+execution\\s+blockers|supporting\\s+evidence|active\\s+business\\s+missions)\\b/i.test(text)) {\n    return buildDetectedIntent(INTENT_TYPES.BUSINESS_REASONING, {\n      confidence: 0.95, segment: text, segmentIndex, sourceText: text,\n    });\n  }\n\n  if (isSessionInspectionQuestion(text)) {
     return buildDetectedIntent(INTENT_TYPES.INSPECTION, {
       confidence: 0.95,
       segment: text,
