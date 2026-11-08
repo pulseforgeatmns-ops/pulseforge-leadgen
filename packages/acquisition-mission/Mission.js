@@ -1,5 +1,7 @@
 'use strict';
 
+const { mergeAuthorizationConstraints } = require('./AuthorizationConstraints');
+
 /**
  * SPEC-118 — Acquisition Mission object.
  * SPEC-130 — Mission Planning Engine seeds the canonical Mission Plan.
@@ -144,6 +146,11 @@ function createMission(input = {}) {
     createdBy: asText(input.createdBy || input.created_by) || SPECIALISTS.MAX,
     orchestrationMissionId: asText(input.orchestrationMissionId) || null,
     constraints: Array.isArray(input.constraints) ? input.constraints.map(asText).filter(Boolean) : [],
+    // P0 — durable operator restrictions; enforced by the router and TME.
+    // Supplied explicitly by the operator-facing surface (Max handoff, REST
+    // create). Never inferred here from objective text: governed automation
+    // reuses approved objectives whose wording must not become prohibitions.
+    authorizationConstraints: mergeAuthorizationConstraints(input.authorizationConstraints || null),
     blockers: [],
     progressPercent: 8,
     missionPlanDraft,

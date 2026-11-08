@@ -273,6 +273,51 @@ async function maybeChainPlanningAfterClarification(input, state = {}) {
   return { action, executionResult, snapshot, executionRequest };
 }
 
+/**
+ * P0 — the prepared-package revision last shown to this session for a mission.
+ * Recorded by WorkspaceEngine after each turn (recordPresentedExecutionDecision).
+ */
+function presentedExecutionRevision(session, missionId) {
+  const presented = session && session.context && session.context.presentedExecutionDecision;
+  if (!presented || presented.missionId !== missionId) return null;
+  return presented.revision || null;
+}
+
+function presentedExecutionContentDigest(session, missionId) {
+  const presented = session && session.context && session.context.presentedExecutionDecision;
+  if (!presented || presented.missionId !== missionId) return null;
+  return presented.contentDigest || null;
+}
+
+/**
+ * Record which execution-approval package (if any) a turn displayed for the
+ * session's bound mission. Only a mission turn that rendered the pending
+ * execution decision counts as "shown"; anything else clears the record.
+ */
+function recordPresentedExecutionDecision(session, result) {
+  if (!session || !session.context || typeof session.context !== 'object') return;
+  const boundMissionId = session.context.acquisitionMissionId || session.context.missionId || null;
+  const mission = result && result.mission;
+  const metadata = (result && result.structured && result.structured.metadata) || {};
+  const missionTurn = metadata.acquisitionMission === true || metadata.pendingDecisionTurnOwnership === true;
+  const pending = mission && mission.pendingOperatorDecision;
+  // "Shown" means the turn rendered the package itself, not just the prompt.
+  const renderedPackage = /(?:^|\n)\s*(?:## )?Execution Ready\b/.test(String((result && result.prose) || ''));
+  if (
+    missionTurn && renderedPackage &&
+    mission && boundMissionId && mission.id === boundMissionId &&
+    pending && pending.kind === 'execution_approval' && pending.preparedArtifactRevision
+  ) {
+    session.context.presentedExecutionDecision = {
+      missionId: mission.id,
+      revision: pending.preparedArtifactRevision,
+      contentDigest: pending.preparedContentDigest || null,
+    };
+    return;
+  }
+  if (missionTurn || !boundMissionId) session.context.presentedExecutionDecision = null;
+}
+
 async function submitChatExecutionRequest(input, {
   intent,
   mission,
@@ -282,6 +327,10 @@ async function submitChatExecutionRequest(input, {
   audit,
 }) {
   const executionPolicy = resolveExecutionPolicy(input);
+  // P0 — an execution approval binds to the package revision this session displayed.
+  const presented = intent === EXECUTION_INTENTS.APPROVE_EXECUTION
+    ? presentedExecutionRevision(input.session, mission.id)
+    : null;
   const request = createExecutionRequestFromChat({
     intent,
     missionId: mission.id,
@@ -293,6 +342,12 @@ async function submitChatExecutionRequest(input, {
     runtimeOwner: resolveMissionRuntimeOwner(mission),
     question,
     permissions: { canExecute: true },
+    ...(intent === EXECUTION_INTENTS.APPROVE_EXECUTION
+      ? { payload: {
+        expectedPreparedArtifactRevision: presented,
+        expectedPreparedContentDigest: presentedExecutionContentDigest(input.session, mission.id),
+      } }
+      : {}),
   });
   return routeExecutionRequest(request, {
     engine,
@@ -391,6 +446,62 @@ function readyExecutionApprovalPrompt(review) {
   return 'Authorize external execution of this prepared outreach?';
 }
 
+const EXECUTION_REVIEW_REFUSALS = new Set([
+  'tme_execution_approval_unreviewed',
+  'tme_execution_approval_stale',
+]);
+
+/** Shared "## Execution Ready" package block (same shape as the SPEC-211 clarify). */
+function formatExecutionPackageBlock(review) {
+  return [
+    '## Execution Ready',
+    '',
+    '**Targets**',
+    summarizeReadyExecutionTargets(review),
+    '',
+    '**Channel**',
+    '• Email',
+    '',
+    '**Message**',
+    summarizeReadyExecutionMessage(review),
+    '',
+    '**Outbound Plan**',
+    summarizeReadyExecutionQueue(review),
+    '',
+    '**Safety / Delivery**',
+    summarizeReadyExecutionSafety(review),
+  ].join('\n');
+}
+
+function buildExecutionReviewRefusal({ err, mission, snapshot }) {
+  const current = (snapshot && snapshot.mission) || mission || {};
+  const review = ensureReadyExecutionReview(snapshot, current);
+  const prose = [
+    `Not executed: ${err.message} Nothing was approved or sent.`,
+    review ? formatExecutionPackageBlock(review) : null,
+    readyExecutionApprovalPrompt(review),
+  ].filter(Boolean).join('\n\n');
+  const structured = buildStructuredResponse({
+    answer: prose,
+    reasoning: [],
+    supportingEvidence: [],
+    contradictingEvidence: [],
+    confidence: 1,
+    nextInvestigations: [],
+    recommendedActions: [],
+    confidenceContributors: ['p0_execution_approval_binding'],
+    timelineReferences: [],
+    relatedEntities: [{ id: current.id, type: 'acquisition_mission', name: current.objective || current.id }],
+    metadata: { acquisitionMission: true, strictOutputShape: true },
+  });
+  Object.assign(structured.metadata, {
+    executionState: 'blocked',
+    executionVerified: false,
+    blocker: err.code,
+  });
+  return { structured, prose, executionReviewRefusal: err.code };
+}
+
 function buildReadyExecutionPresentation({ mission, snapshot }) {
   const review = ensureReadyExecutionReview(snapshot, mission);
   if (!review) {
@@ -465,11 +576,18 @@ function buildExecutionMissionResponse({
 
   if (executionResult && executionResult.rolledBack) {
     const err = executionResult.error || {};
+    // P0 — an execution approval refused for review/currency re-shows the
+    // current package and says plainly that nothing was approved or sent.
+    if (action === 'execution_approved' && EXECUTION_REVIEW_REFUSALS.has(err.code)) {
+      return buildExecutionReviewRefusal({ err, mission, snapshot });
+    }
     const stageName = action === 'plan_approved'
       ? 'Mission plan'
       : action === 'prioritization_approved'
         ? 'Prioritization'
-        : 'Discovery';
+        : action === 'execution_approved'
+          ? 'Execution approval'
+          : 'Discovery';
     const providerDiagnostics =
       (err.details && Array.isArray(err.details.providerExecution) && err.details.providerExecution.length)
         ? formatProviderExecutionProse(err.details.providerExecution)
@@ -496,7 +614,9 @@ function buildExecutionMissionResponse({
         ? 'Approve mission plan?'
         : action === 'prioritization_approved'
           ? 'Approve prioritization?'
-          : 'Approve discovery?',
+          : action === 'execution_approved'
+            ? 'Authorize external execution of prepared outreach?'
+            : 'Approve discovery?',
       evidenceStatus,
       sources: ['acquisition_mission', 'tme'],
       includeReasoningMarker: false,
@@ -1407,19 +1527,28 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
 
   let executionResult = null;
   let executionRequest = null;
+  let execution = null;
   const intent = intentFromAction(action);
 
   if (intent) {
-    const routed = await submitChatExecutionRequest(input, {
-      intent,
-      mission,
-      tenantId,
-      engine,
-      question,
-      audit,
-    });
+    let routed;
+    try {
+      routed = await submitChatExecutionRequest(input, {
+        intent,
+        mission,
+        tenantId,
+        engine,
+        question,
+        audit,
+      });
+    } catch (err) {
+      if (amo.isSyntheticEvidenceError(err)) return buildSyntheticBlockedTurn({ mission, action, intent });
+      if (!amo.isAuthorizationConstraintError(err)) throw err;
+      return buildConstraintBlockedTurn({ err, mission, action, intent });
+    }
     executionRequest = routed.request;
     executionResult = routed.executionResult;
+    execution = routed.execution || null;
     action = routed.action || action;
     snapshot = routed.snapshot || engine.inspect(mission.id, { tenantId });
   }
@@ -1437,18 +1566,29 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
       executionRequest,
     });
     action = chained.action;
-    executionResult = chained.executionResult;
+    const chainedResult = chained.executionResult;
+    if (chainedResult !== executionResult) {
+      execution = chained.execution || (chained.executionRequest
+        ? amo.classifyExecutionEvidence({
+          request: chained.executionRequest,
+          executionResult: chainedResult,
+          specialist: amo.specialistForIntent(chained.executionRequest.intent),
+          tenantId,
+        })
+        : null);
+    }
+    executionResult = chainedResult;
     snapshot = chained.snapshot || snapshot;
     executionRequest = chained.executionRequest || executionRequest;
   }
 
-  const response = buildExecutionMissionResponse({
+  const response = applySyntheticNotice(applyExecutionTruth(buildExecutionMissionResponse({
     mission: snapshot.mission || mission,
     snapshot,
     action,
     question,
     executionResult,
-  });
+  }), execution), snapshot.mission || mission, execution);
 
   if (input.session && input.session.context && typeof input.session.context === 'object') {
     input.session.context.missionId = mission.id;
@@ -1469,11 +1609,173 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     action,
     executionResult,
     executionRequest,
+    execution,
     audit,
   };
 }
 
+/**
+ * P0 — a durable mission restriction refused the request before dispatch.
+ */
+function buildConstraintBlockedTurn({ err, mission, action, intent }) {
+  const constraint = err.code === amo.AUTHORIZATION_CONSTRAINT_BLOCKED ? err : err.cause;
+  const actionClass = (constraint && constraint.actionClass) || amo.intentActionClass(intent);
+  const constraints = (constraint && constraint.authorizationConstraints) || mission.authorizationConstraints || null;
+  const answer = [
+    `Not executed: this mission's authorization forbids ${String(actionClass).replace(/_/g, ' ')}` +
+      (constraints && constraints.reviewOnly ? ' (review-only mission).' : '.'),
+    'No specialist was dispatched and no external action was taken.',
+    'The restriction was set by the operator and can only be lifted by an explicit operator decision.',
+  ].join(' ');
+  const structured = buildStructuredResponse({
+    answer,
+    reasoning: [`Mission ${mission.id} prohibits: ${((constraints && constraints.prohibited) || []).join(', ') || actionClass}.`],
+    relatedEntities: [{ id: mission.id, type: 'acquisition_mission', name: mission.title || mission.id }],
+  });
+  // Assigned after construction: buildStructuredResponse whitelists metadata keys.
+  Object.assign(structured.metadata, {
+    acquisitionMission: true,
+    acquisitionMissionExecution: true,
+    missionExecutionAction: action,
+    executionState: 'blocked',
+    executionVerified: false,
+    blocker: amo.AUTHORIZATION_CONSTRAINT_BLOCKED,
+    actionClass,
+    authorizationConstraints: constraints,
+  });
+  return {
+    reason: 'acquisition_mission_authorization_constraint_blocked',
+    structured,
+    prose: answer,
+    mission,
+    action,
+    executionResult: null,
+    executionRequest: null,
+    execution: {
+      state: 'blocked',
+      verified: false,
+      reason: 'authorization_constraint',
+      evidence: { actionClass, prohibited: (constraints && constraints.prohibited) || [] },
+      correlation: { missionId: mission.id, intent, specialist: amo.specialistForIntent(intent) },
+    },
+  };
+}
+
+/**
+ * P0 — every later turn on a synthetic-evidence mission says so, so reports
+ * built from it can never pass for live results.
+ */
+function applySyntheticNotice(response, mission, execution) {
+  if (!response || !amo.missionHasSyntheticEvidence(mission)) return response;
+  const structured = response.structured || {};
+  structured.metadata = { ...(structured.metadata || {}), syntheticEvidence: mission.syntheticEvidence };
+  response.structured = structured;
+  if (execution && execution.state === 'synthetic_result') return response; // already stated
+  const notice = 'Note: this mission\'s discovery data is synthetic (fixture), not live results; it cannot be used for outreach.';
+  response.prose = [notice, response.prose].filter(Boolean).join('\n\n');
+  structured.answer = [notice, structured.answer].filter(Boolean).join('\n\n');
+  return response;
+}
+
+/**
+ * P0 — synthetic (fixture) evidence refused an outreach request before dispatch.
+ */
+function buildSyntheticBlockedTurn({ mission, action, intent }) {
+  const answer = [
+    'Not executed: this mission\'s discovery data is synthetic (fixture), not live provider results.',
+    'Synthetic data cannot authorize or perform outreach, enter the CRM, or feed learning.',
+    'No specialist was dispatched and no external action was taken. Start a new mission with live discovery.',
+  ].join(' ');
+  const structured = buildStructuredResponse({
+    answer,
+    reasoning: [`Mission ${mission.id} carries synthetic evidence.`],
+    relatedEntities: [{ id: mission.id, type: 'acquisition_mission', name: mission.title || mission.id }],
+  });
+  Object.assign(structured.metadata, {
+    acquisitionMission: true,
+    acquisitionMissionExecution: true,
+    missionExecutionAction: action,
+    executionState: 'blocked',
+    executionVerified: false,
+    blocker: amo.SYNTHETIC_EVIDENCE_BLOCKED,
+    syntheticEvidence: mission.syntheticEvidence || null,
+  });
+  return {
+    reason: 'acquisition_mission_synthetic_evidence_blocked',
+    structured,
+    prose: answer,
+    mission,
+    action,
+    executionResult: null,
+    executionRequest: null,
+    execution: {
+      state: 'blocked',
+      verified: false,
+      reason: 'synthetic_evidence',
+      evidence: { provenance: 'synthetic_fixture' },
+      correlation: { missionId: mission.id, intent, specialist: amo.specialistForIntent(intent) },
+    },
+  };
+}
+
+/**
+ * P0 — bind the operator-facing response to router execution evidence.
+ * Records the classified state on the structured metadata and, when a work
+ * specialist was dispatched without verified completion, says so plainly
+ * instead of letting downstream copy imply the work finished.
+ * @param {{ structured: object, prose: string }} response
+ * @param {object|null} execution
+ */
+function applyExecutionTruth(response, execution) {
+  if (!response || !execution) return response;
+  // A review-gate refusal is blocked (nothing ran), not a specialist failure.
+  if (response.executionReviewRefusal) return response;
+  const structured = response.structured || {};
+  structured.metadata = {
+    ...(structured.metadata || {}),
+    executionState: execution.state,
+    executionVerified: execution.verified,
+    executionEvidence: execution.evidence || null,
+    executionCorrelation: execution.correlation || null,
+  };
+  if (!amo.specialistCompletionUnverified(execution)) {
+    response.structured = structured;
+    return response;
+  }
+  if (execution.state === amo.EXECUTION_EVIDENCE_STATES.FAILED && execution.reason === 'transaction_rolled_back') {
+    // Rollback presentation already states the stage could not execute.
+    response.structured = structured;
+    return response;
+  }
+  const specialist = execution.correlation && execution.correlation.specialist;
+  const name = specialist ? specialist.charAt(0).toUpperCase() + specialist.slice(1) : 'The specialist';
+  const STATES = amo.EXECUTION_EVIDENCE_STATES;
+  const counts = execution.evidence && execution.evidence.counts;
+  let notice;
+  if (execution.state === STATES.BLOCKED && execution.reason === 'authorization_constraint') {
+    notice = `${name} did not run: this mission's authorization forbids ${String(execution.evidence && execution.evidence.actionClass || 'this action').replace(/_/g, ' ')}. No external action was taken.`;
+  } else if (execution.state === STATES.BLOCKED) {
+    notice = `${name} did not complete this stage: it is blocked. No external action was taken.`;
+  } else if (execution.state === STATES.SYNTHETIC_RESULT) {
+    notice = `${name} returned synthetic fixture data, not live provider results. Nothing here is verified and none of it may be used for outreach.`;
+  } else if (execution.state === STATES.PARTIALLY_COMPLETED && counts) {
+    notice = `${name} partially completed: the provider accepted ${counts.accepted} of ${counts.total - counts.blocked}; ${counts.failed} failed and ${counts.pending + counts.unconfirmed} are unconfirmed.`;
+  } else if (execution.state === STATES.FAILED) {
+    notice = `${name} did not complete this stage: the provider rejected every attempt.`;
+  } else {
+    notice = `${name} was dispatched, but completion is not verified — the provider evidence this action requires was not returned. Treat this as outcome unknown.`;
+  }
+  const prose = [notice, response.prose].filter(Boolean).join('\n\n');
+  structured.answer = [notice, structured.answer].filter(Boolean).join('\n\n');
+  response.structured = structured;
+  response.prose = prose;
+  return response;
+}
+
 module.exports = {
+  presentedExecutionRevision,
+  recordPresentedExecutionDecision,
+  applyExecutionTruth,
   detectExecutionAction,
   buildExecutionMissionResponse,
   maybeHandleAcquisitionMissionExecution,

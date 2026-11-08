@@ -316,7 +316,48 @@ function toCommandDeckCard(mission) {
   };
 }
 
+/**
+ * P0 — read the current mission authorization and the hash an amendment must bind to.
+ */
+async function previewMissionAuthorization(input = {}, opts = {}) {
+  const runtime = runtimeFromOpts(opts);
+  const tenantId = String(input.tenantId || '');
+  if (!tenantId) throw Object.assign(new Error('No active client selected.'), { code: 'no_tenant' });
+  await runtime.hydrate(tenantId, opts);
+  return amo.previewAuthorization({ engine: getEngine(opts), missionId: String(input.missionId || ''), tenantId });
+}
+
+/**
+ * P0 — apply an operator-approved authorization amendment as one durable TME commit.
+ * Transport-level authorization (role, fresh confirmation) is the caller's duty.
+ */
+async function amendMissionAuthorization(input = {}, opts = {}) {
+  const runtime = runtimeFromOpts(opts);
+  const tenantId = String(input.tenantId || '');
+  if (!tenantId) throw Object.assign(new Error('No active client selected.'), { code: 'no_tenant' });
+  await runtime.hydrate(tenantId, opts);
+  const engine = getEngine(opts);
+  const { bindStagePersistDurable } = require('./acquisitionMissionPersistence');
+  return amo.applyAuthorizationAmendment({
+    engine,
+    missionId: String(input.missionId || ''),
+    tenantId,
+    change: input.change,
+    expectedConstraintsHash: input.expectedConstraintsHash,
+    amendmentId: input.amendmentId,
+    approver: input.approver,
+    pool: opts.pool,
+    persistDurable: bindStagePersistDurable(
+      { pool: opts.pool, persist: opts.persist, persistStage: opts.persistStage },
+      engine,
+      tenantId
+    ),
+  });
+}
+
 module.exports = {
+  previewMissionAuthorization,
+  amendMissionAuthorization,
   getEngine,
   resetEngine,
   resetAmoRuntime,

@@ -44,6 +44,8 @@ const {
   isApprovalMessage,
 } = require('./MessageTypeClassifier');
 const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
+const { stripNegatedDirectives } = require('./NegatedDirective');
+const { hasExecutionCommandDirective } = require('./SessionDirectiveRegistry');
 
 const MISSION_CREATION_RES = [
   /\bcreate (?:a )?(?:new )?mission\b/i,
@@ -209,10 +211,13 @@ function extractSegmentCandidates(segment, segmentIndex, input = {}) {
     return candidates;
   }
 
+  // P0 — "Do not create a mission" is a constraint, not a creation request.
+  const affirmative = stripNegatedDirectives(q);
   if (
-    isMissionCreationMessage(q) ||
-    matchesAny(q, MISSION_CREATION_RES) ||
-    detectAcquisitionObjective(q)
+    affirmative &&
+    (isMissionCreationMessage(affirmative) ||
+      matchesAny(affirmative, MISSION_CREATION_RES) ||
+      detectAcquisitionObjective(affirmative))
   ) {
     candidates.push({
       objective: PRIMARY_OBJECTIVES.MISSION_CREATION,
@@ -235,7 +240,10 @@ function extractSegmentCandidates(segment, segmentIndex, input = {}) {
     (isMissionExecutionMessage(q, input) ||
       matchesAny(q, MISSION_EXECUTION_RES) ||
       (isMissionExecutionCommand(q) && hasActiveMission) ||
-      (isApprovalMessage(q) && hasActiveMission)) &&
+      (isApprovalMessage(q) && hasActiveMission) ||
+      // P0 — "go ahead and launch the campaign" binds to the active mission;
+      // the mission runtime decides against its pending decision and gates.
+      (hasActiveMission && hasExecutionCommandDirective(affirmative))) &&
     !(isSessionConfigurationMessage(q) && !hasActiveMission)
   ) {
     candidates.push({

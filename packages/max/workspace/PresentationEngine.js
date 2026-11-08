@@ -9,6 +9,69 @@
 const DEFAULT_MODEL = process.env.MAX_WORKSPACE_MODEL || process.env.MAX_CHAT_MODEL || 'claude-sonnet-4-6';
 const { PRESENTATION_IDENTITY } = require('../identity/MaxIdentity');
 
+const PRESENTATION_TIMEOUT_MS = 30000;
+
+/** Operator-actionable guidance per sanitized model error code. */
+const MODEL_ERROR_ACTIONS = Object.freeze({
+  provider_auth: 'Check ANTHROPIC_API_KEY for this environment.',
+  rate_limited: 'Provider rate limit reached; retry shortly.',
+  provider_overloaded: 'Provider overloaded or unavailable; retry shortly.',
+  timeout: 'Model request timed out; retry.',
+  provider_unreachable: 'Could not reach the model provider; check network egress.',
+  spend_blocked: 'Blocked by the API spend policy; review API usage limits.',
+  billing_unavailable: 'Model provider billing is unavailable. Check the Anthropic account billing and credits for this key, then retry.',
+  invalid_request: 'Model request rejected; check MAX_WORKSPACE_MODEL.',
+  provider_error: 'Model request failed; check server logs.',
+});
+
+const BILLING_REFUSAL_RE = /\bcredit balance\b|\binsufficient (?:credit|credits|funds|balance)\b|\bplans?\s*&\s*billing\b|\bbilling\b.{0,40}\b(?:required|disabled|unavailable|issue)\b/i;
+
+/** Inspect provider error text for a billing refusal. The text itself never leaves this function. */
+function isBillingRefusal(e) {
+  if (e.status === 402) return true;
+  const body = e.error && typeof e.error === 'object' ? e.error : null;
+  const inner = body && body.error && typeof body.error === 'object' ? body.error : body;
+  const texts = [inner && inner.message, e.message].filter((t) => typeof t === 'string');
+  return texts.some((t) => BILLING_REFUSAL_RE.test(t));
+}
+
+/**
+ * Map a provider/SDK/spend-guard error to a stable, non-sensitive code.
+ * Never returns provider message text.
+ * @param {unknown} err
+ * @returns {string}
+ */
+function classifyModelError(err) {
+  const e = err || {};
+  const status = Number.isInteger(e.status) ? e.status : null;
+  const name = String(e.name || '');
+  const code = String(e.code || '');
+  if (name === 'ApiSpendError' || /^api_/.test(code)) return 'spend_blocked';
+  if (status === 401 || status === 403 || name === 'AuthenticationError' || name === 'PermissionDeniedError') {
+    return 'provider_auth';
+  }
+  // Billing / credit-balance refusals arrive as HTTP 400 invalid_request_error
+  // (or 402). Matched on the provider text, which is never returned or logged.
+  if ((status === 400 || status === 402 || name === 'BadRequestError') && isBillingRefusal(e)) {
+    return 'billing_unavailable';
+  }
+  if (status === 429 || name === 'RateLimitError') return 'rate_limited';
+  if (status === 529 || status === 503 || status === 502 || name === 'InternalServerError') {
+    return 'provider_overloaded';
+  }
+  if (name === 'APIConnectionTimeoutError' || /timed?\s*out|ETIMEDOUT/i.test(String(e.message || ''))) {
+    return 'timeout';
+  }
+  if (name === 'APIConnectionError' || /ECONNREFUSED|ENOTFOUND|ECONNRESET/.test(code)) {
+    return 'provider_unreachable';
+  }
+  if (status === 400 || status === 404 || name === 'BadRequestError' || name === 'NotFoundError') {
+    return 'invalid_request';
+  }
+  if (status != null && status >= 500) return 'provider_overloaded';
+  return 'provider_error';
+}
+
 const MISSION_PRESENTATION_SYSTEM = `${PRESENTATION_IDENTITY}
 You receive a verified Structured Response Object with mission-oriented communication (SPEC-121).
 
@@ -198,27 +261,51 @@ class PresentationEngine {
       };
     }
 
+    // P0 response integrity: the answer is always the verified structured
+    // object; the model only phrases it. Record whether a model completion
+    // actually happened so a deterministic fallback is never mistaken for one,
+    // and never surface raw provider error text to the client.
+    let modelCompletion;
     if (!this._disableLlm && this._anthropic && process.env.ANTHROPIC_API_KEY) {
       try {
         prose = await this._presentWithClaude(structured);
         presentation = 'claude';
+        modelCompletion = { attempted: true, ok: true };
       } catch (err) {
+        const errorCode = classifyModelError(err);
         prose = formatDeterministicProse(structured);
         presentation = 'fallback_error';
-        metadata.presentationError =
-          err && err.message ? String(err.message) : 'llm_failed';
+        modelCompletion = {
+          attempted: true,
+          ok: false,
+          errorCode,
+          action: MODEL_ERROR_ACTIONS[errorCode] || MODEL_ERROR_ACTIONS.provider_error,
+        };
+        console.warn('[max-presentation] model completion failed; deterministic prose used', {
+          errorCode,
+          httpStatus: err && Number.isInteger(err.status) ? err.status : null,
+        });
       }
     } else {
       prose = formatDeterministicProse(structured);
+      modelCompletion = {
+        attempted: false,
+        ok: false,
+        errorCode: this._disableLlm ? 'model_disabled' : 'model_not_configured',
+      };
+    }
+
+    const outMetadata = { ...metadata, presentation, modelCompletion };
+    if (modelCompletion.attempted && !modelCompletion.ok) {
+      outMetadata.presentationError = modelCompletion.errorCode;
+    } else {
+      delete outMetadata.presentationError;
     }
 
     return {
       prose,
       structured,
-      metadata: {
-        ...metadata,
-        presentation,
-      },
+      metadata: outMetadata,
       presentation,
     };
   }
@@ -229,19 +316,23 @@ class PresentationEngine {
       metadata.missionCommunication === true
         ? MISSION_PRESENTATION_SYSTEM
         : DEFAULT_PRESENTATION_SYSTEM;
-    const message = await this._anthropic.messages.create({
-      model: this._model,
-      max_tokens: 900,
-      system,
-      messages: [
-        {
-          role: 'user',
-          content: `Translate this verified Structured Response Object into natural language for an operator. Preserve every fact; do not add any.\n\n${JSON.stringify(structured, null, 2)}`,
-        },
-      ],
-    });
+    const message = await this._anthropic.messages.create(
+      {
+        model: this._model,
+        max_tokens: 900,
+        system,
+        messages: [
+          {
+            role: 'user',
+            content: `Translate this verified Structured Response Object into natural language for an operator. Preserve every fact; do not add any.\n\n${JSON.stringify(structured, null, 2)}`,
+          },
+        ],
+      },
+      // Bound the operator's wait; the SDK default (10 min) outlives the HTTP request.
+      { timeout: PRESENTATION_TIMEOUT_MS }
+    );
 
-    const prose = message.content
+    const prose = (Array.isArray(message && message.content) ? message.content : [])
       .filter((part) => part.type === 'text')
       .map((part) => part.text)
       .join('\n')
@@ -302,4 +393,7 @@ function formatDeterministicProse(structured) {
 module.exports = {
   PresentationEngine,
   formatDeterministicProse,
+  classifyModelError,
+  MODEL_ERROR_ACTIONS,
+  PRESENTATION_TIMEOUT_MS,
 };

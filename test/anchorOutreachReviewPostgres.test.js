@@ -49,6 +49,9 @@ test('review holds exclude queue admission in actual PostgreSQL queries without 
       INSERT INTO users(id,client_id,name,email,role,active) VALUES(7,10,'Offline AO','ao@example.test','ao',true);
     `);
     await db.exec(fs.readFileSync(path.join(__dirname,'../migrations/2026-09-22-ao-prospect-routing.sql'),'utf8'));
+    // AO CRM columns read by the shared AO working-eligibility predicate (#1060/#1064).
+    await db.exec(fs.readFileSync(path.join(__dirname,'../migrations/2026-09-24-ao-spec-005-command-center.sql'),'utf8'));
+    await db.exec(fs.readFileSync(path.join(__dirname,'../migrations/2026-09-28-ao-crm-001.sql'),'utf8'));
     await db.query('INSERT INTO companies(id,client_id,name,location) VALUES($1,10,$2,$3)', [company,'Offline Company','Manchester, NH']);
     const heldCompany = '00000000-0000-0000-0000-000000000011';
     const unknownCompany = '00000000-0000-0000-0000-000000000012';

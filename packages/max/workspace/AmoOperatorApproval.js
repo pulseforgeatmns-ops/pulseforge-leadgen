@@ -141,7 +141,18 @@ const {
   buildExecutionReview,
   buildPendingExecutionDecision,
   computePreparedArtifactRevision,
+  computePreparedContentDigest,
 } = require('../../acquisition-mission/ExecutionApproval');
+const { EXECUTION_SOURCES } = require('../../acquisition-mission/ExecutionRequest');
+
+/** P0 — sources whose execution approval must name the reviewed package revision. */
+const REVIEW_BOUND_SOURCES = new Set([
+  EXECUTION_SOURCES.CHAT,
+  EXECUTION_SOURCES.APPROVAL_BUTTON,
+  EXECUTION_SOURCES.COMMAND_DECK,
+  EXECUTION_SOURCES.VOICE,
+  EXECUTION_SOURCES.API,
+]);
 
 const DISCOVERY_APPROVAL_ACTION = 'discovery_approved';
 const DISCOVERY_INVESTIGATION_ACTION = 'discovery_investigation_continued';
@@ -631,6 +642,9 @@ function fixtureScoutDiscoveryResult() {
     },
   ];
   return {
+    // P0 — fixture data is never a live provider result; evidence
+    // classification reports it as synthetic_result, never completed.
+    provenance: 'synthetic_fixture',
     status: 'completed',
     confidence: 0.72,
     summary:
@@ -641,6 +655,7 @@ function fixtureScoutDiscoveryResult() {
       opportunities,
       qualifiedCount: 2,
       confidence: 0.72,
+      provenance: 'synthetic_fixture',
     },
   };
 }
@@ -2992,7 +3007,7 @@ async function advancePreparedOutreachRevision(input = {}) {
   }
 }
 
-function validateExecutionPreconditions({ mission, engine, tenantId }) {
+function validateExecutionPreconditions({ mission, engine, tenantId }, review = {}) {
   if (!mission) throw planningError('tme_mission_missing', 'Mission does not exist.');
   if (mission.planCancelled === true || /cancelled/i.test(String(mission.status || ''))) {
     throw planningError('tme_mission_inactive', 'Mission is not active.');
@@ -3003,6 +3018,28 @@ function validateExecutionPreconditions({ mission, engine, tenantId }) {
   }
   if (mission.stage && mission.stage !== STAGES.READY) {
     throw planningError('tme_wrong_stage', `Execution approval cannot execute while the mission is at ${mission.stage}.`);
+  }
+  // P0 — a "yes" binds to the exact prepared package the operator was shown.
+  // Chat approvals must carry the revision this session displayed; any surface
+  // that supplies one is held to it. A changed package needs a fresh review.
+  if (review.required || review.expectedRevision || review.expectedContentDigest) {
+    const currentRevision = computePreparedArtifactRevision(mission.id, snapshot.contributions || []);
+    const currentDigest = computePreparedContentDigest(mission.id, snapshot.contributions || []);
+    if (!review.expectedRevision || (review.required && !review.expectedContentDigest)) {
+      throw planningError(
+        'tme_execution_approval_unreviewed',
+        'The prepared outreach has not been shown in this conversation yet. Review it before authorizing.'
+      );
+    }
+    if (
+      review.expectedRevision !== currentRevision
+      || (review.expectedContentDigest && review.expectedContentDigest !== currentDigest)
+    ) {
+      throw planningError(
+        'tme_execution_approval_stale',
+        'The prepared outreach changed after it was shown. Review the current package before authorizing.'
+      );
+    }
   }
   const ctx = specialistContext(snapshot.contributions || [], { missionId: mission.id, ...snapshot });
   if (ctx.deliverabilityPaused) {
@@ -3101,7 +3138,23 @@ async function advanceExecutionAfterApproval(input = {}) {
     specialist: SPECIALISTS.OPERATOR,
     stage: 'execution_approval',
     operatorId,
-    validatePreconditions: (ctx) => validateExecutionPreconditions(ctx),
+    validatePreconditions: (ctx) => validateExecutionPreconditions(ctx, {
+      // Every human-facing surface must bind to the reviewed package. The
+      // governed daily path carries its own snapshot-hash binding instead.
+      required: Boolean(
+        executionRequest &&
+          REVIEW_BOUND_SOURCES.has(executionRequest.source) &&
+          !input.governedApproval
+      ),
+      expectedRevision:
+        (executionRequest && executionRequest.payload && executionRequest.payload.expectedPreparedArtifactRevision)
+        || input.expectedPreparedArtifactRevision
+        || null,
+      expectedContentDigest:
+        (executionRequest && executionRequest.payload && executionRequest.payload.expectedPreparedContentDigest)
+        || input.expectedPreparedContentDigest
+        || null,
+    }),
     execute: async ({ mission: current }) => ({
       question,
       missionId: current.id,

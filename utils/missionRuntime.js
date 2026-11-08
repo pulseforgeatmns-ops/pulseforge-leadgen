@@ -22,12 +22,57 @@ const {
 } = require('../packages/capabilities/discovery');
 
 let enginePromise = null;
+/** @type {{ durable: boolean, store: string, reason: string, at: string }|null} */
+let persistenceStatus = null;
+
+const MISSION_PERSISTENCE_UNAVAILABLE = 'MISSION_PERSISTENCE_UNAVAILABLE';
+
+/**
+ * P0 Max reliability — mission persistence never silently degrades.
+ *
+ * Ephemeral (in-memory) mission storage is only used when a caller asks for it
+ * explicitly (`inMemory: true`, isolated tests) or a developer opts in with
+ * MISSION_STORE_ALLOW_EPHEMERAL=1. Otherwise a missing pool or a failed
+ * PostgreSQL initialization rejects with MISSION_PERSISTENCE_UNAVAILABLE so no
+ * caller can report a mission as persisted when it is not.
+ *
+ * @param {object} [options]
+ */
+function ephemeralAllowed(options = {}) {
+  if (options.inMemory === true) return true;
+  if (options.allowEphemeral === true) return true;
+  return String(process.env.MISSION_STORE_ALLOW_EPHEMERAL || '') === '1';
+}
+
+function persistenceUnavailable(reason, cause) {
+  const err = new Error(`Mission persistence unavailable: ${reason}`);
+  err.code = MISSION_PERSISTENCE_UNAVAILABLE;
+  err.reason = reason;
+  if (cause) err.cause = cause;
+  return err;
+}
+
+function recordPersistence(engine, status) {
+  persistenceStatus = { ...status, at: new Date().toISOString() };
+  if (engine && typeof engine === 'object') {
+    engine.persistence = { ...persistenceStatus };
+  }
+  return engine;
+}
+
+/**
+ * @returns {{ durable: boolean, store: string, reason: string, at: string }|null}
+ */
+function getMissionPersistenceStatus() {
+  return persistenceStatus ? { ...persistenceStatus } : null;
+}
 
 /**
  * @param {object} [options]
  * @param {boolean} [options.reset]
  * @param {{ query: Function }} [options.pool]
  * @param {boolean} [options.inMemory]
+ * @param {boolean} [options.allowEphemeral]
  * @param {boolean} [options.useFixture]
  */
 function getMissionEngine(options = {}) {
@@ -35,7 +80,13 @@ function getMissionEngine(options = {}) {
     enginePromise = null;
   }
   if (!enginePromise) {
-    enginePromise = boot(options);
+    const booting = boot(options);
+    enginePromise = booting;
+    // A failed boot must not be cached: the next caller retries, so a
+    // transient database outage recovers without a process restart.
+    booting.catch(() => {
+      if (enginePromise === booting) enginePromise = null;
+    });
   }
   return enginePromise;
 }
@@ -77,32 +128,49 @@ async function boot(options = {}) {
   });
 
   if (options.inMemory === true) {
-    return createMissionEngine({
-      registry,
-      store: createInMemoryMissionStore(),
-      planner: undefined,
-    });
+    return recordPersistence(
+      createMissionEngine({
+        registry,
+        store: createInMemoryMissionStore(),
+        planner: undefined,
+      }),
+      { durable: false, store: 'memory', reason: 'explicit_in_memory' }
+    );
   }
 
+  let failure = null;
   if (pool) {
     try {
       await ensureMissionSchema(pool);
-      return createMissionEngine({
-        registry,
-        store: createPostgresMissionStore(pool),
-      });
-    } catch (err) {
-      console.error(
-        '[missionRuntime] Postgres store failed — using in-memory:',
-        err.message
+      return recordPersistence(
+        createMissionEngine({
+          registry,
+          store: createPostgresMissionStore(pool),
+        }),
+        { durable: true, store: 'postgres', reason: 'postgres_ready' }
       );
+    } catch (err) {
+      failure = persistenceUnavailable('postgres_initialization_failed', err);
     }
+  } else {
+    failure = persistenceUnavailable('no_database_pool');
   }
 
-  return createMissionEngine({
-    registry,
-    store: createInMemoryMissionStore(),
-  });
+  if (!ephemeralAllowed(options)) {
+    recordPersistence(null, { durable: false, store: 'none', reason: failure.reason });
+    console.error('[missionRuntime] mission persistence unavailable — failing closed:', failure.reason,
+      failure.cause && failure.cause.message ? failure.cause.message : '');
+    throw failure;
+  }
+
+  console.warn('[missionRuntime] EPHEMERAL mission store (explicit opt-in):', failure.reason);
+  return recordPersistence(
+    createMissionEngine({
+      registry,
+      store: createInMemoryMissionStore(),
+    }),
+    { durable: false, store: 'memory', reason: `ephemeral_opt_in:${failure.reason}` }
+  );
 }
 
 /**
@@ -148,7 +216,9 @@ function createCrmLookup(pool) {
 }
 
 module.exports = {
+  MISSION_PERSISTENCE_UNAVAILABLE,
   getMissionEngine,
+  getMissionPersistenceStatus,
   missionEnabled,
   routeIntent,
   activeMissionResolverEnabled,

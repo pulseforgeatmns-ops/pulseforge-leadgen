@@ -73,12 +73,17 @@ function executionApprovalMission(extra = {}) {
   };
 }
 
+const { liveScoutStub } = require('./amoTestRuntime');
+
 async function preparedRuntime() {
   const engine = amo.createAcquisitionMissionEngine();
   const created = engine.create({ tenantId: '10', objective: OBJECTIVE, targetSegment: 'Law Firms' });
   await advancePlanAfterApproval({ engine, mission: created, tenantId: '10', question: 'Approved.' });
+  // Discovery is scaffolded with an explicit live-Scout stub. The synthetic
+  // fixture fallback is now stamped and can never reach execution approval
+  // (P0 synthetic isolation); this suite is about prepared-outreach revision.
   await advanceDiscoveryAfterApproval({
-    engine, mission: created, tenantId: '10', question: 'Approved. Begin Discovery.', allowFixtureFallback: true,
+    engine, mission: created, tenantId: '10', question: 'Approved. Begin Discovery.', runScout: liveScoutStub,
   });
   await advancePrioritizationAfterApproval({
     engine, mission: engine.get(created.id, '10'), tenantId: '10', question: 'Approved prioritization.',

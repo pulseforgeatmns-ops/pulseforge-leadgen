@@ -534,6 +534,8 @@ function extractLearningCandidateRows(bundle = {}) {
   const mission = bundle.mission || {};
   const tenantId = mission.tenantId || mission.clientId;
   if (!tenantId || !mission.id) return [];
+  // P0 — synthetic (fixture) evidence never produces acquisition learning.
+  if (mission.syntheticEvidence) return [];
   const outcomes = Array.isArray(bundle.outcomes) ? bundle.outcomes : [];
   const contributions = Array.isArray(bundle.contributions) ? bundle.contributions : [];
   const hasOutcomes = outcomes.length > 0;

@@ -23,6 +23,44 @@ const {
   logPendingDecisionCaptureGuarded,
 } = require('./pendingDecisionCaptureGuard');
 const { isStructuredClarificationPending } = require('../../acquisition-mission/PendingDecisionResponseType');
+const { stripNegatedDirectives } = require('./NegatedDirective');
+
+/**
+ * P0 execution-intent routing — an approval that names a specific operational
+ * action only resolves a pending decision of the matching kind. "Go ahead and
+ * send the emails" must not approve a pending plan or discovery decision.
+ * Targets are read from the affirmative text (negated directives stripped).
+ */
+const ACTION_TARGETS = Object.freeze({
+  outbound: /\b(?:send(?:s|ing)?|e-?mails?|outreach|outbound|campaign|launch(?:es|ing)?)\b/i,
+  discovery: /\b(?:scout|discover(?:y|ies)?|find\s+(?:new\s+|more\s+)?(?:prospects|leads))\b/i,
+  investigation: /\binvestigat/i,
+  prioritization: /\bprioriti[sz]/i,
+  plan: /\bplan\b/i,
+});
+
+const KIND_TARGETS = Object.freeze({
+  // Plan approval is the internal gate in front of discovery and only advances
+  // to the discovery decision (no Scout run), so "approved, begin discovery"
+  // resolves it. Outbound never does.
+  [OPERATOR_DECISION_KINDS.PLAN_APPROVAL]: ['plan', 'discovery'],
+  [OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL]: ['discovery'],
+  [OPERATOR_DECISION_KINDS.DISCOVERY_INVESTIGATION]: ['discovery', 'investigation'],
+  [OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL]: ['prioritization'],
+  [OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL]: ['outbound'],
+});
+
+/**
+ * @returns {string[]|null} named targets when none of them matches the pending kind
+ */
+function mismatchedActionTargets(kind, q) {
+  const allowed = KIND_TARGETS[kind];
+  if (!allowed) return null;
+  const affirmative = stripNegatedDirectives(q);
+  const named = Object.keys(ACTION_TARGETS).filter((t) => ACTION_TARGETS[t].test(affirmative));
+  if (!named.length || named.some((t) => allowed.includes(t))) return null;
+  return named;
+}
 
 const RESOLUTION_OUTCOMES = Object.freeze({
   AFFIRM: 'affirm',
@@ -513,6 +551,15 @@ function resolvePendingOperatorDecision(question, mission, options = {}) {
 
   const classification = classifyByKind(pending.kind, q, pending);
   if (classification) {
+    if (classification.outcome === RESOLUTION_OUTCOMES.AFFIRM) {
+      const mismatch = mismatchedActionTargets(pending.kind, q);
+      if (mismatch) {
+        return {
+          ...buildUnresolvedResolution(mission, pending, RESOLUTION_OUTCOMES.AMBIGUOUS),
+          requestedActionMismatch: mismatch,
+        };
+      }
+    }
     return buildResolution(mission, pending, classification, question);
   }
 
@@ -549,6 +596,7 @@ function pendingDecisionRequestsExecution(resolution) {
 }
 
 module.exports = {
+  mismatchedActionTargets,
   RESOLUTION_OUTCOMES,
   PENDING_ALLOWED_ACTIONS,
   resolvePendingOperatorDecision,

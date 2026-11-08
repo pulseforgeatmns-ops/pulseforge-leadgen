@@ -590,7 +590,8 @@ async function runAutonomousProgression(input = {}) {
     missionId,
     tenantId,
     operatorId = AUTONOMOUS_OPERATOR_ID,
-    allowFixtureFallback = true,
+    // P0 — fixture (synthetic) Scout data only when a caller opts in explicitly.
+    allowFixtureFallback = false,
     maxSteps = 8,
     deps = {},
   } = input;

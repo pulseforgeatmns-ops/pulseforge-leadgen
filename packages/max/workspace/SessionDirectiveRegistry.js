@@ -642,6 +642,43 @@ function hasStructuredSessionField(signals) {
 }
 
 /**
+ * P0 execution-intent routing — imperative requests to do work now
+ * ("let's run it", "go ahead and launch the campaign"). They also imply
+ * executionPolicy=normal (applied by SessionStateManager), but they are
+ * operational requests, not session configuration, so they must reach the
+ * execution-intent resolver instead of the session-setting bypass.
+ * "Go ahead and execute without asking" is a policy grant and stays a setting.
+ */
+const EXECUTION_COMMAND_RE =
+  /\b(?:let'?s|let us|go ahead and|time to|ready to)\s+(?:execute(?!\s+without asking)|run|launch|begin|operate|proceed|approve|start|send)\b/i;
+const QUESTION_LEAD_RE =
+  /^\s*(?:should|shall|can|could|would|will|what|how|why|when|where|which|who|is|are|do|does|did|may|might)\b/i;
+
+/**
+ * @param {string} text — affirmative text (negated directives already stripped)
+ * @returns {boolean}
+ */
+function hasExecutionCommandDirective(text) {
+  return String(text || '')
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .some((s) => !QUESTION_LEAD_RE.test(s) && !/\?\s*$/.test(s) && EXECUTION_COMMAND_RE.test(s));
+}
+
+/**
+ * True when the message is an operational execution request rather than a
+ * session setting: it carries an execution command and no explicit session
+ * scope ("for the rest of this conversation…") or reset.
+ * @param {string} affirmativeText
+ * @param {object} [signals]
+ */
+function isOperationalExecutionCommand(affirmativeText, signals = extractDirectiveSignals(affirmativeText)) {
+  if (signals.reset || signals.persistent) return false;
+  return hasExecutionCommandDirective(affirmativeText);
+}
+
+/**
  * ADR-071 runtime guarantee helper — true when extraction would mutate state.
  * @param {string} text
  * @param {object} [signals]
@@ -669,4 +706,7 @@ module.exports = {
   hasStructuredSessionField,
   hasStandaloneFieldDirective,
   isInterpretableSessionConfiguration,
+  EXECUTION_COMMAND_RE,
+  hasExecutionCommandDirective,
+  isOperationalExecutionCommand,
 };
