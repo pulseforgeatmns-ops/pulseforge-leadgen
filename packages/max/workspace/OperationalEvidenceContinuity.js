@@ -22,7 +22,8 @@
  *
  *  2. Ownership — a turn is an operational ANALYSIS turn when, after negated
  *     clauses are removed, it carries no action command or decision response,
- *     it does not single out one mission, and either
+ *     it does not single out one mission (but see the mission-subject rule
+ *     below and docs/P0-MAX-QUESTION-DIRECTED-REASONING.md), and either
  *       (a) it explicitly refers to previously retrieved operational evidence
  *           and asks for analysis of it, or
  *       (b) the session already holds an evidence record for this tenant and
@@ -30,6 +31,17 @@
  *           portfolio (missions, outbound, gate, blockers, failures).
  *     (b) is stateful: without a recorded inspection the same words keep their
  *     normal routing, so this is not a global keyword bypass.
+ *
+ *     Mission subject: a question about a mission the frame resolves (id,
+ *     description, or the previous analytical turn's focus) is analysis when
+ *     the session holds evidence and no action/decision verb remains; a
+ *     generic "this mission" without that focus keeps mission ownership.
+ *
+ *  2b. Answer construction (question-directed) — OperationalQuestionFrame
+ *     builds { subject, subjectIds, facets, intent, responseScope } and the
+ *     answer covers exactly that: a mission answer from
+ *     OperationalMissionReasoning, or only the portfolio sections asked for
+ *     (the full five sections for an overview request).
  *
  *  3. Evidence resolution — a current record (same tenant, ≤ EVIDENCE_TTL) is
  *     reused and cited with its as-of time. A missing, stale, or other-tenant
@@ -54,7 +66,18 @@ const {
   tenantBlockers,
   countByCategory,
   refusalTurn,
+  loadMissionById,
 } = require('./OperationalInspection');
+const {
+  PORTFOLIO_FACETS,
+  buildAnalyticalFrame,
+  isInterrogative,
+  currentFocus,
+  setFocus,
+  clearFocus,
+  frameTrace,
+} = require('./OperationalQuestionFrame');
+const { composeMissionAnswer } = require('./OperationalMissionReasoning');
 
 const SPEC = 'P0-1089-OPERATIONAL-EVIDENCE-CONTINUITY';
 
@@ -102,21 +125,7 @@ function buildEvidenceRecord(snapshot, { tenantName = null, recordedAt = null } 
     recordedAt: recordedAt || new Date().toISOString(),
     staleAfterDays: snapshot.staleAfterDays,
     missionCounts: countByCategory(snapshot.missions),
-    missions: snapshot.missions.map((m) => ({
-      id: m.id,
-      system: m.system,
-      title: m.title || null,
-      objective: m.objective || null,
-      stage: m.stage || null,
-      status: m.status || null,
-      synthetic: Boolean(m.synthetic),
-      category: m.classification.category,
-      certainty: m.classification.certainty,
-      basis: m.classification.basis,
-      lastActivityAt: m.classification.lastActivityAt,
-      ageDays: m.classification.ageDays,
-      blockers: (m.blockers || []).map((b) => ({ kind: b.kind, label: b.label })),
-    })),
+    missions: snapshot.missions.map(evidenceMission),
     tenantBlockers: tenantBlockers(snapshot),
     prospecting: p ? { counts: { ...p.counts }, lastAddedAt: p.lastAddedAt, lastContactedAt: p.lastContactedAt } : null,
     outbound: o ? { channels: o.channels.map((c) => ({ ...c })) } : null,
@@ -125,6 +134,33 @@ function buildEvidenceRecord(snapshot, { tenantName = null, recordedAt = null } 
       ? { available: g.available === true, applicable: g.applicable !== false, mode: g.mode || null, reason: g.reason || null }
       : null,
     sources: snapshot.sources.map((s) => ({ ...s })),
+  };
+}
+
+/**
+ * One mission in the evidence record. Carries the timestamps behind its
+ * classification (created/updated/latest event) so a follow-up can explain the
+ * classification from the same evidence instead of re-reading it.
+ */
+function evidenceMission(m) {
+  return {
+    id: m.id,
+    system: m.system,
+    title: m.title || null,
+    objective: m.objective || null,
+    stage: m.stage || null,
+    status: m.status || null,
+    synthetic: Boolean(m.synthetic),
+    category: m.classification.category,
+    certainty: m.classification.certainty,
+    basis: m.classification.basis,
+    lastActivityAt: m.classification.lastActivityAt,
+    ageDays: m.classification.ageDays,
+    createdAt: m.createdAt || null,
+    updatedAt: m.updatedAt || null,
+    completedAt: m.completedAt || null,
+    lastEvent: m.lastEvent && m.lastEvent.at ? { kind: m.lastEvent.kind || null, label: m.lastEvent.label || null, at: m.lastEvent.at } : null,
+    blockers: (m.blockers || []).map((b) => ({ kind: b.kind, label: b.label })),
   };
 }
 
@@ -149,14 +185,22 @@ const PRIOR_EVIDENCE_REFERENCE = [
 ];
 
 const ANALYTICAL_REQUEST =
-  /\b(?:identify|explain|why|distinguish|differentiate|separate|which|recommend|assess|analy[sz]e|interpret|evaluate|compare|summari[sz]e|classify|cite|reason|what\s+(?:should|does|do|is|are|would)|tell\s+me)\b/i;
+  /\b(?:identify|explain|why|distinguish|differentiate|separate|which|recommend|assess|analy[sz]e|interpret|evaluate|compare|summari[sz]e|classify|cite|reason|what\s+(?:should|does|do|is|are|would)|tell\s+me|give\s+me|show\s+me|walk\s+me\s+through)\b/i;
 
 const PORTFOLIO_SCOPE =
-  /\bmissions\b|\boutbound\b|\b(?:safety\s+)?gate\b|\bkill[\s-]?switch\b|\bmaintenance\b|\bblockers?\b|\bstale\b|\bcanonical\s+(?:business\s+)?objective\b|\bexecution\s+(?:failures?|problems?|errors?|work)\b|\bpaused?\b|\btouchpoints?\b|\bprospects\b/i;
+  /\bmissions\b|\bportfolio\b|\boutbound\b|\b(?:safety\s+)?gate\b|\bkill[\s-]?switch\b|\bmaintenance\b|\bblockers?\b|\bstale\b|\bcanonical\s+(?:business\s+)?objective\b|\bexecution\s+(?:failures?|problems?|errors?|work)\b|\bpaused?\b|\btouchpoints?\b|\bprospects\b/i;
 
 /** One specific mission is mission-owned (status, approval, continuation). */
 const SPECIFIC_MISSION_REFERENCE =
   /\b(?:this|that|the\s+current|the\s+active|the\s+selected|my\s+current)\s+(?:acquisition\s+)?mission\b(?!s)|\bmission\s+(?:id\s+)?[a-z]{2,4}_[a-z0-9_]+\b/i;
+
+/**
+ * A turn about one mission that still asks for something to be DONE to it
+ * (after negated clauses are removed) is not analysis; it keeps the mission's
+ * own routing and authorization path.
+ */
+const MISSION_ACTION_VERB =
+  /\b(?:run|launch|start|send|execute|resume|restart|reactivate|retry|cancel|archive|delete|pause|unpause|advance|continue|close|reopen|reclassify|mark|move|lift|enable|disable|submit|kick\s+off|fire)\b/i;
 
 /** A reply to a pending decision is never analysis, whatever else it says. */
 const DECISION_RESPONSE =
@@ -181,29 +225,52 @@ function detectOperationalAnalysisFollowUp(question, session = null, options = {
   if (DECISION_RESPONSE.test(affirmative)) return none('decision_response_language');
 
   const tenantId = session && session.context ? session.context.tenantId : null;
-  const evidence = resolveEvidenceState(session, tenantId, options.now || new Date());
-  const missionIds = evidence.record ? evidence.record.missions.map((m) => String(m.id).toLowerCase()) : [];
-  const lower = affirmative.toLowerCase();
-  if (SPECIFIC_MISSION_REFERENCE.test(affirmative) || missionIds.some((id) => id && lower.includes(id))) {
+  const now = options.now || new Date();
+  const evidence = resolveEvidenceState(session, tenantId, now);
+  const hasEvidence = evidence.state === EVIDENCE_STATES.CURRENT || evidence.state === EVIDENCE_STATES.STALE;
+  const focus = hasEvidence ? currentFocus(session, tenantId, now) : null;
+  const frame = buildAnalyticalFrame(raw, evidence.record, { focus });
+  const refersToPrior = PRIOR_EVIDENCE_REFERENCE.some((re) => re.test(raw));
+
+  // A mission named (by id or description) or referred to through the
+  // analytical focus of the previous turn. Analysis of ONE mission stays
+  // read-only when the session holds the evidence it is about, the turn is a
+  // question, and nothing in its affirmative text asks for an action. A
+  // generic "this mission" with no analytical focus is not resolved here, so it
+  // keeps mission ownership (status, approval, continuation).
+  if (frame.subject === 'mission') {
+    const cues = ['mission_subject', `reference:${frame.reference || 'unresolved'}`];
+    if (refersToPrior) cues.push('prior_evidence_reference');
+    if (!hasEvidence && !refersToPrior) return { ...none('specific_mission_reference_without_evidence', cues), frame };
+    if (MISSION_ACTION_VERB.test(affirmative)) return { ...none('mission_action_language', cues), frame };
+    if (!isInterrogative(affirmative)) return { ...none('mission_reference_not_a_question', cues), frame };
+    return {
+      matched: true,
+      reason: frame.reference === 'focus' ? 'mission_follow_up_on_focus' : 'mission_specific_analysis',
+      cues,
+      evidenceState: evidence.state,
+      frame,
+    };
+  }
+  if (SPECIFIC_MISSION_REFERENCE.test(affirmative)) {
     return none('specific_mission_reference');
   }
 
   const cues = [];
-  const refersToPrior = PRIOR_EVIDENCE_REFERENCE.some((re) => re.test(raw));
   if (refersToPrior) cues.push('prior_evidence_reference');
   if (ANALYTICAL_REQUEST.test(affirmative)) cues.push('analytical_request');
   if (PORTFOLIO_SCOPE.test(affirmative)) cues.push('portfolio_scope');
   const has = (c) => cues.includes(c);
 
   if (refersToPrior && (has('analytical_request') || has('portfolio_scope'))) {
-    return { matched: true, reason: 'explicit_prior_evidence_reference', cues, evidenceState: evidence.state };
+    return { matched: true, reason: 'explicit_prior_evidence_reference', cues, evidenceState: evidence.state, frame };
   }
   if (
     (evidence.state === EVIDENCE_STATES.CURRENT || evidence.state === EVIDENCE_STATES.STALE) &&
     has('analytical_request') &&
     has('portfolio_scope')
   ) {
-    return { matched: true, reason: 'analytical_follow_up_on_session_evidence', cues, evidenceState: evidence.state };
+    return { matched: true, reason: 'analytical_follow_up_on_session_evidence', cues, evidenceState: evidence.state, frame };
   }
   return none(evidence.record ? 'no_analytical_follow_up_cue' : 'no_session_evidence', cues);
 }
@@ -384,21 +451,64 @@ function composeEvidenceQuality(record, { evidenceUse, refreshedReason, constrai
   return lines;
 }
 
+/**
+ * Portfolio analysis. A portfolio-wide request (or one asking about three or
+ * more aspects) gets all five numbered sections. A narrower portfolio question
+ * gets only the sections it asks about, plus the evidence section — the answer
+ * is proportional to the question.
+ */
 function composeOperationalAnalysis(record, ctx = {}) {
   const tenantLabel = record.tenantName ? `${record.tenantName} (tenant ${record.tenantId})` : `tenant ${record.tenantId}`;
   const objective = composeCanonicalObjective(record, ctx.blueprintGoal || null);
-  const sections = [
-    [
-      `Operational analysis — ${tenantLabel}`,
-      'Reasoning over persisted read-only evidence. Nothing was approved, resumed, created, executed, or changed; the outbound gate, pending decisions, and session settings were not touched.',
-    ],
-    objective.lines,
-    composeRelevance(record, objective.canonical),
-    composeSafetyVersusFailure(record),
-    composeRecommendation(record),
-    composeEvidenceQuality(record, ctx),
+  const frame = ctx.frame || null;
+  const focused = Boolean(frame && frame.subject === 'portfolio' && frame.responseScope === 'focused' && frame.facets.length);
+  const header = [
+    `Operational analysis — ${tenantLabel}`,
+    'Reasoning over persisted read-only evidence. Nothing was approved, resumed, created, executed, or changed; the outbound gate, pending decisions, and session settings were not touched.',
   ];
-  return { prose: sections.map((s) => s.join('\n')).join('\n\n'), canonical: objective.canonical };
+  if (!focused) {
+    const sections = [
+      header,
+      objective.lines,
+      composeRelevance(record, objective.canonical),
+      composeSafetyVersusFailure(record),
+      composeRecommendation(record),
+      composeEvidenceQuality(record, ctx),
+    ];
+    return { prose: sections.map((s) => s.join('\n')).join('\n\n'), canonical: objective.canonical, scope: 'portfolio', sections: ['objective', 'relevance', 'safety', 'recommendation', 'evidence'] };
+  }
+  const want = new Set(frame.facets);
+  const unnumbered = (lines) => [lines[0].replace(/^\d+\.\s+/, ''), ...lines.slice(1)];
+  const sections = [header];
+  const included = [];
+  if (want.has(PORTFOLIO_FACETS.OBJECTIVE)) {
+    sections.push(unnumbered(objective.lines));
+    included.push('objective');
+  }
+  if (want.has(PORTFOLIO_FACETS.RELEVANCE)) {
+    const lines = unnumbered(composeRelevance(record, objective.canonical));
+    if (!want.has(PORTFOLIO_FACETS.OBJECTIVE)) lines[0] = 'Missions relevant to the canonical objective';
+    if (!want.has(PORTFOLIO_FACETS.SAFETY)) {
+      const pending = pendingDecisionsOf(record);
+      if (pending.length) {
+        const current = pending.filter((x) => x.m.category === CATEGORIES.ACTIVE).length;
+        lines.push(`Pending operator decisions: ${pending.length} (${current} on active missions, ${pending.length - current} on historical or ambiguous missions). Those on historical missions are recorded state, not current requests. I did not request, approve, or consume any of them.`);
+      }
+    }
+    sections.push(lines);
+    included.push('relevance');
+  }
+  if (want.has(PORTFOLIO_FACETS.SAFETY)) {
+    sections.push(unnumbered(composeSafetyVersusFailure(record)));
+    included.push('safety');
+  }
+  if (want.has(PORTFOLIO_FACETS.RECOMMENDATION)) {
+    sections.push(unnumbered(composeRecommendation(record)));
+    included.push('recommendation');
+  }
+  sections.push(unnumbered(composeEvidenceQuality(record, ctx)));
+  included.push('evidence');
+  return { prose: sections.map((s) => s.join('\n')).join('\n\n'), canonical: objective.canonical, scope: 'focused', sections: included };
 }
 
 async function loadBlueprintGoal(service, tenantId) {
@@ -487,7 +597,65 @@ async function maybeHandleOperationalAnalysisTurn(input = {}) {
   // Imperative prohibitions only ("Do not …", "Never …"), not descriptive
   // phrases such as "missions that should not be treated as current work".
   const constraints = extractNegatedClauses(question).filter((c) => /^(?:do\s+not|don['’]?t|dont|never|must\s+not)\b/i.test(c));
-  const { prose, canonical } = composeOperationalAnalysis(record, { blueprintGoal, evidenceUse, refreshedReason, constraints });
+
+  // Answer construction is separate from ownership: rebuild the frame against
+  // the evidence actually used (it may have just been refreshed) and answer
+  // the question that was asked.
+  const focus = currentFocus(session, tenantId, now);
+  const frame = buildAnalyticalFrame(question, record, { focus });
+  let prose;
+  let canonical = null;
+  let answer = { scope: frame.responseScope, sections: null, conclusions: [], uncertainties: [], missionIds: [], lookups: [] };
+  if (frame.subject === 'mission') {
+    const missions = frame.subjectIds
+      .map((id) => record.missions.find((m) => m.id === id))
+      .filter(Boolean)
+      .map((m) => ({ ...m, origin: 'evidence' }));
+    const lookups = [];
+    for (const u of frame.unresolved.filter((x) => x.kind === 'id')) {
+      // Not in the evidence: read that one mission, read-only, tenant-scoped.
+      const found = await loadMissionById({ tenantId, missionId: u.text, opts, acquisitionMissionRuntime: input.acquisitionMissionRuntime || null });
+      mutationBoundary = mergeBoundary(mutationBoundary, found.mutationBoundary);
+      if (found.found) {
+        missions.push({ ...evidenceMission(found.mission), origin: 'read_now', readAt: found.asOf });
+        lookups.push({ text: u.text, found: true });
+      } else {
+        lookups.push({ text: u.text, found: false, sources: found.sources });
+      }
+    }
+    const tenantLabel = record.tenantName ? `${record.tenantName} (tenant ${record.tenantId})` : `tenant ${record.tenantId}`;
+    const composed = composeMissionAnswer(frame, {
+      record,
+      missions,
+      lookups,
+      blueprintGoal,
+      evidenceUse,
+      refreshedReason,
+      constraints,
+      tenantLabel,
+      tenantName: record.tenantName,
+    });
+    prose = composed.prose;
+    answer = {
+      scope: 'focused',
+      sections: null,
+      conclusions: composed.conclusions,
+      uncertainties: composed.uncertainties,
+      missionIds: missions.map((m) => m.id),
+      lookups: lookups.map((l) => ({ found: l.found })),
+    };
+    // The referent for the next turn ("it", "this mission"): the missions this
+    // answer was about. Kept when nothing resolved, so a clarification can follow.
+    if (missions.length) setFocus(session, { tenantId, missionIds: missions.map((m) => m.id), at: now.toISOString() });
+  } else {
+    const composed = composeOperationalAnalysis(record, { blueprintGoal, evidenceUse, refreshedReason, constraints, frame });
+    prose = composed.prose;
+    canonical = composed.canonical;
+    answer = { ...answer, scope: composed.scope, sections: composed.sections };
+    clearFocus(session);
+  }
+  askPathTrace.traceBranch('operational_analysis_frame', { ...frameTrace(frame), sections: answer.sections, lookups: answer.lookups });
+
   const pending = pendingDecisionsOf(record);
   const unavailableSources = record.sources.filter((s) => !s.available).map((s) => `${s.source}: ${s.reason}`);
 
@@ -495,6 +663,7 @@ async function maybeHandleOperationalAnalysisTurn(input = {}) {
     answer: prose,
     reasoning: [
       'P0 #1089 — analytical follow-up over persisted read-only operational evidence; no mission runtime, pending decision, execution router, session-state resolver, or outbound control was invoked.',
+      `Question-directed answer: subject=${frame.subject}, intent=${frame.intent}, scope=${answer.scope}, facets=${frame.facets.join(',') || 'none'}.`,
     ],
     supportingEvidence: record.sources
       .filter((s) => s.available)
@@ -519,14 +688,28 @@ async function maybeHandleOperationalAnalysisTurn(input = {}) {
         pendingDecisions: { present: pending.length, requested: 0, consumed: 0 },
         sources: record.sources.map((s) => ({ source: s.source, available: s.available, reason: s.reason })),
         mutationBoundary: mutationBoundary || null,
+        analyticalFrame: {
+          ...frameTrace(frame),
+          sections: answer.sections,
+          missionIds: answer.missionIds,
+          lookups: answer.lookups,
+        },
+        conclusions: answer.conclusions,
+        uncertainties: answer.uncertainties,
       },
     },
   });
-  logAnalysis({ tenantId, detection, evidenceUse, evidenceState: state, pendingPresent: pending.length, mutationBoundary, record });
-  return { prose, structured, reason: detection.reason, detection, evidence: record, mutationBoundary };
+  logAnalysis({ tenantId, detection, evidenceUse, evidenceState: state, pendingPresent: pending.length, mutationBoundary, record, frame });
+  return { prose, structured, reason: detection.reason, detection, evidence: record, mutationBoundary, frame };
 }
 
-function logAnalysis({ tenantId, detection, evidenceUse, evidenceState, pendingPresent, mutationBoundary, refused, record }) {
+function mergeBoundary(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  return { enforced: true, reads: (a.reads || 0) + (b.reads || 0), writesBlocked: (a.writesBlocked || 0) + (b.writesBlocked || 0) };
+}
+
+function logAnalysis({ tenantId, detection, evidenceUse, evidenceState, pendingPresent, mutationBoundary, refused, record, frame }) {
   // Route, evidence provenance, counts and boundary only — no prospect data,
   // mission titles, or objectives.
   const row = {
@@ -544,6 +727,7 @@ function logAnalysis({ tenantId, detection, evidenceUse, evidenceState, pendingP
     pendingDecisions: { present: pendingPresent || 0, requested: 0, consumed: 0 },
     sources: record ? record.sources.map((s) => ({ source: s.source, available: s.available })) : null,
     mutationBoundary: mutationBoundary || null,
+    frame: frameTrace(frame || null),
     timestamp: new Date().toISOString(),
   };
   if (process.env.NODE_ENV !== 'test') console.info('[OPERATIONAL_ANALYSIS]', JSON.stringify(row));
@@ -560,4 +744,6 @@ module.exports = {
   detectOperationalAnalysisFollowUp,
   composeOperationalAnalysis,
   maybeHandleOperationalAnalysisTurn,
+  evidenceMission,
+  clearOperationalFocus: clearFocus,
 };

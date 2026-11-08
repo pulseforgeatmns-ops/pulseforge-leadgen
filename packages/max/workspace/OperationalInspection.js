@@ -558,6 +558,135 @@ function classifyMission(mission, now = new Date()) {
 }
 
 // ---------------------------------------------------------------------------
+// Single-mission read (P0 question-directed reasoning)
+// ---------------------------------------------------------------------------
+
+/**
+ * Read ONE mission of the session tenant by exact id, through the read-only
+ * guard, and classify it with the same criteria as the inspection. Used when
+ * an analytical follow-up names a mission that is not in the session's
+ * evidence record. Scoped by tenant: a mission of another tenant is
+ * indistinguishable from a missing one (nothing about it is returned).
+ *
+ * @returns {Promise<{ found: boolean, mission: object|null, sources: object[], mutationBoundary: object }>}
+ */
+async function loadMissionById(input = {}) {
+  const opts = input.opts || {};
+  const now = opts.now instanceof Date ? opts.now : new Date();
+  const tenantId = String(input.tenantId);
+  const missionId = String(input.missionId || '').trim();
+  const boundary = { enforced: true, reads: 0, writesBlocked: 0 };
+  const rawPool = resolvePool(opts);
+  const db = rawPool ? readOnlyQueryable(rawPool, boundary) : null;
+  const sources = [];
+  if (!missionId) return { found: false, mission: null, sources, mutationBoundary: boundary };
+  if (!db && input.acquisitionMissionRuntime && typeof input.acquisitionMissionRuntime.engine === 'function') {
+    // Same non-durable fallback as the inspection when no database is configured.
+    try {
+      const engine = input.acquisitionMissionRuntime.engine();
+      const m = engine && typeof engine.list === 'function'
+        ? engine.list(tenantId).find((x) => String(x.id) === missionId && String(x.tenantId || x.clientId || '') === tenantId)
+        : null;
+      sources.push({ source: 'acquisition_missions', available: true, provenance: 'in-process acquisition mission runtime (non-durable view)' });
+      if (m) {
+        const events = engine.store && typeof engine.store.listEvents === 'function' ? engine.store.listEvents(m.id) : [];
+        const last = events.length ? events[events.length - 1] : null;
+        const mission = normalizeAmoMission(m, last ? { kind: last.kind, label: last.label, at: iso(last.at) } : undefined);
+        return { found: true, mission: { ...mission, classification: classifyMission(mission, now) }, sources, asOf: now.toISOString(), mutationBoundary: boundary };
+      }
+      return { found: false, mission: null, sources, mutationBoundary: boundary };
+    } catch (_) {
+      sources.push({ source: 'acquisition_missions', available: false, reason: 'acquisition_mission_runtime_unavailable' });
+      return { found: false, mission: null, sources, mutationBoundary: boundary };
+    }
+  }
+  if (!db) {
+    sources.push({ source: 'acquisition_missions', available: false, reason: 'acquisition_mission_store_not_configured' });
+    sources.push({ source: 'missions', available: false, reason: 'mission_store_not_configured' });
+    return { found: false, mission: null, sources, mutationBoundary: boundary };
+  }
+  let mission = null;
+  try {
+    const { missionFromRow } = require('../../../services/acquisitionMissionPersistence');
+    const { rows } = await db.query(
+      'SELECT * FROM acquisition_missions WHERE tenant_id = $1 AND id = $2 LIMIT 1',
+      [tenantId, missionId]
+    );
+    if (rows && rows[0]) {
+      let lastEvent;
+      try {
+        const ev = await db.query(
+          `SELECT mission_id, kind, label, at
+             FROM acquisition_mission_events
+            WHERE tenant_id = $1 AND mission_id = $2
+            ORDER BY at DESC
+            LIMIT 1`,
+          [tenantId, missionId]
+        );
+        const r = ev.rows && ev.rows[0];
+        lastEvent = r ? { kind: r.kind, label: r.label, at: iso(r.at) } : undefined;
+      } catch (_) {
+        lastEvent = undefined;
+      }
+      mission = normalizeAmoMission(missionFromRow(rows[0]), lastEvent);
+    }
+    sources.push({ source: 'acquisition_missions', available: true, provenance: 'Postgres acquisition_missions (single mission, tenant-scoped)' });
+  } catch (err) {
+    if (/relation .* does not exist/i.test(String(err && err.message))) {
+      sources.push({ source: 'acquisition_missions', available: true, provenance: 'Postgres acquisition_missions (table absent)' });
+    } else {
+      sources.push({ source: 'acquisition_missions', available: false, reason: 'acquisition_mission_store_unavailable' });
+    }
+  }
+  if (!mission) {
+    try {
+      const { rows } = await db.query(
+        `SELECT id, tenant_id, client_id, type, status, objective_text, title,
+                created_at, updated_at, completed_at
+           FROM missions
+          WHERE tenant_id = $1 AND id::text = $2
+          LIMIT 1`,
+        [tenantId, missionId]
+      );
+      const r = rows && rows[0];
+      if (r) {
+        mission = {
+          system: 'mission_engine',
+          id: r.id,
+          title: r.title || null,
+          objective: r.objective_text || null,
+          stage: null,
+          status: r.status || null,
+          planCancelled: false,
+          createdAt: iso(r.created_at),
+          updatedAt: iso(r.updated_at),
+          completedAt: iso(r.completed_at),
+          lastEvent: null,
+          synthetic: false,
+          testFlag: false,
+          blockers: r.status === 'failed' ? [{ kind: 'mission_failed', label: 'Mission engine status: failed' }] : [],
+        };
+      }
+      sources.push({ source: 'missions', available: true, provenance: 'Postgres missions (single mission, tenant-scoped)' });
+    } catch (err) {
+      if (/relation .* does not exist/i.test(String(err && err.message))) {
+        sources.push({ source: 'missions', available: true, provenance: 'Postgres missions (table absent)' });
+      } else {
+        sources.push({ source: 'missions', available: false, reason: 'mission_store_unavailable' });
+      }
+    }
+  }
+  if (!mission) return { found: false, mission: null, sources, mutationBoundary: boundary };
+  return {
+    found: true,
+    mission: { ...mission, classification: classifyMission(mission, now) },
+    sources,
+    asOf: now.toISOString(),
+    mutationBoundary: boundary,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Snapshot
 // ---------------------------------------------------------------------------
 
@@ -883,6 +1012,7 @@ module.exports = {
   readOnlyQueryable,
   classifyMission,
   loadOperationalSnapshot,
+  loadMissionById,
   resolveNamedClientScope,
   composeOperationalReport,
   maybeHandleOperationalInspectionTurn,

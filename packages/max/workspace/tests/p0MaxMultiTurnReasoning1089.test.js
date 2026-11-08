@@ -365,21 +365,36 @@ describe('P0 #1089 — session shapes', { concurrency: false }, () => {
 });
 
 describe('P0 #1089 — follow-ups that do not repeat "operational status report"', { concurrency: false }, () => {
+  // Question-directed reasoning: each narrower follow-up keeps the operational
+  // owner and gets the sections it asks about (plus evidence), not the whole
+  // five-section report.
   const FOLLOW_UPS = [
-    'Which missions are genuinely current work, and why is outbound paused?',
-    'Explain why outbound is paused and distinguish the safety gate from actual execution failures.',
-    'Given the evidence you just retrieved, what is the canonical business objective?',
-    'Recommend the next reliability validation step based on that report.',
+    ['Which missions are genuinely current work, and why is outbound paused?', ['relevance', 'safety', 'evidence']],
+    ['Explain why outbound is paused and distinguish the safety gate from actual execution failures.', ['safety', 'evidence']],
+    ['Given the evidence you just retrieved, what is the canonical business objective?', ['objective', 'evidence']],
+    ['Recommend the next reliability validation step based on that report.', ['recommendation', 'evidence']],
   ];
-  for (const q of FOLLOW_UPS) {
-    it(`"${q}" keeps the operational owner`, async () => {
+  const HEADINGS = {
+    objective: /^Canonical business objective$/m,
+    relevance: /^Missions relevant to the canonical objective$/m,
+    safety: /^Why outbound is paused — safety gate vs\. execution failures$/m,
+    recommendation: /^Recommended next reliability validation step$/m,
+    evidence: /^Evidence and limits$/m,
+  };
+  for (const [q, sections] of FOLLOW_UPS) {
+    it(`"${q}" keeps the operational owner and answers only ${sections.join(' + ')}`, async () => {
       const { engine, mission } = await readyMission();
       const { ask } = await openWorkspace({ engine, pool: createFixturePool(), bindMissionId: mission.id });
       await ask(TURN_1);
       const before = fingerprint(engine);
       const result = await ask(q);
       assertAnalysisOwner(result);
-      assert.match(result.prose, /Canonical business objective[\s\S]*Safety gate[\s\S]*Evidence and limits/);
+      for (const [section, re] of Object.entries(HEADINGS)) {
+        if (sections.includes(section)) assert.match(result.prose, re, `${q} → ${section}`);
+        else assert.doesNotMatch(result.prose, re, `${q} must not include ${section}`);
+      }
+      assert.deepEqual(result.operationalEvidence.analyticalFrame.sections, sections);
+      assert.equal(result.operationalEvidence.analyticalFrame.responseScope, 'focused');
       assert.equal(fingerprint(engine), before);
       assert.deepEqual(amo.listExecutionRouterAudit(), []);
     });
