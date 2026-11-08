@@ -334,6 +334,10 @@ function buildResponseMetadata(partial = {}) {
   }
   if (partial.readOnlyCognition === true) meta.readOnlyCognition = true;
   if (partial.sessionInspection === true) meta.sessionInspection = true;
+  // P0 #1087: read-only operational inspection
+  if (partial.operationalInspection === true) meta.operationalInspection = true;
+  if (partial.operationalInspectionRefused != null) meta.operationalInspectionRefused = String(partial.operationalInspectionRefused);
+  if (partial.operationalSnapshot != null) meta.operationalSnapshot = partial.operationalSnapshot;
   if (partial.sessionConfiguration === true) meta.sessionConfiguration = true;
   if (partial.sessionStateRead === true) meta.sessionStateRead = true;
   if (partial.sessionStateEvidence === true) meta.sessionStateEvidence = true;

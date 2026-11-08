@@ -1304,6 +1304,7 @@ async function clearAmoSessionBindings(pool = defaultPool()) {
 
 module.exports = {
   ensureAcquisitionMissionSchema,
+  missionFromRow,
   ensureOutcomeLearningSchema,
   ensureExecutionAuditSchema,
   persistMission,
