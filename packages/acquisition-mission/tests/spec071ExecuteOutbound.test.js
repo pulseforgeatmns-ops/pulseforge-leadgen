@@ -1,4 +1,6 @@
 'use strict';
+// Discovery uses a live-Scout stub: synthetic fixture missions cannot reach outreach (P0).
+const { liveScoutStub } = require('../../max/workspace/tests/amoTestRuntime');
 
 /**
  * SPEC-071 / AUDIT-070 — Canonical EXECUTE Outbound Adapter.
@@ -100,7 +102,7 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
   async function throughExecutionApproved() {
     await advancePlanAfterApproval({ engine, mission, tenantId: '10', question: 'Approved.' });
     await advanceDiscoveryAfterApproval({
-      engine, mission, tenantId: '10', question: 'Approved.', allowFixtureFallback: true,
+      engine, mission, tenantId: '10', question: 'Approved.', runScout: liveScoutStub,
     });
     await advancePrioritizationAfterApproval({
       engine, mission: engine.get(mission.id, '10'), tenantId: '10', question: 'Approved.',
@@ -337,7 +339,7 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
   it('governor pause blocks execution with no provider call', async () => {
     await advancePlanAfterApproval({ engine, mission, tenantId: '10', question: 'Approved.' });
     await advanceDiscoveryAfterApproval({
-      engine, mission, tenantId: '10', question: 'Approved.', allowFixtureFallback: true,
+      engine, mission, tenantId: '10', question: 'Approved.', runScout: liveScoutStub,
     });
     await advancePrioritizationAfterApproval({
       engine, mission: engine.get(mission.id, '10'), tenantId: '10', question: 'Approved.',

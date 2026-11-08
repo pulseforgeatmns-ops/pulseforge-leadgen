@@ -1,4 +1,6 @@
 'use strict';
+// Discovery uses a live-Scout stub: synthetic fixture missions cannot reach outreach (P0).
+const { liveScoutStub } = require('../../max/workspace/tests/amoTestRuntime');
 
 /**
  * Regression: READY missions awaiting execution_approval must hydrate.
@@ -37,7 +39,7 @@ async function readySnapshot(engine, mission) {
     engine, mission, tenantId: '10', question: 'Approved.',
   });
   await advanceDiscoveryAfterApproval({
-    engine, mission, tenantId: '10', question: 'Approved.', allowFixtureFallback: true,
+    engine, mission, tenantId: '10', question: 'Approved.', runScout: liveScoutStub,
   });
   await advancePrioritizationAfterApproval({
     engine, mission: engine.get(mission.id, '10'), tenantId: '10', question: 'Approved.',

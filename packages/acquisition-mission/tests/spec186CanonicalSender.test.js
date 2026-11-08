@@ -1,4 +1,6 @@
 'use strict';
+// Discovery uses a live-Scout stub: synthetic fixture missions cannot reach outreach (P0).
+const { liveScoutStub } = require('../../max/workspace/tests/amoTestRuntime');
 
 /**
  * AUDIT-085 / SPEC-186 — Canonical single-sender enforcement on AMO EXECUTE.
@@ -115,7 +117,7 @@ describe('SPEC-186 — Canonical single-sender enforcement', () => {
   async function throughExecutionApproved(sender = ANCHOR_SENDER) {
     await advancePlanAfterApproval({ engine, mission, tenantId: '10', question: 'Approved.' });
     await advanceDiscoveryAfterApproval({
-      engine, mission, tenantId: '10', question: 'Approved.', allowFixtureFallback: true,
+      engine, mission, tenantId: '10', question: 'Approved.', runScout: liveScoutStub,
     });
     await advancePrioritizationAfterApproval({
       engine, mission: engine.get(mission.id, '10'), tenantId: '10', question: 'Approved.',

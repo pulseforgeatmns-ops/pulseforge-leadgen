@@ -40,6 +40,9 @@ const {
 const { assessMissionResumeCompatibility } = require('./MissionResumeCompatibility');
 const { detectAcquisitionObjective, normalizeObjectiveText } = require('./AcquisitionObjectiveDetection');
 const { detectMissionExecutionLanguage } = require('./ExecutionLanguageDetection');
+const { PRIMARY_OBJECTIVES } = require('./PrimaryObjective');
+const amo = require('../../acquisition-mission');
+const MISSION_PERSISTENCE_UNAVAILABLE = 'MISSION_PERSISTENCE_UNAVAILABLE';
 const {
   MissionLifecycleIntent,
   resolveMissionLifecycleIntent,
@@ -373,7 +376,13 @@ async function maybeHandleAcquisitionOwnershipTurn(input = {}) {
     (executionLanguage.reason === 'mission_create_command' ||
       executionLanguage.reason === 'mission_operate_command');
   const isExplicitLifecycle = isExplicitLifecycleIntent(lifecycleIntent);
-  if (!isAcquisition && !isExplicitMissionCommand && !isExplicitLifecycle) return null;
+  // The objective resolver is the authoritative routing decision. Once Max
+  // assigns mission creation, the handler must not reclassify the same text.
+  // Direct callers without a resolved objective retain legacy detection.
+  const routedMissionCreation =
+    input.objectiveResolution &&
+    input.objectiveResolution.primaryObjective === PRIMARY_OBJECTIVES.MISSION_CREATION;
+  if (!routedMissionCreation && !isAcquisition && !isExplicitMissionCommand && !isExplicitLifecycle) return null;
 
   const tenantId = resolveTenantId(input);
   const audit = input.audit || createAcquisitionOwnershipAudit();
@@ -388,8 +397,67 @@ async function maybeHandleAcquisitionOwnershipTurn(input = {}) {
     ? () => buildAcquisitionOwnershipTrace()
     : audit.buildOwnershipTrace.bind(audit);
 
-  if (!tenantId) return null;
+  if (!tenantId) {
+    // Legacy text-detected callers keep their null contract. A routed
+    // mission-creation decision must not silently fall back to reasoning.
+    if (!routedMissionCreation) return null;
+    return buildMissionCreationNotCompleted({
+      reason: 'acquisition_mission_tenant_required',
+      answer: 'No active client selected. Select a client workspace before creating a mission — nothing was created.',
+      blocker: 'tenant_required',
+    });
+  }
 
+  try {
+    return await handleAcquisitionOwnershipForTenant(input, {
+      question, lifecycleIntent, tenantId, audit, emitOwner, emitCiContribution, traceOwnership,
+    });
+  } catch (err) {
+    if (!err || err.code !== MISSION_PERSISTENCE_UNAVAILABLE) throw err;
+    if (err.outcome === 'unknown') {
+      return buildMissionCreationNotCompleted({
+        reason: 'acquisition_mission_persistence_outcome_unknown',
+        answer: 'I could not confirm whether the mission was saved: durable mission storage did not respond. Check the mission list before retrying, so a duplicate is not created.',
+        blocker: 'persistence_outcome_unknown',
+      });
+    }
+    return buildMissionCreationNotCompleted({
+      reason: 'acquisition_mission_persistence_unavailable',
+      answer: 'I could not create or resume the mission: durable mission storage is unavailable right now. Nothing was created or changed. Retry once storage is healthy.',
+      blocker: 'persistence_unavailable',
+    });
+  }
+}
+
+/**
+ * P0 — explicit, evidence-free "not completed" turn. Never reports a mission.
+ * @param {{ reason: string, answer: string, blocker: string }} input
+ */
+function buildMissionCreationNotCompleted({ reason, answer, blocker }) {
+  const structured = buildStructuredResponse({
+    answer,
+    reasoning: [`Mission creation did not complete (${blocker}).`],
+  });
+  // Assigned after construction: buildStructuredResponse whitelists metadata keys.
+  Object.assign(structured.metadata, {
+    missionCreated: false,
+    missionResumed: false,
+    executionState: 'blocked',
+    blocker,
+  });
+  return {
+    reason,
+    prose: answer,
+    structured,
+    mission: null,
+    created: false,
+    blocked: true,
+  };
+}
+
+async function handleAcquisitionOwnershipForTenant(input, ctx) {
+  const { question, lifecycleIntent, tenantId, emitOwner, emitCiContribution, traceOwnership } = ctx;
+  const audit = ctx.audit;
   const runtime = resolveAcquisitionMissionRuntime(input);
   const persistOpts = runtime.persistOpts(input);
 
@@ -401,6 +469,11 @@ async function maybeHandleAcquisitionOwnershipTurn(input = {}) {
   let created = false;
 
   const targetSegment = inferTargetSegment(question);
+  // Restrictions come from the operator's own words, before normalization.
+  const operatorConstraints = amo.extractAuthorizationConstraints(
+    String(input.question || ''),
+    { source: 'operator_instruction' }
+  );
   const resolvedObjective =
     input.resolvedObjective ||
     (input.session && input.session.context && input.session.context.resolvedObjective) ||
@@ -468,10 +541,23 @@ async function maybeHandleAcquisitionOwnershipTurn(input = {}) {
           blueprint: ciEvidence.strategicEvidence || null,
         },
         executionContract: input.executionContract || null,
+        authorizationConstraints: operatorConstraints,
       },
       persistOpts
     );
     created = true;
+  } else if (amo.tightens(mission.authorizationConstraints, operatorConstraints)) {
+    // P0 — a resumed request may add restrictions; it can never remove them.
+    const tightened = {
+      ...mission,
+      authorizationConstraints: amo.mergeAuthorizationConstraints(
+        mission.authorizationConstraints,
+        operatorConstraints
+      ),
+    };
+    runtime.engine().store.putMission(tightened);
+    await runtime.persistMissionState(mission.id, persistOpts);
+    mission = runtime.engine().store.getMission(mission.id) || tightened;
   }
 
   const engine = runtime.engine();

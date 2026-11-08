@@ -399,6 +399,22 @@
     });
   }
 
+  function installDashboardPageScroll() {
+    if (window.location.pathname !== '/dashboard') return;
+    const pipeline = document.getElementById('pipelineArea');
+    if (!pipeline) return;
+    const sync = () => {
+      const active = pipeline.style.display === 'block';
+      document.documentElement.classList.toggle('pf-pipeline-page-scroll', active);
+      document.body.classList.toggle('pf-pipeline-page-scroll', active);
+    };
+    new MutationObserver(sync).observe(pipeline, {
+      attributes: true,
+      attributeFilter: ['style'],
+    });
+    sync();
+  }
+
   // Deep-link support: /dashboard#pf-tab=pipeline activates the matching
   // legacy sidebar tab once the page's own script has rendered it.
   function activateHashTab() {
@@ -437,6 +453,7 @@
     const nav = buildNav(context, tenantState);
     document.body.prepend(nav);
     applyTheme(readTheme());
+    installDashboardPageScroll();
     activateHashTab();
     window.addEventListener('hashchange', () => { activateHashTab(); refreshCurrent(); });
     syncShellTenantState(context, tenantState);

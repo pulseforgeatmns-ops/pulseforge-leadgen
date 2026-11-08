@@ -32,6 +32,16 @@ const READ_ONLY_MODES = new Set(['read_only', 'execution_disabled']);
 /** @type {object[]} */
 const _routerAudit = [];
 
+const { classifyExecutionEvidence } = require('./ExecutionEvidence');
+const {
+  AUTHORIZATION_CONSTRAINT_BLOCKED,
+  assertActionAuthorized,
+  evaluateAction,
+  intentActionClass,
+  missionHasSyntheticEvidence,
+  assertNotSyntheticForAction,
+} = require('./AuthorizationConstraints');
+
 function cerError(code, message, extras = {}) {
   const err = amoError(code, message);
   err.spec = 'SPEC-171';
@@ -56,6 +66,7 @@ function recordRouterAudit(entry = {}) {
     parentRequestId: entry.parentRequestId || null,
     transactionId: entry.transactionId || null,
     errorCode: entry.errorCode || null,
+    executionState: entry.executionState || null,
     at: entry.at || nowIso(),
     request: entry.request && typeof entry.request === 'object' ? clone(entry.request) : null,
   };
@@ -449,6 +460,42 @@ async function routeExecutionRequest(request, context = {}) {
   const action = actionFromIntent(request.intent);
   const replay = context.replay === true;
 
+  // P0 — durable mission restrictions are checked before any handler runs.
+  // TME re-checks per stage, so autonomous chains are covered as well.
+  const actionClass = intentActionClass(request.intent);
+  const verdict = evaluateAction(mission, actionClass);
+  if (!verdict.allowed) {
+    recordRouterAudit({
+      requestId: request.id,
+      source: request.source,
+      intent: request.intent,
+      missionId: request.missionId,
+      operatorId: request.operatorId,
+      runtimeOwner,
+      specialist,
+      action,
+      outcome: 'blocked_by_constraint',
+      executionState: 'blocked',
+      errorCode: AUTHORIZATION_CONSTRAINT_BLOCKED,
+      replay,
+      request,
+    });
+    assertActionAuthorized(mission, actionClass, { requestId: request.id, intent: request.intent });
+  }
+  if (missionHasSyntheticEvidence(mission)) {
+    try {
+      assertNotSyntheticForAction(mission, actionClass, { requestId: request.id, intent: request.intent });
+    } catch (err) {
+      recordRouterAudit({
+        requestId: request.id, source: request.source, intent: request.intent, missionId: request.missionId,
+        operatorId: request.operatorId, runtimeOwner, specialist, action,
+        outcome: 'blocked_synthetic_evidence', executionState: 'blocked',
+        errorCode: err.code, replay, request,
+      });
+      throw err;
+    }
+  }
+
   const dispatched = await dispatch(request, context, mission, handlers, runtimeOwner);
   const chained = await maybeChainAutonomousDiscovery(request, context, dispatched, handlers);
 
@@ -463,11 +510,22 @@ async function routeExecutionRequest(request, context = {}) {
         ? 'auto_consumed_discovery'
         : 'dispatched';
 
+  // P0 — dispatch is not completion. Classify the result against structural
+  // commit/rollback evidence; only verified states may be reported as done.
+  const execution = classifyExecutionEvidence({
+    request: chained.autoConsumedDiscoveryApproval && chained.request ? chained.request : request,
+    executionResult: chained.executionResult,
+    specialist: chained.specialist || specialist,
+    runtimeOwner,
+    tenantId: context.tenantId,
+  });
+
   const audit = recordRouterAudit({
     requestId: request.id,
     source: request.source,
     intent: request.intent,
     missionId: request.missionId,
+    executionState: execution.state,
     operatorId: request.operatorId,
     runtimeOwner,
     specialist,
@@ -493,6 +551,7 @@ async function routeExecutionRequest(request, context = {}) {
     replay,
     autoConsumedDiscoveryApproval: chained.autoConsumedDiscoveryApproval === true,
     planResult: chained.planResult || null,
+    execution,
     routed: true,
   };
 }

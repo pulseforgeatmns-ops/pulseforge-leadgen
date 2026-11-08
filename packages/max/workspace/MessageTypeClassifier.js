@@ -16,6 +16,7 @@
 const askPathTrace = require('./audit/AskPathTrace');
 const { MESSAGE_TYPES, buildMessageClassification } = require('./MessageType');
 const { normalizeText } = require('./SessionState');
+const { stripNegatedDirectives } = require('./NegatedDirective');
 const {
   detectSessionDirectiveSignals,
   isSessionResetRequest,
@@ -28,6 +29,7 @@ const {
   isInterpretableSessionConfiguration,
   SESSION_CONFIGURATION_THRESHOLD,
   matchFieldDirectives,
+  isOperationalExecutionCommand,
 } = require('./SessionDirectiveRegistry');
 const {
   isMissionExecutionCommand,
@@ -69,6 +71,8 @@ const MISSION_CREATION_RES = [
   /\bstart (?:a )?(?:new )?(?:acquisition )?mission\b/i,
   /\bbegin (?:a )?(?:new )?(?:acquisition )?mission\b/i,
   /\bnew acquisition mission\b/i,
+  // P0 — "set up a <qualifier> mission" is affirmative creation language.
+  /\bset\s*up\s+(?:a|an|the|new)\s+(?:[\w-]+\s+){0,4}mission\b/i,
   MISSION_CREATE_COMMAND_RE,
 ];
 
@@ -275,10 +279,16 @@ function isSessionConfigurationMessage(text) {
   const q = normalizeText(text);
   if (!q) return false;
   if (isSessionInspectionQuestion(q)) return false;
+  // A read-only constraint on an operational inspection is not a request to
+  // reconfigure the session. Keep the requested inspection as the objective.
+  if (/\b(?:status report|mission (?:status|state|progress|health|blockers?)|execution blockers?|current mission state)\b/i.test(q) &&
+      /\b(?:give me|show me|identify|report|summari[sz]e|what(?:'s| is)|where are we)\b/i.test(q)) return false;
 
   if (isSessionResetRequest(q)) return true;
 
   const signals = detectSessionDirectiveSignals(q);
+  // P0 — an execution request is never consumed as a session setting.
+  if (isOperationalExecutionCommand(stripNegatedDirectives(q), signals)) return false;
   return isInterpretableSessionConfiguration(q, signals);
 }
 
@@ -329,7 +339,8 @@ function isCorrectionMessage(text) {
 function isMissionCreationMessage(text) {
   const q = normalizeText(text);
   if (!q) return false;
-  return matchesAny(q, MISSION_CREATION_RES);
+  // P0 — negated directives ("do not create a mission") are constraints.
+  return matchesAny(stripNegatedDirectives(q), MISSION_CREATION_RES);
 }
 
 function isMissionExecutionMessage(text, input = {}) {

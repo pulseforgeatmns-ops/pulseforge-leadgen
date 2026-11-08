@@ -53,6 +53,9 @@ const missionRuntimeOwnership = require('./MissionRuntimeOwnership');
 const missionExecutionContext = require('./MissionExecutionContext');
 const executionRequest = require('./ExecutionRequest');
 const executionRouter = require('./ExecutionRouter');
+const executionEvidence = require('./ExecutionEvidence');
+const authorizationConstraints = require('./AuthorizationConstraints');
+const authorizationAmendment = require('./AuthorizationAmendment');
 const executionApproval = require('./ExecutionApproval');
 const outboundExecution = require('./OutboundExecution');
 const communicationObservation = require('./CommunicationObservation');
@@ -74,6 +77,25 @@ const missionInspectionSnapshot = require('./MissionInspectionSnapshot');
 
 module.exports = {
   ...types,
+  EXECUTION_EVIDENCE_STATES: executionEvidence.EXECUTION_STATES,
+  AUTHORIZATION_CONSTRAINT_BLOCKED: authorizationConstraints.AUTHORIZATION_CONSTRAINT_BLOCKED,
+  ACTION_CLASSES: authorizationConstraints.ACTION_CLASSES,
+  extractAuthorizationConstraints: authorizationConstraints.extractAuthorizationConstraints,
+  mergeAuthorizationConstraints: authorizationConstraints.mergeAuthorizationConstraints,
+  tightens: authorizationConstraints.tightens,
+  evaluateAction: authorizationConstraints.evaluateAction,
+  stageActionClass: authorizationConstraints.stageActionClass,
+  intentActionClass: authorizationConstraints.intentActionClass,
+  isAuthorizationConstraintError: authorizationConstraints.isAuthorizationConstraintError,
+  SYNTHETIC_EVIDENCE_BLOCKED: authorizationConstraints.SYNTHETIC_EVIDENCE_BLOCKED,
+  missionHasSyntheticEvidence: authorizationConstraints.missionHasSyntheticEvidence,
+  isSyntheticEvidenceError: authorizationConstraints.isSyntheticEvidenceError,
+  authorizationConstraintsHash: authorizationAmendment.authorizationConstraintsHash,
+  computeAmendedConstraints: authorizationAmendment.computeAmendedConstraints,
+  previewAuthorization: authorizationAmendment.previewAuthorization,
+  applyAuthorizationAmendment: authorizationAmendment.applyAuthorizationAmendment,
+  classifyExecutionEvidence: executionEvidence.classifyExecutionEvidence,
+  specialistCompletionUnverified: executionEvidence.specialistCompletionUnverified,
   assertContract,
   contractFor,
   FORBIDDEN,

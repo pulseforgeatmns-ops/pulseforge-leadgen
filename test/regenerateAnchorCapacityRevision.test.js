@@ -1,4 +1,6 @@
 'use strict';
+// Discovery uses a live-Scout stub: synthetic fixture missions cannot reach outreach (P0).
+const { liveScoutStub } = require('../packages/max/workspace/tests/amoTestRuntime');
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -47,7 +49,7 @@ async function preparedReadyMission() {
   const mission = engine.create({ tenantId: '10', objective: OBJECTIVE, targetSegment: 'Law Firms' });
   await advancePlanAfterApproval({ engine, mission, tenantId: '10', question: 'Approved.' });
   await advanceDiscoveryAfterApproval({
-    engine, mission, tenantId: '10', question: 'Approved.', allowFixtureFallback: true,
+    engine, mission, tenantId: '10', question: 'Approved.', runScout: liveScoutStub,
   });
   await advancePrioritizationAfterApproval({
     engine, mission: engine.get(mission.id, '10'), tenantId: '10', question: 'Approved.',
@@ -363,6 +365,18 @@ describe('regenerateAnchorCapacityRevision — canonical path', () => {
 
   it('REVISE_PREPARED_OUTREACH clears pre-SPEC-212 contamination when Paige variants are reused', async () => {
     const { engine, mission } = await preparedReadyMission();
+    // Pre-SPEC-212 rows are legacy production data; so is the approval beside
+    // them. Legacy approvals carry no complete-content digest (P0), so they keep
+    // revision-only semantics while the contaminated payload is rewritten.
+    for (const row of engine.store.listContributions(mission.id)) {
+      if (row.payload && row.payload.preparedContentDigest) {
+        engine.store.updateContribution(row.id, (current) => {
+          const next = JSON.parse(JSON.stringify(current));
+          delete next.payload.preparedContentDigest;
+          return next;
+        });
+      }
+    }
     simulatePreSpec212Persist(engine, mission.id);
 
     const before = engine.inspect(mission.id, { tenantId: '10' });

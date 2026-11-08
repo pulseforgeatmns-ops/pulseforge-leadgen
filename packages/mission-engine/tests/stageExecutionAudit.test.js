@@ -18,6 +18,7 @@ const {
 } = require('..');
 const { createBuiltinRegistry } = require('../../capabilities');
 const { createWorkspaceEngine } = require('../../max/workspace');
+const { createTestAmoRuntime } = require('../../max/workspace/tests/amoTestRuntime');
 
 function testEngine() {
   return createMissionEngine({
@@ -221,6 +222,8 @@ describe('AUDIT-003 workspace integration', () => {
     clearMissionStageAuditLog();
     const missionEngine = testEngine();
     const workspace = createWorkspaceEngine({
+      // Explicitly isolated: in-memory AMO runtime (no implicit DB pool).
+      acquisitionMissionRuntime: createTestAmoRuntime(),
       missionEngine,
       missionsEnabled: true,
       resolverEnabled: true,
