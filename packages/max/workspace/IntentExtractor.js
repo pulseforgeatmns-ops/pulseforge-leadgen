@@ -49,7 +49,7 @@ const REFLECTION_RES = [
 /** Operator constraints — not actionable intents (desk workflows, safety rails). */
 const NEGATION_OR_CONSTRAINT_RES = [
   /\b(?:don'?t|do not)\s+create (?:a )?mission\b/i,
-  /\b(?:don'?t|do not)\s+(?:launch|execute|approve|print|mail)\b/i,
+  /\b(?:don'?t|do not)\s+(?:launch|execute|approve|print|mail|change|initiate|send|archive|delete|modify)\b/i,
   /\b(?:don'?t|do not)\s+(?:include|show|add)\b/i,
   /\bno mission creation\b/i,
   /\bwithout creating (?:a )?mission\b/i,
