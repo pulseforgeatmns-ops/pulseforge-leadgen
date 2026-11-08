@@ -3809,7 +3809,7 @@ body.viewer-role .prospect-pipeline-card { cursor: pointer; }
 
 <style>
 /* Refined Pipeline: the Command Deck's visual language, applied to action. */
-#pipelineArea.pf-refined { background:radial-gradient(ellipse 55% 34% at 68% 0%,rgba(177,126,48,.13),transparent),#060c19; color:#e9edf7; min-height:100vh; padding:clamp(18px,3vw,44px); }
+#pipelineArea.pf-refined { background:radial-gradient(ellipse 55% 34% at 68% 0%,rgba(177,126,48,.13),transparent),#060c19; color:#e9edf7; min-height:0; height:100%; overflow-y:auto; overflow-x:hidden; overscroll-behavior-y:contain; -webkit-overflow-scrolling:touch; padding:clamp(18px,3vw,44px); }
 #pipelineArea.pf-refined .area-header { display:none; }
 .pf-workspace {display:none}
 #pipelineArea.pf-refined .pf-workspace {display:block}
