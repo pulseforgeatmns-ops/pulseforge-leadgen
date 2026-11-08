@@ -42,7 +42,23 @@ async function openEngine(runtime) {
 }
 
 describe('SPEC-151 — Multi-Intent Execution Planner', () => {
-  describe('P0 production regression: Anchor read-only inspection', () => {\n    it('does not turn a multi-paragraph status inspection into an executable compound plan', () => {\n      const question = [\n        'Give me a read-only operational status report for Anchor Cleaning.',\n        'Identify the current mission state, active execution blockers, and supporting evidence.',\n        'Distinguish active business missions from completed, stale, or development/test missions, but do not archive, delete, or modify anything.',\n        'Do not change session settings, initiate prospecting, send outreach, or execute any actions. This is an inspection request only.',\n      ].join('\\n\\n');\n      const { intents } = extractIntents({ question });\n      assert.ok(intents.some(intent => intent.type === INTENT_TYPES.BUSINESS_REASONING));\n      assert.equal(intents.some(intent => intent.type === INTENT_TYPES.SESSION_CONFIGURATION), false);\n      assert.equal(intents.some(intent => intent.type === INTENT_TYPES.BUSINESS_OPERATION), false);\n      assert.equal(isCompoundMessage(intents), false);\n    });\n  });\n\n  describe('intent extraction and planning', () => {
+  describe('P0 production regression: Anchor read-only inspection', () => {
+    it('does not turn a multi-paragraph status inspection into an executable compound plan', () => {
+      const question = [
+        'Give me a read-only operational status report for Anchor Cleaning.',
+        'Identify the current mission state, active execution blockers, and supporting evidence.',
+        'Distinguish active business missions from completed, stale, or development/test missions, but do not archive, delete, or modify anything.',
+        'Do not change session settings, initiate prospecting, send outreach, or execute any actions. This is an inspection request only.',
+      ].join('\n\n');
+      const { intents } = extractIntents({ question });
+      assert.ok(intents.some(intent => intent.type === INTENT_TYPES.BUSINESS_REASONING));
+      assert.equal(intents.some(intent => intent.type === INTENT_TYPES.SESSION_CONFIGURATION), false);
+      assert.equal(intents.some(intent => intent.type === INTENT_TYPES.BUSINESS_OPERATION), false);
+      assert.equal(isCompoundMessage(intents), false);
+    });
+  });
+
+  describe('intent extraction and planning', () => {
     it('splits compound operator messages into independent segments', () => {
       const text =
         'Use autonomous execution.\n\nAcquire recurring client.';
