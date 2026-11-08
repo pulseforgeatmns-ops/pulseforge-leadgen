@@ -165,7 +165,10 @@ test('an exhausted search generation advances without waiting and the final one 
   const later = await loadScoutDiscoveryBackoff(eventsPool([event(3, 180), event(2, 195), event(1, 210)]), '10', 'fp', now);
   assert.equal(later.reason, 'approved_search_plan_exhausted');
   // A daily re-observation is allowed; durable memory still forbids rebuying.
-  assert.equal(await loadScoutDiscoveryBackoff(eventsPool([event(3, 25 * 60)]), '10', 'fp', now), null);
+  // SPEC-SCOUT-P0-007: it re-observes the final generation, never generation 0.
+  const recheck = await loadScoutDiscoveryBackoff(eventsPool([event(3, 25 * 60)]), '10', 'fp', now);
+  assert.deepEqual([recheck.reason, recheck.searchGeneration, recheck.diversify],
+    ['approved_search_plan_exhausted_recheck', 3, true]);
 
   const fresh = await loadScoutDiscoveryBackoff(eventsPool([event(0, 15, false)]), '10', 'fp', now);
   assert.equal(fresh, null, 'generation 0 with searchable queries keeps the existing threshold behavior');

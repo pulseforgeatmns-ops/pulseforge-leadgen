@@ -217,7 +217,10 @@ test('persistDiscoveredCompanies passes its resolved tenant to the Anchor-only r
       const pool = { query: async (sql, params) => {
         queries.push(sql);
         // Only the caller's tenant-scoped ownership classification may query.
-        assert.match(sql, /WHERE p\.client_id=\$4/);
+        // SPEC-SCOUT-P0-007: companies (incl. contactless) are tenant-scoped;
+        // prospects stay bound by the join's c.client_id=p.client_id.
+        assert.match(sql, /WHERE c\.client_id=\$4/);
+        assert.match(sql, /c\.client_id=p\.client_id/);
         assert.equal(params[3], 13);
         return fixturePool.query(sql, params);
       } };

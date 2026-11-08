@@ -57,6 +57,7 @@ async function baseSchema(db) {
       ao_call_suppressed BOOLEAN NOT NULL DEFAULT false,
       ao_outreach_review_required BOOLEAN NOT NULL DEFAULT false,
       disposition_status TEXT NOT NULL DEFAULT 'active',
+      ao_current_status TEXT, ao_next_action TEXT, ao_disqualification_reason TEXT,
       next_action_due_at TIMESTAMPTZ, next_action_status TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW(),
       CONSTRAINT prospects_disposition_status_check CHECK (disposition_status IN ('active', 'dead'))

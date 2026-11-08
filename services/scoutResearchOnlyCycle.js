@@ -82,6 +82,12 @@ async function runResearchOnlyCycleIfGranted({ pool, store, program, governed, c
     // differ when an accepted business is already retained or already queued.
     acceptedCandidates: Number(scout?.admission?.fit || 0), evaluatedCandidates: Number(scout?.admission?.evaluated || 0),
     retainedCandidates: Number(scout?.discoveredQueued || 0), queuedForEnrichment: 0,
+    // SPEC-SCOUT-P0-007: known identities (CRM, queue, research ledger) are
+    // reported, never retained or counted as net-new. Retention is research
+    // evidence only: it is never outreach-ready clean inventory.
+    previouslyKnownCandidates: Number(scout?.admission?.previouslyKnown || 0),
+    identityCollisions: Number(scout?.admission?.identityCollisions || 0),
+    netNewRetained: Number(scout?.discoveredQueued || 0), netNewCleanInventory: 0, outreachReady: false,
     candidateLedger: scout?.candidateWork ? { total: scout.candidateWork.total, byState: scout.candidateWork.byState,
       byReason: scout.candidateWork.byReason } : null,
     searchGeneration: Number(scout?.searchGeneration || 0), searchGenerationExhausted: scout?.searchGenerationExhausted === true,
@@ -90,6 +96,7 @@ async function runResearchOnlyCycleIfGranted({ pool, store, program, governed, c
     ...(scout?.queryProgression?.researchCoverage ? { researchCoverage: scout.queryProgression.researchCoverage } : {}),
     enrichment: false, verification: false, preparation: false, outbound: false,
   };
+  result.scorecard = control.replenishmentScorecard(scout, 0, { researchOnly: true, paidResearchUsdMicros: spend.reservedUsdMicros });
   await grants.finishResearchCycle(pool, claim, { completed: !failure, result });
   const researchOnly = { grantId: claim.grantId, cycleNumber: claim.cycleNumber, cyclesRemaining: claim.maxCycles - claim.cycleNumber,
     releasedCycles: claim.releasedCycles, releasedCyclesRemaining: Math.max(0, claim.releasedCycles - claim.cycleNumber),
@@ -103,6 +110,7 @@ async function runResearchOnlyCycleIfGranted({ pool, store, program, governed, c
       scoutInvoked: true, scoutSearchFingerprint: claim.manifest.fingerprint,
       scoutSearchGeneration: result.searchGeneration, scoutSearchGenerationExhausted: result.searchGenerationExhausted,
       scoutDiscoveryAttempted: result.discoveryAttempted, scoutQueued: 0, researchRetained: result.retainedCandidates,
+      scoutPreviouslyKnown: result.previouslyKnownCandidates, scoutNetNewQualified: result.netNewRetained,
       researchMissionId: claim.researchMissionId,
       netCleanInventoryDelta: 0, newCleanInventoryAdded: 0, newPromotions: 0, recoveredExisting: 0,
       googleReservedUsdMicros: spend.reservedUsdMicros, discoveryBlockedReason: result.discoveryReason,
@@ -115,7 +123,9 @@ async function runResearchOnlyCycleIfGranted({ pool, store, program, governed, c
     return { halted: 'research_only_cycle_stopped', programId: program.id, researchOnly, prepareRequested: false, preparedAdded: 0, sent: 0 };
   }
   return { cycleId, programId: program.id, mode: program.mode, recoveryMode: recovery.mode, researchOnly, scout,
-    replenishment: { status: 'research_only', reason: null, newQueueAdmissions: 0, retainedCandidates: result.retainedCandidates },
+    replenishment: { status: 'research_only', reason: null, newQueueAdmissions: 0, retainedCandidates: result.retainedCandidates,
+      researchYield: result.netNewRetained > 0 ? 'retained_research_candidates' : 'zero_yield',
+      newQualifiedInventory: 0, scorecard: result.scorecard },
     prepareRequested: false, preparedAdded: 0, sent: 0 };
 }
 
