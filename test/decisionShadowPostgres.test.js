@@ -43,7 +43,7 @@ test('real PostgreSQL: migration, full round trip, duplicate safety, review filt
     sink.write(fixture);
     await sink.drain();
     assert.equal(sink.stats().failed, 1);
-    assert.equal(warnings[0].reason, 'write_failed');
+    assert.equal(warnings[0].reason, 'schema_table_missing');
     assert.notEqual(warnings[0].reason, 'database_unconfigured',
       'Postgres integration test must configure DATABASE_URL before persistence writes');
     const migration = fs.readFileSync(path.join(root, 'migrations/2026-09-21-decision-shadow-review.sql'), 'utf8');
