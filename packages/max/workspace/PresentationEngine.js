@@ -19,9 +19,21 @@ const MODEL_ERROR_ACTIONS = Object.freeze({
   timeout: 'Model request timed out; retry.',
   provider_unreachable: 'Could not reach the model provider; check network egress.',
   spend_blocked: 'Blocked by the API spend policy; review API usage limits.',
+  billing_unavailable: 'Model provider billing is unavailable. Check the Anthropic account billing and credits for this key, then retry.',
   invalid_request: 'Model request rejected; check MAX_WORKSPACE_MODEL.',
   provider_error: 'Model request failed; check server logs.',
 });
+
+const BILLING_REFUSAL_RE = /\bcredit balance\b|\binsufficient (?:credit|credits|funds|balance)\b|\bplans?\s*&\s*billing\b|\bbilling\b.{0,40}\b(?:required|disabled|unavailable|issue)\b/i;
+
+/** Inspect provider error text for a billing refusal. The text itself never leaves this function. */
+function isBillingRefusal(e) {
+  if (e.status === 402) return true;
+  const body = e.error && typeof e.error === 'object' ? e.error : null;
+  const inner = body && body.error && typeof body.error === 'object' ? body.error : body;
+  const texts = [inner && inner.message, e.message].filter((t) => typeof t === 'string');
+  return texts.some((t) => BILLING_REFUSAL_RE.test(t));
+}
 
 /**
  * Map a provider/SDK/spend-guard error to a stable, non-sensitive code.
@@ -37,6 +49,11 @@ function classifyModelError(err) {
   if (name === 'ApiSpendError' || /^api_/.test(code)) return 'spend_blocked';
   if (status === 401 || status === 403 || name === 'AuthenticationError' || name === 'PermissionDeniedError') {
     return 'provider_auth';
+  }
+  // Billing / credit-balance refusals arrive as HTTP 400 invalid_request_error
+  // (or 402). Matched on the provider text, which is never returned or logged.
+  if ((status === 400 || status === 402 || name === 'BadRequestError') && isBillingRefusal(e)) {
+    return 'billing_unavailable';
   }
   if (status === 429 || name === 'RateLimitError') return 'rate_limited';
   if (status === 529 || status === 503 || status === 502 || name === 'InternalServerError') {

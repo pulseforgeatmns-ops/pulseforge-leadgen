@@ -13,7 +13,9 @@ SHA in §6 at sign-off).
 Commits added after `5b2db0c`/`f49e4fe` (all reviewed in `docs/P0-MAX-RESPONSE-INTEGRITY.md`):
 `9829760` response integrity, `d849a49` execution-intent routing, `6bfc3b0`
 review-bound execution approval, `33ed2d9` complete-content approval binding,
-then a merge of `main` (`f129c74`, Pipeline UI only).
+then a merge of `main` (`f129c74`, Pipeline UI only), then preflight corrections:
+a distinct `billing_unavailable` model-error code, and the P0 PostgreSQL recovery test
+moved from `package.json` into explicit CI workflow steps (no `package.json` change remains).
 
 **R.1 Migrations.** None. No migration file, no new table or column, startup DDL unchanged.
 New approval fields (`preparedContentDigest`) and pending-decision fields
@@ -22,8 +24,18 @@ existing `acquisition_mission_contributions.payload` / `acquisition_missions.pay
 The unapplied operator migrations noted in §0.2 are pre-existing and not required.
 
 **R.2 Production configuration.** None. No environment variable, feature flag or
-Railway setting changes. Merge = deploy for **two** services that build from `main`:
-`pulseforge-leadgen` and `max-decay-daily`.
+Railway setting changes.
+
+**R.2a Services affected by merging the final commit** (Railway project `charming-trust`,
+environment `production`; source settings read 2026-11-08, read-only):
+| Service | Source | Watch patterns | Deploys on merge? |
+|---|---|---|---|
+| `pulseforge-leadgen` | `main`, `checkSuites:false` | none (every commit) | **Yes** |
+| `max-decay-daily` (cron `0 8 * * *`) | `main`, `checkSuites:false` | none (every commit) | **Yes** (next cron run uses the new build) |
+| `signal-dashboard` | `main`, `checkSuites:false` | signal paths, `/package.json`, `/package-lock.json` | **No.** The final diff vs `main` (66 files) touches no watched path. An earlier PR revision changed `package.json` and would have redeployed it and re-run its pre-deploy schema step; that change was removed. |
+| `signal-historical-backfill` | `codex/signal-opportunities-v1` | n/a | No (different branch) |
+| `telegramCallerFeed` | `codex/signal-opportunities-v1` | n/a | No (different branch) |
+Re-check this table if any later commit touches `package.json`, `package-lock.json` or a signal path.
 
 **R.3 API behaviour change.** `APPROVE_EXECUTION` from any human-facing source (chat,
 approval button, command deck, voice, API) must carry `expectedPreparedArtifactRevision`
@@ -96,7 +108,14 @@ configuration change was made.
 - The operator's "budget" table search would not match `api_spend_policies`. `api_usage_events` exists, and it is created by the same migration file, so the policy table almost certainly exists. **Its row is unverified** (acceptance §1.3 query).
 
 ### 0.4 Production observations (read-only logs, not PR-caused)
-- `ANTHROPIC_API_KEY` returns `401 invalid x-api-key` for the 12:00 UTC Paige/Mira jobs (2026-11-05 and 2026-11-06). Whether Max workspace turns are affected is unverified. Acceptance cannot judge Max prose if the model call fails.
+- Anthropic access, chronologically (historical errors are not evidence of a current outage):
+  - 2026-11-05 and 2026-11-06, 12:00 UTC Paige/Mira jobs: `401 invalid x-api-key` (credential).
+  - 2026-11-07, 12:00 UTC: `400` credit balance too low (credential accepted, billing refused).
+  - Afterwards, the operator replenished credits and a direct production-console Anthropic request returned
+    HTTP 200 (operator-reported). This establishes credential **and** billing access at the time of that test.
+  - It does not establish Max's complete model path (workspace → presentation → model → response). That
+    remains acceptance gate 1: one authenticated Max workspace turn with `metadata.modelCompletion.ok === true`.
+    A failed turn now reports a sanitized code (`provider_auth`, `billing_unavailable`, `rate_limited`, …).
 - `[amo] hydrate skip inconsistent mission mission_30b36f10-…` (prepared outreach ready, execution approval not pending). The PR keeps skipping it; it does not fail the tenant's hydrate.
 
 ---

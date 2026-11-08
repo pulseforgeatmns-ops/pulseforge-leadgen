@@ -142,6 +142,15 @@ describe('P0 response integrity — model failures are reported, sanitized and a
     return Object.assign(new Error(SECRET_TEXT), props);
   }
 
+  const CREDIT_TEXT = 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.';
+  function creditError({ inMessage }) {
+    const body = { type: 'error', error: { type: 'invalid_request_error', message: CREDIT_TEXT }, request_id: 'req_123' };
+    return Object.assign(
+      new Error(inMessage ? `400 ${JSON.stringify(body)} ${SECRET_TEXT}` : `400 ${SECRET_TEXT}`),
+      { status: 400, name: 'BadRequestError', ...(inMessage ? {} : { error: body }) },
+    );
+  }
+
   const CASES = [
     ['auth 401', providerError({ status: 401, name: 'AuthenticationError' }), 'provider_auth'],
     ['permission 403', providerError({ status: 403 }), 'provider_auth'],
@@ -152,6 +161,11 @@ describe('P0 response integrity — model failures are reported, sanitized and a
     ['connection', Object.assign(new Error('Connection error.'), { name: 'APIConnectionError' }), 'provider_unreachable'],
     ['spend guard', Object.assign(new Error('api_daily_usd_limit'), { name: 'ApiSpendError', code: 'api_daily_usd_limit' }), 'spend_blocked'],
     ['bad model 404', providerError({ status: 404, name: 'NotFoundError' }), 'invalid_request'],
+    // Anthropic credit-balance refusal, exactly as production logged it on 2026-11-07 (HTTP 400).
+    ['credit balance 400 (message)', creditError({ inMessage: true }), 'billing_unavailable'],
+    ['credit balance 400 (structured body)', creditError({ inMessage: false }), 'billing_unavailable'],
+    ['payment required 402', providerError({ status: 402 }), 'billing_unavailable'],
+    ['ordinary 400 stays invalid_request', providerError({ status: 400, name: 'BadRequestError' }), 'invalid_request'],
     ['unknown', new Error(SECRET_TEXT), 'provider_error'],
   ];
 
@@ -180,7 +194,7 @@ describe('P0 response integrity — model failures are reported, sanitized and a
         });
         assert.equal(out.metadata.presentationError, code);
         const serialized = JSON.stringify(out) + JSON.stringify(logged);
-        assert.doesNotMatch(serialized, /sk-ant|x-api-key|req_123/, 'raw provider text must not leak');
+        assert.doesNotMatch(serialized, /sk-ant|x-api-key|req_123|credit balance is too low|purchase credits|invalid_request_error/, 'raw provider text must not leak');
       } finally {
         console.warn = warn;
       }

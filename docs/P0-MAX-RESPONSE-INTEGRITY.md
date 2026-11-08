@@ -205,3 +205,23 @@ itself). Tests: `p0PreparedArtifactRevision.test.js` (16).
   revision. The governed daily path tracks per-candidate sends separately. A mission-and-prospect guard was prototyped but
   not shipped, to keep the send path unchanged during the freeze. Recommended as the first post-release change.
 - Missing-approval refusals are classified `failed`, not `blocked` (zero sends either way).
+
+---
+
+## 9. Preflight corrections (2026-11-08)
+
+- **Billing failures.** `classifyModelError` returned `invalid_request` for the production failure of 2026-11-07
+  (HTTP 400 `invalid_request_error`, "credit balance is too low") and advised checking `MAX_WORKSPACE_MODEL`. Billing
+  refusals (HTTP 400 with a credit/billing message, in either the SDK message or the structured error body, or HTTP
+  402) now get the distinct code `billing_unavailable` with the action "Model provider billing is unavailable. Check the
+  Anthropic account billing and credits for this key, then retry." The provider text is only pattern-matched; it is
+  never returned, logged or stored. An ordinary 400 stays `invalid_request`. Tests: 4 new cases in
+  `p0MaxResponseIntegrity.test.js`; 3 fail before the fix.
+- **Deployment scope.** The PR's only `package.json` change added `test/maxReliabilityRecoveryPostgres.test.js` to
+  the `test:max:expectations:postgres` script. `/package.json` is a `signal-dashboard` watch pattern, so that line
+  alone would have redeployed `signal-dashboard` and re-run its pre-deploy schema step. The line is reverted. The same
+  test now runs as an explicit step in the PR Max job (`pr-ci-lean.yml`) and in `full-regression.yml`, so CI
+  coverage is unchanged. The final diff touches no `signal-dashboard` watched path (checklist R.2a).
+- **Anthropic evidence.** Reconciled chronologically in checklist §0.4. The 2026-11-08 preflight statement that
+  production "can't currently make model calls" is superseded by the operator's post-replenishment HTTP 200. Max's
+  own model path is still unverified until acceptance gate 1.
