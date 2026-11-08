@@ -338,6 +338,9 @@ function buildResponseMetadata(partial = {}) {
   if (partial.operationalInspection === true) meta.operationalInspection = true;
   if (partial.operationalInspectionRefused != null) meta.operationalInspectionRefused = String(partial.operationalInspectionRefused);
   if (partial.operationalSnapshot != null) meta.operationalSnapshot = partial.operationalSnapshot;
+  // P0 #1089: analytical follow-up over operational evidence
+  if (partial.operationalAnalysis === true) meta.operationalAnalysis = true;
+  if (partial.operationalEvidenceContinuity != null) meta.operationalEvidenceContinuity = partial.operationalEvidenceContinuity;
   if (partial.sessionConfiguration === true) meta.sessionConfiguration = true;
   if (partial.sessionStateRead === true) meta.sessionStateRead = true;
   if (partial.sessionStateEvidence === true) meta.sessionStateEvidence = true;

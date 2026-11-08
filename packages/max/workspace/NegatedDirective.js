@@ -59,4 +59,33 @@ function matchesOnlyWhenNegated(text, pattern) {
   return re.test(raw) && !re.test(stripNegatedDirectives(raw));
 }
 
-module.exports = { stripNegatedDirectives, extractNegatedClauses, matchesOnlyWhenNegated };
+const DECISION_VOCABULARY =
+  /\b(?:approv(?:e|ed|al)|authori[sz]e|reject|deny|cancel|abort|go\s+ahead|proceed|yes|yep|yeah|ok(?:ay)?|send|launch|execute|continue|resume|hold|stop|revise|rewrite|regenerate|redo)\b/i;
+const INFORMATIONAL_REQUEST =
+  /\b(?:explain|identify|distinguish|differentiate|separate|summari[sz]e|recommend|assess|analy[sz]e|describe|list|cite|compare|evaluate|interpret|report|tell\s+me|show\s+me|why|what|which|how)\b/i;
+
+/**
+ * P0 #1089 — a message whose prohibitions qualify a separate informational
+ * request ("Explain the outbound pause. Do not approve or resume missions.")
+ * is not a decision response: the negated clauses are constraints on the
+ * request, not an answer to a pending approve/reject decision. A message that
+ * is only a prohibition ("Don't send it.") or that also uses decision
+ * vocabulary affirmatively keeps its normal decision handling.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function isConstraintQualifiedRequest(text) {
+  const raw = String(text || '');
+  if (!extractNegatedClauses(raw).length) return false;
+  const affirmative = stripNegatedDirectives(raw);
+  if (affirmative.split(/\s+/).filter((w) => /[a-z]/i.test(w)).length < 3) return false;
+  if (DECISION_VOCABULARY.test(affirmative)) return false;
+  return INFORMATIONAL_REQUEST.test(affirmative);
+}
+
+module.exports = {
+  stripNegatedDirectives,
+  extractNegatedClauses,
+  matchesOnlyWhenNegated,
+  isConstraintQualifiedRequest,
+};

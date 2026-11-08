@@ -10,6 +10,7 @@ const { OPERATOR_DECISION_KINDS } = require('../../acquisition-mission/types');
  */
 
 const { isStructuredClarificationPending } = require('../../acquisition-mission/PendingDecisionResponseType');
+const { stripNegatedDirectives } = require('./NegatedDirective');
 
 const CAPTURE_INTENTS = Object.freeze({
   DECISION_RESPONSE: 'decision_response',
@@ -21,6 +22,15 @@ const CAPTURE_INTENTS = Object.freeze({
 });
 
 const SHORT_RESPONSE_MAX_WORDS = 8;
+
+/**
+ * P0 #1089 — "why … approve" inside a negated clause ("Explain why outbound is
+ * paused … do not approve or resume missions") is not a clarification request
+ * about the pending decision.
+ */
+function affirmativeOf(message) {
+  return stripNegatedDirectives(message) || String(message || '');
+}
 const SHORT_RESPONSE_MAX_CHARS = 80;
 
 const APPROVAL_PATTERNS = [
@@ -211,7 +221,7 @@ function classifyPendingDecisionCaptureIntentImpl(input = {}) {
     if (isStructuredClarificationPending(pendingDecision) && isExactOfferedClarification(message, pendingDecision)) {
       return CAPTURE_INTENTS.DECISION_RESPONSE;
     }
-    if (matchesAny(message, PENDING_DECISION_CLARIFICATION_PATTERNS)) {
+    if (matchesAny(affirmativeOf(message), PENDING_DECISION_CLARIFICATION_PATTERNS)) {
       return CAPTURE_INTENTS.PENDING_DECISION_CLARIFICATION;
     }
     if (isStructuredClarificationPending(pendingDecision)) {
@@ -224,7 +234,7 @@ function classifyPendingDecisionCaptureIntentImpl(input = {}) {
     }
   }
 
-  if (matchesAny(message, PENDING_DECISION_CLARIFICATION_PATTERNS)) {
+  if (matchesAny(affirmativeOf(message), PENDING_DECISION_CLARIFICATION_PATTERNS)) {
     return CAPTURE_INTENTS.PENDING_DECISION_CLARIFICATION;
   }
 

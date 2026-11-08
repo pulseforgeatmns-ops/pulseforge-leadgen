@@ -23,7 +23,7 @@ const {
   logPendingDecisionCaptureGuarded,
 } = require('./pendingDecisionCaptureGuard');
 const { isStructuredClarificationPending } = require('../../acquisition-mission/PendingDecisionResponseType');
-const { stripNegatedDirectives } = require('./NegatedDirective');
+const { stripNegatedDirectives, isConstraintQualifiedRequest } = require('./NegatedDirective');
 
 /**
  * P0 execution-intent routing — an approval that names a specific operational
@@ -131,7 +131,10 @@ function isHoldOrDefer(q) {
   );
 }
 
-function isQuestionAboutDecision(q) {
+function isQuestionAboutDecision(text) {
+  // P0 #1089 — decision vocabulary inside a negated clause ("do not approve")
+  // is a constraint, not a question about the pending decision.
+  const q = stripNegatedDirectives(text) || String(text || '');
   if (/^(?:why|what|how|where|when)\??$/i.test(q)) return true;
   if (/\bwhat (?:happens|does|would|will)\b/i.test(q)) return true;
   if (/\bwhat(?:'s| is| are) the (?:biggest )?risks?\b/i.test(q)) return true;
@@ -510,6 +513,15 @@ function resolvePendingOperatorDecision(question, mission, options = {}) {
       action: 'clarify_plan',
       confidence: 0.94,
     }, question);
+  }
+
+  // P0 #1089 — prohibitions that qualify a separate informational request are
+  // constraints on that request, never an approve/reject answer (a negated
+  // "do not approve or resume missions" previously resolved as REJECT/cancel).
+  if (isConstraintQualifiedRequest(q)) {
+    return guardedUnresolved(mission, pending, RESOLUTION_OUTCOMES.UNRELATED, CAPTURE_INTENTS.UNRELATED_OR_QUESTION, {
+      ...options, messageChars, captureGuarded: true,
+    });
   }
 
   if (isHoldOrDefer(q)) {

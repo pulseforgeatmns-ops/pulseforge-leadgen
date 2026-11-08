@@ -191,16 +191,18 @@ class PresentationEngine {
 
     // P0 #1087 — operational inspection is a persisted-state report; never rephrase
     // (a model rewrite could invent progress or drop unavailable-source disclosures).
-    if (metadata.operationalInspection === true) {
+    // P0 #1089 — operational analysis is equally grounded; it is not rephrased either.
+    if (metadata.operationalInspection === true || metadata.operationalAnalysis === true) {
+      const kind = metadata.operationalAnalysis === true ? 'operational_analysis' : 'operational_inspection';
       prose = structured.answer ? String(structured.answer).trim() : '';
       return {
         prose,
         structured,
         metadata: {
           ...metadata,
-          presentation: 'operational_inspection',
+          presentation: kind,
         },
-        presentation: 'operational_inspection',
+        presentation: kind,
       };
     }
 
