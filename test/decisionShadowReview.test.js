@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { FIELDS, insertShadowEvent, listShadowEvents } = require('../packages/decision-service/ShadowEventRepository');
-const { createShadowEventSink, createShadowPool } = require('../packages/decision-service/ShadowEventSink');
+const { createShadowEventSink, createShadowPool, persistenceFailureReason } = require('../packages/decision-service/ShadowEventSink');
 const { buildShadowReview, likelyMissionInspection } = require('../packages/decision-service/shadowReview');
 const { buildRoutingWarning, classifyDecisionMismatch } = require('../packages/decision-service/shadowRoutingWarning');
 const { parseArgs } = require('../scripts/reviewDecisionShadow');
@@ -185,4 +185,18 @@ test('review CLI defaults to 50 and accepts bounded filters without writes', () 
   }
   assert.deepEqual(parseWarningArgs([]), { limit: 50, tenantId: null, json: false });
   assert.deepEqual(parseWarningArgs(['--tenant', '10', '--limit', '25']), { limit: 25, tenantId: '10', json: false });
+});
+
+
+test('shadow persistence failures expose only allowlisted diagnostic categories', () => {
+  for (const [code, expected] of [
+    ['42P01', 'schema_table_missing'], ['42703', 'schema_column_missing'],
+    ['42501', 'database_permission_denied'], ['28P01', 'database_auth_failed'],
+    ['3D000', 'database_missing'], ['53300', 'database_connections_exhausted'],
+    ['57014', 'database_query_timeout'], ['ECONNREFUSED', 'database_connection_failed'],
+    ['ENOTFOUND', 'database_connection_failed'], ['ETIMEDOUT', 'database_connection_failed'],
+    ['ECONNRESET', 'database_connection_failed'],
+  ]) assert.equal(persistenceFailureReason({ code, message: 'SECRET_DATABASE_URL' }), expected);
+  assert.equal(persistenceFailureReason({ code: 'unknown', message: 'SECRET_DATABASE_URL' }), 'write_failed');
+  assert.equal(persistenceFailureReason(null), 'write_failed');
 });
