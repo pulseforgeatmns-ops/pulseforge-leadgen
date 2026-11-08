@@ -41,6 +41,7 @@ test('review holds exclude queue admission in actual PostgreSQL queries without 
         email text,phone text,vertical text,icp_score integer,status text,service_area_match text,
         do_not_contact boolean DEFAULT false,ao_outreach_review_required boolean DEFAULT false,
         ao_call_suppressed boolean DEFAULT false,disposition_status text DEFAULT 'active',is_hot boolean DEFAULT false,
+        ao_current_status text,ao_next_action text,ao_disqualification_reason text,
         first_name text,last_name text,next_action_due_at timestamptz,created_at timestamptz DEFAULT now(),updated_at timestamptz DEFAULT now(),
         setter_visible boolean DEFAULT false,setter_visibility_reason text,setter_updated_at timestamptz);
       CREATE TABLE touchpoints(id bigserial PRIMARY KEY,client_id integer,prospect_id uuid,
