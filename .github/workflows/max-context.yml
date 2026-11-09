@@ -1,0 +1,21 @@
+name: Max conversation context
+on:
+  pull_request:
+    paths:
+      - 'packages/max/context/**'
+      - 'packages/max/workspace/SessionStore.js'
+      - 'packages/max/workspace/WorkspaceEngine.js'
+      - 'migrations/*max-conversation-context*'
+      - '.github/workflows/max-context.yml'
+jobs:
+  context:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: ./.github/actions/setup-postgres-environment
+      - run: npm ci --ignore-scripts
+      - run: node packages/max/context/tests/conversationContext.test.js
+      - run: node --test packages/max/context/tests/conversationContextPostgres.test.js

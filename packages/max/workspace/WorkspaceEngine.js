@@ -269,6 +269,8 @@ class WorkspaceEngine {
   constructor(options = {}) {
     this._sessions = options.sessions || new SessionStore();
     this._decisionService = options.decisionService || new DecisionService();
+    const { ConversationContinuity } = require('../context/ConversationContinuity');
+    this._conversationContinuity = options.conversationContinuity || new ConversationContinuity();
     this._resolveWorkspaceOwner = options.resolveWorkspaceOwner || resolveWorkspaceOwner;
     this._presentation =
       options.presentation ||
@@ -437,6 +439,10 @@ class WorkspaceEngine {
    * @param {object} [input.context] - optional new MaxContext (evidence only)
    * @param {object} [input.rawContext] - alias
    */
+  async resumeConversationContext({ tenantId, sessionId }) {
+    return this._conversationContinuity.resume(String(tenantId), sessionId);
+  }
+
   async ask(input) {
     const shadow = beginShadow(
       this._decisionService, input,
@@ -450,6 +456,7 @@ class WorkspaceEngine {
         result
       );
       completeShadow(shadow, result);
+      this._conversationContinuity.remember(this._sessions.get(result.sessionId));
       return result;
     } catch (error) {
       completeShadow(shadow, null, error);
