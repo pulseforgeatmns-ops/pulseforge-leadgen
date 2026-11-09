@@ -3,6 +3,7 @@ const { randomUUID } = require('node:crypto');
 const { ModelFrameProducer } = require('./producers/ModelFrameProducer');
 const { observedRoute } = require('../../decision-service/observedRoute');
 const { estimateClaudeUsage } = require('../../../utils/apiPricing');
+const { recordObserverHealth } = require('../observability/ObserverHealth');
 
 // Captured before production handles the turn. Never retain a mutable session,
 // transcript, raw message, or model client in the persisted observation.
@@ -39,15 +40,15 @@ class ShadowInterpreter {
   capture(session) {
     if (!this.enabled) return null;
     try { return snapshot(session); }
-    catch (_) { this.counts.failed++; this.emit({event:'MAX_INTERPRETATION_FAILURE',reason:'context_unavailable'}); return null; }
+    catch (_) { this.counts.failed++; recordObserverHealth('semantic_shadow', 'failure', {reason:'context_unavailable'}); this.emit({event:'MAX_INTERPRETATION_FAILURE',reason:'context_unavailable'}); return null; }
   }
   observe({ context, text, result }) {
     if (!this.enabled || !context) return;
-    if (this.pending.size >= this.maxPending) { this.counts.dropped++; return; }
+    if (this.pending.size >= this.maxPending) { this.counts.dropped++; recordObserverHealth('semantic_shadow', 'dropped', {pending:this.pending.size}); return; }
     // No result/frame is returned to the request or routing pipeline.
     let legacy;
     try { legacy = observedRoute(result); }
-    catch (_) { this.counts.failed++; this.emit({event:'MAX_INTERPRETATION_FAILURE',reason:'legacy_metadata_invalid'}); return; }
+    catch (_) { this.counts.failed++; recordObserverHealth('semantic_shadow', 'failure', {reason:'legacy_metadata_invalid'}); this.emit({event:'MAX_INTERPRETATION_FAILURE',reason:'legacy_metadata_invalid'}); return; }
     const task = new Promise(resolve => setImmediate(resolve)).then(async () => {
       if (!this.producer) {
         const Client = require('../../../utils/meteredAnthropic').forAgent('max-interpretation-shadow');
@@ -57,7 +58,7 @@ class ShadowInterpreter {
         return this.run(producer, context, text, legacy);
       }
       return this.run(this.producer, context, text, legacy);
-    }).catch(() => { this.counts.failed++; this.emit({ event: 'MAX_INTERPRETATION_FAILURE', reason: 'observer_failed' }); });
+    }).catch(() => { this.counts.failed++; recordObserverHealth('semantic_shadow', 'failure', {reason:'observer_failed'}); this.emit({ event: 'MAX_INTERPRETATION_FAILURE', reason: 'observer_failed' }); });
     this.pending.add(task);
     task.finally(() => this.pending.delete(task));
   }
@@ -79,6 +80,7 @@ class ShadowInterpreter {
         [row.id, row.tenantId, row.timestamp, JSON.stringify(row)]);
     } else await this.persist(row);
     this.counts.completed++;
+    recordObserverHealth('semantic_shadow', 'success', {pending:this.pending.size});
     this.emit({ event: 'MAX_INTERPRETATION_SHADOW', id: row.id, disagreement: row.disagreement, latencyMs: row.latencyMs, failure: row.failure });
   }
   emit(row) { try { Promise.resolve(this.audit(row)).catch(() => {}); } catch (_) { /* observation cannot affect production */ } }

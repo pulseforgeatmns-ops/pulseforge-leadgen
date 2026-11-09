@@ -1,6 +1,7 @@
 'use strict';
 
 const { insertShadowEvent } = require('./ShadowEventRepository');
+const { recordObserverHealth } = require('../max/observability/ObserverHealth');
 
 function integer(value, fallback, min, max) {
   const n = Number(value);
@@ -56,6 +57,7 @@ function createShadowEventSink({ env = process.env, createPool = createShadowPoo
       if (!enabled || row?.mode !== 'shadow' || row?.event !== 'DECISION_SHADOW_EVALUATED') return;
       if (pending.size >= maxPending) {
         counts.dropped += 1;
+        recordObserverHealth('jev_shadow', 'dropped', {pending:pending.size});
         warning('capacity_limit');
         return;
       }
@@ -73,7 +75,8 @@ function createShadowEventSink({ env = process.env, createPool = createShadowPoo
         }
         await insertShadowEvent(pool, row);
         counts.persisted += 1;
-      }).catch(error => { counts.failed += 1; warning(persistenceFailureReason(error)); });
+        recordObserverHealth('jev_shadow', 'success', {pending:pending.size});
+      }).catch(error => { counts.failed += 1; const reason=persistenceFailureReason(error); recordObserverHealth('jev_shadow','failure',{reason,pending:pending.size}); warning(reason); });
       pending.add(task);
       task.then(() => pending.delete(task));
     },
