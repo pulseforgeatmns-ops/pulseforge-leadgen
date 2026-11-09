@@ -11,7 +11,11 @@ const {
  * Non-durable across process restarts (SPEC-009 v1).
  */
 class SessionStore {
-  constructor() {
+  constructor({now = Date.now, ttlMs = 2 * 60 * 60 * 1000, maxSessions = 1024} = {}) {
+    this._now = now;
+    this._ttlMs = ttlMs;
+    this._maxSessions = maxSessions;
+    this._lastAccess = new Map();
     /** @type {Map<string, object>} */
     this._sessions = new Map();
   }
@@ -39,7 +43,13 @@ class SessionStore {
           : null,
     };
     rememberEntity(session, context);
+    this._prune();
+    if (this._sessions.size >= this._maxSessions) {
+      const oldest = [...this._lastAccess].sort((a,b) => a[1]-b[1])[0]?.[0];
+      this._sessions.delete(oldest); this._lastAccess.delete(oldest);
+    }
     this._sessions.set(sessionId, session);
+    this._lastAccess.set(sessionId, this._now());
     return session;
   }
 
@@ -49,7 +59,13 @@ class SessionStore {
    */
   get(sessionId) {
     if (!sessionId) return null;
-    return this._sessions.get(String(sessionId)) || null;
+    const id = String(sessionId);
+    if (this._now() - (this._lastAccess.get(id) ?? -Infinity) >= this._ttlMs) {
+      this._sessions.delete(id); this._lastAccess.delete(id); return null;
+    }
+    const session = this._sessions.get(id) || null;
+    if (session) this._lastAccess.set(id, this._now());
+    return session;
   }
 
   /**
@@ -132,12 +148,20 @@ class SessionStore {
     return session;
   }
 
+  _prune() {
+    for (const [id, at] of this._lastAccess) if (this._now()-at >= this._ttlMs) {
+      this._sessions.delete(id); this._lastAccess.delete(id);
+    }
+  }
+
   /** Test helper */
   clear() {
     this._sessions.clear();
+    this._lastAccess.clear();
   }
 
   get size() {
+    this._prune();
     return this._sessions.size;
   }
 }

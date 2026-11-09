@@ -268,6 +268,8 @@ class WorkspaceEngine {
    */
   constructor(options = {}) {
     this._sessions = options.sessions || new SessionStore();
+    const { ConversationContinuity } = require('../context/ConversationContinuity');
+    this._conversationContinuity = options.conversationContinuity || new ConversationContinuity({audit:row=>console.info('[MAX_CONVERSATION_CONTEXT]',JSON.stringify(row))});
     this._decisionService = options.decisionService || new DecisionService();
     const { ShadowInterpreter } = require('../interpretation/ShadowInterpreter');
     this._interpretationShadow = options.interpretationShadow || new ShadowInterpreter({ audit: row => console.info('[MAX_INTERPRETATION_SHADOW]', JSON.stringify(row)) });
@@ -439,6 +441,10 @@ class WorkspaceEngine {
    * @param {object} [input.context] - optional new MaxContext (evidence only)
    * @param {object} [input.rawContext] - alias
    */
+  async resumeConversationContext({ tenantId, sessionId }) {
+    return this._conversationContinuity.resume(String(tenantId), sessionId);
+  }
+
   async ask(input) {
     const interpretationContext = this._interpretationShadow.capture(input?.sessionId ? this._sessions.get(input.sessionId) : null);
     const shadow = beginShadow(
@@ -452,6 +458,7 @@ class WorkspaceEngine {
         result && result.sessionId ? this._sessions.get(result.sessionId) : null,
         result
       );
+      this._conversationContinuity.remember(this._sessions.get(result.sessionId));
       completeShadow(shadow, result);
       this._interpretationShadow.observe({ context: interpretationContext, text: String(input.question || ''), result });
       return result;
