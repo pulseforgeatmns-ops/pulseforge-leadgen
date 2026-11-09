@@ -2,6 +2,7 @@
 
 const { insertShadowEvidence } = require('./ShadowEvidenceRepository');
 const { createShadowPool } = require('./ShadowEventSink');
+const { recordObserverHealth } = require('../max/observability/ObserverHealth');
 
 function createShadowEvidenceSink({ env = process.env, createPool = createShadowPool,
   warn = row => console.warn('[DECISION_SHADOW_EVIDENCE]', JSON.stringify(row)) } = {}) {
@@ -18,7 +19,9 @@ function createShadowEvidenceSink({ env = process.env, createPool = createShadow
           pool.on('error', () => {});
         }
         await insertShadowEvidence(pool, row);
+        recordObserverHealth('jev_evidence', 'success', {pending:pending.size});
       }).catch(() => {
+        recordObserverHealth('jev_evidence', 'failure', {reason:'evidence_write_failed',pending:pending.size});
         try { warn({ status: 'error', reason: 'evidence_write_failed' }); } catch (_) { /* noop */ }
       });
       pending.add(task);
