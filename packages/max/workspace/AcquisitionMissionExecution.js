@@ -32,7 +32,7 @@ const {
   assertRuntimeEngine,
 } = require('./WorkspaceMissionInspection');
 const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
-const { resolvePendingOperatorDecision } = require('./PendingDecisionResolver');
+const { resolvePendingOperatorDecision, authorizationPolarityVerdict } = require('./PendingDecisionResolver');
 const { splitClauses, isVerbNegatedInClause } = require('./MissionLifecycleIntent');
 const {
   isExplicitMissionExit,
@@ -1112,6 +1112,20 @@ function detectExecutionAction(question, snapshot, operatorIntent = null) {
     return null;
   }
   const resolution = operatorIntent && operatorIntent.pendingDecisionResolution;
+  // P0 authorization polarity — a prohibition ("Don't proceed.", "Do not send
+  // it", "Don't cancel the mission") never dispatches an approval, continuation,
+  // send, or cancellation, whatever raw verbs the fallbacks below would match.
+  // Same verdict as PendingDecisionResolver: only `held`/`mixed` are blocked; an
+  // explicit cancellation, an explicit revision, or an approval whose
+  // prohibitions name a different (later) action keep their normal path.
+  const pendingKind = snapshot && snapshot.mission && snapshot.mission.pendingOperatorDecision
+    ? snapshot.mission.pendingOperatorDecision.kind
+    : null;
+  const polarityVerdict = authorizationPolarityVerdict(qGuard, pendingKind).verdict;
+  if (polarityVerdict === 'held' || polarityVerdict === 'mixed') {
+    askPathTrace.traceEarlyReturn('detectExecutionAction', `negated_authorization_${polarityVerdict}`);
+    return null;
+  }
   if (resolution && resolution.resolvedFromPendingDecision && resolution.executionAction) {
     askPathTrace.traceEarlyReturn('detectExecutionAction', 'pending_decision_resolution');
     return resolution.executionAction;

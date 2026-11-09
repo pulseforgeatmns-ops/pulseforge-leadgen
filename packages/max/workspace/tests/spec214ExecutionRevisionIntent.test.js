@@ -167,15 +167,18 @@ describe('SPEC-214 — Route Canonical Execution Revision Intent', () => {
       assert.equal(intent.conversationIntent.via, 'pending_decision_resolved');
     });
 
-    it('reject "No, don\'t send this" still cancels execution', async () => {
+    // P0 authorization polarity: "No, don't send this" declines (holds) the
+    // execution decision; it does not dispatch CANCEL_PLAN.
+    it('reject "No, don\'t send this" holds execution without cancelling the mission', async () => {
       const mission = executionApprovalMission();
 
       const question = "No, don't send this.";
       const pendingDecisionResolution = resolvePendingOperatorDecision(question, mission);
 
-      assert.equal(pendingDecisionResolution.resolved, true);
+      assert.equal(pendingDecisionResolution.resolved, false);
       assert.equal(pendingDecisionResolution.outcome, 'reject');
-      assert.equal(pendingDecisionResolution.action, 'cancel');
+      assert.equal(pendingDecisionResolution.action, 'decline');
+      assert.equal(pendingDecisionResolution.executionIntent, null);
     });
 
     it('modify "Change the objective to restaurants" still requests planning', async () => {
@@ -284,12 +287,20 @@ describe('SPEC-214 — Route Canonical Execution Revision Intent', () => {
       assert.equal(operatorIntent.conversationIntent.intent, THINKING_MODES.EXECUTE);
     });
 
-    it('reject "No, don\'t send this" → existing reject path', async () => {
+    it('reject "No, don\'t send this" → held reject (no send, no cancel)', async () => {
       const mission = executionApprovalMission();
 
       const operatorUtterance = "No, don't send this.";
       const resolution = resolvePendingOperatorDecision(operatorUtterance, mission);
 
+      assert.equal(resolution.resolved, false);
+      assert.equal(resolution.outcome, 'reject');
+      assert.equal(resolution.action, 'decline');
+    });
+
+    it('an explicit cancellation still cancels: "No, don\'t send this. Cancel the mission."', async () => {
+      const mission = executionApprovalMission();
+      const resolution = resolvePendingOperatorDecision("No, don't send this. Cancel the mission.", mission);
       assert.equal(resolution.resolved, true);
       assert.equal(resolution.outcome, 'reject');
       assert.equal(resolution.action, 'cancel');
