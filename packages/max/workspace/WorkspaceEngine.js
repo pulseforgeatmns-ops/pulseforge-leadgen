@@ -268,9 +268,9 @@ class WorkspaceEngine {
    */
   constructor(options = {}) {
     this._sessions = options.sessions || new SessionStore();
-    this._decisionService = options.decisionService || new DecisionService();
     const { ConversationContinuity } = require('../context/ConversationContinuity');
     this._conversationContinuity = options.conversationContinuity || new ConversationContinuity();
+    this._decisionService = options.decisionService || new DecisionService();
     this._resolveWorkspaceOwner = options.resolveWorkspaceOwner || resolveWorkspaceOwner;
     this._presentation =
       options.presentation ||
@@ -455,8 +455,8 @@ class WorkspaceEngine {
         result && result.sessionId ? this._sessions.get(result.sessionId) : null,
         result
       );
-      completeShadow(shadow, result);
       this._conversationContinuity.remember(this._sessions.get(result.sessionId));
+      completeShadow(shadow, result);
       return result;
     } catch (error) {
       completeShadow(shadow, null, error);

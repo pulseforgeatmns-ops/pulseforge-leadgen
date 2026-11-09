@@ -11,7 +11,7 @@ function scope(tenantId, sessionId) {
 // Explicit projection: never serialize a live SessionStore object. No transcript,
 // customer records, execution policy, package presentation, or approvals survive.
 function project(session, tenantId) {
-  if (String(session?.context?.tenantId) !== tenantId) throw new Error('Conversation tenant mismatch');
+  if (session?.context?.tenantId == null || String(session.context.tenantId) !== tenantId) throw new Error('Conversation tenant mismatch');
   const currentFocus = require('../workspace/OperationalQuestionFrame').currentFocus(session,tenantId);
   const focus = identifier(currentFocus?.missionIds?.[0]);
   const mission = identifier(session.context.acquisitionMissionId || session.context.missionId);
