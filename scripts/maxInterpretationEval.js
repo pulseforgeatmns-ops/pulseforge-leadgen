@@ -16,7 +16,9 @@
  * architecture document's cost/latency estimates must be replaced with.
  */
 
-const { CASES } = require('../packages/max/interpretation/eval/heldoutInterpretation');
+const { CASES: ORIGINAL_CASES } = require('../packages/max/interpretation/eval/heldoutInterpretation');
+const { CASES: EXTENDED_CASES } = require('../packages/max/interpretation/eval/extendedInterpretation');
+const CASES = process.argv.includes('--extended') ? [...ORIGINAL_CASES, ...EXTENDED_CASES] : ORIGINAL_CASES;
 const { scoreProducer } = require('../packages/max/interpretation/eval/scoreInterpretation');
 const { produceLexicalFrame } = require('../packages/max/interpretation/producers/LexicalFrameProducer');
 
@@ -39,7 +41,7 @@ async function runModel() {
   const client = new Metered({ apiKey: process.env.ANTHROPIC_API_KEY });
   const producer = new ModelFrameProducer({
     client,
-    model: arg('--model-id', process.env.MAX_INTERPRETER_MODEL || undefined),
+    model: arg('--model-id', process.env.MAX_INTERPRETATION_MODEL || process.env.MAX_WORKSPACE_MODEL || 'claude-sonnet-4-6'),
     timeoutMs: Number(arg('--timeout-ms', 0)) || undefined,
   });
   const repeats = Math.max(1, Number(arg('--repeats', 1)) || 1);
