@@ -20,7 +20,7 @@
  *   - an affirmative authorization contradicted by a prohibition of the same
  *     decision is AMBIGUOUS (never dispatched);
  *   - an approval whose prohibitions name a different, later action
- *     ("Approved. Do not run Scout discovery yet." on a plan) resolves normally;
+ *     ("Approved. Do not run Scout discovery yet." on a plan) holds until the restriction can be durably enforced;
  *   - explicit approvals and explicit cancellations keep their meaning.
  */
 
@@ -60,6 +60,18 @@ const ALL_KINDS = [
   K.EXECUTION_APPROVAL,
 ];
 
+const QUALIFIED = [
+  'Maybe approve the plan? Not sure yet.',
+  'Approve it, but hold the emails until Monday.',
+  'Perhaps go ahead with this.',
+  'I guess this is approved.',
+  'Yes, provided the compliance review succeeds.',
+  'Authorize this only after the customer confirms.',
+  'Approved. Wait for my next message before sending.',
+  'Go ahead unless finance objects.',
+  'Approved. Do not run Scout discovery yet.',
+];
+
 const PROHIBITIONS = [
   "Don't proceed.",
   "Don't approve this.",
@@ -90,6 +102,14 @@ function pendingMission(kind) {
 
 describe('P0 authorization polarity — resolver matrix (every pending-decision kind)', () => {
   for (const kind of ALL_KINDS) {
+    for (const q of QUALIFIED) {
+      it(`${kind}: qualified decision holds without authority`, () => {
+        const r = resolvePendingOperatorDecision(q, pendingMission(kind));
+        assert.equal(r.resolved, false, q);
+        assert.equal(r.executionIntent || null, null, q);
+        assert.equal(r.resolvedFromPendingDecision, false, q);
+      });
+    }
     for (const q of PROHIBITIONS) {
       it(`${kind}: "${q}" is a held decline — never approve, never cancel`, () => {
         const r = resolvePendingOperatorDecision(q, pendingMission(kind));
@@ -147,8 +167,8 @@ describe('P0 authorization polarity — resolver matrix (every pending-decision 
       assert.notEqual(r.action, 'cancel', kind);
       assert.notEqual(r.executionIntent, EXECUTION_INTENTS.CANCEL_PLAN, kind);
     }
-    // Internal gates: the approval stands and the send prohibition is scoped to later outreach.
-    assert.equal(resolvePendingOperatorDecision("Approved, but don't send it.", pendingMission(K.PLAN_APPROVAL)).action, 'approve_plan');
+    // Future-stage restrictions cannot be dropped at internal gates.
+    assert.equal(resolvePendingOperatorDecision("Approved, but don't send it.", pendingMission(K.PLAN_APPROVAL)).resolved, false);
     // Execution gate: the same sentence contradicts itself and is held.
     assert.equal(resolvePendingOperatorDecision("Approved, but don't send it.", pendingMission(K.EXECUTION_APPROVAL)).outcome, O.AMBIGUOUS);
   });
@@ -171,11 +191,11 @@ describe('P0 authorization polarity — resolver matrix (every pending-decision 
     }
   });
 
-  it('plan gate: approval plus a prohibition of a later action resolves the plan (scoped)', () => {
-    assert.equal(authorizationPolarityVerdict('Approved. Do not run Scout discovery yet.', K.PLAN_APPROVAL).verdict, 'scoped');
+  it('plan gate: approval plus a prohibition of a later action holds rather than losing the future restriction', () => {
+    assert.equal(authorizationPolarityVerdict('Approved. Do not run Scout discovery yet.', K.PLAN_APPROVAL).verdict, 'mixed');
     const r = resolvePendingOperatorDecision('Approved. Do not run Scout discovery yet.', pendingMission(K.PLAN_APPROVAL));
-    assert.equal(r.outcome, O.AFFIRM);
-    assert.equal(r.action, 'approve_plan');
+    assert.equal(r.outcome, O.AMBIGUOUS);
+    assert.equal(r.resolved, false);
   });
 
   it('execution gate: a no-send reply with an explicit revision request still revises', () => {
@@ -253,7 +273,7 @@ describe('P0 authorization polarity — end to end', { concurrency: false }, () 
   });
 
   for (const kind of E2E_GATES) {
-    for (const q of E2E_PROHIBITIONS) {
+    for (const q of [...E2E_PROHIBITIONS, ...QUALIFIED]) {
       it(`${kind}: "${q}" dispatches nothing and leaves the mission unchanged`, async () => {
         const c = await missionAt(kind);
         amo.clearExecutionRouterAudit();
@@ -285,6 +305,16 @@ describe('P0 authorization polarity — end to end', { concurrency: false }, () 
   // Chat routing of a bare "Cancel the mission." to the AMO handler is
   // unchanged by this fix (it is not routed there on main either); the
   // execution handler is where an explicit cancellation must keep dispatching.
+  for (const kind of E2E_GATES) {
+    it(`${kind}: bare cancellation reaches the governed router`, async () => {
+      const c = await missionAt(kind);
+      amo.clearExecutionRouterAudit();
+      await c.ask('Cancel the mission.');
+      assert.deepEqual(amo.listExecutionRouterAudit().map(a => a.intent), ['CANCEL_PLAN']);
+      assert.equal(c.get().planCancelled, true);
+    });
+  }
+
   it('plan gate: an explicit cancellation still dispatches CANCEL_PLAN from the execution handler', async () => {
     for (const question of ['Cancel it.', "Don't send it. Cancel it."]) {
       const engine = amo.createAcquisitionMissionEngine();
@@ -321,6 +351,6 @@ describe('P0 authorization polarity — end to end', { concurrency: false }, () 
     const r = await c.ask('Approve it but do not send anything.');
     assert.deepEqual(amo.listExecutionRouterAudit(), []);
     assert.equal(c.fingerprint(), before);
-    assert.match(r.prose, /both authorizes and prohibits/);
+    assert.match(r.prose, /Nothing was approved|nothing was approved/);
   });
 });

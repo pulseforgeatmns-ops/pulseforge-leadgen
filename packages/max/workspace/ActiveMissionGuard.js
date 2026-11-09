@@ -26,6 +26,7 @@ const {
 const { isMissionPlanningTurn } = require('./MissionPlanningTurn');
 const { buildStructuredResponse } = require('./WorkspaceTypes');
 const askPathTrace = require('./audit/AskPathTrace');
+const { resolvePendingOperatorDecision } = require('./PendingDecisionResolver');
 
 const UNRESOLVED_BOUND_MISSION_REASON = 'unresolved_bound_mission_context';
 
@@ -207,7 +208,9 @@ async function resolveActiveMissionLock(input = {}) {
     const planningTurn = operatorIntent
       ? operatorIntent.planningRequested
       : isMissionPlanningTurn(amoMission, question);
-    const cancelDuringPlanning = planningTurn && /\bcancel\b/i.test(question);
+    const decision = resolvePendingOperatorDecision(question, amoMission);
+    const cancelDuringPlanning = (planningTurn && /\bcancel\b/i.test(question)) ||
+      (decision.resolvedFromPendingDecision && decision.action === 'cancel');
     askPathTrace.traceEarlyReturn('resolveActiveMissionLock', 'amo_active', {
       missionId: amoMission.id,
       executionCommand: executionCommand || planningTurn,

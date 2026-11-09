@@ -63,7 +63,7 @@ function mismatchedActionTargets(kind, q) {
   if (!allowed) return null;
   const affirmative = stripNegatedDirectives(q);
   const named = Object.keys(ACTION_TARGETS).filter((t) => ACTION_TARGETS[t].test(affirmative));
-  if (!named.length || named.some((t) => allowed.includes(t))) return null;
+  if (!named.length || named.every((t) => allowed.includes(t))) return null;
   return named;
 }
 
@@ -514,6 +514,19 @@ const OWN_DECISION_TARGETS = Object.freeze({
  */
 function authorizationPolarityVerdict(q, kind = null) {
   const polarity = classifyAuthorizationPolarity(q);
+  // Authority requires an unqualified speech act. A hedge, question or
+  // condition cannot be discarded while retaining its approval vocabulary.
+  // No scheduler/constraint transaction is attached to this resolver, so
+  // future-stage restrictions must be clarified rather than silently lost.
+  const uncertain = /\b(?:maybe|perhaps|possibly|probably|tentatively|potentially|might|could|would|should|unsure|uncertain|not\s+(?:sure|certain|ready|convinced)|i\s+(?:think|guess|suppose)|on\s+second\s+thought|undecided)\b/i.test(q);
+  const qualified = /\b(?:if|unless|until|after|once|when|provided|providing|assuming|pending|subject\s+to|only|as\s+long\s+as|hold|wait|defer|delay|postpone|later|tomorrow|next\s+week|but|however|except)\b/i.test(q);
+  if ((polarity.affirmativeAuthorization || polarity.affirmativeCancel) &&
+      (uncertain || qualified || /\?/.test(q))) {
+    return { verdict: 'mixed', polarity, qualification: true };
+  }
+  if (polarity.affirmativeAuthorization && polarity.negatedClauses.length) {
+    return { verdict: 'mixed', polarity, qualification: true };
+  }
   if (!polarity.negatedAuthorization && !polarity.negatedCancel) return { verdict: 'clear', polarity };
   if (polarity.affirmativeCancel) return { verdict: 'cancel', polarity };
   if (kind === OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL && isRevisionRequest(q)) return { verdict: 'revision', polarity };
@@ -524,7 +537,9 @@ function authorizationPolarityVerdict(q, kind = null) {
       const named = Object.keys(ACTION_TARGETS).filter((t) => ACTION_TARGETS[t].test(c));
       return named.length > 0 && !named.some((t) => own.includes(t));
     });
-    return { verdict: scopedElsewhere ? 'scoped' : 'mixed', polarity };
+    // Even a restriction on a different stage must survive this decision.
+    // Until persistence and enforcement are atomic, ask for clarification.
+    return { verdict: 'mixed', polarity, scopedRestriction: scopedElsewhere };
   }
   return { verdict: polarity.affirmativeAuthorization ? 'mixed' : 'held', polarity };
 }
@@ -538,7 +553,7 @@ function authorizationPolarityVerdict(q, kind = null) {
  * Otherwise null (normal classification continues).
  */
 function heldByAuthorizationPolarity(mission, pending, q, { onlyBareProhibition = false } = {}) {
-  const { verdict, polarity } = authorizationPolarityVerdict(q, pending.kind);
+  const { verdict, polarity, qualification } = authorizationPolarityVerdict(q, pending.kind);
   if (verdict !== 'held' && verdict !== 'mixed') return null;
   if (onlyBareProhibition && polarity.affirmative.replace(/[^a-z]/gi, '').length > 0) return null;
   const mixed = verdict === 'mixed';
@@ -549,6 +564,7 @@ function heldByAuthorizationPolarity(mission, pending, q, { onlyBareProhibition 
     negatedAuthorization: polarity.negatedAuthorization,
     negatedCancelOnly: polarity.negatedCancel && !polarity.negatedAuthorization,
     mixedPolarity: mixed,
+    qualifiedAuthorization: Boolean(qualification),
     executionIntent: null,
     executionAction: null,
     resolvedFromPendingDecision: false,
@@ -583,6 +599,10 @@ function resolvePendingOperatorDecision(question, mission, options = {}) {
   };
   const captureIntent = safeClassifyPendingDecisionCaptureIntent(captureInput);
   const messageChars = q.length;
+  const earlyHeld = heldByAuthorizationPolarity(mission, pending, q);
+  if (earlyHeld && earlyHeld.mixedPolarity &&
+      captureIntent !== CAPTURE_INTENTS.PENDING_DECISION_CLARIFICATION &&
+      !isQuestionAboutDecision(q)) return earlyHeld;
 
   if (
     pending.kind === OPERATOR_DECISION_KINDS.PLAN_CLARIFICATION &&

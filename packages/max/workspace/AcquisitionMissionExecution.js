@@ -1444,7 +1444,9 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'not_execution_command');
     return null;
   }
-  if (isExplicitMissionExit(question).explicit && !planningTurn) {
+  const governedDecision = resolvePendingOperatorDecision(question, mission, { tenantId });
+  if (isExplicitMissionExit(question).explicit && !planningTurn &&
+      !(governedDecision.resolvedFromPendingDecision && governedDecision.action === 'cancel')) {
     askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'explicit_mission_exit');
     return null;
   }
