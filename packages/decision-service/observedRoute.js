@@ -74,7 +74,7 @@ function observedRoute(result, failed = false, meta = {}) {
   if (!failed && result && !result.error && !result.metadata?.miep && trace.pipeline !== 'MultiIntentExecutionPlanner') {
     if (action === 'clarify' || pending?.outcome === 'ambiguous') route = 'clarification';
     else if (/^(approve_|reject|cancel)|_(approved|rejected)$/.test(action || '') || ['affirm', 'reject'].includes(pending?.outcome)) route = 'approval';
-    else if (['mission_inspection', 'execution_inspection', 'session_inspection'].includes(objective)
+    else if (owner === 'operational_inspection' || ['mission_inspection', 'execution_inspection', 'session_inspection'].includes(objective)
       || ['session_inspection', 'execution_inspection'].includes(messageType)
       || ['session_inspected', 'execution_inspected', 'session_explained', 'inspected'].includes(action)
       || ['mission_inspection', 'execution_state_manager'].includes(owner)
