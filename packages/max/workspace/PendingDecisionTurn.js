@@ -105,7 +105,7 @@ function buildClarifyProse(question, resolution, snapshot) {
     // P0 authorization polarity — a prohibition holds the decision.
     prefix =
       'Understood — not approved. Nothing was approved, sent, or cancelled; this decision stays pending.\n' +
-      'To cancel the mission instead, say "cancel the mission".\n\n';
+      'To cancel the mission instead, say "cancel it".\n\n';
   } else if (resolution.held && resolution.mixedPolarity) {
     prefix =
       'Not executed: your message both authorizes and prohibits action, so nothing was approved, sent, or cancelled.\n' +

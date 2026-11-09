@@ -108,10 +108,25 @@ const CANCEL_VERB =
  * Purely lexical and conservative: an ambiguous mixture never authorizes.
  * @param {string} text
  */
+/**
+ * Inline negation the clause splitter does not cover: "I would not approve
+ * this", "we can't send it", "never authorize" — negation within two words of
+ * the verb. Matched spans are treated as negated clauses.
+ */
+const INLINE_NEGATED_VERB_RE = new RegExp(
+  `\\b(?:not|never|cannot|can['’]?t|won['’]?t|wouldn['’]?t|shouldn['’]?t|mustn['’]?t|didn['’]?t|isn['’]?t|aren['’]?t)\\s+(?:[a-z]+\\s+){0,2}?(?:${AUTHORIZATION_VERB.source.replace(/^\\b\(\?:/, '(?:').replace(/\)\\b$/, ')')}|${CANCEL_VERB.source.replace(/^\\b\(\?:/, '(?:').replace(/\)\\b$/, ')')})\\b`,
+  'gi'
+);
+
 function classifyAuthorizationPolarity(text) {
   const raw = String(text || '');
+  let affirmative = stripNegatedDirectives(raw);
   const clauses = extractNegatedClauses(raw);
-  const affirmative = stripNegatedDirectives(raw);
+  const inline = affirmative.match(INLINE_NEGATED_VERB_RE) || [];
+  if (inline.length) {
+    clauses.push(...inline);
+    affirmative = affirmative.replace(INLINE_NEGATED_VERB_RE, ' ').replace(/\s+/g, ' ').trim();
+  }
   return {
     negatedAuthorization: clauses.some((c) => AUTHORIZATION_VERB.test(c)),
     negatedCancel: clauses.some((c) => CANCEL_VERB.test(c)),

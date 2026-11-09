@@ -65,6 +65,10 @@ const PROHIBITIONS = [
   'Never launch this.',
   "Don't continue.",
   'Do not move forward with this.',
+  // Inline negation the clause splitter does not cover.
+  'I would not approve this.',
+  'We should not send this.',
+  "We can't proceed with this.",
 ];
 
 function pendingMission(kind) {
@@ -128,6 +132,18 @@ describe('P0 authorization polarity — resolver matrix (every pending-decision 
       }
     });
   }
+
+  it('"Approved, but don\'t send it." never cancels the mission at any gate', () => {
+    for (const kind of ALL_KINDS) {
+      const r = resolvePendingOperatorDecision("Approved, but don't send it.", pendingMission(kind));
+      assert.notEqual(r.action, 'cancel', kind);
+      assert.notEqual(r.executionIntent, EXECUTION_INTENTS.CANCEL_PLAN, kind);
+    }
+    // Internal gates: the approval stands and the send prohibition is scoped to later outreach.
+    assert.equal(resolvePendingOperatorDecision("Approved, but don't send it.", pendingMission(K.PLAN_APPROVAL)).action, 'approve_plan');
+    // Execution gate: the same sentence contradicts itself and is held.
+    assert.equal(resolvePendingOperatorDecision("Approved, but don't send it.", pendingMission(K.EXECUTION_APPROVAL)).outcome, O.AMBIGUOUS);
+  });
 
   it('execution gate: an authorization contradicted by a no-send prohibition is ambiguous', () => {
     for (const q of ['Approve it but do not send anything.', "Go ahead, but don't send it."]) {

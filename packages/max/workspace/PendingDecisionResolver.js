@@ -162,7 +162,9 @@ function isUnrelatedTopic(q) {
 }
 
 function isCancelPhrase(q) {
-  return /\b(?:cancel(?:\s+(?:it|the mission|this))?|stop(?:\s+the)?\s+mission|abort(?:\s+the\s+mission)?|don'?t\s+send(?:\s+this|\s+it)?)\b/i.test(
+  // P0 authorization polarity — "don't send it" is a prohibition (held by the
+  // polarity guard), not a mission cancellation; it was removed from this list.
+  return /\b(?:cancel(?:\s+(?:it|the mission|this))?|stop(?:\s+the)?\s+mission|abort(?:\s+the\s+mission)?)\b/i.test(
     q
   );
 }
