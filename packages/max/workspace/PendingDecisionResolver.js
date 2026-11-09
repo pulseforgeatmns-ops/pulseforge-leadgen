@@ -497,6 +497,9 @@ function guardedUnresolved(mission, pending, outcome, captureIntent, options = {
  */
 function authorizationPolarityVerdict(q, kind = null) {
   const polarity = classifyAuthorizationPolarity(q);
+  const nomination = classifyByKind(kind, polarity.affirmative);
+  const affirmativeDecision = polarity.affirmativeAuthorization || polarity.affirmativeCancel ||
+    nomination?.outcome === RESOLUTION_OUTCOMES.AFFIRM || nomination?.action === 'cancel';
   // Authority requires an unqualified speech act. A hedge, question or
   // condition cannot be discarded while retaining its approval vocabulary.
   // No scheduler/constraint transaction is attached to this resolver, so
@@ -505,11 +508,11 @@ function authorizationPolarityVerdict(q, kind = null) {
       !/\b(?:maybe|perhaps|possibly|if|unless)\b/i.test(q)) return { verdict: 'revision', polarity };
   const uncertain = /\b(?:maybe|perhaps|possibly|probably|tentatively|potentially|might|could|would|should|unsure|uncertain|not\s+(?:sure|certain|ready|convinced)|i\s+(?:think|guess|suppose)|on\s+second\s+thought|undecided)\b/i.test(q);
   const qualified = /\b(?:if|unless|until|after|once|when|provided|providing|assuming|pending|subject\s+to|only|as\s+long\s+as|hold|wait|defer|delay|postpone|later|tomorrow|next\s+week|but|however|except)\b/i.test(q);
-  if ((polarity.affirmativeAuthorization || polarity.affirmativeCancel) &&
+  if (affirmativeDecision &&
       (uncertain || qualified || /\?/.test(q))) {
     return { verdict: 'mixed', polarity, qualification: true };
   }
-  if (polarity.affirmativeAuthorization && polarity.negatedClauses.length) {
+  if (affirmativeDecision && !polarity.affirmativeCancel && polarity.negatedClauses.length) {
     return { verdict: 'mixed', polarity, qualification: true };
   }
   if (!polarity.negatedAuthorization && !polarity.negatedCancel) return { verdict: 'clear', polarity };

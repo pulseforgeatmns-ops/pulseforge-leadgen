@@ -64,6 +64,8 @@ const QUALIFIED = [
   'Maybe approve the plan? Not sure yet.',
   'Approve it, but hold the emails until Monday.',
   'Perhaps go ahead with this.',
+  'Looks good, but wait for clearance.',
+  'Sounds good unless compliance objects.',
   'I guess this is approved.',
   'Yes, provided the compliance review succeeds.',
   'Authorize this only after the customer confirms.',
