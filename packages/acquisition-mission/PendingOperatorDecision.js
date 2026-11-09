@@ -226,6 +226,10 @@ function assertMissionStateConsistent(missionOrSnapshot, extras = {}) {
       details
     );
   }
+  // A terminal cancellation preserves historical artifacts, but none of those
+  // artifacts may require a new approval. Still reject a cancelled mission
+  // advertising authority above.
+  if (mission.planCancelled === true && mission.status === 'Cancelled') return mission;
 
   if (approved && (PLAN_KINDS.has(kind) || kind === OPERATOR_DECISION_KINDS.PLAN_CLARIFICATION)) {
     throw missionStateInconsistent(
