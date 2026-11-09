@@ -37,7 +37,7 @@ test('restart recovery returns continuity hints and failure recovers without aut
   one.remember(session);await one.drain();
   const two=new ConversationContinuity({env:{MAX_CONVERSATION_CONTEXT:'true'},store});
   assert.deepEqual((await two.resume('t1','s1')).context.candidates,['m1']);
-  const broken=new ConversationContinuity({env:{MAX_CONVERSATION_CONTEXT:'true'},store:{load:async()=>{throw Error('database down');}}});
+  const broken=new ConversationContinuity({env:{MAX_CONVERSATION_CONTEXT:'true'},audit:async()=>{throw Error('telemetry unavailable');},store:{load:async()=>{throw Error('database down');}}});
   assert.equal(await broken.resume('t1','s1'),null);
   broken.remember(session);await broken.drain();
   const off=new ConversationContinuity({env:{},store});

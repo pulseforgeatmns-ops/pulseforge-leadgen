@@ -41,7 +41,7 @@ class ConversationContinuity {
       if(this.queues.get(key)===task)this.queues.delete(key);
     });
   }
-  emit(reason){try{this.audit({event:'MAX_CONVERSATION_CONTEXT',reason});}catch(_){}}
+  emit(reason){try{Promise.resolve(this.audit({event:'MAX_CONVERSATION_CONTEXT',reason})).catch(()=>{});}catch(_){}}
   async drain(){await Promise.all([...this.pending]);}
   async close(){await this.drain();if(this.pool)await this.pool.end();}
 }
