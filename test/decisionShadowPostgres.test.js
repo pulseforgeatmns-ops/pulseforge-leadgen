@@ -49,7 +49,18 @@ test('real PostgreSQL: migration, full round trip, duplicate safety, review filt
     const migration = fs.readFileSync(path.join(root, 'migrations/2026-09-21-decision-shadow-review.sql'), 'utf8');
     const migration006 = fs.readFileSync(path.join(root, 'migrations/2026-09-30-jev-006-shadow-observability.sql'), 'utf8');
     await db.query(migration);
+    const { inspectShadowSchema } = require('../packages/decision-service/shadowSchema');
+    const before006 = await inspectShadowSchema(db);
+    assert.equal(before006.ready, false);
+    assert.ok(before006.missing.decision_shadow_events.includes('mission_stage'));
+    await assert.rejects(insertShadowEvent(db, fixture), error => error.code === '42703');
     await db.query(migration006);
+    await db.query(migration006); // idempotent replay after partial deployment
+    assert.equal((await inspectShadowSchema(db)).ready, true);
+    const { insertShadowEvidence, listShadowEvidence } = require('../packages/decision-service/ShadowEvidenceRepository');
+    await insertShadowEvidence(db, { evidence_id: randomUUID(), event: 'PENDING_DECISION_CAPTURE_GUARDED', spec: 'SPEC-JEV-006', tenant_id: '10', timestamp: new Date().toISOString(), payload: { reason: 'regression_probe' } });
+    assert.equal((await listShadowEvidence(db, {tenantId:'10'})).length, 1);
+    assert.equal((await listShadowEvidence(db, {tenantId:'other'})).length, 0);
     const probePool = createShadowPool(env);
     try {
       await probePool.query('SELECT 1');
