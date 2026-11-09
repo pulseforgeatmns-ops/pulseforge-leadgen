@@ -33,4 +33,4 @@ jobs:
           node-version: '22'
       - uses: ./.github/actions/setup-postgres-environment
       - run: npm ci --ignore-scripts
-      - run: node --test packages/max/interpretation/tests/shadowPostgres.test.js
+      - run: node --test packages/max/interpretation/tests/shadowPostgres.postgres.cjs
