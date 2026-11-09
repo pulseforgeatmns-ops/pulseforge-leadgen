@@ -53,6 +53,31 @@ class SessionStore {
     return session;
   }
 
+  /** Restore a durable referent-only session under its original opaque id. */
+  restore(sessionId, context) {
+    const id = String(sessionId || '');
+    if (!id || id.length > 160 || !/^[a-zA-Z0-9_.:-]+$/.test(id)) throw new Error('Invalid workspace session');
+    const existing = this.get(id);
+    if (existing) {
+      if (String(existing.context?.tenantId) !== String(context?.tenantId)) throw new Error('Workspace session tenant mismatch');
+      return existing;
+    }
+    const createdAt = new Date().toISOString();
+    const session = {
+      id, createdAt, updatedAt: createdAt, context,
+      fingerprint: contextFingerprint(context), messages: [], discussedEntities: new Set(),
+      conversationMemory: null, activeWorkContext: context?.activeWorkContext || null,
+    };
+    rememberEntity(session, context);
+    this._prune();
+    if (this._sessions.size >= this._maxSessions) {
+      const oldest = [...this._lastAccess].sort((a,b) => a[1]-b[1])[0]?.[0];
+      this._sessions.delete(oldest); this._lastAccess.delete(oldest);
+    }
+    this._sessions.set(id, session); this._lastAccess.set(id, this._now());
+    return session;
+  }
+
   /**
    * @param {string} sessionId
    * @returns {object|null}
