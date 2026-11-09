@@ -47,7 +47,7 @@ const {
 const { classifyAuthorizationPolarity, prohibitsAuthorization } = require('../NegatedDirective');
 const { createHermeticWorkspaceEngine } = require('./workspaceTestHarness');
 const { analyzeOperatorIntent } = require('../OperatorIntent');
-const { maybeHandleAcquisitionMissionExecution } = require('../AcquisitionMissionExecution');
+const { maybeHandleAcquisitionMissionExecution, detectExecutionAction } = require('../AcquisitionMissionExecution');
 const { createTestAmoRuntime, liveScoutStub } = require('./amoTestRuntime');
 
 const TENANT = '10';
@@ -106,6 +106,7 @@ describe('P0 authorization polarity — resolver matrix (every pending-decision 
       it(`${kind}: qualified decision holds without authority`, () => {
         const r = resolvePendingOperatorDecision(q, pendingMission(kind));
         assert.equal(r.resolved, false, q);
+        assert.equal(detectExecutionAction(q, {mission:pendingMission(kind)}), null, q);
         assert.equal(r.executionIntent || null, null, q);
         assert.equal(r.resolvedFromPendingDecision, false, q);
       });
@@ -305,7 +306,23 @@ describe('P0 authorization polarity — end to end', { concurrency: false }, () 
   // Chat routing of a bare "Cancel the mission." to the AMO handler is
   // unchanged by this fix (it is not routed there on main either); the
   // execution handler is where an explicit cancellation must keep dispatching.
+  it('an unbound cancellation never dispatches', async () => {
+    const ws = createHermeticWorkspaceEngine();
+    const opened = await ws.open({tenantId:TENANT,page:'command-deck'});
+    amo.clearExecutionRouterAudit();
+    await ws.ask({sessionId:opened.sessionId,question:'Cancel the mission.'});
+    assert.deepEqual(amo.listExecutionRouterAudit(),[]);
+  });
+
   for (const kind of E2E_GATES) {
+    it(`${kind}: leaving the conversation never cancels`, async () => {
+      const c = await missionAt(kind);
+      const before = c.fingerprint();
+      amo.clearExecutionRouterAudit();
+      await c.ask('Exit this mission.');
+      assert.deepEqual(amo.listExecutionRouterAudit(),[]);
+      assert.equal(c.fingerprint(),before);
+    });
     it(`${kind}: bare cancellation reaches the governed router`, async () => {
       const c = await missionAt(kind);
       amo.clearExecutionRouterAudit();

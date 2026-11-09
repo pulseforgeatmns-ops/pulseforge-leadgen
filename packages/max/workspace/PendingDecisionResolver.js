@@ -518,6 +518,8 @@ function authorizationPolarityVerdict(q, kind = null) {
   // condition cannot be discarded while retaining its approval vocabulary.
   // No scheduler/constraint transaction is attached to this resolver, so
   // future-stage restrictions must be clarified rather than silently lost.
+  if (kind === OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL && isRevisionRequest(q) &&
+      !/\b(?:maybe|perhaps|possibly|if|unless)\b/i.test(q)) return { verdict: 'revision', polarity };
   const uncertain = /\b(?:maybe|perhaps|possibly|probably|tentatively|potentially|might|could|would|should|unsure|uncertain|not\s+(?:sure|certain|ready|convinced)|i\s+(?:think|guess|suppose)|on\s+second\s+thought|undecided)\b/i.test(q);
   const qualified = /\b(?:if|unless|until|after|once|when|provided|providing|assuming|pending|subject\s+to|only|as\s+long\s+as|hold|wait|defer|delay|postpone|later|tomorrow|next\s+week|but|however|except)\b/i.test(q);
   if ((polarity.affirmativeAuthorization || polarity.affirmativeCancel) &&
@@ -600,7 +602,7 @@ function resolvePendingOperatorDecision(question, mission, options = {}) {
   const captureIntent = safeClassifyPendingDecisionCaptureIntent(captureInput);
   const messageChars = q.length;
   const earlyHeld = heldByAuthorizationPolarity(mission, pending, q);
-  if (earlyHeld && earlyHeld.mixedPolarity &&
+  if (earlyHeld && earlyHeld.mixedPolarity && !isConstraintQualifiedRequest(q) &&
       captureIntent !== CAPTURE_INTENTS.PENDING_DECISION_CLARIFICATION &&
       !isQuestionAboutDecision(q)) return earlyHeld;
 

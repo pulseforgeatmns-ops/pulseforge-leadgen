@@ -249,7 +249,7 @@ describe('Studio Substral — region clarification and Scout dispatch', () => {
   }
 
   for (const prohibition of ['Do not begin discovery.', 'Do not run Scout discovery yet.']) {
-    it(`can approve the plan while honoring the discovery prohibition: ${prohibition}`, async () => {
+    it(`holds the compound decision until future restrictions can be persisted: ${prohibition}`, async () => {
       const question = `region = Manchester NH. Approval: approved. ${prohibition}`;
       const context = { tenantId: '17', missionId: mission.id };
       const operatorIntent = await analyzeOperatorIntent({
@@ -259,10 +259,10 @@ describe('Studio Substral — region clarification and Scout dispatch', () => {
         question, operatorIntent, context,
         acquisitionMissionRuntime: createTestAmoRuntime({ engine }), allowFixtureFallback: true,
       });
-      assert.equal(turn.action, 'plan_approved');
+      assert.equal(turn, null);
       const after = engine.inspect(mission.id, { tenantId: '17' });
-      assert.equal(after.mission.structuredMissionApproved, true);
-      assert.equal(after.mission.pendingOperatorDecision.kind, 'discovery_approval');
+      assert.equal(after.mission.structuredMissionApproved, false);
+      assert.equal(after.mission.pendingOperatorDecision.kind, 'plan_clarification');
       assert.equal(after.contributions.some((row) => row.specialist === 'scout'), false);
     });
   }
@@ -278,11 +278,10 @@ describe('Studio Substral — region clarification and Scout dispatch', () => {
         question, operatorIntent, context,
         acquisitionMissionRuntime: createTestAmoRuntime({ engine }), allowFixtureFallback: true,
       });
-      assert.equal(turn.action, 'plan_clarified');
+      assert.equal(turn, null);
       const after = engine.inspect(mission.id, { tenantId: '17' });
-      assert.equal(after.mission.missionPlanDraft.geography.region, 'Greater Manchester');
       assert.equal(after.mission.structuredMissionApproved, false);
-      assert.equal(after.mission.pendingOperatorDecision.kind, 'plan_approval');
+      assert.equal(after.mission.pendingOperatorDecision.kind, 'plan_clarification');
       assert.equal(after.contributions.some((row) => row.specialist === 'scout'), false);
     });
   }
