@@ -27,8 +27,16 @@
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 
-const amo = require('../../../acquisition-mission');
+// Isolate the Scout provider boundary (as audit008 does) BEFORE the workspace
+// modules load, so the discovery-gate "Approved." control runs the real
+// approval transaction without reaching the tenant database or network.
 const A = require('../AmoOperatorApproval');
+const { liveScoutStub: scoutProviderStub } = require('./amoTestRuntime');
+const originalAdvanceDiscovery = A.advanceDiscoveryAfterApproval;
+A.advanceDiscoveryAfterApproval = (input = {}) =>
+  originalAdvanceDiscovery({ ...input, runScout: input.runScout || scoutProviderStub });
+
+const amo = require('../../../acquisition-mission');
 const { OPERATOR_DECISION_KINDS: K } = require('../../../acquisition-mission/types');
 const { EXECUTION_INTENTS } = require('../../../acquisition-mission/ExecutionRequest');
 const {
