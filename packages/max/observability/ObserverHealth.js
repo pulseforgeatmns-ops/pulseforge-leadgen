@@ -1,6 +1,7 @@
 'use strict';
 
 const states = new Map();
+const processStartedAt = new Date().toISOString();
 
 function state(name) {
   if (!states.has(name)) states.set(name, {
@@ -24,7 +25,12 @@ function recordObserverHealth(name, event, details = {}) {
 }
 
 function observerHealthSnapshot() {
-  return Object.fromEntries([...states].map(([name, value]) => [name, { ...value }]));
+  return {
+    scope: 'process',
+    durableHistory: false,
+    processStartedAt,
+    observers: Object.fromEntries([...states].map(([name, value]) => [name, { ...value }])),
+  };
 }
 
 function resetObserverHealth() { states.clear(); }

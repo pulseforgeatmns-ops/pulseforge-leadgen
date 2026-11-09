@@ -46,13 +46,36 @@ test('readiness exposes booleans, bounded health and aggregate persistence only'
   assert.equal(result.readOnly, true);
   assert.equal(result.jev.schema.ready, true);
   assert.equal(result.semanticShadow.activeRouting, false);
-  assert.equal(result.conversationContext.authenticatedRecoveryIntegrated, false);
-  assert.equal(result.observerHealth.semantic_shadow.failed, 1);
-  assert.equal(result.observerHealth.semantic_shadow.dropped, 1);
+  assert.deepEqual(result.conversationContext.authenticatedRecoveryCapability, {
+    implementedInDeployedCode: false, scope: 'deployed_code', configurationIndependent: true,
+  });
+  assert.equal(result.observerHealth.scope, 'process');
+  assert.equal(result.observerHealth.durableHistory, false);
+  assert.ok(result.observerHealth.processStartedAt);
+  assert.equal(result.observerHealth.observers.semantic_shadow.failed, 1);
+  assert.equal(result.observerHealth.observers.semantic_shadow.dropped, 1);
+  assert.equal(result.outbound.verified, true);
+  assert.equal(result.outbound.status, 'verified');
   assert.equal(result.outbound.recoveryKillSwitchEffective, true);
   assert.equal(result.outbound.persistedMaintenanceArmed, true);
   assert.deepEqual(result.outbound.authorization, { mode: 'paused', authorizedAt: '2026-11-01T00:00:00.000Z', expiresAt: '2026-11-02T00:00:00.000Z' });
   assert.doesNotMatch(JSON.stringify(result), /must-not-appear|customer@example/i);
+});
+
+test('failed outbound gate reads are explicitly unknown and never look safely verified', async () => {
+  const db = database();
+  const query = db.query;
+  db.query = async sql => {
+    if (sql.includes('FROM anchor_email_recovery_control')) throw new Error('unavailable');
+    return query(sql);
+  };
+  const result = await getMaxOperationalReadiness({ db, env: { ANCHOR_EMAIL_RECOVERY_MAINTENANCE: 'true' } });
+  assert.equal(result.outbound.verified, false);
+  assert.equal(result.outbound.status, 'unknown');
+  assert.equal(result.outbound.mode, null);
+  assert.equal(result.outbound.reason, 'gate_state_unverified');
+  assert.equal(result.outbound.recoveryKillSwitchEffective, null);
+  assert.equal(result.outbound.persistedMaintenanceArmed, null);
 });
 
 function appFor(user, readiness) {
