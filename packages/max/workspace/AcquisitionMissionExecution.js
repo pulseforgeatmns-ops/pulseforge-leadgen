@@ -32,7 +32,7 @@ const {
   assertRuntimeEngine,
 } = require('./WorkspaceMissionInspection');
 const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
-const { resolvePendingOperatorDecision, authorizationPolarityVerdict } = require('./PendingDecisionResolver');
+const { resolvePendingOperatorDecision, authorizationPolarityVerdict, mismatchedActionTargets } = require('./PendingDecisionResolver');
 const { splitClauses, isVerbNegatedInClause } = require('./MissionLifecycleIntent');
 const {
   isExplicitMissionExit,
@@ -1126,6 +1126,7 @@ function detectExecutionAction(question, snapshot, operatorIntent = null) {
     askPathTrace.traceEarlyReturn('detectExecutionAction', `negated_authorization_${polarityVerdict}`);
     return null;
   }
+  if (polarityVerdict !== 'cancel' && polarityVerdict !== 'revision' && mismatchedActionTargets(pendingKind, qGuard)) return null;
   if (resolution && resolution.resolvedFromPendingDecision && resolution.executionAction) {
     askPathTrace.traceEarlyReturn('detectExecutionAction', 'pending_decision_resolution');
     return resolution.executionAction;

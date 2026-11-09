@@ -27,7 +27,6 @@ const {
   stripNegatedDirectives,
   isConstraintQualifiedRequest,
   classifyAuthorizationPolarity,
-  AUTHORIZATION_VERB,
 } = require('./NegatedDirective');
 
 /**
@@ -483,27 +482,11 @@ function guardedUnresolved(mission, pending, outcome, captureIntent, options = {
 }
 
 /**
- * The action each decision kind itself authorizes. A prohibition naming a
- * DIFFERENT action ("Approved. Do not run Scout discovery yet." on a plan
- * approval) constrains a later step and does not contradict this decision.
- */
-const OWN_DECISION_TARGETS = Object.freeze({
-  [OPERATOR_DECISION_KINDS.PLAN_APPROVAL]: ['plan'],
-  [OPERATOR_DECISION_KINDS.PLAN_CLARIFICATION]: ['plan'],
-  [OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL]: ['discovery'],
-  [OPERATOR_DECISION_KINDS.DISCOVERY_INVESTIGATION]: ['investigation', 'discovery'],
-  [OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL]: ['prioritization'],
-  [OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL]: ['outbound'],
-});
-
-/**
  * P0 authorization polarity verdict for a message against a decision kind.
  *
  *   clear    no prohibition of authorization/cancellation
  *   cancel   explicit affirmative cancellation (keeps its meaning)
  *   revision explicit revision request at the execution gate
- *   scoped   affirmative authorization; every prohibition names a different
- *            (later) action — this decision may resolve normally
  *   mixed    affirmative authorization contradicted by a prohibition of this
  *            decision (or an untargeted one) — ambiguous, never dispatched
  *   held     prohibition only — the decision is declined/held, never
@@ -533,15 +516,7 @@ function authorizationPolarityVerdict(q, kind = null) {
   if (polarity.affirmativeCancel) return { verdict: 'cancel', polarity };
   if (kind === OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL && isRevisionRequest(q)) return { verdict: 'revision', polarity };
   if (polarity.affirmativeAuthorization && !polarity.negatedCancel) {
-    const own = OWN_DECISION_TARGETS[kind] || [];
-    const prohibited = polarity.negatedClauses.filter((c) => AUTHORIZATION_VERB.test(c));
-    const scopedElsewhere = own.length > 0 && prohibited.every((c) => {
-      const named = Object.keys(ACTION_TARGETS).filter((t) => ACTION_TARGETS[t].test(c));
-      return named.length > 0 && !named.some((t) => own.includes(t));
-    });
-    // Even a restriction on a different stage must survive this decision.
-    // Until persistence and enforcement are atomic, ask for clarification.
-    return { verdict: 'mixed', polarity, scopedRestriction: scopedElsewhere };
+    return { verdict: 'mixed', polarity };
   }
   return { verdict: polarity.affirmativeAuthorization ? 'mixed' : 'held', polarity };
 }
