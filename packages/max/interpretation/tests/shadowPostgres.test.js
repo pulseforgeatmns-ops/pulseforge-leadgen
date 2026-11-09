@@ -1,0 +1,27 @@
+'use strict';
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const {Pool}=require('pg');
+const {startDisposablePostgres}=require('../../../../test/helpers/disposablePostgres');
+const {ShadowInterpreter}=require('../ShadowInterpreter');
+const {ModelFrameProducer}=require('../producers/ModelFrameProducer');
+const {review}=require('../../../../scripts/maxInterpretationShadowReview');
+test('PostgreSQL: shadow migration replay, validated frame persistence, tenant-scoped audit', {timeout:60000},async t=>{
+ const instance=await startDisposablePostgres('max-frame-');
+ const db=new Pool({connectionString:instance.connectionString});
+ t.after(async()=>{await db.end();await instance.stop();});
+ const sql=fs.readFileSync('migrations/2026-11-09-max-interpretation-shadow.sql','utf8');
+ await db.query(sql);await db.query(sql);
+ const observer=new ShadowInterpreter({env:{MAX_INTERPRETATION_SHADOW:'true',DATABASE_URL:instance.connectionString,DATABASE_SSL:'false'},producer:new ModelFrameProducer({client:{messages:{create:async()=>{throw Error('offline');}}}})});
+ t.after(()=>observer.close());
+ observer.observe({context:{tenantId:'t1',candidates:[],focusIds:[],pendingDecisionId:null},text:'An unfamiliar inspection request',result:{route:'inspection'}});
+ await observer.drain();
+ assert.equal(observer.counts.completed,1);
+ const rows=(await db.query('SELECT observation FROM max_interpretation_shadow')).rows;
+ assert.equal(rows[0].observation.frame.authority.grantsAuthority,false);
+ assert.equal(rows[0].observation.failure,'provider_error');
+ assert.doesNotMatch(JSON.stringify(rows),/An unfamiliar inspection request/);
+ assert.equal((await review(db,'t1')).length,1);
+ assert.equal((await review(db,'t2')).length,0);
+});

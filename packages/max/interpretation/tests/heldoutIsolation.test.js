@@ -10,7 +10,9 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { CASES } = require('../eval/heldoutInterpretation');
+const { CASES: ORIGINAL } = require('../eval/heldoutInterpretation');
+const { CASES: EXTENDED } = require('../eval/extendedInterpretation');
+const CASES = [...ORIGINAL, ...EXTENDED];
 
 const ROOT = path.resolve(__dirname, '../../../..');
 const PRODUCTION_DIRS = ['packages/max', 'packages/acquisition-mission', 'packages/decision-service', 'routes', 'services', 'utils'];
@@ -35,7 +37,7 @@ describe('held-out evaluation isolation', () => {
   });
 
   it('no production module imports an evaluation set', () => {
-    const offenders = sources.filter(([, src]) => /heldoutInterpretation|eval\/semantic\/scenarios/.test(src)).map(([f]) => f);
+    const offenders = sources.filter(([, src]) => /heldoutInterpretation|extendedInterpretation|eval\/semantic\/scenarios/.test(src)).map(([f]) => f);
     assert.deepEqual(offenders, []);
   });
 

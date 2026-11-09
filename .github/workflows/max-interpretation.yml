@@ -18,5 +18,19 @@ jobs:
       # Direct invocation preserves granular results with the hermetic network guard.
       - run: |
           set -e
-          for test in packages/max/interpretation/tests/*.test.js; do node "$test"; done
+          for test in packages/max/interpretation/tests/*.test.js; do
+            case "$test" in *shadowPostgres*) continue ;; esac
+            node "$test"
+          done
       - run: npm run max:interpretation-eval
+
+  postgres:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: ./.github/actions/setup-postgres-environment
+      - run: npm ci --ignore-scripts
+      - run: node --test packages/max/interpretation/tests/shadowPostgres.test.js

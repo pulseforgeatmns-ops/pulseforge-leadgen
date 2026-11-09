@@ -269,6 +269,8 @@ class WorkspaceEngine {
   constructor(options = {}) {
     this._sessions = options.sessions || new SessionStore();
     this._decisionService = options.decisionService || new DecisionService();
+    const { ShadowInterpreter } = require('../interpretation/ShadowInterpreter');
+    this._interpretationShadow = options.interpretationShadow || new ShadowInterpreter({ audit: row => console.info('[MAX_INTERPRETATION_SHADOW]', JSON.stringify(row)) });
     this._resolveWorkspaceOwner = options.resolveWorkspaceOwner || resolveWorkspaceOwner;
     this._presentation =
       options.presentation ||
@@ -438,6 +440,7 @@ class WorkspaceEngine {
    * @param {object} [input.rawContext] - alias
    */
   async ask(input) {
+    const interpretationContext = this._interpretationShadow.capture(input?.sessionId ? this._sessions.get(input.sessionId) : null);
     const shadow = beginShadow(
       this._decisionService, input,
       input?.sessionId ? this._sessions.get(input.sessionId) : null,
@@ -450,6 +453,7 @@ class WorkspaceEngine {
         result
       );
       completeShadow(shadow, result);
+      this._interpretationShadow.observe({ context: interpretationContext, text: String(input.question || ''), result });
       return result;
     } catch (error) {
       completeShadow(shadow, null, error);
