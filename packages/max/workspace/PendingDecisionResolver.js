@@ -499,6 +499,7 @@ function authorizationPolarityVerdict(q, kind = null) {
   const polarity = classifyAuthorizationPolarity(q);
   const nomination = classifyByKind(kind, polarity.affirmative);
   const affirmativeDecision = polarity.affirmativeAuthorization || polarity.affirmativeCancel ||
+    isGenericAffirmative(polarity.affirmative) ||
     nomination?.outcome === RESOLUTION_OUTCOMES.AFFIRM || nomination?.action === 'cancel';
   // Authority requires an unqualified speech act. A hedge, question or
   // condition cannot be discarded while retaining its approval vocabulary.

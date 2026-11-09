@@ -1126,7 +1126,10 @@ function detectExecutionAction(question, snapshot, operatorIntent = null) {
     askPathTrace.traceEarlyReturn('detectExecutionAction', `negated_authorization_${polarityVerdict}`);
     return null;
   }
-  if (polarityVerdict !== 'cancel' && polarityVerdict !== 'revision' && mismatchedActionTargets(pendingKind, qGuard)) return null;
+  const wrongTargets = mismatchedActionTargets(pendingKind, qGuard);
+  const historicalDiscovery = wrongTargets?.every(target => target === 'discovery') &&
+    findScoutDiscoveryAfterApproval(snapshot.contributions || [], findDiscoveryApproval(snapshot.contributions || []));
+  if (polarityVerdict !== 'cancel' && polarityVerdict !== 'revision' && wrongTargets && !historicalDiscovery) return null;
   if (resolution && resolution.resolvedFromPendingDecision && resolution.executionAction) {
     askPathTrace.traceEarlyReturn('detectExecutionAction', 'pending_decision_resolution');
     return resolution.executionAction;
