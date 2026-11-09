@@ -1,0 +1,22 @@
+name: Max interpretation contracts
+on:
+  pull_request:
+    paths:
+      - 'packages/max/interpretation/**'
+      - 'packages/max/workspace/WorkspaceEngine.js'
+      - 'scripts/maxInterpretationEval.js'
+      - '.github/workflows/max-interpretation.yml'
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts
+      # Direct invocation preserves granular results with the hermetic network guard.
+      - run: |
+          set -e
+          for test in packages/max/interpretation/tests/*.test.js; do node "$test"; done
+      - run: npm run max:interpretation-eval
