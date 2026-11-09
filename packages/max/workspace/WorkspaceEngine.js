@@ -269,7 +269,7 @@ class WorkspaceEngine {
   constructor(options = {}) {
     this._sessions = options.sessions || new SessionStore();
     const { ConversationContinuity } = require('../context/ConversationContinuity');
-    this._conversationContinuity = options.conversationContinuity || new ConversationContinuity();
+    this._conversationContinuity = options.conversationContinuity || new ConversationContinuity({audit:row=>console.info('[MAX_CONVERSATION_CONTEXT]',JSON.stringify(row))});
     this._decisionService = options.decisionService || new DecisionService();
     this._resolveWorkspaceOwner = options.resolveWorkspaceOwner || resolveWorkspaceOwner;
     this._presentation =

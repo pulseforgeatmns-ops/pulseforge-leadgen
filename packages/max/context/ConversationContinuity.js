@@ -3,7 +3,7 @@ const {ConversationContextStore, project} = require('./ConversationContextStore'
 class ConversationContinuity {
   constructor({env=process.env,store,audit=()=>{}}={}) {
     this.enabled=env.MAX_CONVERSATION_CONTEXT==='true';
-    this.env=env;this.store=store;this.audit=audit;this.pending=new Set();
+    this.env=env;this.store=store;this.audit=audit;this.pending=new Set();this.queues=new Map();
   }
   repository() {
     if (!this.store) {
@@ -27,13 +27,19 @@ class ConversationContinuity {
     let tenantId,sessionId,context;
     try {tenantId=String(session.context.tenantId);sessionId=session.id;context=project(session,tenantId);}
     catch (_) {this.emit('invalid_context');return;}
-    const task=new Promise(resolve=>setImmediate(resolve)).then(async()=>{
+    const key=JSON.stringify([tenantId,sessionId]);
+    const previous=this.queues.get(key);
+    const task=new Promise(resolve=>setImmediate(resolve)).then(()=>previous).then(async()=>{
       const store=this.repository();
       const prior=await store.load(tenantId,sessionId);
       const saved=await store.save(tenantId,sessionId,context,prior?.revision||null);
       this.emit(saved.saved?'saved':'revision_conflict');
     }).catch(()=>this.emit('persistence_unavailable'));
-    this.pending.add(task);task.finally(()=>this.pending.delete(task));
+    this.queues.set(key,task);
+    this.pending.add(task);task.finally(()=>{
+      this.pending.delete(task);
+      if(this.queues.get(key)===task)this.queues.delete(key);
+    });
   }
   emit(reason){try{this.audit({event:'MAX_CONVERSATION_CONTEXT',reason});}catch(_){}}
   async drain(){await Promise.all([...this.pending]);}

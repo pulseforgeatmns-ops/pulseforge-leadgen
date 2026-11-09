@@ -55,3 +55,19 @@ test('in-memory sessions have idle expiry and a bounded capacity',()=>{
   assert.ok(store.get(b.id));assert.ok(store.get(c.id));
   now=103;assert.equal(store.get(b.id),null);assert.equal(store.size,0);
 });
+
+test('same-session observer writes preserve completion order without overlapping',async()=>{
+  let active=0,peak=0;
+  const written=[];
+  const store={load:async()=>null,save:async(t,s,context)=>{
+    active++;peak=Math.max(peak,active);
+    await new Promise(resolve=>setImmediate(resolve));
+    written.push(context.candidates[0]);active--;return {saved:true};
+  }};
+  const observer=new ConversationContinuity({env:{MAX_CONVERSATION_CONTEXT:'true'},store});
+  observer.remember({id:'s1',context:{tenantId:'t1',missionId:'m1'}});
+  observer.remember({id:'s1',context:{tenantId:'t1',missionId:'m2'}});
+  await observer.drain();
+  assert.equal(peak,1);assert.deepEqual(written,['m1','m2']);
+  assert.equal(observer.queues.size,0);
+});
