@@ -36,12 +36,18 @@ class ShadowInterpreter {
     this.maxPending = 16;
     this.counts = { completed: 0, failed: 0, dropped: 0 };
   }
-  capture(session) { return this.enabled ? snapshot(session) : null; }
+  capture(session) {
+    if (!this.enabled) return null;
+    try { return snapshot(session); }
+    catch (_) { this.counts.failed++; this.emit({event:'MAX_INTERPRETATION_FAILURE',reason:'context_unavailable'}); return null; }
+  }
   observe({ context, text, result }) {
     if (!this.enabled || !context) return;
     if (this.pending.size >= this.maxPending) { this.counts.dropped++; return; }
     // No result/frame is returned to the request or routing pipeline.
-    const legacy = observedRoute(result);
+    let legacy;
+    try { legacy = observedRoute(result); }
+    catch (_) { this.counts.failed++; this.emit({event:'MAX_INTERPRETATION_FAILURE',reason:'legacy_metadata_invalid'}); return; }
     const task = new Promise(resolve => setImmediate(resolve)).then(async () => {
       if (!this.producer) {
         const Client = require('../../../utils/meteredAnthropic').forAgent('max-interpretation-shadow');
@@ -75,7 +81,7 @@ class ShadowInterpreter {
     this.counts.completed++;
     this.emit({ event: 'MAX_INTERPRETATION_SHADOW', id: row.id, disagreement: row.disagreement, latencyMs: row.latencyMs, failure: row.failure });
   }
-  emit(row) { try { this.audit(row); } catch (_) { /* observation cannot affect production */ } }
+  emit(row) { try { Promise.resolve(this.audit(row)).catch(() => {}); } catch (_) { /* observation cannot affect production */ } }
   async drain() { await Promise.all([...this.pending]); }
   async close() { await this.drain(); if (this.pool) await this.pool.end(); }
 }

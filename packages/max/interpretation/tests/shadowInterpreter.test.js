@@ -65,3 +65,11 @@ test('real WorkspaceEngine keeps a shadow approval nomination away from executio
   assert.deepEqual(amo.listExecutionRouterAudit(),[]);
   assert.equal(answer.interpretationFrame,undefined);
 });
+
+test('malformed session/legacy metadata and rejecting telemetry stay isolated',async()=>{
+  const observer=new ShadowInterpreter({env:{MAX_INTERPRETATION_SHADOW:'true'},audit:async()=>{throw Error('audit down');}});
+  assert.equal(observer.capture({context:{tenantId:'72'},operationalEvidence:{tenantId:'72',missions:{}}}),null);
+  observer.observe({context,text:'x',result:{workspaceOwnership:{owner:42}}});
+  await observer.drain();
+  assert.equal(observer.counts.failed,2);
+});
