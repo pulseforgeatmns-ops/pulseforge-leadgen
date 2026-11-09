@@ -6,7 +6,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
-const integration = ['test/maxAttentionCronRoute.test.js', 'test/maxAttentionAuthorization.test.js'];
+const integration = [
+  'packages/max/workspace/tests/authenticatedRecoveryRoute.test.js',
+  'test/maxAttentionCronRoute.test.js',
+  'test/maxAttentionAuthorization.test.js',
+];
 function manifests() {
   const command = require('../package.json').scripts['test:max'];
   if (!command.startsWith('node --test ')) throw new Error('Unsupported test:max contract; update lane manifest parser explicitly');

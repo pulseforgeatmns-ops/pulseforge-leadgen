@@ -45,7 +45,11 @@ test('process replacement restores only tenant-validated referents and never aut
   assert.equal(session.context.tenantId, 't1');
   assert.equal(session.context.missionId, 'current-mission');
   assert.equal(session.context.requiresEvidenceRefresh, true);
-  assert.deepEqual(session.context.recoveredEvidenceRefs, [{ kind: 'operational_inspection', observedAt: '2026-11-09T01:00:00.000Z' }]);
+  assert.deepEqual(session.context.recoveredEvidenceRefs, [{
+    kind: 'operational_inspection',
+    observedAt: '2026-11-09T01:00:00.000Z',
+    requiresFreshValidation: true,
+  }]);
   assert.deepEqual(session.operationalFocus.missionIds, ['current-mission']);
   assert.deepEqual(session.messages, []);
   assert.doesNotMatch(JSON.stringify(session.context), /approv|pending|execut|decision/i);
@@ -69,6 +73,27 @@ test('missing, expired, corrupt and cross-tenant durable state fail closed', asy
     { recovered: false, reason: 'context_unavailable' });
   assert.deepEqual(calls, [['t2','missing']]);
   assert.equal(workspace.sessions.get('missing'), null);
+});
+
+test('durable context with zero current mission references creates no trusted session', async () => {
+  const workspace = createHermeticWorkspaceEngine({
+    conversationContinuity: {
+      async resume() {
+        return { revision: 'r1', context: {
+          version: 1, candidates: ['deleted-mission'], focusId: 'deleted-mission',
+          evidenceRefs: [{ kind: 'operational_inspection', observedAt: '2026-11-09T01:00:00.000Z' }],
+          requiresEvidenceRefresh: true,
+        } };
+      },
+      remember() {},
+    },
+    conversationReferenceLoader: async () => ({ found: false, mission: null }),
+  });
+  assert.deepEqual(
+    await workspace.recoverConversationSession({ tenantId: 't1', sessionId: 'stale-session' }),
+    { recovered: false, reason: 'no_valid_references', evidenceRefreshRequired: true },
+  );
+  assert.equal(workspace.sessions.get('stale-session'), null);
 });
 
 test('restored session ids cannot be rebound to another tenant', () => {
