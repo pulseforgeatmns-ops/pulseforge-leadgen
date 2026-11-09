@@ -23,7 +23,12 @@ const {
   logPendingDecisionCaptureGuarded,
 } = require('./pendingDecisionCaptureGuard');
 const { isStructuredClarificationPending } = require('../../acquisition-mission/PendingDecisionResponseType');
-const { stripNegatedDirectives, isConstraintQualifiedRequest } = require('./NegatedDirective');
+const {
+  stripNegatedDirectives,
+  isConstraintQualifiedRequest,
+  classifyAuthorizationPolarity,
+  AUTHORIZATION_VERB,
+} = require('./NegatedDirective');
 
 /**
  * P0 execution-intent routing — an approval that names a specific operational
@@ -157,7 +162,9 @@ function isUnrelatedTopic(q) {
 }
 
 function isCancelPhrase(q) {
-  return /\b(?:cancel(?:\s+(?:it|the mission|this))?|stop(?:\s+the)?\s+mission|abort(?:\s+the\s+mission)?|don'?t\s+send(?:\s+this|\s+it)?)\b/i.test(
+  // P0 authorization polarity — "don't send it" is a prohibition (held by the
+  // polarity guard), not a mission cancellation; it was removed from this list.
+  return /\b(?:cancel(?:\s+(?:it|the mission|this))?|stop(?:\s+the)?\s+mission|abort(?:\s+the\s+mission)?)\b/i.test(
     q
   );
 }
@@ -316,6 +323,16 @@ function classifyPlanApproval(q) {
   return null;
 }
 
+const EXPLICIT_REVISION_RE = /\b(?:regenerate|redo|rework|revise|rewrite|rebuild|reset|reprepare|renew|prepare\s+a\s+new\s+version|bring\s+me\s+a\s+new\s+package|bring\s+me\s+another\s+version|new\s+version|new\s+package|update\s+the\s+messag|update\s+the\s+plan|rewrite\s+it|change\s+the\s+copy|change\s+the\s+messag)\b/i;
+
+function isRevisionRequest(q) {
+  return (
+    (/\b(?:regenerate|rewrite|revise|re-?prepare|replace)\b/i.test(q)
+      && /\b(?:message|messaging|outreach|plan|package|bundle|before execution|before sending)\b/i.test(q))
+    || EXPLICIT_REVISION_RE.test(q)
+  );
+}
+
 function classifyExecutionApproval(q) {
   if (/\b(?:regenerate|rewrite|revise|re-?prepare|replace)\b/i.test(q)
     && /\b(?:message|messaging|outreach|plan|package|bundle|before execution|before sending)\b/i.test(q)) {
@@ -325,7 +342,7 @@ function classifyExecutionApproval(q) {
     return { outcome: RESOLUTION_OUTCOMES.REJECT, action: 'cancel', confidence: 0.95 };
   }
 
-  const explicitRevision = /\b(?:regenerate|redo|rework|revise|rewrite|rebuild|reset|reprepare|renew|prepare\s+a\s+new\s+version|bring\s+me\s+a\s+new\s+package|bring\s+me\s+another\s+version|new\s+version|new\s+package|update\s+the\s+messag|update\s+the\s+plan|rewrite\s+it|change\s+the\s+copy|change\s+the\s+messag)\b/i.test(q);
+  const explicitRevision = EXPLICIT_REVISION_RE.test(q);
   const explicitNoSend = /\b(?:do\s+not\s+send|don't\s+send|do\s+not\s+authorize|don't\s+authorize|do\s+not\s+approve|don't\s+approve|not\s+authorize|not\s+approve)\b/i.test(q);
   const explicitNegative = /\b(?:no\b|don't|do\s+not|not)\b/i.test(q) && /\b(?:send|authorize|approve)\b/i.test(q);
 
@@ -466,6 +483,79 @@ function guardedUnresolved(mission, pending, outcome, captureIntent, options = {
 }
 
 /**
+ * The action each decision kind itself authorizes. A prohibition naming a
+ * DIFFERENT action ("Approved. Do not run Scout discovery yet." on a plan
+ * approval) constrains a later step and does not contradict this decision.
+ */
+const OWN_DECISION_TARGETS = Object.freeze({
+  [OPERATOR_DECISION_KINDS.PLAN_APPROVAL]: ['plan'],
+  [OPERATOR_DECISION_KINDS.PLAN_CLARIFICATION]: ['plan'],
+  [OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL]: ['discovery'],
+  [OPERATOR_DECISION_KINDS.DISCOVERY_INVESTIGATION]: ['investigation', 'discovery'],
+  [OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL]: ['prioritization'],
+  [OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL]: ['outbound'],
+});
+
+/**
+ * P0 authorization polarity verdict for a message against a decision kind.
+ *
+ *   clear    no prohibition of authorization/cancellation
+ *   cancel   explicit affirmative cancellation (keeps its meaning)
+ *   revision explicit revision request at the execution gate
+ *   scoped   affirmative authorization; every prohibition names a different
+ *            (later) action — this decision may resolve normally
+ *   mixed    affirmative authorization contradicted by a prohibition of this
+ *            decision (or an untargeted one) — ambiguous, never dispatched
+ *   held     prohibition only — the decision is declined/held, never
+ *            approved, sent, or cancelled
+ *
+ * @param {string} q
+ * @param {string|null} kind
+ */
+function authorizationPolarityVerdict(q, kind = null) {
+  const polarity = classifyAuthorizationPolarity(q);
+  if (!polarity.negatedAuthorization && !polarity.negatedCancel) return { verdict: 'clear', polarity };
+  if (polarity.affirmativeCancel) return { verdict: 'cancel', polarity };
+  if (kind === OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL && isRevisionRequest(q)) return { verdict: 'revision', polarity };
+  if (polarity.affirmativeAuthorization && !polarity.negatedCancel) {
+    const own = OWN_DECISION_TARGETS[kind] || [];
+    const prohibited = polarity.negatedClauses.filter((c) => AUTHORIZATION_VERB.test(c));
+    const scopedElsewhere = own.length > 0 && prohibited.every((c) => {
+      const named = Object.keys(ACTION_TARGETS).filter((t) => ACTION_TARGETS[t].test(c));
+      return named.length > 0 && !named.some((t) => own.includes(t));
+    });
+    return { verdict: scopedElsewhere ? 'scoped' : 'mixed', polarity };
+  }
+  return { verdict: polarity.affirmativeAuthorization ? 'mixed' : 'held', polarity };
+}
+
+/**
+ * Returns a NON-dispatching resolution for a `held` or `mixed` verdict:
+ * - held  → outcome REJECT, action 'decline', resolved:false: the operator
+ *           declined this decision; nothing is approved, sent, or cancelled
+ *           and the decision stays pending.
+ * - mixed → outcome AMBIGUOUS: the operator is asked to answer explicitly.
+ * Otherwise null (normal classification continues).
+ */
+function heldByAuthorizationPolarity(mission, pending, q, { onlyBareProhibition = false } = {}) {
+  const { verdict, polarity } = authorizationPolarityVerdict(q, pending.kind);
+  if (verdict !== 'held' && verdict !== 'mixed') return null;
+  if (onlyBareProhibition && polarity.affirmative.replace(/[^a-z]/gi, '').length > 0) return null;
+  const mixed = verdict === 'mixed';
+  return {
+    ...buildUnresolvedResolution(mission, pending, mixed ? RESOLUTION_OUTCOMES.AMBIGUOUS : RESOLUTION_OUTCOMES.REJECT),
+    action: mixed ? null : 'decline',
+    held: true,
+    negatedAuthorization: polarity.negatedAuthorization,
+    negatedCancelOnly: polarity.negatedCancel && !polarity.negatedAuthorization,
+    mixedPolarity: mixed,
+    executionIntent: null,
+    executionAction: null,
+    resolvedFromPendingDecision: false,
+  };
+}
+
+/**
  * Resolve operator utterance against an active pending operator decision.
  * SPEC-JEV-004 — capture only when the message plausibly answers the decision.
  * @param {string} question
@@ -508,6 +598,9 @@ function resolvePendingOperatorDecision(question, mission, options = {}) {
         ...options, messageChars, captureGuarded: true,
       });
     }
+    // A bare prohibition ("Don't proceed.") is not a clarification answer.
+    const clarificationHeld = heldByAuthorizationPolarity(mission, pending, q, { onlyBareProhibition: true });
+    if (clarificationHeld) return clarificationHeld;
     return buildResolution(mission, pending, {
       outcome: RESOLUTION_OUTCOMES.AFFIRM,
       action: 'clarify_plan',
@@ -561,6 +654,18 @@ function resolvePendingOperatorDecision(question, mission, options = {}) {
     return buildUnresolvedResolution(mission, pending, RESOLUTION_OUTCOMES.AMBIGUOUS);
   }
 
+  // P0 authorization polarity — a prohibition is never an approval and never a
+  // mission cancellation. "Don't proceed." / "Do not approve this." / "No,
+  // don't send this." previously resolved to AFFIRM (raw "proceed"/"approve")
+  // or to REJECT → cancel the whole mission plan. Only these explicit forms
+  // keep a dispatching outcome:
+  //   - an affirmative cancellation in the same message ("Don't send it. Cancel
+  //     the mission.") → explicit cancel;
+  //   - an explicit revision request at the execution gate ("Don't send this —
+  //     rewrite the messaging") → revision (handled by the kind classifier).
+  const held = heldByAuthorizationPolarity(mission, pending, q);
+  if (held) return held;
+
   const classification = classifyByKind(pending.kind, q, pending);
   if (classification) {
     if (classification.outcome === RESOLUTION_OUTCOMES.AFFIRM) {
@@ -608,6 +713,7 @@ function pendingDecisionRequestsExecution(resolution) {
 }
 
 module.exports = {
+  authorizationPolarityVerdict,
   mismatchedActionTargets,
   RESOLUTION_OUTCOMES,
   PENDING_ALLOWED_ACTIONS,

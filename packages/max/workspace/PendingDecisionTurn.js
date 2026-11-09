@@ -99,7 +99,18 @@ function buildClarifyProse(question, resolution, snapshot) {
   let prefix = '';
   let reviewProse = '';
 
-  if (resolution.outcome === RESOLUTION_OUTCOMES.QUESTION) {
+  if (resolution.held && resolution.negatedCancelOnly) {
+    prefix = 'Understood — the mission was not cancelled. Nothing was approved or sent; this decision stays pending.\n\n';
+  } else if (resolution.held && resolution.outcome === RESOLUTION_OUTCOMES.REJECT) {
+    // P0 authorization polarity — a prohibition holds the decision.
+    prefix =
+      'Understood — not approved. Nothing was approved, sent, or cancelled; this decision stays pending.\n' +
+      'To cancel the mission instead, say "cancel it".\n\n';
+  } else if (resolution.held && resolution.mixedPolarity) {
+    prefix =
+      'Not executed: your message both authorizes and prohibits action, so nothing was approved, sent, or cancelled.\n' +
+      'Please answer the pending decision explicitly.\n\n';
+  } else if (resolution.outcome === RESOLUTION_OUTCOMES.QUESTION) {
     prefix = `${contextualPendingAnswer(question, resolution, snapshot)}\n\n`;
   } else if (resolution.outcome === RESOLUTION_OUTCOMES.AMBIGUOUS) {
     const yesNoDecision = isYesNoPendingDecision({

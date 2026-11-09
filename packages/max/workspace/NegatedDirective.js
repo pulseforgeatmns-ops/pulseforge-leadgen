@@ -83,7 +83,76 @@ function isConstraintQualifiedRequest(text) {
   return INFORMATIONAL_REQUEST.test(affirmative);
 }
 
+/**
+ * P0 authorization polarity — vocabulary that, said affirmatively, grants or
+ * advances an operator decision. Inside a negated clause ("Don't proceed.",
+ * "Do not send it", "Never launch this") it is a prohibition and must never be
+ * read as authorization.
+ */
+const AUTHORIZATION_VERB =
+  /\b(?:approv(?:e|ed|es|ing|al)|authori[sz](?:e|ed|es|ing|ation)|proceed(?:s|ing)?|go(?:ing)?\s+ahead|send(?:s|ing)?|execut(?:e|ed|es|ing|ion)|launch(?:es|ed|ing)?|continu(?:e|es|ing)|resum(?:e|es|ing)|run(?:s|ning)?|start(?:s|ing)?|begin(?:s|ning)?|move\s+forward|do\s+it|kick(?:ing)?\s+(?:it\s+)?off|green[\s-]?light|sign\s+off|mail(?:s|ing)?|publish(?:es|ing)?|dispatch(?:es|ing)?|yes)\b/i;
+/** Vocabulary that ends a mission. Only an affirmative use is a cancellation. */
+const CANCEL_VERB =
+  /\b(?:cancel(?:s|led|ling)?|abort(?:s|ed|ing)?|stop\s+(?:the\s+|this\s+)?mission|kill\s+(?:the\s+|this\s+)?mission|terminate\s+(?:the\s+|this\s+)?mission)\b/i;
+
+/**
+ * Classify the authorization polarity of an operator message.
+ *
+ * - negatedAuthorization: approval / proceed / send / execute … appears inside
+ *   a negated clause ("Don't proceed.", "No, do not approve.").
+ * - negatedCancel: cancellation vocabulary appears only inside a negated clause
+ *   ("Don't cancel the mission.").
+ * - affirmativeAuthorization / affirmativeCancel: the same vocabulary outside
+ *   any negated clause.
+ *
+ * Purely lexical and conservative: an ambiguous mixture never authorizes.
+ * @param {string} text
+ */
+/**
+ * Inline negation the clause splitter does not cover: "I would not approve
+ * this", "we can't send it", "never authorize" — negation within two words of
+ * the verb. Matched spans are treated as negated clauses.
+ */
+const INLINE_NEGATED_VERB_RE = new RegExp(
+  `\\b(?:not|never|cannot|can['’]?t|won['’]?t|wouldn['’]?t|shouldn['’]?t|mustn['’]?t|didn['’]?t|isn['’]?t|aren['’]?t)\\s+(?:[a-z]+\\s+){0,2}?(?:${AUTHORIZATION_VERB.source.replace(/^\\b\(\?:/, '(?:').replace(/\)\\b$/, ')')}|${CANCEL_VERB.source.replace(/^\\b\(\?:/, '(?:').replace(/\)\\b$/, ')')})\\b`,
+  'gi'
+);
+
+function classifyAuthorizationPolarity(text) {
+  const raw = String(text || '');
+  let affirmative = stripNegatedDirectives(raw);
+  const clauses = extractNegatedClauses(raw);
+  const inline = affirmative.match(INLINE_NEGATED_VERB_RE) || [];
+  if (inline.length) {
+    clauses.push(...inline);
+    affirmative = affirmative.replace(INLINE_NEGATED_VERB_RE, ' ').replace(/\s+/g, ' ').trim();
+  }
+  return {
+    negatedAuthorization: clauses.some((c) => AUTHORIZATION_VERB.test(c)),
+    negatedCancel: clauses.some((c) => CANCEL_VERB.test(c)),
+    affirmativeAuthorization: AUTHORIZATION_VERB.test(affirmative),
+    affirmativeCancel: CANCEL_VERB.test(affirmative),
+    negatedClauses: clauses,
+    affirmative,
+  };
+}
+
+/**
+ * True when the message prohibits authorization or cancellation and does not
+ * also cancel affirmatively: such a message may never dispatch an approval,
+ * continuation, send, or cancellation.
+ * @param {string} text
+ */
+function prohibitsAuthorization(text) {
+  const p = classifyAuthorizationPolarity(text);
+  return (p.negatedAuthorization || p.negatedCancel) && !p.affirmativeCancel;
+}
+
 module.exports = {
+  AUTHORIZATION_VERB,
+  CANCEL_VERB,
+  classifyAuthorizationPolarity,
+  prohibitsAuthorization,
   stripNegatedDirectives,
   extractNegatedClauses,
   matchesOnlyWhenNegated,

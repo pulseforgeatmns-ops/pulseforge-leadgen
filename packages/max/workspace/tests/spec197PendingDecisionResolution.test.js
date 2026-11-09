@@ -254,12 +254,16 @@ describe('SPEC-197 — Pending Decision Conversational Resolution', () => {
       assert.notEqual(resolution.executionIntent, EXECUTION_INTENTS.APPROVE_EXECUTION);
     });
 
-    it('rejects no-send language without authorizing execution', () => {
+    // P0 authorization polarity: a no-send reply declines (holds) the decision.
+    // It never authorizes execution and never cancels the mission plan.
+    it('rejects no-send language without authorizing execution or cancelling the mission', () => {
       const resolution = resolvePendingOperatorDecision("No, don't send this.", mission);
-      assert.equal(resolution.resolved, true);
+      assert.equal(resolution.resolved, false);
+      assert.equal(resolution.held, true);
       assert.equal(resolution.outcome, RESOLUTION_OUTCOMES.REJECT);
-      assert.equal(resolution.action, 'cancel');
-      assert.equal(resolution.executionIntent, EXECUTION_INTENTS.CANCEL_PLAN);
+      assert.equal(resolution.action, 'decline');
+      assert.equal(resolution.executionIntent, null);
+      assert.equal(resolution.resolvedFromPendingDecision, false);
     });
 
     it('approves execution when the operator explicitly authorizes it', () => {
@@ -270,12 +274,13 @@ describe('SPEC-197 — Pending Decision Conversational Resolution', () => {
       assert.equal(resolution.executionIntent, EXECUTION_INTENTS.APPROVE_EXECUTION);
     });
 
-    it('does not approve when the operator says do not authorize this', () => {
+    it('does not approve (or cancel) when the operator says do not authorize this', () => {
       const resolution = resolvePendingOperatorDecision('Do not authorize this.', mission);
-      assert.equal(resolution.resolved, true);
+      assert.equal(resolution.resolved, false);
       assert.equal(resolution.outcome, RESOLUTION_OUTCOMES.REJECT);
       assert.notEqual(resolution.action, 'approve_execution');
-      assert.equal(resolution.executionIntent, EXECUTION_INTENTS.CANCEL_PLAN);
+      assert.notEqual(resolution.executionIntent, EXECUTION_INTENTS.CANCEL_PLAN);
+      assert.equal(resolution.executionIntent, null);
     });
 
     it('routes rewrite language to request_revision', () => {
