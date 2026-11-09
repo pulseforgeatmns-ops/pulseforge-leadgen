@@ -7,6 +7,10 @@
  */
 
 let _active = false;
+// Opt-in programmatic collector (semantic evaluation harness). When set, every
+// turn is traced into it instead of stdout. Never set in production; routing
+// never reads trace state.
+let _collector = null;
 
 function isActive() {
   return _active;
@@ -17,6 +21,11 @@ function shouldTrace(question) {
 }
 
 function beginTrace(question) {
+  if (_collector) {
+    _active = true;
+    _collector.push({ kind: 'TRACE_BEGIN', payload: {} });
+    return;
+  }
   if (!shouldTrace(question)) return;
   _active = true;
   emit('TRACE_BEGIN', { utterance: String(question || '').trim() });
@@ -30,6 +39,10 @@ function endTrace() {
 
 function emit(kind, payload = {}) {
   if (!_active) return;
+  if (_collector) {
+    _collector.push({ kind, payload });
+    return;
+  }
   process.stdout.write(
     `[ASK_PATH_TRACE] ${kind} ${JSON.stringify(payload)}\n`
   );
@@ -65,7 +78,25 @@ function traceFallback(fromOwner, toOwner, reason, extra = {}) {
   emit('OWNER_FALLBACK', { fromOwner, toOwner, reason, ...extra });
 }
 
+/**
+ * Run `fn` with every ask() trace event captured into the returned array.
+ * Evaluation/instrumentation only. Not re-entrant (asks run sequentially).
+ */
+async function collect(fn) {
+  const events = [];
+  const previous = _collector;
+  _collector = events;
+  try {
+    const value = await fn();
+    return { value, events };
+  } finally {
+    _collector = previous;
+    _active = false;
+  }
+}
+
 module.exports = {
+  collect,
   isActive,
   shouldTrace,
   beginTrace,
