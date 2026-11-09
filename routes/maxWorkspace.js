@@ -193,7 +193,14 @@ router.post(
       const max = await getWorkspaceRuntime();
 
       if (req.body?.sessionId) {
-        const existing = max.workspace?.sessions?.get(req.body.sessionId);
+        let existing = max.workspace?.sessions?.get(req.body.sessionId);
+        if (!existing && max.workspace?.recoverConversationSession) {
+          const recovery = await max.workspace.recoverConversationSession({ tenantId, sessionId: req.body.sessionId });
+          if (recovery?.reason === 'tenant_mismatch') {
+            return res.status(403).json({ error: 'tenant_mismatch', message: 'Workspace session belongs to a different tenant — open a new workspace' });
+          }
+          existing = max.workspace.sessions.get(req.body.sessionId);
+        }
         if (
           existing &&
           existing.context &&

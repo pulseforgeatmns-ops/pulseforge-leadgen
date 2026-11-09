@@ -270,6 +270,8 @@ class WorkspaceEngine {
     this._sessions = options.sessions || new SessionStore();
     const { ConversationContinuity } = require('../context/ConversationContinuity');
     this._conversationContinuity = options.conversationContinuity || new ConversationContinuity({audit:row=>console.info('[MAX_CONVERSATION_CONTEXT]',JSON.stringify(row))});
+    this._conversationReferenceLoader = options.conversationReferenceLoader || null;
+    this._conversationRecoveryPending = new Map();
     this._decisionService = options.decisionService || new DecisionService();
     const { ShadowInterpreter } = require('../interpretation/ShadowInterpreter');
     this._interpretationShadow = options.interpretationShadow || new ShadowInterpreter({ audit: row => console.info('[MAX_INTERPRETATION_SHADOW]', JSON.stringify(row)) });
@@ -443,6 +445,49 @@ class WorkspaceEngine {
    */
   async resumeConversationContext({ tenantId, sessionId }) {
     return this._conversationContinuity.resume(String(tenantId), sessionId);
+  }
+
+  async recoverConversationSession({ tenantId, sessionId }) {
+    const tenant = String(tenantId);
+    const existing = this._sessions.get(sessionId);
+    if (existing) return String(existing.context?.tenantId) === tenant
+      ? { recovered: false, existing: true, sessionId: existing.id }
+      : { recovered: false, reason: 'tenant_mismatch' };
+    const key = JSON.stringify([tenant, String(sessionId)]);
+    if (this._conversationRecoveryPending.has(key)) return this._conversationRecoveryPending.get(key);
+    const recovery = (async () => {
+      const durable = await this.resumeConversationContext({ tenantId: tenant, sessionId });
+      if (!durable?.context?.requiresEvidenceRefresh) return { recovered: false, reason: 'context_unavailable' };
+      const valid = [];
+      for (const missionId of durable.context.candidates || []) {
+        let found;
+        try {
+          found = this._conversationReferenceLoader
+            ? await this._conversationReferenceLoader({ tenantId: tenant, missionId })
+            : await require('./OperationalInspection').loadMissionById({
+              tenantId: tenant, missionId, opts: this._operationalInspectionOpts || {},
+              acquisitionMissionRuntime: this._resolveAmoRuntime(),
+            });
+        } catch (_) { found = null; }
+        if (found?.found && String(found.mission?.id) === String(missionId)) valid.push(String(missionId));
+      }
+      const focusId = valid.includes(durable.context.focusId) ? durable.context.focusId : valid[0] || null;
+      const context = normalizeContext({
+        tenantId: tenant, page: 'command-deck',
+        ...(focusId ? { missionId: focusId } : {}),
+      });
+      const now = Date.now();
+      context.recoveredEvidenceRefs = (durable.context.evidenceRefs || []).filter(ref => {
+        const observed = Date.parse(ref.observedAt);
+        return Number.isFinite(observed) && observed <= now;
+      }).map(ref => ({ kind: ref.kind, observedAt: ref.observedAt }));
+      context.requiresEvidenceRefresh = true;
+      const session = this._sessions.restore(sessionId, context);
+      if (valid.length) session.operationalFocus = { tenantId: tenant, missionIds: valid, at: new Date().toISOString() };
+      return { recovered: true, sessionId: session.id, candidates: valid, evidenceRefreshRequired: true };
+    })().finally(() => this._conversationRecoveryPending.delete(key));
+    this._conversationRecoveryPending.set(key, recovery);
+    return recovery;
   }
 
   async ask(input) {
