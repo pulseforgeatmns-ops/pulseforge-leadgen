@@ -27,7 +27,6 @@ const {
   stripNegatedDirectives,
   isConstraintQualifiedRequest,
   classifyAuthorizationPolarity,
-  AUTHORIZATION_VERB,
 } = require('./NegatedDirective');
 
 /**
@@ -63,7 +62,7 @@ function mismatchedActionTargets(kind, q) {
   if (!allowed) return null;
   const affirmative = stripNegatedDirectives(q);
   const named = Object.keys(ACTION_TARGETS).filter((t) => ACTION_TARGETS[t].test(affirmative));
-  if (!named.length || named.some((t) => allowed.includes(t))) return null;
+  if (!named.length || named.every((t) => allowed.includes(t))) return null;
   return named;
 }
 
@@ -483,27 +482,11 @@ function guardedUnresolved(mission, pending, outcome, captureIntent, options = {
 }
 
 /**
- * The action each decision kind itself authorizes. A prohibition naming a
- * DIFFERENT action ("Approved. Do not run Scout discovery yet." on a plan
- * approval) constrains a later step and does not contradict this decision.
- */
-const OWN_DECISION_TARGETS = Object.freeze({
-  [OPERATOR_DECISION_KINDS.PLAN_APPROVAL]: ['plan'],
-  [OPERATOR_DECISION_KINDS.PLAN_CLARIFICATION]: ['plan'],
-  [OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL]: ['discovery'],
-  [OPERATOR_DECISION_KINDS.DISCOVERY_INVESTIGATION]: ['investigation', 'discovery'],
-  [OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL]: ['prioritization'],
-  [OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL]: ['outbound'],
-});
-
-/**
  * P0 authorization polarity verdict for a message against a decision kind.
  *
  *   clear    no prohibition of authorization/cancellation
  *   cancel   explicit affirmative cancellation (keeps its meaning)
  *   revision explicit revision request at the execution gate
- *   scoped   affirmative authorization; every prohibition names a different
- *            (later) action — this decision may resolve normally
  *   mixed    affirmative authorization contradicted by a prohibition of this
  *            decision (or an untargeted one) — ambiguous, never dispatched
  *   held     prohibition only — the decision is declined/held, never
@@ -514,17 +497,30 @@ const OWN_DECISION_TARGETS = Object.freeze({
  */
 function authorizationPolarityVerdict(q, kind = null) {
   const polarity = classifyAuthorizationPolarity(q);
+  const nomination = classifyByKind(kind, polarity.affirmative);
+  const affirmativeDecision = polarity.affirmativeAuthorization || polarity.affirmativeCancel ||
+    isGenericAffirmative(polarity.affirmative) ||
+    nomination?.outcome === RESOLUTION_OUTCOMES.AFFIRM || nomination?.action === 'cancel';
+  // Authority requires an unqualified speech act. A hedge, question or
+  // condition cannot be discarded while retaining its approval vocabulary.
+  // No scheduler/constraint transaction is attached to this resolver, so
+  // future-stage restrictions must be clarified rather than silently lost.
+  if (kind === OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL && isRevisionRequest(q) &&
+      !/\b(?:maybe|perhaps|possibly|if|unless)\b/i.test(q)) return { verdict: 'revision', polarity };
+  const uncertain = /\b(?:maybe|perhaps|possibly|probably|tentatively|potentially|might|could|would|should|unsure|uncertain|not\s+(?:sure|certain|ready|convinced)|i\s+(?:think|guess|suppose)|on\s+second\s+thought|undecided)\b/i.test(q);
+  const qualified = /\b(?:if|unless|until|after|once|when|provided|providing|assuming|pending|subject\s+to|only|as\s+long\s+as|hold|wait|defer|delay|postpone|later|tomorrow|next\s+week|but|however|except)\b/i.test(q);
+  if (affirmativeDecision &&
+      (uncertain || qualified || /\?/.test(q))) {
+    return { verdict: 'mixed', polarity, qualification: true };
+  }
+  if (affirmativeDecision && !polarity.affirmativeCancel && polarity.negatedClauses.length) {
+    return { verdict: 'mixed', polarity, qualification: true };
+  }
   if (!polarity.negatedAuthorization && !polarity.negatedCancel) return { verdict: 'clear', polarity };
   if (polarity.affirmativeCancel) return { verdict: 'cancel', polarity };
   if (kind === OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL && isRevisionRequest(q)) return { verdict: 'revision', polarity };
   if (polarity.affirmativeAuthorization && !polarity.negatedCancel) {
-    const own = OWN_DECISION_TARGETS[kind] || [];
-    const prohibited = polarity.negatedClauses.filter((c) => AUTHORIZATION_VERB.test(c));
-    const scopedElsewhere = own.length > 0 && prohibited.every((c) => {
-      const named = Object.keys(ACTION_TARGETS).filter((t) => ACTION_TARGETS[t].test(c));
-      return named.length > 0 && !named.some((t) => own.includes(t));
-    });
-    return { verdict: scopedElsewhere ? 'scoped' : 'mixed', polarity };
+    return { verdict: 'mixed', polarity };
   }
   return { verdict: polarity.affirmativeAuthorization ? 'mixed' : 'held', polarity };
 }
@@ -538,7 +534,7 @@ function authorizationPolarityVerdict(q, kind = null) {
  * Otherwise null (normal classification continues).
  */
 function heldByAuthorizationPolarity(mission, pending, q, { onlyBareProhibition = false } = {}) {
-  const { verdict, polarity } = authorizationPolarityVerdict(q, pending.kind);
+  const { verdict, polarity, qualification } = authorizationPolarityVerdict(q, pending.kind);
   if (verdict !== 'held' && verdict !== 'mixed') return null;
   if (onlyBareProhibition && polarity.affirmative.replace(/[^a-z]/gi, '').length > 0) return null;
   const mixed = verdict === 'mixed';
@@ -549,6 +545,7 @@ function heldByAuthorizationPolarity(mission, pending, q, { onlyBareProhibition 
     negatedAuthorization: polarity.negatedAuthorization,
     negatedCancelOnly: polarity.negatedCancel && !polarity.negatedAuthorization,
     mixedPolarity: mixed,
+    qualifiedAuthorization: Boolean(qualification),
     executionIntent: null,
     executionAction: null,
     resolvedFromPendingDecision: false,
@@ -583,6 +580,10 @@ function resolvePendingOperatorDecision(question, mission, options = {}) {
   };
   const captureIntent = safeClassifyPendingDecisionCaptureIntent(captureInput);
   const messageChars = q.length;
+  const earlyHeld = heldByAuthorizationPolarity(mission, pending, q);
+  if (earlyHeld && earlyHeld.mixedPolarity && !isConstraintQualifiedRequest(q) &&
+      captureIntent !== CAPTURE_INTENTS.PENDING_DECISION_CLARIFICATION &&
+      !isQuestionAboutDecision(q)) return earlyHeld;
 
   if (
     pending.kind === OPERATOR_DECISION_KINDS.PLAN_CLARIFICATION &&

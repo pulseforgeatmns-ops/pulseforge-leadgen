@@ -32,7 +32,7 @@ const {
   assertRuntimeEngine,
 } = require('./WorkspaceMissionInspection');
 const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
-const { resolvePendingOperatorDecision, authorizationPolarityVerdict } = require('./PendingDecisionResolver');
+const { resolvePendingOperatorDecision, authorizationPolarityVerdict, mismatchedActionTargets } = require('./PendingDecisionResolver');
 const { splitClauses, isVerbNegatedInClause } = require('./MissionLifecycleIntent');
 const {
   isExplicitMissionExit,
@@ -1126,6 +1126,10 @@ function detectExecutionAction(question, snapshot, operatorIntent = null) {
     askPathTrace.traceEarlyReturn('detectExecutionAction', `negated_authorization_${polarityVerdict}`);
     return null;
   }
+  const wrongTargets = mismatchedActionTargets(pendingKind, qGuard);
+  const historicalDiscovery = wrongTargets?.every(target => target === 'discovery') &&
+    findScoutDiscoveryAfterApproval(snapshot.contributions || [], findDiscoveryApproval(snapshot.contributions || []));
+  if (polarityVerdict !== 'cancel' && polarityVerdict !== 'revision' && wrongTargets && !historicalDiscovery) return null;
   if (resolution && resolution.resolvedFromPendingDecision && resolution.executionAction) {
     askPathTrace.traceEarlyReturn('detectExecutionAction', 'pending_decision_resolution');
     return resolution.executionAction;
@@ -1444,7 +1448,9 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'not_execution_command');
     return null;
   }
-  if (isExplicitMissionExit(question).explicit && !planningTurn) {
+  const governedDecision = resolvePendingOperatorDecision(question, mission, { tenantId });
+  if (isExplicitMissionExit(question).explicit && !planningTurn &&
+      !(governedDecision.resolvedFromPendingDecision && governedDecision.action === 'cancel')) {
     askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'explicit_mission_exit');
     return null;
   }
