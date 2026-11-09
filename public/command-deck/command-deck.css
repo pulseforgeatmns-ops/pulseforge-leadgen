@@ -3306,12 +3306,56 @@ body.theme-dark .cd-spatial-node.cd-priority-urgent {
 }
 
 .cd-domain-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
   padding: 0.85rem 1.25rem calc(0.85rem + env(safe-area-inset-bottom));
   border-top: 1px solid var(--pf-border);
 }
 
+.cd-domain-footer [hidden] {
+  display: none !important;
+}
+
+.cd-domain-overview {
+  margin-bottom: 1.35rem;
+}
+
+.cd-domain-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.cd-domain-metric {
+  min-width: 0;
+  padding: 0.8rem;
+  border: 1px solid var(--pf-border);
+  border-radius: var(--pf-radius-md);
+  background: var(--pf-bg-card);
+}
+
+.cd-domain-metric strong {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-family: var(--cd-font-editorial);
+  font-size: 1.45rem;
+  font-weight: 500;
+  color: var(--pf-text);
+}
+
+.cd-domain-metric span {
+  display: block;
+  font-family: var(--pf-font-mono);
+  font-size: 0.56rem;
+  line-height: 1.35;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pf-text-muted);
+}
+
 .cd-domain-summary {
-  margin: 0 0 1rem;
+  margin: 0;
   padding-left: 1.1rem;
   line-height: 1.5;
 }

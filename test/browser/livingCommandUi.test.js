@@ -16,7 +16,18 @@ function model(clientId = 10) {
         id, label: id[0].toUpperCase() + id.slice(1), priority: 'normal',
         position: { slot: ['top', 'left', 'right', 'bottom'][i] },
         summary: { lines: ['Monitoring activity'], compressed: 'Monitoring activity' },
-        intelligence: { active: false }, actions: [], drawer: { sections: [] },
+        intelligence: { active: false }, actions: [], drawer: {
+          sections: [],
+          snapshot: id === 'acquisition' ? {
+            title: 'Prospect pipeline',
+            metrics: [
+              { label: 'Open prospects', value: 17 },
+              { label: 'New in 24h', value: 2 },
+              { label: 'Warm', value: 3 },
+              { label: 'Booked', value: 1 },
+            ],
+          } : null,
+        },
       })),
     },
     livingBrief: {
@@ -127,6 +138,21 @@ test('desktop opening brief, scoped Ads facts and real Max conversation path', a
   await page.keyboard.press('Enter');
   await openedAgain;
   assert.equal(writes.filter(write => write.path.endsWith('/ask')).length, 1);
+  assert.deepEqual(errors, []);
+});
+
+test('domain bubbles open live detail with only relevant options', async t => {
+  const { page, errors } = await setup(t);
+  await page.click('[data-domain-id="acquisition"]');
+  await page.waitForFunction(() => !document.getElementById('cdDomainDrawer').hidden);
+  assert.deepEqual(
+    await page.$$eval('.cd-domain-metric', metrics => metrics.map(metric => metric.textContent.trim().replace(/\s+/g, ' '))),
+    ['17 Open prospects', '2 New in 24h', '3 Warm', '1 Booked']
+  );
+  assert.equal(await page.$eval('#cdDomainReviewContent', element => element.hidden), true);
+  assert.equal(await page.$eval('#cdDomainReviewContent', element => getComputedStyle(element).display), 'none');
+  assert.equal(await page.$eval('#cdDomainOpenWorkspace', element => element.textContent), 'Review pipeline');
+  assert.match(await page.$eval('#cdDomainOpenWorkspace', element => element.href), /dashboard#pf-tab=pipeline$/);
   assert.deepEqual(errors, []);
 });
 
