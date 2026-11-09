@@ -1,6 +1,8 @@
 # P0 — Max reasoning generalization audit
 
-Status: **audit + evaluation harness only.** No production routing or reasoning was changed. The one production edit is opt-in instrumentation (`AskPathTrace.collect`).
+Status: **audit + evaluation harness only.** Update (Nov 9): the authorization P0 in §4.1 is **fixed by #1093** (`8099716`); results below are reported before and after.
+
+Original status: **audit + evaluation harness only.** No production routing or reasoning was changed. The one production edit is opt-in instrumentation (`AskPathTrace.collect`).
 Baseline: `46bd575` (after PRs #1088, #1090, #1091).
 Evidence: `npm run max:semantic-eval` (report in `artifacts/max-semantic-eval/results.md`). Regression guard: `npm run test:max:semantic`.
 
@@ -16,7 +18,7 @@ Governing principle under test: *language determines intent, intent determines i
 4. **Two further structural causes compound it:**
    - **Fragmented evidence.** There are two read-only evidence stacks with different SQL, different gates and different coverage. The business-intelligence stack never reads `acquisition_missions` or `agent_log`, so it cannot diagnose Scout and reported "No missions are currently recorded" for a tenant with four.
    - **Brittle referent state.** The analytical focus is cleared whenever any other owner takes a turn, and corrections ("I meant the governed outbound one") resolve to the old focus.
-5. **P0 authorization defect found (needs a hotfix ahead of any architecture work).** `PendingDecisionResolver` ignores negation. Across every pending-decision kind, "Don't proceed." / "Do not go ahead." resolve to **AFFIRM**. "Don't approve this." resolves to AFFIRM for plan, discovery, prioritization and investigation gates, and to REJECT/**cancel the plan** at the execution gate. Reproduced end to end:
+5. **P0 authorization defect found — FIXED in #1093 (`8099716`).** `PendingDecisionResolver` ignores negation. Across every pending-decision kind, "Don't proceed." / "Do not go ahead." resolve to **AFFIRM**. "Don't approve this." resolves to AFFIRM for plan, discovery, prioritization and investigation gates, and to REJECT/**cancel the plan** at the execution gate. Reproduced end to end:
    - At plan approval, "Don't approve this." dispatched `APPROVE_PLAN`.
    - After the outreach package was shown, "Don't proceed." dispatched `APPROVE_EXECUTION` and consumed the execution approval.
 
@@ -90,6 +92,10 @@ Tenant isolation (`checkNamedClientScope`, session tenant), the SELECT-only guar
 
 **Overall 18% pass · semantic 20% · safety 92%** (50 turns, 1.5 s engine runtime, deterministic).
 
+**After #1093 (`main` 8099716): overall 24% pass · semantic 26% · safety 98%.** F2, F6 and F7 (negated approval/proceed) now hold the decision with no dispatch or mutation, and they are in `baseline.json` `passing`. The only remaining safety failure is D1, the business-intelligence "No missions are currently recorded" contradiction (§4.3). Every other failure category is unchanged, as expected: the fix was deliberately narrow and did not touch routing, evidence or composition.
+
+The tables below are the original pre-fix baseline.
+
 | Dimension | Pass |
 |---|---|
 | intent understood | 40% |
@@ -118,7 +124,9 @@ By owner: `reasoning/*` 30 turns, 0 pass · `operational_analysis/*` 8 turns, 6 
 
 ## 4. Root causes (code evidence)
 
-### 4.1 P0 — negation is invisible to pending-decision resolution
+### 4.1 P0 — negation is invisible to pending-decision resolution (FIXED, #1093)
+
+> Fixed by #1093. `NegatedDirective.classifyAuthorizationPolarity()` plus `PendingDecisionResolver.authorizationPolarityVerdict()` are applied before every kind classifier and again in `detectExecutionAction`. A prohibition is held (REJECT/`decline`, unresolved, no execution intent). An approval contradicted by a prohibition of the same decision is ambiguous. An approval whose prohibitions name a later action resolves normally. Explicit cancellations and revisions keep their meaning. The review also fixed inline negation ("I would not approve this.") and removed "don't send it" from the cancel phrases. 0 of 204 legitimate decisions changed versus main. The original analysis follows.
 
 - `classifyPlanApproval` (`PendingDecisionResolver.js:299-317`): `/\b(?:approv(e|al|ed)|proceed|go ahead)\b/` on raw text → `AFFIRM approve_plan` (0.94). The same pattern applies to discovery, prioritization and investigation gates.
 - `classifyExecutionApproval` (`:319-358`): `explicitNoSend`/`explicitNegative` map "don't approve" to **REJECT → `cancel` → `plan_cancelled`** (a prohibition is not a cancellation), but "Don't proceed." misses that branch and hits the AFFIRM regex (`proceed`) → `approve_execution`.
@@ -175,7 +183,7 @@ Separate from these, the authority layer's *input* (decision polarity) is lexica
 
 ## 5. Recommended repair — the smallest change that fixes the class
 
-### 5.0 Hotfix first (independent, deterministic, small)
+### 5.0 Hotfix first (independent, deterministic, small) — DONE in #1093
 
 Add a polarity check to `resolvePendingOperatorDecision`, run before any kind-specific classifier:
 - If `extractNegatedClauses()` finds a negated approve / authorize / proceed / go-ahead / send / execute clause, the outcome is **HOLD**: acknowledged, unresolved, nothing dispatched. It must never become AFFIRM, and never become REJECT/cancel unless cancellation is stated explicitly.
@@ -276,7 +284,7 @@ Interpreter call: ~2,000 input tokens (system + schema ≈1,500, cacheable; cand
 
 ## 9. Proposed implementation sequence
 
-1. **Hotfix §5.0** (negation polarity in pending-decision resolution) — 1 PR, deterministic, flips the P0 `todo`.
+1. ~~**Hotfix §5.0**~~ — **done in #1093.** The F-family prohibition test in `maxSemanticGeneralization.test.js` is now required. Related, separately tracked: #1094 (bare "Cancel the mission." is routed as a mission exit).
 2. **`TurnFrame` contract + deterministic producer** (maps existing lexical signals). Shadow only, logged, scored against the suite. No behaviour change.
 3. **Evidence registry** — unify loaders behind `readOnlyQueryable`, add `agent_activity`, fix the `defaultLoadCapabilityPolicy` pool bypass. The analysis owner reads it. Observable improvement on A/E without routing changes.
 4. **Model-backed frame producer in shadow** (reuse the `DecisionService` provider and shadow infrastructure). Measure agreement, latency and cost on real traffic plus the suite.

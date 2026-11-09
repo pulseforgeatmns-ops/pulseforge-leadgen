@@ -90,8 +90,17 @@ describe('Max semantic generalization evaluation', { concurrency: false }, () =>
     assert.equal(failing.length, 0, `${failing.length}/${engineRun.grades.length} turns fail`);
   });
 
-  it('known P0: negated approval/proceed never consumes a pending decision', { todo: 'P0 authorization hotfix — PendingDecisionResolver ignores negation (see audit §4.1)' }, () => {
-    const violations = engineRun.grades.filter((g) => g.act === 'prohibition' && g.dims.authority === false);
-    assert.deepEqual(violations.map(key), []);
+  // Fixed by #1093 (authorization polarity). Required from here on.
+  it('a prohibition never consumes a pending decision, dispatches, or mutates (F-family)', () => {
+    const prohibitions = engineRun.grades.filter((g) => g.act === 'prohibition');
+    assert.ok(prohibitions.length >= 3, 'prohibition scenarios present');
+    const violations = prohibitions.filter((g) => g.dims.authority === false || g.dims.mutation === false);
+    assert.deepEqual(violations.map((g) => `${key(g)} — ${g.notes.join('; ')}`), []);
+  });
+
+  it('explicit authorization still resolves through the canonical path (F3 control)', () => {
+    const grants = engineRun.grades.filter((g) => g.act === 'authorization');
+    assert.ok(grants.length >= 1);
+    for (const g of grants) assert.ok(['authorization', 'authorization_confirmation', 'clarification'].includes(g.responseClass), key(g));
   });
 });
