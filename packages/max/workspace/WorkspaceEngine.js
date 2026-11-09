@@ -471,6 +471,13 @@ class WorkspaceEngine {
         } catch (_) { found = null; }
         if (found?.found && String(found.mission?.id) === String(missionId)) valid.push(String(missionId));
       }
+      if (valid.length === 0) {
+        return {
+          recovered: false,
+          reason: 'no_valid_references',
+          evidenceRefreshRequired: true,
+        };
+      }
       const focusId = valid.includes(durable.context.focusId) ? durable.context.focusId : valid[0] || null;
       const context = normalizeContext({
         tenantId: tenant, page: 'command-deck',
@@ -480,10 +487,14 @@ class WorkspaceEngine {
       context.recoveredEvidenceRefs = (durable.context.evidenceRefs || []).filter(ref => {
         const observed = Date.parse(ref.observedAt);
         return Number.isFinite(observed) && observed <= now;
-      }).map(ref => ({ kind: ref.kind, observedAt: ref.observedAt }));
+      }).map(ref => ({
+        kind: ref.kind,
+        observedAt: ref.observedAt,
+        requiresFreshValidation: true,
+      }));
       context.requiresEvidenceRefresh = true;
       const session = this._sessions.restore(sessionId, context);
-      if (valid.length) session.operationalFocus = { tenantId: tenant, missionIds: valid, at: new Date().toISOString() };
+      session.operationalFocus = { tenantId: tenant, missionIds: valid, at: new Date().toISOString() };
       return { recovered: true, sessionId: session.id, candidates: valid, evidenceRefreshRequired: true };
     })().finally(() => this._conversationRecoveryPending.delete(key));
     this._conversationRecoveryPending.set(key, recovery);
