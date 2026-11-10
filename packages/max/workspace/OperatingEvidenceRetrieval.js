@@ -393,6 +393,7 @@ function evidenceItem(input = {}) {
     debugSource: input.debugSource || null,
     counts: input.counts || null,
     records: Array.isArray(input.records) ? input.records : [],
+    ...(input.retrievalStatus ? { retrievalStatus: input.retrievalStatus } : {}),
   };
 }
 
@@ -437,13 +438,41 @@ function scopedRows(rows, clientId, tenantId) {
   });
 }
 
+/**
+ * Retrieval status vocabulary (P0 #1110). A failed read must never be
+ * presented as "nothing there".
+ *   found       — read succeeded and returned rows
+ *   empty       — read succeeded and returned zero rows
+ *   failed      — the read was attempted and threw
+ *   unavailable — the read could not be attempted (no store / no tenant)
+ */
+const RETRIEVAL_STATUS = Object.freeze({
+  FOUND: 'found',
+  EMPTY: 'empty',
+  FAILED: 'failed',
+  UNAVAILABLE: 'unavailable',
+});
+
+function errorClassOf(err) {
+  if (!err) return 'unknown_error';
+  if (err.code && /^[A-Za-z0-9_]{1,40}$/.test(String(err.code))) return String(err.code);
+  return (err.constructor && err.constructor.name) || 'Error';
+}
+
 async function safeLoad(loader, fallback) {
   if (typeof loader !== 'function') return fallback;
   try {
     const result = await loader();
     return result == null ? fallback : result;
-  } catch (_) {
-    return fallback;
+  } catch (err) {
+    // Preserve that the read failed; record only the error class (messages can
+    // carry SQL or values and are never surfaced).
+    return {
+      ...fallback,
+      available: false,
+      status: RETRIEVAL_STATUS.FAILED,
+      errorClass: errorClassOf(err),
+    };
   }
 }
 
@@ -484,11 +513,11 @@ async function defaultLoadCampaignAo(input = {}) {
 async function defaultLoadProspects(input = {}) {
   const clientId = resolveClientId(input);
   if (clientId == null) {
-    return { available: false, reason: 'missing_tenant' };
+    return { available: false, status: RETRIEVAL_STATUS.UNAVAILABLE, reason: 'missing_tenant' };
   }
   const pool = defaultPool(input);
   if (!pool || typeof pool.query !== 'function') {
-    return { available: false, reason: 'prospect_store_unavailable' };
+    return { available: false, status: RETRIEVAL_STATUS.UNAVAILABLE, reason: 'prospect_store_unavailable' };
   }
   try {
     const { rows } = await pool.query(
@@ -514,14 +543,38 @@ async function defaultLoadProspects(input = {}) {
        LIMIT 8`,
       [clientId]
     );
+    const counts = rows[0] || {};
     return {
       available: true,
-      counts: rows[0] || {},
+      status: Number(counts.total || 0) > 0 ? RETRIEVAL_STATUS.FOUND : RETRIEVAL_STATUS.EMPTY,
+      source: 'prospects',
+      counts,
       segments: segments.rows || [],
     };
-  } catch (_) {
-    return { available: false, reason: 'prospect_store_unavailable' };
+  } catch (err) {
+    return {
+      available: false,
+      status: RETRIEVAL_STATUS.FAILED,
+      reason: 'prospect_query_failed',
+      errorClass: errorClassOf(err),
+    };
   }
+}
+
+/**
+ * Normalize a prospects loader result (default or injected) to an explicit
+ * retrieval status.
+ */
+function prospectRetrievalStatus(prospects) {
+  if (!prospects || typeof prospects !== 'object') return RETRIEVAL_STATUS.UNAVAILABLE;
+  if (Object.values(RETRIEVAL_STATUS).includes(prospects.status)) return prospects.status;
+  if (prospects.available === false) {
+    return prospects.reason === 'prospect_query_failed'
+      ? RETRIEVAL_STATUS.FAILED
+      : RETRIEVAL_STATUS.UNAVAILABLE;
+  }
+  const total = Number((prospects.counts && prospects.counts.total) || 0);
+  return total > 0 ? RETRIEVAL_STATUS.FOUND : RETRIEVAL_STATUS.EMPTY;
 }
 
 async function defaultLoadScout(input = {}) {
@@ -1125,14 +1178,31 @@ async function loadOperatingEvidence(input = {}) {
     );
   }
 
-  if (prospects.available === false) {
+  const prospectStatus = prospectRetrievalStatus(prospects);
+  if (prospectStatus === RETRIEVAL_STATUS.FAILED) {
     items.push(
       evidenceItem({
         epistemic: EPISTEMIC.UNAVAILABLE,
-        claim: 'Prospect repository could not be read for this tenant.',
+        claim:
+          'Prospect repository could not be read for this tenant: the query against the prospects table failed. This is a retrieval failure, not an empty result.',
         provenance: PROVENANCE.PROSPECTS,
         sourceKind: 'prospects',
-        debugSource: prospects.reason,
+        debugSource: prospects.errorClass || prospects.reason || 'prospect_query_failed',
+        retrievalStatus: RETRIEVAL_STATUS.FAILED,
+      })
+    );
+  } else if (prospectStatus === RETRIEVAL_STATUS.UNAVAILABLE) {
+    items.push(
+      evidenceItem({
+        epistemic: EPISTEMIC.UNAVAILABLE,
+        claim:
+          prospects && prospects.reason === 'missing_tenant'
+            ? 'Prospect repository was not queried: no active tenant is bound to this conversation.'
+            : 'Prospect repository is unavailable: no prospect store is connected, so it was not queried. This is not an empty result.',
+        provenance: PROVENANCE.PROSPECTS,
+        sourceKind: 'prospects',
+        debugSource: (prospects && prospects.reason) || 'prospect_store_unavailable',
+        retrievalStatus: RETRIEVAL_STATUS.UNAVAILABLE,
       })
     );
   } else {
@@ -1143,11 +1213,12 @@ async function loadOperatingEvidence(input = {}) {
         epistemic: EPISTEMIC.VERIFIED,
         claim:
           total > 0
-            ? `Prospect repository has ${total} existing prospect${total === 1 ? '' : 's'}${qualified ? `, ${qualified} at or above qualification threshold` : ''}.`
-            : 'No prospects are currently recorded for this tenant.',
+            ? `Prospect repository has ${total} existing prospect${total === 1 ? '' : 's'}${qualified ? `, ${qualified} at or above qualification threshold` : ''} (source: prospects table for this workspace).`
+            : 'No prospects are currently recorded for this tenant (prospects table queried for this workspace: 0 rows).',
         provenance: PROVENANCE.PROSPECTS,
         sourceKind: 'prospects',
         counts: prospects.counts || { total: 0 },
+        retrievalStatus: prospectStatus,
       })
     );
   }
@@ -1969,6 +2040,8 @@ function operatingStructured(answer, extras = {}) {
       campaignMailExecuted: extras.mailExecuted === true,
       businessIntelligence: extras.businessIntelligence || null,
       businessIntelligenceSynthesis: Boolean(extras.businessIntelligence),
+      ...(extras.retrievalStatus ? { retrievalStatus: extras.retrievalStatus } : {}),
+      ...(extras.operationalRead ? { operationalRead: extras.operationalRead } : {}),
     },
   });
 }
@@ -1991,6 +2064,8 @@ module.exports = {
   composeOperatingEvidenceAnswer,
   composeRecommendationFromEvidence,
   operatingStructured,
+  RETRIEVAL_STATUS,
+  prospectRetrievalStatus,
   resolveTenantId,
   resolveClientId,
   hasDurableMailExecution,

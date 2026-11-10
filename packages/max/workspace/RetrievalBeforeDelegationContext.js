@@ -40,6 +40,8 @@ const {
   loadOperatingEvidence,
   composeOperatingEvidenceAnswer,
   operatingStructured,
+  prospectRetrievalStatus,
+  RETRIEVAL_STATUS,
   bundleHasUsableOperatingSignal,
 } = require('./OperatingEvidenceRetrieval');
 const {
@@ -313,8 +315,9 @@ async function maybeHandleOperatingEvidenceTurn(input, question, mode) {
     recommend &&
     isBareCurrentStateRecommendation(question) &&
     !hasOperatingGrounding(question);
+  const operationalRead = input.operationalRead || null;
   const bundle = await loadOperatingEvidence(input);
-  if (bareOnly && !bundleHasUsableOperatingSignal(bundle)) {
+  if (!operationalRead && bareOnly && !bundleHasUsableOperatingSignal(bundle)) {
     return null;
   }
   const understanding = await inspectRetrievalSources(input);
@@ -322,7 +325,7 @@ async function maybeHandleOperatingEvidenceTurn(input, question, mode) {
     input.session && input.session.context && typeof input.session.context === 'object'
       ? input.session.context
       : null;
-  const composed = composeOperatingEvidenceAnswer(question, bundle, {
+  const composedRaw = composeOperatingEvidenceAnswer(question, bundle, {
     inventoryOnly,
     recommend,
     businessUnderstanding: understanding,
@@ -332,6 +335,14 @@ async function maybeHandleOperatingEvidenceTurn(input, question, mode) {
     operatorDeniedEmailActive: Boolean(sessionCtx && sessionCtx.operatorDeniedEmailActive),
     contract,
   });
+  const retrievalStatus = operationalRead
+    ? (bundle && bundle.ok === false && bundle.reason === 'missing_tenant'
+        ? RETRIEVAL_STATUS.UNAVAILABLE
+        : prospectRetrievalStatus(bundle && bundle.prospects))
+    : null;
+  const composed = operationalRead
+    ? { ...composedRaw, prose: withOperationalReadDisclosure(composedRaw.prose, operationalRead, retrievalStatus) }
+    : composedRaw;
 
   if (sessionCtx) {
     sessionCtx.lastCognitiveMode = mode.kind;
@@ -358,7 +369,19 @@ async function maybeHandleOperatingEvidenceTurn(input, question, mode) {
       mailExecuted: Boolean(bundle.campaign && bundle.campaign.mailExecuted),
       unavailable: itemsByUnavailable(bundle.items),
       businessIntelligence: composed.businessIntelligence || null,
+      retrievalStatus,
+      operationalRead: operationalRead
+        ? {
+            reason: operationalRead.reason,
+            objects: operationalRead.objects,
+            wantsRecordList: Boolean(operationalRead.wantsRecordList),
+            wantsRanking: Boolean(operationalRead.wantsRanking),
+          }
+        : null,
       reasoning: [
+        operationalRead
+          ? 'Operational read: answered from this workspace\'s operating records before any Blueprint reasoning (P0 #1110).'
+          : null,
         `Classified operator intent as ${mode.kind}.`,
         contract ? `Selected ${contract.label} response contract before retrieval.` : null,
         'Synthesized business intelligence from grounded operating evidence before presenting inventory.',
@@ -406,7 +429,85 @@ async function maybeHandleOperatingEvidenceTurn(input, question, mode) {
     launchedScout: false,
     operatingEvidence: bundle,
     responseContract: contract,
+    retrievalStatus,
   };
+}
+
+const RECORD_LISTING_UNAVAILABLE =
+  'Record-level listing and ranking are not available in Max yet, so I have not named, ranked, or prioritized individual prospects. The figures above are counts from this workspace\'s own records, not from the Business Blueprint.';
+
+const NO_PRIOR_RANKING =
+  'No prospect ranking was produced earlier in this conversation, so there is no top-ranked record to explain. I will not reconstruct a ranking from the Business Blueprint.';
+
+function withOperationalReadDisclosure(prose, read, status) {
+  const parts = [String(prose || '').trim()].filter(Boolean);
+  if (read && read.reason === 'ranking_follow_up_after_operational_read') {
+    parts.unshift(NO_PRIOR_RANKING);
+  } else if (read && (read.wantsRecordList || read.wantsRanking)) {
+    parts.push(RECORD_LISTING_UNAVAILABLE);
+  }
+  if (status === RETRIEVAL_STATUS.FAILED && !/retrieval failure/i.test(parts.join(' '))) {
+    parts.push('Prospect records could not be read because the query failed. This is a retrieval failure, not an empty result.');
+  }
+  return parts.join('\n\n');
+}
+
+function operationalReadUnavailableTurn(question, read, mode, failureClass) {
+  const status = failureClass ? RETRIEVAL_STATUS.FAILED : RETRIEVAL_STATUS.UNAVAILABLE;
+  const prose = failureClass
+    ? 'I could not read this workspace\'s operating records: the retrieval failed. This is a retrieval failure, not an empty result, so I am not substituting Blueprint guidance.'
+    : 'I could not serve this from this workspace\'s operating records, and I am not substituting Blueprint guidance for record data.';
+  const structured = operatingStructured(prose, {
+    used: [],
+    items: [],
+    cognitiveMode: (mode && mode.kind) || 'retrieval',
+    unavailable: [],
+    retrievalStatus: status,
+    operationalRead: read
+      ? { reason: read.reason, objects: read.objects, wantsRecordList: Boolean(read.wantsRecordList), wantsRanking: Boolean(read.wantsRanking) }
+      : null,
+    reasoning: [
+      'Operational read could not be served; failed closed instead of falling back to Blueprint reasoning (P0 #1110).',
+    ],
+  });
+  return {
+    reason: 'operational_read_unavailable',
+    structured,
+    prose,
+    mode,
+    sourcesUsed: [],
+    delegated: false,
+    launchedScout: false,
+    retrievalStatus: status,
+  };
+}
+
+/**
+ * P0 #1110 — answer a request to read existing tenant operating records.
+ * Always returns a turn: grounded operating evidence, or an explicit
+ * unavailable/failed turn. Never returns null (so Blueprint cannot claim it)
+ * and never delegates, executes, or writes.
+ */
+async function maybeHandleOperationalReadTurn(input = {}) {
+  const question = String(input.question || '').trim();
+  const read = input.operationalRead || { reason: 'operational_read', objects: [] };
+  const mode =
+    input.cognitive ||
+    classifyCognitiveMode(question, { session: input.session, context: input.context });
+  const contract = input.responseContract || selectResponseContract(question, mode);
+  let turn = null;
+  let failureClass = null;
+  try {
+    turn = await maybeHandleOperatingEvidenceTurn(
+      { ...input, responseContract: contract, operationalRead: read },
+      question,
+      mode
+    );
+  } catch (err) {
+    failureClass = (err && (err.code || (err.constructor && err.constructor.name))) || 'Error';
+  }
+  if (!turn) return operationalReadUnavailableTurn(question, read, mode, failureClass);
+  return { ...turn, operationalRead: read };
 }
 
 async function maybeHandleClaimChallengeTurn(input, question, mode) {
@@ -720,6 +821,7 @@ async function maybeHandleRetrievalBeforeDelegationTurn(input = {}) {
 
 module.exports = {
   maybeHandleRetrievalBeforeDelegationTurn,
+  maybeHandleOperationalReadTurn,
   inspectRetrievalSources,
   composeRetrievalAnswer,
   isHardRetrievalQuestion,

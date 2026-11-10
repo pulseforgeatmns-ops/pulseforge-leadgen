@@ -110,7 +110,13 @@ const {
 const { maybeHandleCalCoachingTurn } = require('./CalCoachingContext');
 const {
   maybeHandleRetrievalBeforeDelegationTurn,
+  maybeHandleOperationalReadTurn,
 } = require('./RetrievalBeforeDelegationContext');
+const {
+  classifyOperationalRead,
+  operationalReadPrecedenceEnabled,
+  recordOperationalRead,
+} = require('./OperationalReadIntent');
 const {
   maybeHandleOperatorOperatingUpdate,
 } = require('./OperatorOperatingUpdate');
@@ -330,6 +336,106 @@ class WorkspaceEngine {
     if (this._runtimeProvider) return this._runtimeProvider();
     const { getAcquisitionMissionRuntime } = require('../../../services/acquisitionMissionRuntime');
     return getAcquisitionMissionRuntime();
+  }
+
+  /**
+   * P0 #1110 — answer a read of the tenant's existing operating records from
+   * operating evidence. Never falls back to Blueprint reasoning, never
+   * delegates, executes, or writes.
+   */
+  async _answerOperationalRead({
+    question,
+    session,
+    rawContext,
+    read,
+    envelopeSwitch,
+    workspaceOwnership,
+    traceAskReturn,
+  }) {
+    askPathTrace.traceBranch('operational_read', {
+      reason: workspaceOwnership && workspaceOwnership.reason,
+      objects: (read && read.objects) || [],
+    });
+    const context = rawContext || session.context;
+    const cognitive = classifyCognitiveMode(question, { session, context });
+    const turn = await maybeHandleOperationalReadTurn({
+      question,
+      session,
+      context,
+      cognitive,
+      operationalRead: read,
+      objectiveService: this._operatorObjectiveService || undefined,
+      objectiveOpts: this._operatorObjectiveOpts || undefined,
+      cieService: this._clientIntelligenceService || undefined,
+      cieOpts: this._clientIntelligenceOpts || undefined,
+      operatingEvidenceOpts: {
+        ...(this._operatingEvidenceOpts || {}),
+        knowledge:
+          (this._operatingEvidenceOpts && this._operatingEvidenceOpts.knowledge) ||
+          (this._operatingUpdateOpts && this._operatingUpdateOpts.knowledge) ||
+          undefined,
+      },
+      knowledge:
+        (this._operatingUpdateOpts && this._operatingUpdateOpts.knowledge) ||
+        (this._operatingEvidenceOpts && this._operatingEvidenceOpts.knowledge) ||
+        undefined,
+    });
+    recordOperationalRead(session, read);
+    session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+    if (session.context && typeof session.context === 'object') {
+      session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+      session.context._answerCorpus = 'workspace';
+    }
+    const structured = turn.structured;
+    const presented = await this._presentation.present(structured);
+    const prose = presented.prose || turn.prose;
+    this._sessions.appendMessage(session.id, {
+      role: 'max',
+      text: prose,
+      structured,
+    });
+    return traceAskReturn('operational_read', {
+      sessionId: session.id,
+      prose,
+      structured,
+      metadata: presented.metadata,
+      suggestions: resolveResultSuggestions({ structured, session, question }),
+      recommendedActions: structured.recommendedActions,
+      contextSwitch: envelopeSwitch,
+      domainSwitch: null,
+      context: session.context,
+      presentation: presented.presentation,
+      route: ROUTE_KINDS.INTELLIGENCE,
+      mission: null,
+      resolution: null,
+      executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+      retrieval: {
+        mode: turn.mode,
+        sourcesUsed: turn.sourcesUsed || [],
+        delegated: false,
+        retrievalStatus: turn.retrievalStatus || null,
+        operationalRead: read
+          ? { reason: read.reason, objects: read.objects, wantsRecordList: Boolean(read.wantsRecordList), wantsRanking: Boolean(read.wantsRanking) }
+          : null,
+      },
+      domainDecision: {
+        domain: EXECUTION_DOMAINS.WORKSPACE,
+        reason: turn.reason,
+        missionType: null,
+        missionIntent: null,
+        confidence: 1,
+        previousDomain: session.previousExecutionDomain || null,
+        domainSwitched: false,
+      },
+      executionContext: {
+        domain: EXECUTION_DOMAINS.WORKSPACE,
+        routeKind: ROUTE_KINDS.INTELLIGENCE,
+        reason: turn.reason,
+        missionType: null,
+        missionId: null,
+      },
+      workspaceOwnership,
+    }, { pipeline: 'OperatingEvidence', claimedBy: workspaceOwnership && workspaceOwnership.reason });
   }
 
   _amoRuntimeInput(extra = {}) {
@@ -667,6 +773,9 @@ class WorkspaceEngine {
         role: 'operator',
         text: question,
       });
+      // P0 #1110 — monotonic operator turn counter (the message buffer is
+      // capped at 40, so its length cannot identify "the previous turn").
+      session.operatorTurnSeq = (Number(session.operatorTurnSeq) || 0) + 1;
     }
 
     // Reviewing existing content is a workspace navigation request, not mission
@@ -2968,6 +3077,20 @@ class WorkspaceEngine {
     // 6 — Knowledge Retrieval (only when no specialist owner claimed)
     if (ownerIs(WORKSPACE_OWNERS.KNOWLEDGE_RETRIEVAL)) {
       askPathTrace.traceBranch('owner_pipeline:knowledge_retrieval');
+      if (workspaceOwnership.reason === 'operational_read') {
+        // P0 #1110 — reads of existing tenant records: operating evidence only.
+        return this._answerOperationalRead({
+          question,
+          session,
+          rawContext,
+          read:
+            workspaceOwnership.operationalRead ||
+            classifyOperationalRead(question, { session }),
+          envelopeSwitch,
+          workspaceOwnership,
+          traceAskReturn,
+        });
+      }
       const operatingUpdateTurn = await maybeHandleOperatorOperatingUpdate({
         question,
         session,
@@ -3296,6 +3419,46 @@ class WorkspaceEngine {
     const suppressMissionForObjective = Boolean(
       objectiveTurn && objectiveTurn.suppressMission
     );
+
+    // P0 #1110 — recovery before generic Blueprint reasoning. When a claimed
+    // owner (Scout, mission inspection, …) declined an operational read, the
+    // turn must land on operating evidence, not on Blueprint advice.
+    if (operationalReadPrecedenceEnabled()) {
+      const tailRead = classifyOperationalRead(question, { session });
+      if (tailRead.isRead) {
+        const declinedOwners = routingFallbacks.map((f) => f && f.claimedOwner).filter(Boolean);
+        ownershipAudit.logOwnerSelected({
+          owner: WORKSPACE_OWNERS.KNOWLEDGE_RETRIEVAL,
+          reason: 'operational_read_recovery',
+          confidence: 0.9,
+          specialist: null,
+          recoveredFrom: declinedOwners,
+          question,
+        });
+        workspaceOwnership = {
+          owner: WORKSPACE_OWNERS.KNOWLEDGE_RETRIEVAL,
+          reason: 'operational_read_recovery',
+          confidence: 0.9,
+          specialist: null,
+          fallback: false,
+          recoveredFrom: declinedOwners,
+          operationalRead: tailRead,
+        };
+        if (session.context && typeof session.context === 'object') {
+          session.context.workspaceOwner = workspaceOwnership.owner;
+          session.context.workspaceOwnerReason = workspaceOwnership.reason;
+        }
+        return this._answerOperationalRead({
+          question,
+          session,
+          rawContext,
+          read: tailRead,
+          envelopeSwitch,
+          workspaceOwnership,
+          traceAskReturn,
+        });
+      }
+    }
 
     const cieTurn = await maybeHandleClientIntelligenceTurn({
       question,

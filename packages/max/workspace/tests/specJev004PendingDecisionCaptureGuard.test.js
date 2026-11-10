@@ -26,7 +26,7 @@ const {
   listPendingDecisionCaptureGuardLog,
   clearPendingDecisionCaptureGuardLog,
 } = require('../pendingDecisionCaptureGuard');
-const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine, unavailableOperatingEvidence } = require('./workspaceTestHarness');
 const { createTestAmoRuntime } = require('./amoTestRuntime');
 
 const ANCHOR_OBJECTIVE =
@@ -62,6 +62,9 @@ async function openPendingDiscoveryWorkspace(opts = {}) {
   const runtime = createTestAmoRuntime({ engine });
   const workspace = createWorkspaceEngine({
     scoutAcquisitionOpts: { scoutCompanies: [], scoutPeople: [] },
+    // P0 #1110 — prospect-count questions are operational reads and consult
+    // operating evidence; keep the suite hermetic.
+    operatingEvidenceOpts: unavailableOperatingEvidence(),
     acquisitionMissionRuntime: runtime,
     missionsEnabled: true,
     resolverEnabled: true,
