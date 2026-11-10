@@ -521,7 +521,10 @@ function isProspectInventoryRead(q) {
     /\b(?:prospect|borrower|lead)\s+(?:list|pipeline|inventory|queue)\b/.test(lower);
   const read = /\b(?:brief|briefing|summari[sz]e|review|show|list|status|prioriti[sz]e|rank|how\s+are|what(?:'s|\s+is))\b/.test(lower);
   const execution = /\b(?:send|email|launch|start\s+outreach|import|upload|scrape|find\s+new|discover|generate\s+new)\b/.test(lower);
-  return inventory && read && !execution;
+  if (inventory && read && !execution) return true;
+  // P0 #1110 — shared operational-read detector (prospect objects only here).
+  const shared = require('./OperationalReadIntent').classifyOperationalRead(q);
+  return shared.isRead && shared.objects.includes('prospects');
 }
 
 function classifyWorkspace(q) {

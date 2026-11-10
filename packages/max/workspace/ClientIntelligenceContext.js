@@ -16,6 +16,11 @@
  * Advisory reasoning is not execution authorization.
  */
 
+const {
+  classifyOperationalRead,
+  operationalReadPrecedenceEnabled,
+  currentOperatorTurn,
+} = require('./OperationalReadIntent');
 const cie = require('../clientIntelligence');
 const { buildStructuredResponse } = require('./WorkspaceTypes');
 const {
@@ -1146,6 +1151,27 @@ function conceptFamilyHits(tokens, family) {
   return hits;
 }
 
+/**
+ * P0 #1110 — the short-continuation rule may only extend the immediately
+ * previous Blueprint turn. Previously any earlier CIE turn in the session (the
+ * marker is never cleared) made every <=8-token message Blueprint-claimable.
+ * Sessions without an engine-maintained turn counter keep legacy behaviour.
+ */
+function priorClientReasoningIsImmediate(session) {
+  if (!hasPriorClientReasoning(session)) return false;
+  if (!operationalReadPrecedenceEnabled()) return true;
+  const now = currentOperatorTurn(session);
+  if (now == null) return true;
+  const prior = session.context.lastClientIntelligenceTurn;
+  if (prior.operatorTurn == null) return false;
+  return Number(prior.operatorTurn) === now - 1;
+}
+
+function isOperationalReadForCie(question, session) {
+  if (!operationalReadPrecedenceEnabled()) return false;
+  return classifyOperationalRead(question, { session }).isRead;
+}
+
 function hasPriorClientReasoning(session) {
   const prior =
     (session &&
@@ -1535,6 +1561,8 @@ function shouldClaimClientIntelligenceTurn(question, session, opts = {}) {
     /* registry unavailable */
   }
   if (shouldRetrieveOperatingEvidence(question)) return false;
+  // P0 #1110 — reads of existing tenant records are never Blueprint claims.
+  if (isOperationalReadForCie(question, session)) return false;
   const sessionContract =
     opts.responseContract ||
     (session && session.context && session.context.responseContract) ||
@@ -1561,7 +1589,7 @@ function shouldClaimClientIntelligenceTurn(question, session, opts = {}) {
     // Default for unseen paraphrases: interrogative / advisory shape.
     if (scored.features.advisory >= 1) return true;
     // Short continuations after a CIE turn.
-    if (hasPriorClientReasoning(session) && scored.tokens.length <= 8) {
+    if (priorClientReasoningIsImmediate(session) && scored.tokens.length <= 8) {
       return true;
     }
     return false;
@@ -2353,6 +2381,7 @@ function recordLastCieTurn(session, turn, summary, prose) {
     reason: turn.reason || null,
     recommendationFocus: turn.recommendationFocus || null,
     question: turn.question || null,
+    operatorTurn: currentOperatorTurn(session),
     at: new Date().toISOString(),
   };
   updateActiveReasoningFromTurn(
@@ -2410,6 +2439,17 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
       attachment,
       clientId: pre.clientId,
       skipReason: 'operating_evidence',
+    };
+  }
+
+  // P0 #1110 — operational record reads belong to operating evidence.
+  if (isOperationalReadForCie(question, session)) {
+    return {
+      handled: false,
+      summary,
+      attachment,
+      clientId: pre.clientId,
+      skipReason: 'operational_read',
     };
   }
 

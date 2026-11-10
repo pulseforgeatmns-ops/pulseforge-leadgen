@@ -2,7 +2,7 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { createHermeticWorkspaceEngine: createWorkspaceEngine } = require('./workspaceTestHarness');
+const { createHermeticWorkspaceEngine: createWorkspaceEngine, unavailableOperatingEvidence } = require('./workspaceTestHarness');
 const {
   maybeHandlePaigeCampaignContentDelegation,
 } = require('../PaigeCampaignDelegationContext');
@@ -82,6 +82,9 @@ describe('SPEC-094 Paige campaign content workspace routing', () => {
     const workspace = createWorkspaceEngine({
       disableLlm: true,
       missionsEnabled: false,
+      // P0 #1110 — "What's in the pipeline today?" is an operational read and
+      // now consults operating evidence; keep the suite hermetic.
+      operatingEvidenceOpts: unavailableOperatingEvidence(),
       paigeCampaignDelegationService: {
         shouldDelegateToPaige: delegation.shouldDelegateToPaige,
         delegateCampaignContentRecommendation: async () => {

@@ -61,6 +61,10 @@ const {
 } = require('./OperatorObjectiveResolutionEngine');
 const { PRIMARY_OBJECTIVES } = require('./PrimaryObjective');
 const askPathTrace = require('./audit/AskPathTrace');
+const {
+  classifyOperationalRead,
+  operationalReadPrecedenceEnabled,
+} = require('./OperationalReadIntent');
 
 const WORKSPACE_OWNERS = Object.freeze({
   ACTIVE_MISSION: 'active_mission',
@@ -392,6 +396,26 @@ function claimsExecutionInspection(question) {
   } catch (_) {
     return false;
   }
+}
+
+function claimsOperationalRead(question, input = {}) {
+  if (!operationalReadPrecedenceEnabled()) return null;
+  const q = normalizeQuestion(question);
+  if (!q) return null;
+  if (claimsExecutionInspection(q)) return null;
+  if (claimsMissionInspection(q, input)) return null;
+  // Questions the existing operating-evidence detector already recognizes
+  // keep their established knowledge-retrieval route (step 7) unchanged.
+  if (claimsKnowledgeRetrieval(q)) return null;
+  const read = classifyOperationalRead(question, { session: input.session });
+  if (!read.isRead) return null;
+  return {
+    owner: WORKSPACE_OWNERS.KNOWLEDGE_RETRIEVAL,
+    reason: 'operational_read',
+    confidence: 0.9,
+    specialist: null,
+    operationalRead: read,
+  };
 }
 
 function claimsKnowledgeRetrieval(question) {
@@ -964,6 +988,13 @@ async function resolveWorkspaceOwner(input = {}) {
     };
   }
 
+  // 3b — Operational read (P0 #1110). Reads of the tenant's existing records
+  // (prospects, tasks, emails, pipeline) are answered from operating data
+  // before Blueprint advice or a specialist can claim them. Mission and
+  // execution inspection keep precedence for mission-state questions.
+  const operationalClaim = claimsOperationalRead(question, input);
+  if (operationalClaim) return operationalClaim;
+
   // 4 — Blueprint
   if (claimsBlueprintOwnership(question, input)) {
     return {
@@ -1046,4 +1077,5 @@ module.exports = {
   claimsSpecialistOwnership,
   claimsActiveDeskWorkflow,
   claimsKnowledgeRetrieval,
+  claimsOperationalRead,
 };
