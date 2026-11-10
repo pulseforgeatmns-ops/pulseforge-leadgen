@@ -334,11 +334,15 @@ async function maybeHandleOperatingEvidenceTurn(input, question, mode) {
     retractedPremises: retractedIdsFrom(input),
     operatorDeniedEmailActive: Boolean(sessionCtx && sessionCtx.operatorDeniedEmailActive),
     contract,
+    operationalRead,
   });
+  const focused = Boolean(composedRaw && composedRaw.operationalReadFocused);
+  const sourceStatuses = focused ? composedRaw.sourceStatuses || {} : null;
   const retrievalStatus = operationalRead
     ? (bundle && bundle.ok === false && bundle.reason === 'missing_tenant'
         ? RETRIEVAL_STATUS.UNAVAILABLE
-        : prospectRetrievalStatus(bundle && bundle.prospects))
+        : (sourceStatuses && (sourceStatuses.prospects || sourceStatuses.activity)) ||
+          prospectRetrievalStatus(bundle && bundle.prospects))
     : null;
   const composed = operationalRead
     ? { ...composedRaw, prose: withOperationalReadDisclosure(composedRaw.prose, operationalRead, retrievalStatus) }
@@ -367,9 +371,12 @@ async function maybeHandleOperatingEvidenceTurn(input, question, mode) {
       cognitiveMode: mode.kind,
       recommend: composed.recommend,
       mailExecuted: Boolean(bundle.campaign && bundle.campaign.mailExecuted),
-      unavailable: itemsByUnavailable(bundle.items),
+      // Focused operational reads state each requested source's status in
+      // prose; no raw source tokens from unrequested sources.
+      unavailable: focused ? [] : itemsByUnavailable(bundle.items),
       businessIntelligence: composed.businessIntelligence || null,
       retrievalStatus,
+      sourceStatuses,
       operationalRead: operationalRead
         ? {
             reason: operationalRead.reason,
@@ -378,7 +385,11 @@ async function maybeHandleOperatingEvidenceTurn(input, question, mode) {
             wantsRanking: Boolean(operationalRead.wantsRanking),
           }
         : null,
-      reasoning: [
+      reasoning: focused ? [
+        'Operational read: answered from this workspace\'s operating records before any Blueprint reasoning (P0 #1110).',
+        `Reported the sources this request covers (${Object.keys(sourceStatuses).join(', ') || 'none'}) and their retrieval status; unrelated sources are not summarized.`,
+        'No action was executed and no specialist was delegated.',
+      ] : [
         operationalRead
           ? 'Operational read: answered from this workspace\'s operating records before any Blueprint reasoning (P0 #1110).'
           : null,

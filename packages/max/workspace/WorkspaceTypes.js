@@ -59,6 +59,14 @@ function buildResponseMetadata(partial = {}) {
       ? partial.unavailable.map(String)
       : [],
   };
+  // P0 #1110: explicit retrieval status for operational reads.
+  if (partial.retrievalStatus != null) meta.retrievalStatus = String(partial.retrievalStatus);
+  if (partial.sourceStatuses && typeof partial.sourceStatuses === 'object') {
+    meta.sourceStatuses = { ...partial.sourceStatuses };
+  }
+  if (partial.operationalRead && typeof partial.operationalRead === 'object') {
+    meta.operationalRead = { ...partial.operationalRead };
+  }
   // SPEC-022: preserve mission routing metadata when present
   if (partial.route != null) meta.route = String(partial.route);
   if (partial.missionId != null) meta.missionId = String(partial.missionId);

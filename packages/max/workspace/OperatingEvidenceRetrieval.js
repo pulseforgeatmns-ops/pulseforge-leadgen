@@ -35,6 +35,7 @@ const CAMPAIGN_LAYER = Object.freeze({
 const PROVENANCE = Object.freeze({
   AO: 'Campaign 001 AO records',
   SCOUT: 'Scout acquisition state',
+  COMPANIES: 'company records',
   PROSPECTS: 'prospect repository',
   MISSION: 'mission',
   OBJECTIVE: 'operator objective',
@@ -544,12 +545,36 @@ async function defaultLoadProspects(input = {}) {
       [clientId]
     );
     const counts = rows[0] || {};
+    // Setter-status / review-state breakdown (P0 #1110 follow-up). Aggregate
+    // counts only, tenant-scoped. Isolated so a failure here never turns the
+    // totals above into a failed read.
+    let breakdown;
+    try {
+      const grouped = await pool.query(
+        `SELECT COALESCE(NULLIF(setter_status::text, ''), 'unset') AS setter_status,
+                COALESCE(NULLIF(acquisition_metadata->>'reviewState', ''), 'none') AS review_state,
+                COUNT(*)::int AS count
+           FROM prospects
+          WHERE client_id = $1
+          GROUP BY 1, 2
+          ORDER BY count DESC, 1, 2`,
+        [clientId]
+      );
+      const groupedRows = (grouped && grouped.rows) || [];
+      breakdown = {
+        status: groupedRows.length ? RETRIEVAL_STATUS.FOUND : RETRIEVAL_STATUS.EMPTY,
+        rows: groupedRows,
+      };
+    } catch (err) {
+      breakdown = { status: RETRIEVAL_STATUS.FAILED, errorClass: errorClassOf(err), rows: [] };
+    }
     return {
       available: true,
       status: Number(counts.total || 0) > 0 ? RETRIEVAL_STATUS.FOUND : RETRIEVAL_STATUS.EMPTY,
       source: 'prospects',
       counts,
       segments: segments.rows || [],
+      breakdown,
     };
   } catch (err) {
     return {
@@ -683,10 +708,12 @@ async function defaultLoadObjectives(input = {}) {
 
 async function defaultLoadActivity(input = {}) {
   const clientId = resolveClientId(input);
-  if (clientId == null) return { available: false, reason: 'missing_tenant', rows: [] };
+  if (clientId == null) {
+    return { available: false, status: RETRIEVAL_STATUS.UNAVAILABLE, reason: 'missing_tenant', rows: [] };
+  }
   const pool = defaultPool(input);
   if (!pool || typeof pool.query !== 'function') {
-    return { available: false, reason: 'activity_store_unavailable', rows: [] };
+    return { available: false, status: RETRIEVAL_STATUS.UNAVAILABLE, reason: 'activity_store_unavailable', rows: [] };
   }
   try {
     const touchpoints = await pool.query(
@@ -698,6 +725,7 @@ async function defaultLoadActivity(input = {}) {
       [clientId]
     );
     let activityRows = [];
+    let activityLogStatus = RETRIEVAL_STATUS.FOUND;
     try {
       const activity = await pool.query(
         `SELECT al.id, al.client_id, al.action_type, al.notes, al.created_at
@@ -710,14 +738,24 @@ async function defaultLoadActivity(input = {}) {
       activityRows = activity.rows || [];
     } catch (_) {
       activityRows = [];
+      // Keep the legacy shape, but record that the setter activity log was
+      // not read rather than presenting it as empty.
+      activityLogStatus = RETRIEVAL_STATUS.FAILED;
     }
     return {
       available: true,
       touchpoints: touchpoints.rows || [],
       activity: activityRows,
+      activityLogStatus,
     };
-  } catch (_) {
-    return { available: false, reason: 'activity_store_unavailable', rows: [] };
+  } catch (err) {
+    return {
+      available: false,
+      status: RETRIEVAL_STATUS.FAILED,
+      reason: 'activity_query_failed',
+      errorClass: errorClassOf(err),
+      rows: [],
+    };
   }
 }
 
@@ -1236,7 +1274,20 @@ async function loadOperatingEvidence(input = {}) {
     const intel = scout.intelligence || {};
     const matched = Number((intel.counts && intel.counts.matched) || (intel.companies || []).length || 0);
     const state = scout.state;
-    if (matched > 0 || (state && Number(state.opportunityCount || 0) > 0)) {
+    const scoutStateCount = state ? Number(state.opportunityCount || 0) : 0;
+    if (scoutStateCount <= 0 && matched > 0) {
+      // Company rows on file (imports, CRM, earlier discovery). Without Scout
+      // acquisition state there is no established Scout provenance.
+      items.push(
+        evidenceItem({
+          epistemic: EPISTEMIC.VERIFIED,
+          claim: `${matched} compan${matched === 1 ? 'y is' : 'ies are'} on file for this workspace (source: companies table). This is retrieved state, not a new investigation.`,
+          provenance: PROVENANCE.COMPANIES,
+          sourceKind: 'scout',
+          counts: intel.counts || { matched },
+        })
+      );
+    } else if (matched > 0 || scoutStateCount > 0) {
       items.push(
         evidenceItem({
           epistemic: EPISTEMIC.VERIFIED,
@@ -1616,6 +1667,16 @@ function composeOperatingEvidenceAnswer(question, bundle, extras = {}) {
       recommend: false,
       launchedScout: false,
     };
+  }
+
+  // P0 #1110 follow-up — operational reads get a focused answer over the
+  // sources the operator asked about. Legacy (Anchor / SPEC-105 / SPEC-110)
+  // operating-evidence turns are unchanged.
+  if (
+    extras.operationalRead &&
+    require('./OperationalReadIntent').operationalReadFocusedEvidenceEnabled()
+  ) {
+    return composeOperationalReadAnswer(question, bundle, extras.operationalRead);
   }
 
   const {
@@ -2041,9 +2102,289 @@ function operatingStructured(answer, extras = {}) {
       businessIntelligence: extras.businessIntelligence || null,
       businessIntelligenceSynthesis: Boolean(extras.businessIntelligence),
       ...(extras.retrievalStatus ? { retrievalStatus: extras.retrievalStatus } : {}),
+      ...(extras.sourceStatuses ? { sourceStatuses: extras.sourceStatuses } : {}),
       ...(extras.operationalRead ? { operationalRead: extras.operationalRead } : {}),
     },
   });
+}
+
+
+/**
+ * P0 #1110 follow-up — focused operating-evidence answer for operational reads.
+ *
+ * Each requested object maps to REQUIRED sources (their found / empty /
+ * failed / unavailable state is always reported) and OPTIONAL sources (shown
+ * only when they hold verified data). Generic absence statements from sources
+ * the operator did not ask about (Campaign 001 / AO, physical mail,
+ * walkthroughs, Yelp, jobs / payments, missions, Business Intelligence
+ * unknowns) are not rendered. Tenant-scoped; never writes or delegates.
+ */
+const OPERATIONAL_READ_SOURCE_PLAN = Object.freeze({
+  prospects: { required: ['prospects'], optional: ['scout'] },
+  pipeline: { required: ['prospects'], optional: ['scout', 'ao', 'mission'] },
+  emails: { required: ['activity'], optional: [] },
+  tasks: { required: ['activity'], optional: ['ao'] },
+});
+
+const POSITIVE_EPISTEMIC = new Set([
+  EPISTEMIC.VERIFIED,
+  EPISTEMIC.OPERATOR_ATTESTED,
+  EPISTEMIC.INFERRED,
+]);
+
+function activityRetrievalStatus(activity) {
+  if (!activity || typeof activity !== 'object') return RETRIEVAL_STATUS.UNAVAILABLE;
+  if (Object.values(RETRIEVAL_STATUS).includes(activity.status)) return activity.status;
+  if (activity.available === false) {
+    return activity.reason === 'activity_query_failed'
+      ? RETRIEVAL_STATUS.FAILED
+      : RETRIEVAL_STATUS.UNAVAILABLE;
+  }
+  return null; // decided from scoped rows
+}
+
+function countList(entries) {
+  return entries
+    .filter(([, n]) => Number.isFinite(Number(n)))
+    .map(([label, n]) => `${Number(n)} ${label}`)
+    .join(', ');
+}
+
+function tally(rows, key) {
+  const totals = new Map();
+  for (const row of rows || []) {
+    const label = String((row && row[key]) == null ? 'none' : row[key]);
+    totals.set(label, (totals.get(label) || 0) + Number((row && row.count) || 0));
+  }
+  return [...totals.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+
+function prospectBreakdownItems(prospects) {
+  const items = [];
+  if (!prospects || prospects.available === false) return items;
+  const counts = prospects.counts || {};
+  const total = Number(counts.total || 0);
+  if (total <= 0) return items;
+  const statusLine = countList([
+    ['cold', counts.cold],
+    ['warm', counts.warm],
+    ['hot', counts.hot],
+  ]);
+  const stageLine = countList([
+    ['setter-visible', counts.setter_visible],
+    ['booked', counts.booked],
+    ['closed', counts.closed],
+  ]);
+  if (statusLine || stageLine) {
+    items.push(evidenceItem({
+      epistemic: EPISTEMIC.VERIFIED,
+      claim: `Prospect status: ${[statusLine, stageLine].filter(Boolean).join('; ')} (source: prospects table).`,
+      provenance: PROVENANCE.PROSPECTS,
+      sourceKind: 'prospects',
+      retrievalStatus: RETRIEVAL_STATUS.FOUND,
+    }));
+  }
+  const segments = (prospects.segments || []).filter((row) => row && Number(row.count) > 0);
+  if (segments.length) {
+    items.push(evidenceItem({
+      epistemic: EPISTEMIC.VERIFIED,
+      claim: `Prospects by vertical: ${segments.map((row) => `${row.vertical} ${Number(row.count)}`).join(', ')} (source: prospects table).`,
+      provenance: PROVENANCE.PROSPECTS,
+      sourceKind: 'prospects',
+      retrievalStatus: RETRIEVAL_STATUS.FOUND,
+    }));
+  }
+  const breakdown = prospects.breakdown;
+  if (!breakdown) {
+    items.push(evidenceItem({
+      epistemic: EPISTEMIC.UNAVAILABLE,
+      claim: 'Setter-status and review-state breakdown was not available from this read. The totals above are unaffected.',
+      provenance: PROVENANCE.PROSPECTS,
+      sourceKind: 'prospects_breakdown',
+      retrievalStatus: RETRIEVAL_STATUS.UNAVAILABLE,
+    }));
+  } else if (breakdown.status === RETRIEVAL_STATUS.FAILED) {
+    items.push(evidenceItem({
+      epistemic: EPISTEMIC.UNAVAILABLE,
+      claim: 'Setter-status and review-state breakdown could not be read: that query failed. This is a retrieval failure, not an empty result; the totals above are unaffected.',
+      provenance: PROVENANCE.PROSPECTS,
+      sourceKind: 'prospects_breakdown',
+      debugSource: breakdown.errorClass || 'prospect_breakdown_failed',
+      retrievalStatus: RETRIEVAL_STATUS.FAILED,
+    }));
+  } else {
+    const setter = tally(breakdown.rows, 'setter_status');
+    const review = tally(breakdown.rows, 'review_state');
+    if (setter.length) {
+      items.push(evidenceItem({
+        epistemic: EPISTEMIC.VERIFIED,
+        claim: `Setter status: ${setter.map(([k, n]) => `${k === 'unset' ? 'not set' : k} ${n}`).join(', ')} (source: prospects table).`,
+        provenance: PROVENANCE.PROSPECTS,
+        sourceKind: 'prospects',
+        retrievalStatus: RETRIEVAL_STATUS.FOUND,
+      }));
+    }
+    const reviewed = review.filter(([k]) => k !== 'none');
+    items.push(evidenceItem({
+      epistemic: EPISTEMIC.VERIFIED,
+      claim: reviewed.length
+        ? `Review state: ${review.map(([k, n]) => `${k === 'none' ? 'no review state' : k} ${n}`).join(', ')} (source: prospects table).`
+        : 'Review state: none recorded (source: prospects table).',
+      provenance: PROVENANCE.PROSPECTS,
+      sourceKind: 'prospects',
+      retrievalStatus: RETRIEVAL_STATUS.FOUND,
+    }));
+  }
+  return items;
+}
+
+function activityItemsForRead(bundle, objects) {
+  const items = [];
+  const activity = bundle.activity || null;
+  const status = activityRetrievalStatus(activity);
+  if (status === RETRIEVAL_STATUS.FAILED) {
+    items.push(evidenceItem({
+      epistemic: EPISTEMIC.UNAVAILABLE,
+      claim: 'Touchpoint and setter activity records could not be read: the query failed. This is a retrieval failure, not an empty result.',
+      provenance: PROVENANCE.ACTIVITY,
+      sourceKind: 'activity',
+      debugSource: (activity && (activity.errorClass || activity.reason)) || 'activity_query_failed',
+      retrievalStatus: RETRIEVAL_STATUS.FAILED,
+    }));
+    return { items, status };
+  }
+  if (status === RETRIEVAL_STATUS.UNAVAILABLE) {
+    items.push(evidenceItem({
+      epistemic: EPISTEMIC.UNAVAILABLE,
+      claim: activity && activity.reason === 'missing_tenant'
+        ? 'Touchpoint and setter activity records were not queried: no active tenant is bound to this conversation.'
+        : 'Touchpoint and setter activity records are unavailable: no activity store is connected, so they were not queried. This is not an empty result.',
+      provenance: PROVENANCE.ACTIVITY,
+      sourceKind: 'activity',
+      debugSource: (activity && activity.reason) || 'activity_store_unavailable',
+      retrievalStatus: RETRIEVAL_STATUS.UNAVAILABLE,
+    }));
+    return { items, status };
+  }
+  const touchpoints = scopedRows(activity.touchpoints, bundle.clientId, bundle.tenantId);
+  const events = scopedRows(activity.activity, bundle.clientId, bundle.tenantId);
+  const resolved = touchpoints.length || events.length ? RETRIEVAL_STATUS.FOUND : RETRIEVAL_STATUS.EMPTY;
+  if (objects.includes('emails')) {
+    const email = touchpoints.filter((t) => /e-?mail/i.test(String(t.channel || '')));
+    items.push(evidenceItem({
+      epistemic: touchpoints.length ? EPISTEMIC.VERIFIED : EPISTEMIC.NOT_RECORDED,
+      claim: touchpoints.length
+        ? `Email touchpoints: ${email.length} of the ${touchpoints.length} most recent touchpoints read for this workspace (source: touchpoints table, latest 25).`
+        : 'No touchpoints are recorded for this workspace (touchpoints table queried: 0 rows).',
+      provenance: PROVENANCE.TOUCHPOINT,
+      sourceKind: 'activity',
+      retrievalStatus: touchpoints.length ? RETRIEVAL_STATUS.FOUND : RETRIEVAL_STATUS.EMPTY,
+    }));
+  }
+  if (objects.includes('tasks')) {
+    if (activity.activityLogStatus === RETRIEVAL_STATUS.FAILED) {
+      items.push(evidenceItem({
+        epistemic: EPISTEMIC.UNAVAILABLE,
+        claim: 'The setter activity log could not be read: that query failed. This is a retrieval failure, not an empty result.',
+        provenance: PROVENANCE.ACTIVITY,
+        sourceKind: 'activity',
+        retrievalStatus: RETRIEVAL_STATUS.FAILED,
+      }));
+    } else {
+      items.push(evidenceItem({
+        epistemic: events.length ? EPISTEMIC.VERIFIED : EPISTEMIC.NOT_RECORDED,
+        claim: events.length
+          ? `Setter activity log: ${events.length} recent event${events.length === 1 ? '' : 's'} for this workspace (source: activity_log table, latest 25).`
+          : 'No setter activity events are recorded for this workspace (activity_log table queried: 0 rows).',
+        provenance: PROVENANCE.ACTIVITY,
+        sourceKind: 'activity',
+        retrievalStatus: events.length ? RETRIEVAL_STATUS.FOUND : RETRIEVAL_STATUS.EMPTY,
+      }));
+    }
+    items.push(evidenceItem({
+      epistemic: EPISTEMIC.UNAVAILABLE,
+      claim: 'Task and callback records are not part of this read; I checked touchpoints and the setter activity log only.',
+      provenance: PROVENANCE.ACTIVITY,
+      sourceKind: 'tasks_scope',
+      retrievalStatus: RETRIEVAL_STATUS.UNAVAILABLE,
+    }));
+  }
+  return { items, status: resolved };
+}
+
+const SOURCE_LABELS = Object.freeze({
+  prospects: 'prospects table',
+  scout: 'companies table',
+  ao: 'AO account records',
+  mission: 'missions',
+  activity: 'touchpoints and setter activity log',
+});
+
+function composeOperationalReadAnswer(question, bundle, read) {
+  const objects = (read && Array.isArray(read.objects) && read.objects.length)
+    ? read.objects.filter((o) => OPERATIONAL_READ_SOURCE_PLAN[o])
+    : ['prospects'];
+  if (!objects.length) objects.push('prospects');
+  const required = new Set();
+  const optional = new Set();
+  for (const object of objects) {
+    for (const src of OPERATIONAL_READ_SOURCE_PLAN[object].required) required.add(src);
+  }
+  for (const object of objects) {
+    for (const src of OPERATIONAL_READ_SOURCE_PLAN[object].optional) {
+      if (!required.has(src)) optional.add(src);
+    }
+  }
+
+  const all = Array.isArray(bundle.items) ? bundle.items : [];
+  const selected = [];
+  const statuses = [];
+
+  if (required.has('prospects')) {
+    const prospectItems = all.filter((item) => item && item.sourceKind === 'prospects');
+    selected.push(...prospectItems);
+    selected.push(...prospectBreakdownItems(bundle.prospects));
+    statuses.push(['prospects', prospectRetrievalStatus(bundle.prospects)]);
+  }
+  if (required.has('activity')) {
+    const activity = activityItemsForRead(bundle, objects);
+    selected.push(...activity.items);
+    statuses.push(['activity', activity.status]);
+  }
+  for (const src of optional) {
+    const withData = all.filter(
+      (item) => item && item.sourceKind === src && POSITIVE_EPISTEMIC.has(item.epistemic)
+    );
+    if (withData.length) {
+      selected.push(...withData);
+      statuses.push([src, RETRIEVAL_STATUS.FOUND]);
+    }
+  }
+
+  const lines = selected.map((item) => `- ${item.claim}`);
+  const sources = statuses.map(([src, status]) => `- ${SOURCE_LABELS[src] || src}: ${status}`);
+  const prose = [
+    'Operating records for this workspace',
+    lines.join('\n'),
+    'Sources queried',
+    sources.join('\n'),
+  ].filter(Boolean).join('\n\n');
+
+  const usedNames = { prospects: 'prospects', scout: 'scoutState', ao: 'campaignAo', mission: 'missions', activity: 'activity' };
+  const used = [...new Set(statuses.map(([src]) => usedNames[src]).filter(Boolean)), 'operatingEvidence'];
+
+  return {
+    prose,
+    used,
+    knowledgeState: 'operating_evidence',
+    recommend: false,
+    launchedScout: false,
+    items: selected,
+    sourceStatuses: Object.fromEntries(statuses),
+    contract: 'operational_read',
+    businessIntelligence: null,
+    operationalReadFocused: true,
+  };
 }
 
 module.exports = {
@@ -2066,6 +2407,8 @@ module.exports = {
   operatingStructured,
   RETRIEVAL_STATUS,
   prospectRetrievalStatus,
+  composeOperationalReadAnswer,
+  OPERATIONAL_READ_SOURCE_PLAN,
   resolveTenantId,
   resolveClientId,
   hasDurableMailExecution,
