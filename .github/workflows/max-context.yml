@@ -5,6 +5,10 @@ on:
       - 'packages/max/context/**'
       - 'routes/maxWorkspace.js'
       - 'test/maxConversationHttpPostgres.test.js'
+      - 'test/maxContinuityStaging*.test.js'
+      - 'test/helpers/maxContinuityWorkerFixture.cjs'
+      - 'scripts/maxContinuity/**'
+      - '.railway/max-continuity-rehearsal.json'
       - 'test/helpers/loginIdentityHarness.js'
       - 'test/helpers/disposablePostgres.js'
       - 'docs/validation/max-conversation-continuity-p0.md'
@@ -25,3 +29,12 @@ jobs:
       - run: node packages/max/context/tests/conversationContext.test.js
       - run: node --test packages/max/context/tests/conversationContextPostgres.test.js
       - run: node --test packages/max/context/tests/authenticatedRecovery.test.js test/maxConversationHttpPostgres.test.js
+      - name: Staging runner guards and disposable PostgreSQL rehearsal (no skips)
+        run: node --test test/maxContinuityStagingRunner.test.js test/maxContinuityStagingPostgres.test.js
+      - name: Retain sanitized disposable rehearsal evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: max-continuity-staging-runner-ci-evidence
+          path: artifacts/max-continuity-staging/ci-report.json
+          if-no-files-found: error
