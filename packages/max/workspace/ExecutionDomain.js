@@ -238,6 +238,21 @@ function selectExecutionDomain(text, opts = {}) {
     });
   }
 
+  // Read-only prospect inventory requests belong to the tenant workspace.
+  // This must precede generic intelligence fallback; it does not authorize
+  // discovery, campaign execution, or outbound sending.
+  if (isProspectInventoryRead(q)) {
+    return finalizeDomain({
+      domain: EXECUTION_DOMAINS.WORKSPACE,
+      missionIntent: null,
+      missionType: null,
+      routeKind: ROUTE_KINDS.INTELLIGENCE,
+      reason: 'prospect_inventory_read',
+      confidence: 0.92,
+      previousDomain,
+    });
+  }
+
   const workspace = classifyWorkspace(q);
   if (workspace) {
     return finalizeDomain({
@@ -497,6 +512,16 @@ function classifyMarketIntelligence(q) {
     return { reason: 'market_intelligence', confidence: 0.88 };
   }
   return null;
+}
+
+function isProspectInventoryRead(q) {
+  const lower = String(q || '').toLowerCase();
+  // Distinguish existing tenant records from instructions to find new leads.
+  const inventory = /\\b(?:my|our|existing|current|uploaded|saved)\\s+(?:borrower\\s+)?(?:prospects?|leads?|contacts?)\\b/.test(lower) ||
+    /\\b(?:prospect|borrower|lead)\\s+(?:list|pipeline|inventory|queue)\\b/.test(lower);
+  const read = /\\b(?:brief|briefing|summari[sz]e|review|show|list|status|prioriti[sz]e|rank|how\\s+are|what(?:'s|\\s+is))\\b/.test(lower);
+  const execution = /\\b(?:send|email|launch|start\\s+outreach|import|upload|scrape|find\\s+new|discover|generate\\s+new)\\b/.test(lower);
+  return inventory && read && !execution;
 }
 
 function classifyWorkspace(q) {
