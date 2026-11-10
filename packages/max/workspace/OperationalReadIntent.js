@@ -243,6 +243,17 @@ function operationalReadPrecedenceEnabled(env = process.env) {
 }
 
 /**
+ * Rollback switch for the focused operational-read evidence presentation.
+ * Default on; MAX_OPERATIONAL_READ_FOCUSED_EVIDENCE=false restores the full
+ * legacy operating-evidence composition for operational reads (routing is
+ * unaffected — that is MAX_OPERATIONAL_READ_PRECEDENCE).
+ */
+function operationalReadFocusedEvidenceEnabled(env = process.env) {
+  const raw = String((env && env.MAX_OPERATIONAL_READ_FOCUSED_EVIDENCE) || '').trim().toLowerCase();
+  return !['false', '0', 'off', 'no', 'disabled'].includes(raw);
+}
+
+/**
  * Record that this turn was answered as an operational read so the next turn
  * can resolve ranking follow-ups against it.
  */
@@ -262,6 +273,7 @@ module.exports = {
   classifyOperationalRead,
   isOperationalReadRequest,
   operationalReadPrecedenceEnabled,
+  operationalReadFocusedEvidenceEnabled,
   recordOperationalRead,
   currentOperatorTurn,
   previousTurnWasOperationalRead,
