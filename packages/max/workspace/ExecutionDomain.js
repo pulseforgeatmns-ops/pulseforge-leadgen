@@ -225,19 +225,6 @@ function selectExecutionDomain(text, opts = {}) {
     return briefingDecision;
   }
 
-  const market = classifyMarketIntelligence(q);
-  if (market) {
-    return finalizeDomain({
-      domain: EXECUTION_DOMAINS.MARKET_INTELLIGENCE,
-      missionIntent: null,
-      missionType: null,
-      routeKind: ROUTE_KINDS.INTELLIGENCE,
-      reason: market.reason,
-      confidence: market.confidence,
-      previousDomain,
-    });
-  }
-
   // Read-only prospect inventory requests belong to the tenant workspace.
   // This must precede generic intelligence fallback; it does not authorize
   // discovery, campaign execution, or outbound sending.
@@ -249,6 +236,19 @@ function selectExecutionDomain(text, opts = {}) {
       routeKind: ROUTE_KINDS.INTELLIGENCE,
       reason: 'prospect_inventory_read',
       confidence: 0.92,
+      previousDomain,
+    });
+  }
+
+  const market = classifyMarketIntelligence(q);
+  if (market) {
+    return finalizeDomain({
+      domain: EXECUTION_DOMAINS.MARKET_INTELLIGENCE,
+      missionIntent: null,
+      missionType: null,
+      routeKind: ROUTE_KINDS.INTELLIGENCE,
+      reason: market.reason,
+      confidence: market.confidence,
       previousDomain,
     });
   }
