@@ -823,6 +823,60 @@ router.post('/cron/signal-shadow', handleSignalShadowCron);
 router.get('/cron/signal-shadow', handleSignalShadowCron);
 
 router.post('/internal/cron/max-decay', createMaxDecayCronHandler());
+// P0 Max conversation-context retention cleanup.
+// Independent of conversation persistence and outbound execution.
+router.post('/cron/max-conversation-context-cleanup', async (req, res) => {
+  const crypto = require('node:crypto');
+
+  const expected = Buffer.from(process.env.CRON_SECRET || '');
+  const supplied = Buffer.from(
+    String(req.get('authorization') || '').replace(/^Bearer /, '')
+  );
+
+  if (
+    !expected.length ||
+    expected.length !== supplied.length ||
+    !crypto.timingSafeEqual(expected, supplied)
+  ) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const db = require('../db');
+
+    // Delete in bounded batches to avoid long-running locks.
+    const result = await db.query(`
+      WITH expired AS (
+        SELECT tenant_id, session_id
+        FROM max_conversation_context
+        WHERE expires_at <= NOW()
+        ORDER BY expires_at
+        LIMIT 500
+        FOR UPDATE SKIP LOCKED
+      )
+      DELETE FROM max_conversation_context AS context
+      USING expired
+      WHERE context.tenant_id = expired.tenant_id
+        AND context.session_id = expired.session_id
+    `);
+
+    console.info('[MAX_CONTEXT_CLEANUP]', JSON.stringify({
+      deleted: result.rowCount
+    }));
+
+    return res.set('Cache-Control', 'no-store').json({
+      ok: true,
+      deleted: result.rowCount
+    });
+  } catch (err) {
+    console.error('[MAX_CONTEXT_CLEANUP] cleanup failed');
+
+    return res.status(500).json({
+      ok: false,
+      error: 'max_context_cleanup_failed'
+    });
+  }
+});
 
 router.post('/cron/:agent', async (req, res) => {
   const { agent } = req.params;
