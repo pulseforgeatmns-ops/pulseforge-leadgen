@@ -79,6 +79,35 @@ describe('SPEC-057 Execution Domain selection', () => {
   });
 });
 
+describe('P0 #1110 tenant prospect inventory routing', () => {
+  it('keeps a borrower prospect briefing in Workspace, not General Conversation', () => {
+    for (const question of [
+      'brief me on my prospects',
+      'Summarize our borrower prospects',
+      'Show my prospect list',
+      'Review our current leads',
+    ]) {
+      const decision = selectExecutionDomain(question, {
+        previousDomain: EXECUTION_DOMAINS.WORKSPACE,
+      });
+      assert.equal(decision.domain, EXECUTION_DOMAINS.WORKSPACE, question);
+      assert.equal(decision.routeKind, 'intelligence', question);
+      assert.equal(decision.reason, 'prospect_inventory_read', question);
+    }
+  });
+
+  it('does not reclassify outreach or prospect discovery as an inventory read', () => {
+    for (const question of [
+      'Send emails to my prospects',
+      'Find new borrower prospects',
+      'Launch outreach to our prospect list',
+    ]) {
+      const decision = selectExecutionDomain(question);
+      assert.notEqual(decision.reason, 'prospect_inventory_read', question);
+    }
+  });
+});
+
 describe('SPEC-057 Cross-domain routing', () => {
   it('Briefing → Mission Diagnostics: audit invokes Mission Engine', async () => {
     const workspace = createWorkspaceEngine({
