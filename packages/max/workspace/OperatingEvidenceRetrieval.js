@@ -575,6 +575,8 @@ async function defaultLoadProspects(input = {}) {
       counts,
       segments: segments.rows || [],
       breakdown,
+      ...(require('./ProspectRecordIntelligence').requested(input)
+        ? { records: await require('./ProspectRecordIntelligence').loadRecords(pool, clientId, { after: input.operationalRead?.cursor }) } : {}),
     };
   } catch (err) {
     return {
@@ -940,7 +942,13 @@ async function defaultLoadOutcomes(input = {}) {
 async function loadOperatingEvidence(input = {}) {
   const tenantId = resolveTenantId(input);
   const clientId = resolveClientId(input);
-  if (!tenantId || clientId == null) {
+  const sessionScope = input.session?.context?.tenantId;
+  const recordScopeConflict = require('./ProspectRecordIntelligence').requested(input) &&
+    ((sessionScope != null && String(sessionScope) !== tenantId) ||
+     (input.session?.context?.clientId != null && Number(input.session.context.clientId) !== clientId) ||
+     (Number.isSafeInteger(Number(tenantId)) && Number(tenantId) !== clientId) ||
+     (input.authorizedTenantId != null && String(input.authorizedTenantId) !== tenantId));
+  if (!tenantId || clientId == null || recordScopeConflict) {
     return {
       ok: false,
       failClosed: true,
@@ -983,7 +991,7 @@ async function loadOperatingEvidence(input = {}) {
   const [campaign, prospects, scout, missions, objectives, activity, outcomes, operatorAttested, capability] =
     await Promise.all([
       safeLoad(() => loadCampaignAo(loaderInput), { available: false, reason: 'ao_store_unavailable' }),
-      safeLoad(() => loadProspects(loaderInput), { available: false, reason: 'prospect_store_unavailable' }),
+      safeLoad(() => loadProspects(loaderInput), { available: false, status: RETRIEVAL_STATUS.FAILED, reason: 'prospect_query_failed' }),
       safeLoad(() => loadScout(loaderInput), { available: false, reason: 'scout_store_unavailable', launchedNewWork: false }),
       safeLoad(() => loadMissions(loaderInput), { available: false, rows: [] }),
       safeLoad(() => loadObjectives(loaderInput), { available: false, rows: [] }),
@@ -2048,7 +2056,14 @@ function operatingStructured(answer, extras = {}) {
           item.epistemic === EPISTEMIC.PLANNED
         )
         .map((item, idx) => ({
-          id: `op-ev-${idx + 1}`,
+          id: item.recordRef || `op-ev-${idx + 1}`,
+          summary: item.provenance,
+          sourceKind: item.sourceKind,
+          recordRef: item.recordRef,
+          recordId: item.recordId,
+          priority: item.priority,
+          limitations: item.limitations,
+          retrievalStatus: item.retrievalStatus,
           label: item.provenance,
           detail: item.claim,
           epistemic: item.epistemic,
@@ -2091,6 +2106,7 @@ function operatingStructured(answer, extras = {}) {
       unavailable: extras.unavailable || [],
       cognitiveMode: extras.cognitiveMode || 'retrieval',
       retrievalBeforeDelegation: true,
+      recordIntelligence: extras.recordIntelligence === true,
       operatingEvidenceRetrieval: true,
       evidenceGroundedRecommendation: extras.recommend === true,
       claimChallenge: extras.claimChallenge === true,
@@ -2321,6 +2337,10 @@ const SOURCE_LABELS = Object.freeze({
 });
 
 function composeOperationalReadAnswer(question, bundle, read) {
+  if (require('./ProspectRecordIntelligence').requested({ operationalRead: read })) {
+    const records = require('./ProspectRecordIntelligence').composeRecords(bundle, read);
+    if (records) return records;
+  }
   const objects = (read && Array.isArray(read.objects) && read.objects.length)
     ? read.objects.filter((o) => OPERATIONAL_READ_SOURCE_PLAN[o])
     : ['prospects'];

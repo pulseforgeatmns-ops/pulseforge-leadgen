@@ -117,6 +117,11 @@ class PresentationEngine {
     }
 
     const metadata = structured.metadata || {};
+    // Record citations and calculated positions must survive presentation exactly.
+    if (metadata.recordIntelligence === true) {
+      return { prose: structured.answer, structured, metadata: { ...metadata,
+        presentation: 'prospect_records' }, presentation: 'prospect_records' };
+    }
     const conversationContract = metadata.conversationContract || null;
     const executionBlocked =
       conversationContract && conversationContract.executionAllowed === false;

@@ -344,7 +344,7 @@ async function maybeHandleOperatingEvidenceTurn(input, question, mode) {
         : (sourceStatuses && (sourceStatuses.prospects || sourceStatuses.activity)) ||
           prospectRetrievalStatus(bundle && bundle.prospects))
     : null;
-  const composed = operationalRead
+  const composed = operationalRead && !composedRaw.recordIntelligence
     ? { ...composedRaw, prose: withOperationalReadDisclosure(composedRaw.prose, operationalRead, retrievalStatus) }
     : composedRaw;
 
@@ -366,6 +366,7 @@ async function maybeHandleOperatingEvidenceTurn(input, question, mode) {
 
   const structured = attachContractMetadata(
     operatingStructured(composed.prose, {
+      recordIntelligence: composed.recordIntelligence === true,
       used: composed.used,
       items: composed.items || bundle.items || [],
       cognitiveMode: mode.kind,
