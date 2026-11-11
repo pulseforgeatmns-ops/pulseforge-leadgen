@@ -380,7 +380,7 @@ class WorkspaceEngine {
         (this._operatingEvidenceOpts && this._operatingEvidenceOpts.knowledge) ||
         undefined,
     });
-    recordOperationalRead(session, read);
+    recordOperationalRead(session, read, turn.structured);
     session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
     if (session.context && typeof session.context === 'object') {
       session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;

@@ -64,6 +64,7 @@ function buildResponseMetadata(partial = {}) {
   if (partial.sourceStatuses && typeof partial.sourceStatuses === 'object') {
     meta.sourceStatuses = { ...partial.sourceStatuses };
   }
+  if (partial.recordIntelligence === true) meta.recordIntelligence = true;
   if (partial.operationalRead && typeof partial.operationalRead === 'object') {
     meta.operationalRead = { ...partial.operationalRead };
   }
@@ -427,6 +428,14 @@ function normalizeEvidenceRef(ref) {
   return {
     id: String(ref.id || 'unknown'),
     summary: String(ref.summary || ref.label || ref.statement || ref.title || ''),
+    detail: ref.detail != null ? String(ref.detail) : null,
+    epistemic: ref.epistemic != null ? String(ref.epistemic) : null,
+    layer: ref.layer != null ? String(ref.layer) : null,
+    recordRef: ref.recordRef != null ? String(ref.recordRef) : null,
+    recordId: ref.recordId != null ? String(ref.recordId) : null,
+    retrievalStatus: ref.retrievalStatus || null,
+    priority: ref.priority || null,
+    limitations: Array.isArray(ref.limitations) ? ref.limitations.map(String) : [],
     sourceType: ref.sourceType != null ? String(ref.sourceType) : null,
     sourceKind: ref.sourceKind != null ? String(ref.sourceKind) : null,
     kind: ref.kind != null ? String(ref.kind) : null,

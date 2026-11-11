@@ -4625,6 +4625,7 @@
                     : 'evidence'
                   : 'evidence');
               const display =
+                (item.recordRef && item.detail) ||
                 item.summary || item.statement || item.name || item.id || '';
               if (id && investigation) {
                 return `<li><button type="button" class="cd-nav-link" data-mx-nav-type="${escapeHtml(

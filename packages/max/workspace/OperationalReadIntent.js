@@ -32,7 +32,7 @@ const OPPORTUNITY_OBJECT_RE = /\bopportunit(?:y|ies)\b/i;
 // Strong anchor required before "opportunities" means tenant records: explicit
 // existing-data language or a numbered ranking ("top five opportunities").
 const OPPORTUNITY_ANCHOR_RE =
-  /\b(?:existing|current|stored|saved|uploaded|imported|recorded|actual)\b|\bworkspace\s+data\b|\b(?:in|from)\s+(?:this|the|my|our)\s+(?:workspace|crm|pipeline|database)\b|\btop\s+(?:\d+|three|five|ten)\s+opportunit/i;
+  /\b(?:existing|current|stored|saved|uploaded|imported|recorded|actual)\b|\bworkspace\s+data\b|\b(?:in|from)\s+(?:this|the|my|our)\s+(?:workspace|crm|pipeline|database)\b|\btop\s+(?:\d+|three|five|ten)\s+opportunit|\bhighest[- ]priority\s+opportunit/i;
 
 const READ_FORM_RE = new RegExp(
   [
@@ -65,7 +65,7 @@ const STATE_ANCHOR_RE = new RegExp(
     String.raw`\b(?:how\s+many|count|number\s+of|total)\b`,
     String.raw`\b(?:status(?:es)?|stage|stages)\b`,
     String.raw`\b(?:due|overdue|outstanding|open|pending|scheduled)\b`,
-    String.raw`\b(?:qualified|unqualified|booked|closed|hot|warm|cold|contacted|assigned)\b`,
+    String.raw`\b(?:contact_now|qualify_first|hold|rejected|qualified|unqualified|booked|closed|hot|warm|cold|contacted|assigned)\b`,
     String.raw`\b(?:sent|went\s+out|delivered|opened|clicked|bounced|replied|responded)\b`,
     String.raw`\b(?:yet|today|yesterday|this\s+week|last\s+week|so\s+far|recently)\b`,
   ].join('|'),
@@ -224,6 +224,9 @@ function classifyOperationalRead(question, opts = {}) {
     isRead: true,
     reason: 'operational_read',
     objects,
+    cursor: q.match(/\bafter\s+record\s+id\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i)?.[1] || null,
+    reviewState: /\bcontact_now\b/i.test(q) ? 'contact_now' : null,
+    topCount: Math.max(1, Number(q.match(/\b(?:top|best)\s+(\d+)/i)?.[1] || ({ one: 1, two: 2, three: 3, four: 4, five: 5, ten: 10 }[q.match(/\b(?:top|best)\s+(one|two|three|four|five|ten)\b/i)?.[1]?.toLowerCase()] || 5))),
     wantsRecordList: RECORD_LIST_RE.test(q),
     wantsRanking: RANKING_RE.test(q),
   };
@@ -257,14 +260,15 @@ function operationalReadFocusedEvidenceEnabled(env = process.env) {
  * Record that this turn was answered as an operational read so the next turn
  * can resolve ranking follow-ups against it.
  */
-function recordOperationalRead(session, read) {
+function recordOperationalRead(session, read, structured) {
   if (!session || !session.context || typeof session.context !== 'object') return;
   session.context.lastOperationalRead = {
     operatorTurn: currentOperatorTurn(session),
     objects: (read && read.objects) || [],
     wantsRanking: Boolean(read && read.wantsRanking),
-    // PR 1 never produces a record-level ranking.
-    rankedRecordIds: [],
+    rankedRecordIds: (structured?.supportingEvidence || [])
+      .filter(item => item.recordRef && item.priority?.position != null)
+      .map(item => item.recordId),
     at: new Date().toISOString(),
   };
 }
