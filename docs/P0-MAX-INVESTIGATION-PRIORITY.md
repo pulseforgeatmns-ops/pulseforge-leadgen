@@ -354,3 +354,29 @@ The same synthetic cohort, run through the audit classifier, produces four recor
 1. Zero-evidence ranking presentation: records with 0/5 claims receive a shared last position (`Investigation position 5`), which implies an ordering with no evidence behind it. They should be listed as "not ranked: no recorded deal claims".
 2. Exit-plan display casing: the raw value is shown (`exit plan: Sale`) rather than the normalized value (`sale`).
 3. The audit hypothesis list does not name contract prices (`$260,000 purchase contract`) as a non-request amount context. The confirmed fact (`no_pattern_matches_sentence`) is still reported.
+
+### Post-deploy acceptance failure: prohibitions classified as execution (Nov 11 2026)
+
+**Symptom.** In production (tenant 21), the operator's investigation prompt came back as "Switching from Workspace to General Conversation. Fewer than two opportunities are available in the current context to compare." (`comparison_set` unavailable). The prompt was multi-line and ended "This is a read-only investigation. Do not send messages, assign prospects, modify records, or delegate execution."
+
+**Production path, from the 15:46 UTC logs:**
+1. `conversation_identity` claimed the turn (`conversation_contract_execution_forbidden`), declined it, and fell back to `reasoning` (`identity_unhandled`).
+2. Operational-read recovery did not fire, because `classifyOperationalRead` returned `execution_language`. The rest of the path follows from that.
+3. With no owner, the turn reached the generic `ResponseComposer`. It chose the "compare" intent because the prompt contains "Financing-fit **compar**ison", and found no ranked list in the context, so it reported `comparison_set` unavailable. The fallback domain was General Conversation, and the session's previous domain was Workspace, so Max announced the switch.
+4. Prospect retrieval never ran.
+
+**Root cause.** `EXECUTION_RE` was evaluated on the raw prompt, so `send` and `assign` inside the prohibition counted as execution requests. The acceptance test's prompt ("do not initiate outreach") used no verb from that list, and it never put the read-only conversation contract in play.
+
+**Correction (`OperationalReadIntent.js` only).** The execution check now runs on the text after `NegatedDirective.stripNegatedDirectives`, the same helper the other routers use.
+- Execution language anywhere outside a negated clause still classifies the turn as execution.
+- `NegatedDirective` treats a negated clause as running to the next sentence boundary, so a comma does not end it. Stripping alone would therefore hide an affirmative command inside such a clause. A local guard keeps execution when the clause turns affirmative: a contrast (`but`, `instead`, `rather`, `however`), `never mind`, or `do not wait/hesitate/worry/forget/bother/delay`.
+- Those turns stay out of the read path, exactly as before.
+- Documented over-conservative case: "Do not send messages, but do not assign anyone either" also stays execution. Nothing is executed; the turn just isn't answered as a read.
+
+The shared negation helper, the extractor, the ranking, the Blueprint criteria, tenant isolation, outreach gates and flags are unchanged.
+
+**Tests.**
+- `packages/max/workspace/tests/p0OperationalReadNegatedExecution.test.js`: the exact production prompt; affirmative and mixed execution requests; pure prohibitions; adversarial negation.
+- `test/maxInvestigationAcceptancePostgres.test.js`: a second test runs the exact production prompt through `WorkspaceEngine.ask` on disposable PostgreSQL, both in a fresh session and after a previous Workspace turn. It checks for six records ranked 1, 2, 2, 4, 5, 5, recorded-unverified claims, the financing-fit limitations, six outreach-blocked records, domain `workspace` with no switch message, SELECT-only statements, an unchanged database and no network access.
+- Both new files fail on `main` without the correction.
+- The prompt is stored verbatim in `tests/fixtures/productionInvestigationPrompt.js`.

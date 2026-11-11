@@ -38,6 +38,7 @@ const { createMemoryStore: createObjectiveMemoryStore } = require('../services/o
 const { createMemoryStore, startClientInterview, postInterviewMessage, approveBlueprint } = require('../services/clientIntelligenceInterview');
 const { QUESTION } = require('../packages/max/workspace/tests/fixtures/investigationProspects');
 const { EXTRACTOR } = require('../packages/max/workspace/ProspectDealClaims');
+const { PRODUCTION_INVESTIGATION_PROMPT } = require('../packages/max/workspace/tests/fixtures/productionInvestigationPrompt');
 
 const AUDIT_PHRASE = 'Current waterfront flip has an executed $260,000 purchase contract';
 const COHORT = [
@@ -165,6 +166,85 @@ test('tenant 21 investigation request end to end on disposable PostgreSQL', { ti
     assert.equal(await snapshot(db), before, 'database unchanged');
     assert.deepEqual(blocked, [], 'no network beyond the disposable database');
     process.stdout.write(`\n----- prompt -----\n${QUESTION}\n----- response -----\n${r.prose}\n----- end -----\n`);
+  } finally {
+    await db.end();
+    await postgres.stop();
+  }
+});
+
+// Post-#1120 production acceptance failure: the operator's real prompt carries
+// a read-only prohibition ("Do not send messages, assign prospects, modify
+// records, or delegate execution"). It was classified as execution, skipped
+// operational-read recovery and fell into General Conversation
+// ("Fewer than two opportunities…", comparison_set unavailable).
+test('the exact production investigation prompt, fresh and after a previous Workspace turn', { timeout: 180000 }, async () => {
+  const postgres = await startDisposablePostgres('max-investigation-prod-prompt-');
+  allowedPort = Number(postgres.port);
+  const db = new Pool({ connectionString: postgres.connectionString });
+  try {
+    await schema(db);
+    await importReviewOnlyContacts(COHORT.map((c, i) => input(c, i)), { clientId: 21, db, actorId: null });
+    await importReviewOnlyContacts([input(['Foreign Example', 'FOREIGN_SECRET requesting $99k with a first lien.'], 9)], { clientId: 22, db, actorId: null });
+    const before = await snapshot(db);
+    const expectedIds = (await db.query(`SELECT id FROM prospects WHERE client_id = 21 AND source = 'review_only_import'
+      AND acquisition_metadata->>'reviewState' = 'contact_now' ORDER BY id`)).rows.map(r => r.id).sort();
+    const names = Object.fromEntries((await db.query('SELECT id, first_name FROM prospects WHERE client_id = 21')).rows.map(r => [r.id, r.first_name]));
+
+    const statements = [];
+    const recording = { query: (sql, params) => { statements.push(String(sql.text || sql)); return db.query(sql, params); } };
+    const store = await approvedBlueprintWithoutRange();
+    const unknown = async () => ({ available: false, reason: 'acceptance_fixture_not_recorded' });
+    const opts = Object.fromEntries(['loadCampaignAo', 'loadScout', 'loadMissions', 'loadObjectives', 'loadActivity',
+      'loadOutcomes', 'loadOperatorAttested', 'loadCapability'].map(n => [n, unknown]));
+    const engine = createWorkspaceEngine({ disableLlm: true, acquisitionMissionRuntime: createTestAmoRuntime(),
+      clientIntelligenceOpts: { store }, operatorObjectiveOpts: { store: createObjectiveMemoryStore() },
+      operatingEvidenceOpts: { ...opts, pool: recording } });
+
+    const verify = (r, label) => {
+      assert.equal(r.presentation, 'prospect_records', label);
+      assert.equal(r.executionDomain, 'workspace', label);
+      assert.match(r.workspaceOwnership.reason, /^operational_read/, label);
+      assert.doesNotMatch(r.prose, /Switching from|General Conversation|Fewer than two opportunities|comparison_set/, label);
+      const evidence = r.structured.supportingEvidence;
+      const meta = r.structured.metadata;
+      // 2. The six tenant-21 prospects, ranked 1, 2, 2, 4, 5, 5.
+      assert.deepEqual(evidence.map(e => e.recordId).sort(), expectedIds, label);
+      assert.doesNotMatch(JSON.stringify(r), /FOREIGN_SECRET|prospect:22:|\$99k/, label);
+      assert.equal(meta.investigationPriority.ranked, true, label);
+      assert.deepEqual(evidence.map(e => e.priority?.position), [1, 2, 2, 4, 5, 5], label);
+      assert.deepEqual(evidence.map(e => e.priority?.evidenceCoverage), [3, 2, 2, 1, 0, 0], label);
+      assert.equal(names[evidence[0].recordId], 'Zackary', label);
+      // 3. Recorded-unverified claims, financing-fit limits, outreach blocked.
+      for (const e of evidence) for (const c of Object.values(e.recordedClaims.claims)) assert.equal(c.epistemic, 'recorded_unverified', label);
+      assert.match(r.prose, /Recorded claims \(unverified\)/, label);
+      assert.doesNotMatch(r.prose, /(?:within|outside) the recorded business range/, label);
+      assert.equal((r.prose.match(/Financing-fit comparison unavailable: no unambiguous authorized financing range/g) || []).length, 5, label);
+      assert.match(r.prose, /is a range, not a single amount \("\$40k–\$50k"\); financing fit cannot be assessed/, label);
+      assert.equal((r.prose.match(/Outreach eligibility: blocked/g) || []).length, 6, label);
+      // 4. No execution of any kind.
+      assert.equal(meta.executed, false, label); assert.equal(meta.specialistDelegated, false, label);
+      assert.equal(r.retrieval.delegated, false, label);
+      assert.match(r.prose, /No writes, emails, calls, assignments, imports, review-state changes or specialist execution occurred/, label);
+    };
+
+    // 1. Fresh session.
+    const fresh = engine.open({ tenantId: '21', page: 'command-deck' }).sessionId;
+    verify(await engine.ask({ sessionId: fresh, question: PRODUCTION_INVESTIGATION_PROMPT }), 'fresh session');
+
+    // 8. After a previous Workspace turn (the production session's state).
+    const continued = engine.open({ tenantId: '21', page: 'command-deck' }).sessionId;
+    const prior = await engine.ask({ sessionId: continued, question: 'Brief me on my prospects.' });
+    assert.equal(prior.executionDomain, 'workspace', 'prior turn is a Workspace turn');
+    assert.equal(engine.sessions.get(continued).executionDomain, 'workspace');
+    const after = await engine.ask({ sessionId: continued, question: PRODUCTION_INVESTIGATION_PROMPT });
+    verify(after, 'after a Workspace turn');
+    assert.equal(after.domainSwitch, null);
+    assert.equal(engine.sessions.get(continued).executionDomain, 'workspace');
+
+    assert.ok(statements.length > 0);
+    for (const sql of statements) assert.match(sql.trim(), /^(?:SELECT|WITH)\b/i, `non-read statement: ${sql.slice(0, 80)}`);
+    assert.equal(await snapshot(db), before, 'database unchanged');
+    assert.deepEqual(blocked, [], 'no network beyond the disposable database');
   } finally {
     await db.end();
     await postgres.stop();
