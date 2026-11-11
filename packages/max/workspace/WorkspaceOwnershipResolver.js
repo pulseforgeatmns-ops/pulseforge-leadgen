@@ -55,7 +55,7 @@ const { contractBlocksExecution, contractLocksConversation } = require('./Conver
 const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
 const { MESSAGE_TYPES } = require('./MessageType');
 const { messageTypeBypassesOwnership, isMissionCreationMessage } = require('./MessageTypeClassifier');
-const { stripNegatedDirectives } = require('./NegatedDirective');
+const { stripNegatedDirectives, classifyAuthorizationPolarity } = require('./NegatedDirective');
 const {
   primaryObjectiveBypassesOwnership,
 } = require('./OperatorObjectiveResolutionEngine');
@@ -423,6 +423,29 @@ function claimsOperationalRead(question, input = {}) {
     specialist: null,
     operationalRead: read,
   };
+}
+
+// P0 — an explicit operational read ("brief me on my prospects") while an
+// execution approval is pending. PendingDecisionResolver scores such short
+// imperatives as AMBIGUOUS, and an ambiguous reply retains the turn (SPEC-202),
+// so the approval card was re-shown instead of the prospects. The read yields
+// only when the message carries no decision signal at all: the resolver found
+// nothing but ambiguity, there is no approval/execution/cancel vocabulary
+// (affirmative or negated), no explicit decision or filler word, and the shared
+// operational-read classifier claims it (which already excludes affirmative
+// execution language). The read path never resolves, consumes or advances the
+// decision; it stays pending for a later answer.
+const PENDING_DECISION_WORD_RE = /\b(?:yes|yeah|yep|no|nope|reject(?:ed)?|decline[d]?|deny|denied|hold|wait|later|pause|not\s+yet|ok(?:ay)?|sure|maybe|fine|agreed?|confirm(?:ed)?)\b/i;
+function operationalReadDuringPendingDecision(question, operatorIntent, input = {}) {
+  const resolution = operatorIntent && operatorIntent.pendingDecisionResolution;
+  if (!resolution || resolution.pending !== true || resolution.resolved === true) return null;
+  if (resolution.outcome !== 'ambiguous' || resolution.requestedActionMismatch) return null;
+  const polarity = classifyAuthorizationPolarity(question);
+  if (polarity.affirmativeAuthorization || polarity.affirmativeCancel ||
+    polarity.negatedAuthorization || polarity.negatedCancel) return null;
+  if (PENDING_DECISION_WORD_RE.test(String(question || ''))) return null;
+  const claim = claimsOperationalRead(question, input);
+  return claim ? { ...claim, pendingDecisionPreserved: true } : null;
 }
 
 function claimsKnowledgeRetrieval(question) {
@@ -859,6 +882,14 @@ async function resolveWorkspaceOwner(input = {}) {
     operatorIntent &&
     pendingDecisionRetainsTurn(operatorIntent)
   ) {
+    // An explicit operational read with no decision signal is answered from
+    // operating data; the pending decision stays unresolved and unchanged.
+    const readClaim = operationalReadDuringPendingDecision(question, operatorIntent, input);
+    if (readClaim) {
+      askPathTrace.traceOwner(readClaim.owner, 'operational_read_pending_decision_preserved');
+      askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', 'operational_read');
+      return readClaim;
+    }
     askPathTrace.traceOwner(WORKSPACE_OWNERS.ACTIVE_MISSION, 'pending_decision_turn_ownership');
     askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', 'pending_decision_turn_ownership');
     return {
@@ -1085,4 +1116,5 @@ module.exports = {
   claimsActiveDeskWorkflow,
   claimsKnowledgeRetrieval,
   claimsOperationalRead,
+  operationalReadDuringPendingDecision,
 };
