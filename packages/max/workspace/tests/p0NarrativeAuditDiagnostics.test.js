@@ -1,7 +1,6 @@
 'use strict';
-// Diagnostic tests for the first production run of
-// scripts/investigationNarrativeAudit.js (PR #1120). They pin the root causes
-// found in that run without changing behaviour; the proposed fixes await review.
+// Diagnostic tests for the production runs of
+// scripts/investigationNarrativeAudit.js (PR #1120).
 require('./workspaceTestHarness');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -11,10 +10,12 @@ const { extractDealClaims } = require('../ProspectDealClaims');
 // BEGIN READ ONLY / ROLLBACK, producing CANONICAL_PROJECTION_FAILURE before any
 // read) is fixed by savepoint-based nesting; see p0NarrativeAuditTransactions.
 
-test('diagnostic: "in rehab funds" is currently misread as a deal stage (false positive found while probing amount phrasing)', () => {
+test('diagnostic (fixed in fit-narrative-claims-v2): "in rehab funds" is no longer misread as a deal stage', () => {
   const d = extractDealClaims('Fit evidence: $35K in rehab funds needed.');
-  // Current behaviour (the defect): stage "in rehab" is extracted from a
-  // funding phrase; no amount is extracted because no request verb precedes it.
-  assert.equal(d.values.stage, 'in rehab');
+  // Previously stage "in rehab" was extracted from this funding phrase. The
+  // approved correction removes the false positive only; this wording is not
+  // added as a financing-request form.
+  assert.equal(d.values.stage, undefined);
   assert.equal(d.values.amount, undefined);
+  assert.deepEqual(d.unparsed, []);
 });

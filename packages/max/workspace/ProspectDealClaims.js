@@ -28,7 +28,7 @@
 // property values are never financing requests; exit timelines are never
 // closing dates; nothing here produces tenant financing criteria.
 
-const EXTRACTOR = 'fit-narrative-claims-v1';
+const EXTRACTOR = 'fit-narrative-claims-v2';
 const LABELLED_ONLY = 'labelled-claims-v1';
 // Rollback switch for narrative extraction only. Labelled claims, integer-k
 // amounts and record-local "unparsed" handling stay in force when disabled.
@@ -71,6 +71,10 @@ const RANGE_TAIL = String.raw`\s*(?:-|–|—|to)\s*\$?\s?\d[\d,]*(?:\.\d+)?(?:\
 const APPROX = String.raw`about|approximately|approx\.?|roughly|around|up\s+to|at\s+least|over|under|nearly|~`;
 const REQUEST_VERB = String.raw`\b(?:request(?:s|ed|ing)?|need(?:s|ed|ing)?|seek(?:s|ing)?|sought|looking\s+for|asking\s+for|ask(?:s|ing)?\s+for|wants?|to\s+borrow|borrow(?:s|ing)?)`;
 const FINANCING_NOUN = String.raw`(?:bridge\s+|private\s+|short[- ]term\s+|hard[- ]money\s+|gap\s+|rehab\s+)?(?:loan|financing|funding|capital)`;
+// v2 request forms. Qualifiers describe the request itself (remaining, gap,
+// rehab); "purchase", "budget", "ARV" are deliberately absent.
+const REQUEST_QUALIFIER = String.raw`(?:(?:remaining|outstanding|additional|current)\s+)?(?:(?:rehab|renovation|construction|gap|bridge|private|hard[- ]money|short[- ]term)\s+)?(?:(?:loan|financing|funding|capital)\s+)?`;
+const REQUEST_ADJ = String.raw`(?:(?:current|public|active|open|pending|stated|explicit|outstanding)\s+){1,3}`;
 const AMOUNT_PATTERNS = [
   // "requesting $35k for rehab", "needs $15,000 equity gap"
   new RegExp(`${REQUEST_VERB}\\s+(?:(?:a|an)\\s+)?(?:(${APPROX})\\s*)?(${MONEY})(${RANGE_TAIL})?`, 'gi'),
@@ -78,7 +82,16 @@ const AMOUNT_PATTERNS = [
   new RegExp(`(?:(${APPROX})\\s*)?(${MONEY})(${RANGE_TAIL})?\\s+(?:in\\s+)?${FINANCING_NOUN}\\s+(?:request|needed)\\b`, 'gi'),
   // "funding request of $20k"
   new RegExp(`${FINANCING_NOUN}\\s+request\\s+(?:of|for|is)\\s+(?:(${APPROX})\\s*)?(${MONEY})(${RANGE_TAIL})?`, 'gi'),
+  // v2: "$35,000 remaining rehab request", "$20k gap request", "$15k request".
+  // The amount must be immediately followed by the word "request"; budgets,
+  // prices and values never take this form.
+  new RegExp(`(?:(${APPROX})\\s*)?(${MONEY})(${RANGE_TAIL})?\\s+${REQUEST_QUALIFIER}request\\b`, 'gi'),
+  // v2: "current public request for $35,000–$45,000 gap positions". Guarded
+  // by NOT_REQUEST_AFTER like the verb form ("request for $250k properties").
+  new RegExp(`\\b${REQUEST_ADJ}(?:${FINANCING_NOUN}\\s+)?request\\s+(?:of|for|is)\\s+(?:(${APPROX})\\s*)?(${MONEY})(${RANGE_TAIL})?`, 'gi'),
 ];
+// Forms whose following words must be checked for a non-request object.
+const GUARDED_AMOUNT_PATTERNS = new Set([AMOUNT_PATTERNS[0], AMOUNT_PATTERNS[4]]);
 const COORDINATED_AMOUNT = new RegExp(`^(?:\\s+[\\w'-]+){0,4}?\\s+(?:and|or|plus)\\s+(?:another\\s+)?(${MONEY})`, 'i');
 // What follows an amount that is NOT a financing request.
 const NOT_REQUEST_AFTER = /^\s*\+?\s*(?:(?:rehab|renovation|construction|repair)\s+)?(?:budgets?|costs?|estimates?|purchase(?:\s+price)?|prices?|ARVs?|after[- ]repair|values?|valuations?|appraisals?|propert(?:y|ies)|houses?|homes?|SFRs?|duplex(?:es)?|deals?|flips?|projects?|listings?|down\s+payments?|portfolio|in\s+equity|of\s+equity)\b/i;
@@ -94,7 +107,14 @@ const EXIT_TERM = String.raw`DSCR[- ]refinanc(?:e|ing)|DSCR[- ]refi|cash[- ]out\
 const EXIT_PATTERNS = [
   new RegExp(String.raw`\bexit(?:\s+(?:plan|strategy))?(?:\s+(?:is|will\s+be|would\s+be))?\s*(?:via|through|by|:|-|–|=)?\s*(?:(?:a|an)\s+)?(${EXIT_TERM})\b`, 'gi'),
   new RegExp(String.raw`\b(?:plans?\s+to|planning\s+to|intends?\s+to|intending\s+to|will(?:\s+then)?)\s+(refinance|refi|sell|resell|rent|hold)\b`, 'gi'),
+  // v2: "sale exit", "planned DSCR refinance exit". Singular only: "sale
+  // exits" describes a track record. BRRRR and "hold" are generic strategy
+  // terms and are not accepted in this form.
+  new RegExp(String.raw`\b(DSCR[- ]refinanc(?:e|ing)|DSCR[- ]refi|cash[- ]out\s+refinanc(?:e|ing)|refinanc(?:e|ing)|refi|retail\s+sale|resale|sale)\s+exit\b(?!s)`, 'gi'),
 ];
+const SUFFIX_EXIT_PATTERN = EXIT_PATTERNS[2];
+// A projected/possible/past exit is not this project's plan.
+const EXIT_NOT_PLAN_BEFORE = /\b(?:projected|possible|potential|prior|previous|past|typical|usual|historical|completed)\s+(?:\w+\s+){0,2}$/i;
 const EXIT_ALTERNATIVE_AFTER = /^\s*(?:\/|or\s+(?:a\s+|an\s+)?)(?:DSCR\s+|cash[- ]out\s+)?(?:refinanc|refi|sale|sell|resale|rent|hold|BRRRR)/i;
 function normalizeExit(s) {
   if (/dscr/i.test(s)) return 'DSCR refinance';
@@ -113,8 +133,19 @@ const STAGE_PATTERNS = [
   [new RegExp(String.raw`\b(?:purchased|acquired|closed\s+on|owns)\s+(?:the|a|an|this)\s+${PROPERTY}\b`, 'gi'), 'property acquired'],
   [/\bowns?\s+(?:the\s+property\s+|it\s+)?free\s+and\s+clear\b|\bowned\s+free\s+and\s+clear\b/gi, 'property acquired'],
   [new RegExp(String.raw`\bproperty\s+identified\b|\bidentified\s+(?:a|the)\s+${PROPERTY}\b`, 'gi'), 'property identified'],
-  [/\b(?:rehab|renovation)\s+(?:is\s+)?(?:underway|in\s+progress|started)\b|\b(?:mid|in)[- ]rehab\b/gi, 'rehab underway'],
+  // v2: "in rehab" only as a state of the property ("currently in rehab",
+  // "is in rehab"), never "$35K in rehab funds needed".
+  [/\b(?:rehab|renovation)\s+(?:is\s+)?(?:underway|in\s+progress|started)\b|\bmid[- ]rehab\b|\b(?:is|are|currently|now|already|still)\s+in[- ]rehab\b(?!\s+(?:funds?|funding|financing|capital|money|budgets?|costs?|loans?|draws?|requests?|needs?)\b)/gi, 'rehab underway'],
+  // v2: "already purchased" / "property already acquired" for the current
+  // property. Track-record forms ("already purchased 14 homes", "already
+  // purchased and sold") are rejected in narrativeFindings.
+  [new RegExp(String.raw`\b(?:${PROPERTY}\s+(?:was\s+|is\s+|has\s+been\s+)?)?already\s+(?:been\s+)?(?:purchased|acquired|bought|closed\s+on)\b`, 'gi'), 'property acquired'],
 ];
+const ALREADY_STAGE = STAGE_PATTERNS[STAGE_PATTERNS.length - 1][0];
+// After "already purchased": a count, plural property noun or resale means a
+// track record, not the current property.
+const TRACK_RECORD_AFTER = /^\s*(?:(?:and|&)\s+(?:sold|flipped|resold|rented|refinanced)\b|(?:over\s+|more\s+than\s+|about\s+|nearly\s+)?(?:\d+|two|three|four|five|six|seven|eight|nine|ten|dozens?|several|many|multiple|numerous|hundreds?)\b|(?:\w+\s+){0,2}(?:properties|homes|houses|SFRs|units|deals|doors|flips|buildings)\b)/i;
+const TRACK_RECORD_CLAUSE = /\b(?:track\s+record|portfolio|over\s+the\s+(?:years|past)|since\s+(?:19|20)\d{2}|to\s+date|in\s+total|previously|historically|lifetime)\b/i;
 
 // --------------------------------------------------------------- closing
 const MONTH = String.raw`(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sept?(?:ember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)`;
@@ -158,14 +189,26 @@ function clauseAround(sentence, index, length) {
   return { before: sentence.slice(start, index), clause: sentence.slice(start, end) };
 }
 function asserted(sentence, index, length, field) {
-  const { clause } = clauseAround(sentence, index, length);
+  const { before, clause } = clauseAround(sentence, index, length);
   const text = clause.replace(VERIFICATION_STATUS, ' ');
-  return !NEGATION.test(text) && !HEDGE.test(text) && !(field === 'amount' && AMOUNT_HEDGE.test(text));
+  // v2: a deal-stage phrase is negated only by words before it or inside it
+  // ("no executed purchase contract", "not under contract"); a negation that
+  // follows it describes something else ("executed purchase contract with no
+  // financing contingency").
+  const negationScope = field === 'stage'
+    ? (before + sentence.slice(index, index + length)).replace(VERIFICATION_STATUS, ' ')
+    : text;
+  return !NEGATION.test(negationScope) && !HEDGE.test(text) && !(field === 'amount' && AMOUNT_HEDGE.test(text));
 }
 
 function narrativeFindings(fit) {
   const found = Object.fromEntries(FIELDS.map(f => [f, []]));
+  let previous = '';
   for (const sentence of sentences(fit)) {
+    // v2: a ";"-joined clause continues the previous one, so "Exit plan is a
+    // refinance; target close in 90 days" keeps its exit context.
+    const continued = /;$/.test(previous) ? previous : '';
+    previous = sentence;
     const add = (field, entry, index, length) => {
       if (asserted(sentence, index, length, field)) found[field].push({ ...entry, snippet: sentence });
     };
@@ -173,7 +216,7 @@ function narrativeFindings(fit) {
       for (const m of sentence.matchAll(re)) {
         const [approx, money, range] = m.slice(1, 4);
         const after = sentence.slice(m.index + m[0].length);
-        if (re === AMOUNT_PATTERNS[0] && NOT_REQUEST_AFTER.test(after)) continue;
+        if (GUARDED_AMOUNT_PATTERNS.has(re) && NOT_REQUEST_AFTER.test(after)) continue;
         const raw = clean(money);
         const n = parseAmount(raw.replace(/\+$/, ''));
         const reason = range ? 'range' : approx || /\+$/.test(raw) ? 'approximate' : n == null ? 'unsupported_format' : null;
@@ -196,18 +239,23 @@ function narrativeFindings(fit) {
     }
     for (const re of EXIT_PATTERNS) {
       for (const m of sentence.matchAll(re)) {
+        if (re === SUFFIX_EXIT_PATTERN && EXIT_NOT_PLAN_BEFORE.test(clauseAround(sentence, m.index, m[0].length).before)) continue;
         const alternative = EXIT_ALTERNATIVE_AFTER.test(sentence.slice(m.index + m[0].length));
         add('exit', { match: m[0], value: m[1], normalized: normalizeExit(m[1]), reason: alternative ? 'alternatives' : null }, m.index, m[0].length);
       }
     }
     for (const [re, normalized] of STAGE_PATTERNS) {
-      for (const m of sentence.matchAll(re)) add('stage', { match: m[0], value: m[0], normalized }, m.index, m[0].length);
+      for (const m of sentence.matchAll(re)) {
+        if (re === ALREADY_STAGE && (TRACK_RECORD_AFTER.test(sentence.slice(m.index + m[0].length)) ||
+          TRACK_RECORD_CLAUSE.test(clauseAround(sentence, m.index, m[0].length).clause))) continue;
+        add('stage', { match: m[0], value: m[0], normalized }, m.index, m[0].length);
+      }
     }
     for (const re of CLOSING_PATTERNS) {
       for (const m of sentence.matchAll(re)) {
         // Whole sentence before the match: "Exit via refinance, which should
         // close in 6 months" is an exit timeline, not an acquisition closing.
-        if (EXIT_CONTEXT_BEFORE.test(sentence.slice(0, m.index))) continue;
+        if (EXIT_CONTEXT_BEFORE.test(continued + ' ' + sentence.slice(0, m.index))) continue;
         const relative = new RegExp(`^${RELATIVE}$`, 'i').test(m[1]);
         add('closing', { match: m[0], value: m[1], normalized: m[1].replace(/\s+/g, ' ').toLowerCase(), relative }, m.index, m[0].length);
       }
