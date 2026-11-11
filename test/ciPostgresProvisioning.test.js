@@ -179,20 +179,34 @@ test('PostgreSQL service-container configurations are unchanged', () => {
   assert.match(usage, /services:\n\s+postgres:\n\s+image: postgres:16/);
 });
 
+// Dependency-free: this file runs in the plan job, which has no npm install.
+// Splits a workflow into its top-level jobs (two-space keys under `jobs:`).
+function jobsOf(text) {
+  const lines = text.split('\n');
+  const start = lines.findIndex(l => /^jobs:\s*$/.test(l));
+  const jobs = [];
+  if (start < 0) return jobs;
+  for (const line of lines.slice(start + 1)) {
+    if (/^\S/.test(line)) break;
+    const key = line.match(/^ {2}([A-Za-z0-9_-]+):\s*$/);
+    if (key) jobs.push({ id: key[1], lines: [] });
+    else if (jobs.length) jobs[jobs.length - 1].lines.push(line);
+  }
+  return jobs;
+}
+
 test('every steps.postgres reference follows the step that defines it, in the same job', () => {
-  const yaml = require('js-yaml');
   let references = 0;
   for (const [file, text] of workflows()) {
-    for (const [jobId, job] of Object.entries(yaml.load(text).jobs || {})) {
+    for (const job of jobsOf(text)) {
       let defined = false;
-      for (const step of job.steps || []) {
-        const body = JSON.stringify(step);
-        if (/steps\.postgres\./.test(body)) { references += 1; assert.ok(defined, `${file}#${jobId}: steps.postgres used before definition`); }
-        if (step.id === 'postgres') {
-          assert.equal(step.uses, './.github/actions/setup-postgres-environment', `${file}#${jobId}`);
+      job.lines.forEach((line, i) => {
+        if (/steps\.postgres\./.test(line)) { references += 1; assert.ok(defined, `${file}#${job.id}: steps.postgres used before definition`); }
+        if (/^\s+(?:- )?id: postgres\s*$/.test(line)) {
+          assert.match(job.lines[i + 1] || '', /^\s+uses: \.\/\.github\/actions\/setup-postgres-environment\s*$/, `${file}#${job.id}`);
           defined = true;
         }
-      }
+      });
     }
   }
   assert.ok(references >= 4);
