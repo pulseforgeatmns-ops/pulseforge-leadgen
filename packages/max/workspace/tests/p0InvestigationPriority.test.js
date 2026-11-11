@@ -104,7 +104,15 @@ test('conflicting amounts, unsupported amount formats and unknown security do no
   const rows = fixture(); rows[0].notes += '\nRisks: Financing request: $18,000';
   const r = answerFor(rows, rankRead(), criteria());
   assert.ok(r.items.every(i => i.priority === null)); assert.match(r.prose, /Conflicting or unparsed/);
-  assert.equal(recordedDetails('Financing request: $12k').amount, null);
+  // Approved change (narrative-evidence correction): "$12k" is an unambiguous
+  // integer-k amount, as imported LA Endeavors notes write it ("$35k"). It was
+  // previously rejected as unparsed, which also marked the record conflicting.
+  assert.equal(recordedDetails('Financing request: $12k').amount, 12000);
+  // A genuinely unsupported format is still not a financing fact, and is now
+  // record-local "unparsed", never a cohort-blocking contradiction.
+  const decimal = recordedDetails('Financing request: $12.5k');
+  assert.equal(decimal.amount, null); assert.deepEqual(decimal.conflicts, []);
+  assert.equal(decimal.unparsed[0].reason, 'unsupported_format');
   assert.equal(recordedDetails('Security position: unknown').count, 0);
   const blankStage = recordedDetails('Deal stage:   \nSecurity position: first lien claimed');
   assert.equal(blankStage.count, 1); assert.equal(blankStage.values.stage, undefined);

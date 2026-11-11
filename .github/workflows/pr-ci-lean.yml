@@ -401,6 +401,8 @@ jobs:
         run: node --test test/maxConversationHttpPostgres.test.js
       - name: Durable mission recovery on real PostgreSQL (P0)
         run: node --test test/maxReliabilityRecoveryPostgres.test.js
+      - name: Investigation priority end-to-end acceptance on disposable PostgreSQL (P0)
+        run: node --test test/maxInvestigationAcceptancePostgres.test.js
       - name: Verify attention lifecycle and crash recovery on real PostgreSQL
         run: npm run test:max:attention:postgres
       - name: Run strict offline Max unit lane

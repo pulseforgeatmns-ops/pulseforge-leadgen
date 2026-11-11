@@ -150,3 +150,207 @@ Correction (routing only): operator updates, claim challenges and claim correcti
 Rollback: `MAX_OPERATIONAL_READ_PRECEDENCE=false` restores pre-#1110 routing (the legacy route claims these turns again), or revert the commit.
 
 Tests: `packages/max/workspace/tests/p0RecordReadPrecedence.test.js`: the exact production prompt through the full engine, a trigger-word routing matrix, legacy non-record controls, operator update / challenge / correction guards, record-modification controls and plain listings.
+
+## Narrative deal-evidence correction (Nov 11 2026)
+
+After #1117 routed the LA Endeavors prompt correctly, all six real `contact_now` records were still **unranked**, and Max listed financing request, deal stage, security position, exit plan and closing date as missing even though the recorded notes stated them (for example a `$35k` request, a proposed first lien and a DSCR-refinance exit).
+
+### Root cause
+
+- The review-only import (`services/reviewOnlyProspectImportService.js`) accepts free-text `fit`/`risks` and `noteFor()` stores them as prose in `prospects.notes` (`Fit evidence: …`, `Risks: …`). There are **no structured deal columns**; `acquisition_metadata` holds only import mode, outreach flag, review state, category and source URLs.
+- `recorded-deal-coverage-v1` counted a claim only when written as an exact `Label: value` line. The real import never produces that format, so every record scored 0/5, no two records differed and the cohort was unranked. The #1115 fixture had been authored in the labelled format, so the mismatch was not caught.
+- Three parser defects compounded it: `$35k` was "unparsed", and an unparsed amount was pushed into `conflicts`, so one shorthand amount blocked the **whole** cohort; a value was discarded if it contained `no`/`unverified` anywhere; and the response said "Missing verification: <field>" for fields that were recorded.
+- The `$5k–$20k` range appears in prospect risk prose and in the operator's question. Neither is an authorized criterion by design; only approved tenant Blueprint facts are. This correction keeps that rule and does not change the Blueprint criteria parser.
+
+### Correction
+
+`packages/max/workspace/ProspectDealClaims.js` (pure, deterministic) replaces the label-only parser behind the unchanged `recordedDetails()` export:
+
+| State | Meaning | Effect |
+| --- | --- | --- |
+| `claim` | Labelled value, or a narrowly defined explicit statement in **Fit evidence** only. Keeps the exact recorded sentence (`snippet`) and matched text; `epistemic: recorded_unverified`. | Counts toward coverage. |
+| `absent` | Not recorded, or recorded only as unknown/TBD/not verified. | Listed under "Not recorded". |
+| `unparsed` | Recorded but not comparable: amount range, approximate amount, unsupported format (`$12.5k`, `$1.2M`), competing values (`$12k … and $18k`, first and second lien in one record), exit alternatives (`sale or refinance`). | **Record-local**: the field does not count for that record; the cohort can still rank. |
+| `conflict` | Contradictory **labelled** claims (Fit vs Risks), unchanged rule. | Withholds the cohort ranking, as before. |
+
+Narrative patterns are deliberately narrow: request verb + single amount (`requesting $35k`, `needs $15,000`), `$35k bridge loan request`, `funding request of $20k`; `first/second(-position) lien|mortgage|position` (ignoring existing/senior/underlying debt); `exit via/plan …`, `plans to refinance/sell`; `under contract`, `a purchased/acquired <property>`, `owned free and clear`, `property identified`, `rehab underway`; `closing scheduled/set for <date>`, `targeting close in <N weeks>`. A clause with a negation (`not`, `no`, `unknown`, …) or a hedge (`may`, `might`, `if`, …) is not a claim; "not yet verified" is a verification status, not a negation. Rehab budgets, purchase prices, ARVs, property values, deal sizes and down payments are never a financing request; projected/estimated/expected amounts and fund raises are not explicit requests; a lien the borrower already owes, holds, carries or assumes is not the offered security. A timeline after an exit/refinance in the same sentence is never a closing date. `Risks`, `Next action` and other sections are never mined. Dollar ranges found in notes are disclosed as "not authorized business criteria; not used for financing fit". This is not an underwriting engine.
+
+Presentation: `Recorded claims (unverified)` lists each claim with field names, `Claim source text (exact, as recorded)` quotes the source sentences, then `Not recorded`, `Recorded but not comparable for this record`, `Contradictory labelled claims`, financing fit (contradictory vs non-comparable amount vs criteria comparison) and verification status. Structured evidence carries `recordedClaims.claims` (value, origin, snippet, match), `notRecorded`, `unparsed`, `contradictory` and `extractor`.
+
+Unchanged: the coverage policy and ranking thresholds (≥2 comparable candidates, differentiated coverage, ties share position, no implicit cutoff), contradiction abstention, tenant isolation, the Blueprint criteria parser, outreach gates, and the no-write/no-send/no-assignment behaviour. `investigationPriority.extractor` is recorded in the continuity marker; a ranking produced by a different extractor is treated as stale on follow-up.
+
+### Approved assertion change
+
+`recordedDetails('Financing request: $12k').amount` now equals `12000` (was `null`). Real imports write amounts as integer-k shorthand; rejecting it left the request "unrecorded" and, because unparsed amounts were then treated as conflicts, blocked the whole cohort. The same test now also asserts that a genuinely unsupported format (`$12.5k`) stays out of the amount and is record-local `unparsed`, not a conflict. The second approved change (unparsed vs conflicting amounts) needed no assertion edit: the existing test's `$12,000` vs `$18,000` case is a genuine labelled contradiction and still blocks; the existing `/Conflicting or unparsed/` assertions still hold through a cohort summary line that now reports the two categories separately.
+
+### Evidence
+
+Same six synthetic narrative records (built through `normalizeContact`/`noteFor`), same approved synthetic Blueprint (`Financing range: $5,000–$20,000`), same production prompt, through `WorkspaceEngine.ask`:
+
+- Before: [`max-investigation-narrative-six-record-response.before.txt`](examples/max-investigation-narrative-six-record-response.before.txt) — "Unranked investigation candidates"; Zane: "No explicit financing request recorded … Missing verification: financing request, deal stage, lien/security position, exit plan, closing date."
+- After: [`max-investigation-narrative-six-record-response.txt`](examples/max-investigation-narrative-six-record-response.txt) — positions 1, 2, 3, 4, 5, 5 at coverage 5, 4, 2, 1, 0, 0; Zane's `$35k (= $35,000)` request is flagged outside `$5,000–$20,000` while remaining investigation position 1; Cam's `$8k–$12k` range and Eli's competing amounts/liens are record-local; outreach blocked for all six.
+- The labelled #1115 example keeps identical positions and counts; only wording changed.
+
+**Pre-merge blocker: real-data compatibility is unverified.** The six production records' notes and the approved LA Endeavors Blueprint facts were not read: database credentials are not available to this session (and must not be), the Railway integration cannot execute SQL, and the application's record endpoints require an authenticated operator session. The synthetic fixtures prove the extractor's behaviour, not compatibility with the real wording. Before merge, an operator should run a read-only, tenant-scoped read of the six `contact_now` records' `notes` and of the approved Blueprint service facts, and compare them against these patterns (per record: which of the five categories are detected, false positives, missed claims; and whether a `Financing range: $X–$Y` fact is approved).
+
+### Rollback
+
+- Narrative extraction only: `MAX_PROSPECT_NARRATIVE_CLAIMS=false` (also `0`, `off`, `no`, `disabled`) and restart. Labelled claims, `$Nk` amounts and record-local unparsed handling remain; narrative cohorts return to unranked. Extractor becomes `labelled-claims-v1`, so earlier rankings are stale.
+- Whole analytical path: `MAX_PROSPECT_INVESTIGATION_PRIORITY=false` (unchanged).
+- Code: revert this PR. No schema, data or configuration change was made.
+
+Tests: `packages/max/workspace/tests/p0NarrativeDealEvidence.test.js` (fixture `tests/fixtures/narrativeInvestigationProspects.js`). 14 of its 15 original tests fail against the pre-correction composer; the remaining one is the budget/ARV guard, which the old parser also satisfied.
+
+### Real-data audit (operator-run, read-only)
+
+`scripts/investigationNarrativeAudit.js` is a standalone diagnostic for the pre-merge blocker above. It is not wired into any request path, cron or startup hook. It reuses `DATABASE_URL` (`db.js`), Max's prospect loader (`ProspectRecordIntelligence.loadRecords`) and Blueprint loader (`ClientIntelligenceContext.loadApprovedClientIntelligence`, with only `getApprovedClientBlueprint` exposed). It adds no credential, permission or endpoint.
+
+- **Scope:** hard-coded to tenant 21. It audits only `review_only_import` records whose review state is `contact_now`, and expects exactly six. A row from another tenant returned by the database makes the run fail closed, with no records reported.
+- **Read-only:** one connection, `BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY` (checked with `SHOW transaction_read_only`), every statement through `OperationalInspection.readOnlyQueryable` (a single SELECT/WITH statement; multi-statement text is rejected), and always `ROLLBACK`. No writes, imports, assignments, outreach or specialist actions.
+- **Nested transactions (fix after the first production run):** the canonical Blueprint projection takes a connection via `connect()` and runs its own `BEGIN READ ONLY … COMMIT/ROLLBACK`. The first run's guard rejected that `BEGIN` (and the cleanup `ROLLBACK`), so the projection reported itself unavailable and the loader raised `CANONICAL_PROJECTION_FAILURE` before any canonical data was read. On a `connect()`-ed session the audit now maps `BEGIN` to `SAVEPOINT audit_nested_N`, `COMMIT`/`END` to `RELEASE SAVEPOINT`, and `ROLLBACK`/`ABORT` to `ROLLBACK TO SAVEPOINT` + `RELEASE`. It rejects `READ WRITE`, a second nested `BEGIN`, `COMMIT` with no nested transaction, explicit `SAVEPOINT`/`RELEASE`/`ROLLBACK TO`, `AND CHAIN`, `PREPARE TRANSACTION` and `SET TRANSACTION`. A `ROLLBACK` with no nested transaction is never sent. A session released with an open savepoint is rolled back to it. At the end the outer transaction must still report `transaction_read_only = on` (or be aborted, which cannot write); otherwise the report is withheld (exit 2). Max's own Blueprint loader is unchanged.
+- **Explainable warnings:** each `possible_missed_claim` (up to three cue occurrences per category) carries a context window of at most six words either side of the cue, plus:
+  - **confirmed** facts from running the real extractor: `no_pattern_matches_sentence` (the sentence alone yields nothing for the category), `sentence_matches_in_isolation` (it does, so other record content explains the abstention), and `labelled_field_governs`;
+  - **hypotheses (unconfirmed)**, the script's own heuristics, e.g. no request wording before an amount, budget/ARV/debt context, approximate or range amounts, track-record wording, a generic strategy term without exit wording, no date after a closing word, past deals, exit-timeline context, or a negation/hedge in the clause.
+
+  Hypotheses are not extractor behaviour and do not change it.
+- **Fail-closed redaction of context:** the record's name tokens, emails, URLs, phone numbers, street addresses and digit runs of five or more are masked. Any capitalized word that is not a known deal acronym, month/weekday or common deal word is masked as `[word]`. The result is re-checked: residual `@`/URL/phone markers or name tokens withhold the context (`redaction_unverified`), and so do windows that are more than half placeholders (`mostly_redacted`). Lowercase personal names other than the record's own cannot be recognized; the capitalization rule and the final check are the safeguards.
+- **Output:** 8-character record-ID prefixes; a coverage matrix showing `R` recorded-unverified, `-` absent, `N` non-comparable and `C` contradictory; the minimal matched phrase per category, with names, emails, phones and URLs redacted and phrases capped at 80 characters; and review findings (a possible missed claim is a cue word with no detected claim; a possible false positive is a guard word inside a claim's sentence). For the Blueprint it reports whether it is approved and trusted, the range the current parser recognizes, and only the facts that mention financing, loans or dollar amounts. Never names, contact details or full notes. `--json` gives the same redacted report.
+- **Result:** `PASS` (exit 0) requires the six-record cohort, no review findings, no contradictions and a ranked cohort. `FAIL` (exit 1) lists the reasons. `ACCESS UNAVAILABLE` / `AUDIT FAILED` (exit 2) means nothing was read or the read could not complete.
+
+Run from a checkout of the PR branch, with the Railway CLI logged in as an authorized operator and linked to project `charming-trust`:
+
+```sh
+railway run --service pulseforge-leadgen --environment production \
+  node scripts/investigationNarrativeAudit.js
+```
+
+Tests: `p0NarrativeAuditScript.test.js` (tenant scoping, foreign-row fail-closed, Blueprint binding, read-only transaction and write rejection, denied access without secrets, redaction, matrix/PASS/FAIL, real Blueprint normalization path), `p0NarrativeAuditTransactions.test.js` (savepoint success, nested rollback, error recovery, write/escape prevention, the real canonical projection inside a savepoint, end-state verification), `p0NarrativeAuditExplanations.test.js` (context windows, confirmed vs hypothesis separation, fail-closed redaction), `p0NarrativeAuditDiagnostics.test.js` (the "in rehab funds" false positive found while probing; fixed in v2).
+
+### Extractor correction v2 (`fit-narrative-claims-v2`, after the production audit at `c1e93601`)
+
+The read-only production audit (tenant 21, six `contact_now` records) read the canonical Blueprint and confirmed real extraction gaps. An operator approved a narrowly scoped correction. Only these changes were made, in `ProspectDealClaims.js`:
+
+| # | Change | Guard |
+| --- | --- | --- |
+| 1 | Financing request: `$35,000 remaining rehab request` (amount followed directly by an optional qualifier — remaining/outstanding/additional/current, rehab/gap/bridge/…, loan/financing/funding/capital — and the word `request`), and `current public request for $35,000–$45,000 …` (`current/public/active/open/pending/stated/explicit/outstanding … request of/for/is <amount>`). | A range stays a range: it is record-local `unparsed` (`reason: range`, value kept verbatim) and is never turned into one amount. `budget request`, `request for $250k properties/deals`, hedged and negated forms abstain. |
+| 2 | Deal stage: `executed purchase contract` was already recognised; a negation **after** a stage phrase no longer cancels it (`Executed purchase contract with no financing contingency`), while a negation before or inside it still does (`No executed purchase contract`, `Not yet under contract`). `already purchased/acquired/bought/closed on` (optionally `property/SFR/duplex … was/is already purchased`) is `property acquired`. | Track record abstains: a count or plural property noun after the phrase (`already purchased 14 homes`), `and sold/flipped`, or clause words such as `portfolio`, `track record`, `since 2019`, `previously`. Two different current-property stages are record-local `multiple_values`. |
+| 3 | Exit: `sale exit`, `retail sale exit`, `refinance exit`, `DSCR refinance exit`. | Singular only (`sale exits` is history); `projected/possible/potential/prior/past/completed … exit` abstains; `BRRRR exit` and `hold exit` are not accepted in this form. |
+| 4 | False positive: `$35K in rehab funds needed` no longer yields stage `in rehab`. `in rehab` is now a stage only as a property state (`is/are/currently/now/already/still in rehab`, not followed by funds/financing/budget/costs/draws/…); `mid-rehab` and `rehab underway` are unchanged. | The phrase is **not** added as a financing-request form; it stays absent. |
+| 6 | Refinance-target wording is evaluated separately: `sub-90-day refinance target`, `refinance target under 90 days`, `targeting a refinance in under 90 days` are **not** exits (they state a timeline target, not the intended exit) and never closing dates. Explicit forms (`exit via refinance`, `plans to refinance`, `refinance exit`) remain exits. A `;`-joined clause now carries the previous clause's exit context, so `Exit plan is a refinance; target close in 90 days` is not a closing date. | — |
+
+Unchanged (5, 7): generic BRRRR descriptions, rehab budgets, ARVs, projected resale values, past transactions and undated future closings still abstain. Financing criteria still come only from the approved canonical Blueprint; with no recognised range, financing fit is reported as undetermined. Ranking thresholds, tenant isolation, outreach authorization, Blueprint parsing and rollback behaviour are unchanged. The extractor version is now `fit-narrative-claims-v2`, so a v1 ranking is stale on follow-up.
+
+Tests: `packages/max/workspace/tests/p0NarrativeClaimsV2.test.js` — a six-record production-shaped cohort built through `normalizeContact`/`noteFor` from the redacted audit fragments (sentences around the fragments and all names are synthetic), checked field-by-field at record level, plus adversarial near-matches, the no-range financing-fit path and the unchanged synthetic cohort positions.
+
+### Range policy refinement v3 (`fit-narrative-claims-v3`)
+
+Approved policy: an explicit, current, deal-specific financing range is **recorded-unverified financing-request evidence** and counts toward investigation coverage.
+
+- **Kept as a range.** The claim keeps the verbatim value and source sentence plus `form: 'range'` and `range: { min, max }`; `amount` stays `null`. It is never turned into one amount. Bounds must be readable unambiguously (`$35–45k` stays `unparsed: unsupported_format`), and an approximate range (`about $20k–$30k`) stays `unparsed: approximate`. A labelled `Financing request: $10,000–$15,000` is handled the same way.
+- **Supersession is narrow.** A single exact request supersedes a range only when (a) it is in the same statement (same sentence or `;`-joined clause), (b) the statement carries an explicit update cue (`narrowed to`, `revised to`, `now`, `specifically`, `settled on`, …), and (c) it names no different financing need (gap vs rehab, etc.). The claim then records `supersedes: { value, range, snippet }`, so the range stays visible. An update alone (`Revised to $40k.`) is never a request, and updates of other things (`purchase price reduced to $150k`, `rehab budget lowered to $30k`) are ignored.
+- **Ambiguity retains evidence.** An update in a different sentence, a different financing need, a second request with no update cue, or more than one update: the amount becomes record-local `unparsed: multiple_values` with every value listed. Contradictory **labelled** claims still block the cohort, as before.
+- **Not current requests:** general preferences (`typically/usually/generally`, `prefers`, `per deal`, `on average`), history (`past`, `previously`, `last year`, `in 2024`), other or future deals (`next deal`, `future projects`, `for deals …`), and, as before, budgets, purchase prices, ARVs, property values and projected amounts. These apply to exact amounts and ranges alike.
+- **Separate from criteria.** A prospect-stated range is never compared with or used as business criteria. Financing fit for a range record reads "a range, not a single amount … financing fit cannot be assessed for this record. The prospect-stated range is not compared with or used as business criteria." Exact requests are still compared against an approved Blueprint range. `tenantCriteria` and outreach gates are unchanged.
+
+Effect on the synthetic narrative cohort: Cam's `$8k–$12k` now counts (coverage 2 → 3); positions are unchanged (1, 2, 3, 4, 5, 5). The example response was regenerated for Cam's block and the cohort summary line.
+
+Tests: `packages/max/workspace/tests/p0NarrativeRangePolicy.test.js` (exact requests, explicit ranges, superseded ranges, ambiguous precedence, conflicting requests, unrelated/future/past deals, general preferences, separation from Blueprint criteria and outreach).
+
+### Range policy correctness fixes v4 (`fit-narrative-claims-v4`)
+
+The policy is unchanged and confirmed by the operator. Probing v3 against each policy rule found four places where it did not hold, now fixed:
+
+- **History cue in an earlier clause.** In "On a previous deal, requested $50k–$60k" the history cue sits in a clause before the amount, and v3 checked only the amount's own clause. Now cues anywhere earlier in the same sentence apply, unless the amount's own clause is explicitly current ("…, now requesting $40k"). "previous" was added to the history cues.
+- **Other deal or property.** "Requested $45k on a different property" counted as this deal's request. A different/another/other/separate/unrelated property, deal, project, flip, house, home or purchase in the amount's clause now excludes it. ("Another loan" is not treated as another deal.)
+- **Different financing need superseding a range.** The need was read from the next four tokens after the amount, but a leading empty token cut "for the down payment" to "for the down", and a missing need counted as compatible. The need window now takes the next six words, so "…for rehab; narrowed to $10k for the down payment" is record-local `multiple_values`.
+- **"Current request is for $X to $Y"** was not recognized; the adjective + `request` form now accepts `request is (for)`.
+
+A superseding claim's `snippets` now include its own sentence as well as the superseded range's, so the answer shows both source texts.
+
+Tests: `packages/max/workspace/tests/p0NarrativeRangePolicyRegressions.test.js` covers exact requests, explicit ranges, superseded ranges, ambiguous precedence, conflicting requests, unrelated deals, general preferences, and an end-to-end check that a prospect range adds coverage, is never compared with Blueprint criteria, and leaves outreach blocked. Four of its eight tests fail against the v3 extractor. The synthetic example response is unchanged.
+
+### Executed-contract deal stage v5 (`fit-narrative-claims-v5`, after the v4 production audit)
+
+**Root cause.** The v4 audit found that Jon's record recognised `sale exit` but not `Current waterfront flip has an executed $260,000 purchase contract`. The deal-stage pattern required `signed|executed` to be directly followed by `purchase contract|agreement`. A contract price between the two words broke the match. No other pattern applied: `under contract` is absent, and the amount patterns correctly ignore a price that is not followed by request wording.
+
+**Change (stage only).**
+- The executed/signed form now accepts one optional price between the status word and the noun (`executed $260,000 purchase contract`, `signed $1.2M purchase agreement`, `executed $260k purchase contract`). The price is never a financing request.
+- Abstention rules now apply to this pattern family, both with and without a price. They reuse the amount extractor's current/history scoping: an explicitly current clause (`Current waterfront flip has …`) is read on its own; otherwise, earlier clauses in the sentence count too.
+  - **Historical:** `previously`, `prior`, `last year`, `in 2023`, `had`, plural `contracts`, track-record clauses, or a contract that `fell through`, `terminated`, `cancelled`, `expired` or `lapsed`.
+  - **Not executed:** `unsigned`, `proposed`, `draft`, `awaiting`, `expects`, `needs`, `will`, `to be signed`, or hedged (`may`).
+  - **Negated:** `no executed …`, `does not have an executed …`. Negation before or inside the phrase cancels it; negation after it does not (unchanged from v2).
+  - **Another deal:** `on a different property`, `on another flip`, `on the next deal`.
+- `under contract` and the other stage patterns are unchanged.
+
+**Audit warning attribution.** A financing-request claim was flagged `possible_false_positive` whenever its sentence contained a value cue (ARV, budget, price, value, projected, …). That flagged Zackary's correctly extracted `$35,000` request because an ARV for a different amount was in the same sentence. The warning is now downgraded to an informational `NOTE … value cue describes a different amount` only when **every** cue occurrence meets both conditions:
+- it is within two words of a **different** dollar amount, with no clause break or other amount in between (`$250k ARV`, `ARV of $250k`);
+- it is **not** within three words of the claimed amount.
+
+The warning stays if any cue touches the claimed amount (`requesting $35,000 for the budget`), has no amount of its own (`requesting $35k, projected`), is too far from the other amount to attribute, or if the claimed amount cannot be located in its sentence. Notes do not count toward FAIL. Missed-claim detection is unchanged.
+
+Tests: `packages/max/workspace/tests/p0NarrativeExecutedContract.test.js`. It covers the verbatim audit phrase and adversarial near-matches (historical, unsigned/proposed, negated, unrelated). It also runs full-record extraction through the real `importReviewOnlyContacts` INSERT and `ProspectRecordIntelligence.loadRecords` read, using an in-memory pool. Jon's record then has stage and exit recorded, no financing request, and no stage review finding; each near-match record keeps stage absent and still raises the missed-claim review. The attribution cases cover both directions.
+
+Unchanged: financing range policy, ranking thresholds, Blueprint criteria, tenant isolation, outreach authorization and rollback flags.
+
+### P0 acceptance verification at `491f7b70` (v5)
+
+**Production audit (operator-run, read-only, tenant 21), as reported by the operator:**
+- Six of six review-only `contact_now` records were retrieved.
+- Coverage: Zackary 3/5, Raul 2/5, Jon 2/5 (including the executed $260,000 purchase contract), Reginald 1/5, John 0/5, David 0/5.
+- No purchase price, rehab budget or ARV was promoted to a financing request.
+- The approved canonical Blueprint is available, but it has no recognized numeric financing range.
+- The read-only transaction completed with no writes or outreach.
+- The v4 false-positive warning on Zackary's `$35,000` request no longer appears.
+- Four records are reported with `possible_missed_claim`. By the script's definition the audit is therefore `FAIL`. The PASS rule is not changed, and no warning is suppressed. Each finding has an individual manual disposition, recorded below.
+
+**Disposition rules for missed-claim findings.**
+
+An *acceptable abstention* is a cue that the extractor deliberately does not promote:
+- amounts that are budgets, purchase prices, contract prices, ARVs or values;
+- generic strategy terms with no exit wording (`BRRRR investor`);
+- closing words that refer to past deals (`closed on 12 deals`);
+- exit or refinance timelines;
+- negated, hedged or historical statements.
+
+A *defect* is an explicit, current, deal-specific statement in Fit evidence, stated in a form the policy says should count, that the extractor misses (as Jon's contract was in v4).
+
+**Automated result versus manual dispositions.** The automated audit outcome stands as recorded: `FAIL`, with four `possible_missed_claim` warnings. The script, its PASS rule and its warnings are unchanged. The operator then reviewed each warning against the redacted audit output and accepted all four as acceptable abstentions. These are manual dispositions. They do not change the automated result, and they do not alter the extractor or the audit.
+
+| Record | Automated finding (category, as described in the operator review) | Manual disposition | Reason |
+| --- | --- | --- | --- |
+| Zackary | `possible_missed_claim` (exit) | Acceptable abstention | BRRRR, a DSCR lender and refinance timing do not on their own establish a committed exit plan for the current deal. |
+| Jon | `possible_missed_claim` (financing request) | Acceptable abstention | The contract price, rehab budget and ARV are not financing requests. |
+| Reginald | `possible_missed_claim` (financing request, exit) | Acceptable abstention | Historical sale prices, acquisition cost, rehab budget and projected resale do not establish an explicit financing request or a committed exit plan. |
+| David | `possible_missed_claim` (exit, closing date) | Acceptable abstention | Historical BRRRR activity and a future closing with no date do not establish current-deal exit or closing-date claims. |
+
+No extractor defect remains open from the v5 audit. A later audit run reports the same warnings until the notes change; the dispositions above apply only to the notes audited at `491f7b70`.
+
+**Isolated end-to-end Max verification:** `test/maxInvestigationAcceptancePostgres.test.js`. The test:
+- Starts a disposable PostgreSQL 16 database. No production access is used.
+- Imports six tenant-21 records through the real `importReviewOnlyContacts`, plus one foreign tenant-22 record.
+- Records reproduce the audited coverage pattern 3/2/2/1/0/0 with synthetic text. Jon's sentence is the audit phrase verbatim.
+- Uses an approved Blueprint with no numeric range.
+- Runs `WorkspaceEngine.ask` with the original production prompt, the short investigation prompt and the "why first" follow-up.
+- Uses the real default prospect loader, both the aggregate SQL and the `loadRecords` keyset SQL.
+- Allows network access only to the disposable database. HTTP(S), fetch, TLS and DNS are denied.
+
+It asserts:
+- the exact six IDs, with the foreign record absent;
+- order by coverage, positions 1, 2, 2, 4, 5, 5;
+- every claim is `recorded_unverified`, and exact source sentences appear in the prose;
+- no within/outside-range conclusion: five records say "comparison unavailable", and the range record says the fit "cannot be assessed";
+- six "Outreach eligibility: blocked" lines;
+- `executed`, `specialistDelegated` and `delegated` are false;
+- every SQL statement Max sent was a SELECT;
+- the full `prospects` and `companies` tables are byte-identical before and after.
+
+The same synthetic cohort, run through the audit classifier, produces four records with `possible_missed_claim`, all acceptable abstentions: Raul's rehab budget, Jon's contract price, and generic BRRRR wording for Reginald and John. This shows the pattern but does not stand in for reviewing the real findings.
+
+**CI.** The test runs in the `Max orchestration` job of `.github/workflows/pr-ci-lean.yml`, which already provisions disposable PostgreSQL. It runs whenever the PR planner selects the `max` suite; `test/max*` paths map to that domain.
+
+**Limitation.** Production runs `main`, which does not contain this PR, so the production Max response path cannot exercise v5 until deployment is approved. The remaining acceptance test is steps 1–8 of the "Production acceptance procedure" above, run in an authorized tenant-21 session after deployment.
+
+**Follow-ups (separately scoped, not in this PR):**
+1. Zero-evidence ranking presentation: records with 0/5 claims receive a shared last position (`Investigation position 5`), which implies an ordering with no evidence behind it. They should be listed as "not ranked: no recorded deal claims".
+2. Exit-plan display casing: the raw value is shown (`exit plan: Sale`) rather than the normalized value (`sale`).
+3. The audit hypothesis list does not name contract prices (`$260,000 purchase contract`) as a non-request amount context. The confirmed fact (`no_pattern_matches_sentence`) is still reported.
