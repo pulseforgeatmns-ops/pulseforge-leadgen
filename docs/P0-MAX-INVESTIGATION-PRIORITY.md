@@ -301,7 +301,7 @@ Unchanged: financing range policy, ranking thresholds, Blueprint criteria, tenan
 - The approved canonical Blueprint is available, but it has no recognized numeric financing range.
 - The read-only transaction completed with no writes or outreach.
 - The v4 false-positive warning on Zackary's `$35,000` request no longer appears.
-- Four records are reported with `possible_missed_claim`. By the script's definition the audit is therefore `FAIL`. The PASS rule is not changed, and no warning is suppressed. Each finding needs an individual disposition, recorded below once the redacted REVIEW lines are reviewed.
+- Four records are reported with `possible_missed_claim`. By the script's definition the audit is therefore `FAIL`. The PASS rule is not changed, and no warning is suppressed. Each finding has an individual manual disposition, recorded below.
 
 **Disposition rules for missed-claim findings.**
 
@@ -313,6 +313,17 @@ An *acceptable abstention* is a cue that the extractor deliberately does not pro
 - negated, hedged or historical statements.
 
 A *defect* is an explicit, current, deal-specific statement in Fit evidence, stated in a form the policy says should count, that the extractor misses (as Jon's contract was in v4).
+
+**Automated result versus manual dispositions.** The automated audit outcome stands as recorded: `FAIL`, with four `possible_missed_claim` warnings. The script, its PASS rule and its warnings are unchanged. The operator then reviewed each warning against the redacted audit output and accepted all four as acceptable abstentions. These are manual dispositions. They do not change the automated result, and they do not alter the extractor or the audit.
+
+| Record | Automated finding (category, as described in the operator review) | Manual disposition | Reason |
+| --- | --- | --- | --- |
+| Zackary | `possible_missed_claim` (exit) | Acceptable abstention | BRRRR, a DSCR lender and refinance timing do not on their own establish a committed exit plan for the current deal. |
+| Jon | `possible_missed_claim` (financing request) | Acceptable abstention | The contract price, rehab budget and ARV are not financing requests. |
+| Reginald | `possible_missed_claim` (financing request, exit) | Acceptable abstention | Historical sale prices, acquisition cost, rehab budget and projected resale do not establish an explicit financing request or a committed exit plan. |
+| David | `possible_missed_claim` (exit, closing date) | Acceptable abstention | Historical BRRRR activity and a future closing with no date do not establish current-deal exit or closing-date claims. |
+
+No extractor defect remains open from the v5 audit. A later audit run reports the same warnings until the notes change; the dispositions above apply only to the notes audited at `491f7b70`.
 
 **Isolated end-to-end Max verification:** `test/maxInvestigationAcceptancePostgres.test.js`. The test:
 - Starts a disposable PostgreSQL 16 database. No production access is used.
@@ -334,6 +345,8 @@ It asserts:
 - the full `prospects` and `companies` tables are byte-identical before and after.
 
 The same synthetic cohort, run through the audit classifier, produces four records with `possible_missed_claim`, all acceptable abstentions: Raul's rehab budget, Jon's contract price, and generic BRRRR wording for Reginald and John. This shows the pattern but does not stand in for reviewing the real findings.
+
+**CI.** The test runs in the `Max orchestration` job of `.github/workflows/pr-ci-lean.yml`, which already provisions disposable PostgreSQL. It runs whenever the PR planner selects the `max` suite; `test/max*` paths map to that domain.
 
 **Limitation.** Production runs `main`, which does not contain this PR, so the production Max response path cannot exercise v5 until deployment is approved. The remaining acceptance test is steps 1–8 of the "Production acceptance procedure" above, run in an authorized tenant-21 session after deployment.
 
