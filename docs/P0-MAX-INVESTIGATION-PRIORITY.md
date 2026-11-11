@@ -200,3 +200,21 @@ Same six synthetic narrative records (built through `normalizeContact`/`noteFor`
 - Code: revert this PR. No schema, data or configuration change was made.
 
 Tests: `packages/max/workspace/tests/p0NarrativeDealEvidence.test.js` (fixture `tests/fixtures/narrativeInvestigationProspects.js`). 14 of its 15 original tests fail against the pre-correction composer; the remaining one is the budget/ARV guard, which the old parser also satisfied.
+
+### Real-data audit (operator-run, read-only)
+
+`scripts/investigationNarrativeAudit.js` is a standalone diagnostic for the pre-merge blocker above. It is not wired into any request path, cron or startup hook. It reuses `DATABASE_URL` (`db.js`), Max's prospect loader (`ProspectRecordIntelligence.loadRecords`) and Blueprint loader (`ClientIntelligenceContext.loadApprovedClientIntelligence`, with only `getApprovedClientBlueprint` exposed). It adds no credential, permission or endpoint.
+
+- **Scope:** hard-coded to tenant 21. It audits only `review_only_import` records whose review state is `contact_now`, and expects exactly six. A row from another tenant returned by the database makes the run fail closed, with no records reported.
+- **Read-only:** one connection, `BEGIN TRANSACTION READ ONLY` (checked with `SHOW transaction_read_only`), every statement through `OperationalInspection.readOnlyQueryable` (SELECT/WITH only, including through `connect()`), and always `ROLLBACK`. No writes, imports, assignments, outreach or specialist actions.
+- **Output:** 8-character record-ID prefixes; a coverage matrix showing `R` recorded-unverified, `-` absent, `N` non-comparable and `C` contradictory; the minimal matched phrase per category, with names, emails, phones and URLs redacted and phrases capped at 80 characters; and review findings (a possible missed claim is a cue word with no detected claim; a possible false positive is a guard word inside a claim's sentence). For the Blueprint it reports whether it is approved and trusted, the range the current parser recognizes, and only the facts that mention financing, loans or dollar amounts. Never names, contact details or full notes. `--json` gives the same redacted report.
+- **Result:** `PASS` (exit 0) requires the six-record cohort, no review findings, no contradictions and a ranked cohort. `FAIL` (exit 1) lists the reasons. `ACCESS UNAVAILABLE` / `AUDIT FAILED` (exit 2) means nothing was read or the read could not complete.
+
+Run from a checkout of the PR branch, with the Railway CLI logged in as an authorized operator and linked to project `charming-trust`:
+
+```sh
+railway run --service pulseforge-leadgen --environment production \
+  node scripts/investigationNarrativeAudit.js
+```
+
+Tests: `packages/max/workspace/tests/p0NarrativeAuditScript.test.js` (tenant scoping, foreign-row fail-closed, Blueprint binding, read-only transaction and write rejection, denied access without secrets, redaction, matrix/PASS/FAIL, real Blueprint normalization path).
