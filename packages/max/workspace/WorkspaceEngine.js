@@ -1,4 +1,5 @@
 'use strict';
+const { withPresentationTurn, bindPresentationTurn } = require('./PresentationDiagnostics');
 const { assessFallback, buildFallbackBlockedResponse } = require('./RoutingFallbackIntegrity');
 const { hasExecutionCommandDirective } = require('./SessionDirectiveRegistry');
 const { stripNegatedDirectives } = require('./NegatedDirective');
@@ -608,6 +609,10 @@ class WorkspaceEngine {
   }
 
   async ask(input) {
+    return withPresentationTurn(() => this._askWithPresentationDiagnostics(input));
+  }
+
+  async _askWithPresentationDiagnostics(input) {
     const interpretationContext = this._interpretationShadow.capture(input?.sessionId ? this._sessions.get(input.sessionId) : null);
     const shadow = beginShadow(
       this._decisionService, input,
@@ -777,6 +782,7 @@ class WorkspaceEngine {
       // capped at 40, so its length cannot identify "the previous turn").
       session.operatorTurnSeq = (Number(session.operatorTurnSeq) || 0) + 1;
     }
+    bindPresentationTurn(session);
 
     // Reviewing existing content is a workspace navigation request, not mission
     // inspection, delegation, approval, or execution. Resolve before mission locks.

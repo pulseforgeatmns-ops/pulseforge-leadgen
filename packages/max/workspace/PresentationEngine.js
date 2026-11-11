@@ -8,6 +8,7 @@
 
 const DEFAULT_MODEL = process.env.MAX_WORKSPACE_MODEL || process.env.MAX_CHAT_MODEL || 'claude-sonnet-4-6';
 const { PRESENTATION_IDENTITY } = require('../identity/MaxIdentity');
+const { logPresentationFailure } = require('./PresentationDiagnostics');
 
 const PRESENTATION_TIMEOUT_MS = 30000;
 
@@ -294,7 +295,8 @@ class PresentationEngine {
         presentation = 'claude';
         modelCompletion = { attempted: true, ok: true };
       } catch (err) {
-        const errorCode = classifyModelError(err);
+        let errorCode = 'provider_error';
+        try { errorCode = classifyModelError(err); } catch (_) { /* malformed SDK error */ }
         prose = formatDeterministicProse(structured);
         presentation = 'fallback_error';
         modelCompletion = {
@@ -303,10 +305,7 @@ class PresentationEngine {
           errorCode,
           action: MODEL_ERROR_ACTIONS[errorCode] || MODEL_ERROR_ACTIONS.provider_error,
         };
-        console.warn('[max-presentation] model completion failed; deterministic prose used', {
-          errorCode,
-          httpStatus: err && Number.isInteger(err.status) ? err.status : null,
-        });
+        logPresentationFailure(err, errorCode);
       }
     } else {
       prose = formatDeterministicProse(structured);

@@ -193,8 +193,9 @@ describe('P0 response integrity — model failures are reported, sanitized and a
           attempted: true, ok: false, errorCode: code, action: MODEL_ERROR_ACTIONS[code],
         });
         assert.equal(out.metadata.presentationError, code);
+        assert.doesNotMatch(JSON.stringify(out), /invalid_request_error|req_123/, 'provider diagnostics stay server-only');
         const serialized = JSON.stringify(out) + JSON.stringify(logged);
-        assert.doesNotMatch(serialized, /sk-ant|x-api-key|req_123|credit balance is too low|purchase credits|invalid_request_error/, 'raw provider text must not leak');
+        assert.doesNotMatch(serialized, /sk-ant|x-api-key|credit balance is too low|purchase credits/, 'raw provider text must not leak');
       } finally {
         console.warn = warn;
       }
