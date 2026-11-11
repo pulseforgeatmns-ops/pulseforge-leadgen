@@ -42,7 +42,7 @@ const PRODUCTION_SHAPED = [
 ];
 
 test('extractor version is bumped so earlier rankings are treated as stale', () => {
-  assert.equal(EXTRACTOR, 'fit-narrative-claims-v3');
+  assert.equal(EXTRACTOR, 'fit-narrative-claims-v4'); // v4: range-policy correctness fixes (history scope, other deals, need window, "request is for")
 });
 
 test('record-level extraction over the production-shaped cohort', () => {

@@ -28,7 +28,7 @@
 // property values are never financing requests; exit timelines are never
 // closing dates; nothing here produces tenant financing criteria.
 
-const EXTRACTOR = 'fit-narrative-claims-v3';
+const EXTRACTOR = 'fit-narrative-claims-v4';
 const LABELLED_ONLY = 'labelled-claims-v1';
 // Rollback switch for narrative extraction only. Labelled claims, integer-k
 // amounts and record-local "unparsed" handling stay in force when disabled.
@@ -102,7 +102,7 @@ const AMOUNT_PATTERNS = [
   new RegExp(`(?:(${APPROX})\\s*)?(${MONEY})(${RANGE_TAIL})?\\s+${REQUEST_QUALIFIER}request\\b`, 'gi'),
   // v2: "current public request for $35,000–$45,000 gap positions". Guarded
   // by NOT_REQUEST_AFTER like the verb form ("request for $250k properties").
-  new RegExp(`\\b${REQUEST_ADJ}(?:${FINANCING_NOUN}\\s+)?request\\s+(?:of|for|is)\\s+(?:(${APPROX})\\s*)?(${MONEY})(${RANGE_TAIL})?`, 'gi'),
+  new RegExp(`\\b${REQUEST_ADJ}(?:${FINANCING_NOUN}\\s+)?request\\s+(?:is\\s+(?:for\\s+)?|of\\s+|for\\s+)(?:(${APPROX})\\s*)?(${MONEY})(${RANGE_TAIL})?`, 'gi'),
 ];
 // Forms whose following words must be checked for a non-request object.
 const GUARDED_AMOUNT_PATTERNS = new Set([AMOUNT_PATTERNS[0], AMOUNT_PATTERNS[4]]);
@@ -112,10 +112,15 @@ const NOT_REQUEST_AFTER = /^\s*\+?\s*(?:(?:rehab|renovation|construction|repair)
 
 // v3: general borrowing preferences, history and other/future deals are not
 // a current financing request for this deal (exact amounts and ranges alike).
-const NOT_CURRENT_REQUEST = /\b(?:typically|usually|generally|normally|in\s+general|often|tends?\s+to|prefers?|preferred|preference|historically|previously|in\s+the\s+past|past|prior|earlier|last\s+(?:year|month|quarter|deal|project|flip)|in\s+(?:19|20)\d{2}|per\s+(?:deal|project|flip|property)|each\s+(?:deal|project|flip)|any\s+(?:deal|project)|on\s+average|average|next\s+(?:deal|project|flip|property|purchase)|future\s+(?:deals?|projects?|flips?|properties|purchases?)|for\s+deals\b|loans?\s+of\s+\$[\d,]+\w*\s*(?:-|–|—|to)\s*\$?[\d,]+\w*\s+(?:in\s+general|typically))\b/i;
+// The amount belongs to a different deal or property than this one.
+const OTHER_DEAL = /\b(?:different|another|other|separate|unrelated)\s+(?:property|deal|project|flip|house|home|purchase)\b/i;
+const CURRENT_CUE = /\b(?:now|currently|current|this\s+(?:deal|property|project)|subject\s+property)\b/i;
+const NOT_CURRENT_REQUEST = /\b(?:typically|usually|generally|normally|in\s+general|often|tends?\s+to|prefers?|preferred|preference|historically|previously|previous|in\s+the\s+past|past|prior|earlier|last\s+(?:year|month|quarter|deal|project|flip)|in\s+(?:19|20)\d{2}|per\s+(?:deal|project|flip|property)|each\s+(?:deal|project|flip)|any\s+(?:deal|project)|on\s+average|average|next\s+(?:deal|project|flip|property|purchase)|future\s+(?:deals?|projects?|flips?|properties|purchases?)|for\s+deals\b|loans?\s+of\s+\$[\d,]+\w*\s*(?:-|–|—|to)\s*\$?[\d,]+\w*\s+(?:in\s+general|typically))\b/i;
 // The financing need an amount is attached to, read from the matched words
 // and the few words after them ("gap positions", "rehab request").
 const NEED_RE = /\b(rehab|renovation|construction|gap|bridge|purchase|acquisition|refinanc\w*|refi|down\s+payment)\b/i;
+// The first six words after an amount ("for the down payment" must not be cut to "for the down").
+const needWindow = after => String(after || '').trim().split(/\s+/).slice(0, 6).join(' ');
 const needOf = text => { const m = String(text || '').match(NEED_RE); return m ? m[1].toLowerCase().replace(/^renovation$/, 'rehab').replace(/^refi\w*$/, 'refinance') : null; };
 // Words that make a single amount an explicit narrowing/update of a request.
 // An update of a request ("narrowed to $40k", "; now $40k"). Never a request
@@ -253,12 +258,18 @@ function narrativeFindings(fit) {
         const after = sentence.slice(m.index + m[0].length);
         if (GUARDED_AMOUNT_PATTERNS.has(re) && NOT_REQUEST_AFTER.test(after)) continue;
         const raw = clean(money);
-        if (NOT_CURRENT_REQUEST.test(clauseAround(sentence, m.index, m[0].length).clause)) continue;
+        // A history/preference/other-deal cue in the amount's own clause or in
+        // an earlier clause of the same sentence ("On a previous deal,
+        // requested $50k–$60k") makes it not a current request, unless the
+        // amount's own clause is explicitly current ("…, now requesting $40k").
+        const ownClause = clauseAround(sentence, m.index, m[0].length).clause;
+        const scope = CURRENT_CUE.test(ownClause) ? ownClause : sentence.slice(0, m.index) + ownClause;
+        if (NOT_CURRENT_REQUEST.test(scope) || OTHER_DEAL.test(ownClause)) continue;
         const n = parseAmount(raw.replace(/\+$/, ''));
         const value = clean(money + (range || ''));
         const bounds = range && !approx ? parseRange(value) : null;
         const reason = approx || /\+$/.test(raw) ? 'approximate' : range ? (bounds ? null : 'unsupported_format') : n == null ? 'unsupported_format' : null;
-        const need = needOf(m[0] + ' ' + after.split(/\s+/).slice(0, 4).join(' '));
+        const need = needOf(m[0] + ' ' + needWindow(after));
         add('amount', { match: clean(m[0]), value, amount: reason || bounds ? null : n, reason,
           ...(bounds ? { form: 'range', range: bounds } : {}), need, group, sentenceIndex,
           supersedeCue: SUPERSEDE_CUE.test(sentence),
@@ -283,7 +294,7 @@ function narrativeFindings(fit) {
       const n = parseAmount(clean(m[1]));
       if (n == null || !asserted(sentence, m.index, m[0].length, 'amount')) continue;
       found.amountUpdates.push({ match: clean(m[0]), value: clean(m[1]), amount: n, normalized: String(n), group,
-        need: needOf(m[0] + ' ' + after.split(/\s+/).slice(0, 4).join(' ')), snippet: sentence });
+        need: needOf(m[0] + ' ' + needWindow(after)), snippet: sentence });
     }
     for (const m of sentence.matchAll(SECURITY_RE)) {
       if (OTHER_DEBT_BEFORE.test(clauseAround(sentence, m.index, m[0].length).before)) continue;
@@ -368,7 +379,7 @@ function resolveNarrative(field, entries, updates = []) {
   const [only] = distinct;
   if (only.reason) return { unparsed: { field, reason: only.reason, values: [only.value], snippets } };
   return { claim: { field, value: only.value, normalized: only.normalized, origin: 'fit_narrative',
-    match: only.match, snippet: only.snippet, snippets, epistemic: 'recorded_unverified',
+    match: only.match, snippet: only.snippet, snippets: [...new Set([only.snippet, ...snippets])], epistemic: 'recorded_unverified',
     ...(only.amount != null ? { amount: only.amount } : {}), ...(only.form === 'range' ? { form: 'range', range: only.range } : {}),
     ...(supersedes ? { supersedes } : {}), ...(only.relative ? { relative: true } : {}) } };
 }

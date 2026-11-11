@@ -255,3 +255,16 @@ Approved policy: an explicit, current, deal-specific financing range is **record
 Effect on the synthetic narrative cohort: Cam's `$8k–$12k` now counts (coverage 2 → 3); positions are unchanged (1, 2, 3, 4, 5, 5). The example response was regenerated for Cam's block and the cohort summary line.
 
 Tests: `packages/max/workspace/tests/p0NarrativeRangePolicy.test.js` (exact requests, explicit ranges, superseded ranges, ambiguous precedence, conflicting requests, unrelated/future/past deals, general preferences, separation from Blueprint criteria and outreach).
+
+### Range policy correctness fixes v4 (`fit-narrative-claims-v4`)
+
+The policy is unchanged and confirmed by the operator. Probing v3 against each policy rule found four places where it did not hold, now fixed:
+
+- **History cue in an earlier clause.** In "On a previous deal, requested $50k–$60k" the history cue sits in a clause before the amount, and v3 checked only the amount's own clause. Now cues anywhere earlier in the same sentence apply, unless the amount's own clause is explicitly current ("…, now requesting $40k"). "previous" was added to the history cues.
+- **Other deal or property.** "Requested $45k on a different property" counted as this deal's request. A different/another/other/separate/unrelated property, deal, project, flip, house, home or purchase in the amount's clause now excludes it. ("Another loan" is not treated as another deal.)
+- **Different financing need superseding a range.** The need was read from the next four tokens after the amount, but a leading empty token cut "for the down payment" to "for the down", and a missing need counted as compatible. The need window now takes the next six words, so "…for rehab; narrowed to $10k for the down payment" is record-local `multiple_values`.
+- **"Current request is for $X to $Y"** was not recognized; the adjective + `request` form now accepts `request is (for)`.
+
+A superseding claim's `snippets` now include its own sentence as well as the superseded range's, so the answer shows both source texts.
+
+Tests: `packages/max/workspace/tests/p0NarrativeRangePolicyRegressions.test.js` covers exact requests, explicit ranges, superseded ranges, ambiguous precedence, conflicting requests, unrelated deals, general preferences, and an end-to-end check that a prospect range adds coverage, is never compared with Blueprint criteria, and leaves outreach blocked. Four of its eight tests fail against the v3 extractor. The synthetic example response is unchanged.
