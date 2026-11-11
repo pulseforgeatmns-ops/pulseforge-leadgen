@@ -404,11 +404,18 @@ function claimsOperationalRead(question, input = {}) {
   if (!q) return null;
   if (claimsExecutionInspection(q)) return null;
   if (claimsMissionInspection(q, input)) return null;
-  // Questions the existing operating-evidence detector already recognizes
-  // keep their established knowledge-retrieval route (step 7) unchanged.
-  if (claimsKnowledgeRetrieval(q)) return null;
+  // Operator updates, claim challenges and claim corrections keep their
+  // established knowledge-retrieval route (step 7) unchanged.
+  if (isOperatorOperatingUpdate(q) || isClaimChallenge(q) || isOperatorClaimCorrection(q)) return null;
+  // Classify first. Record-level reads (listing, ranking, review-state filter,
+  // pagination) reach record intelligence even when they contain legacy
+  // operating-evidence trigger words ("recorded", "existing", "already",
+  // "inventory"). Only non-record-level operating questions the legacy
+  // detector recognizes keep the Business Intelligence route.
   const read = classifyOperationalRead(question, { session: input.session });
   if (!read.isRead) return null;
+  const recordLevel = Boolean(read.wantsRanking || read.wantsRecordList || read.reviewState || read.cursor);
+  if (!recordLevel && shouldRetrieveOperatingEvidence(q)) return null;
   return {
     owner: WORKSPACE_OWNERS.KNOWLEDGE_RETRIEVAL,
     reason: 'operational_read',
