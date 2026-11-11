@@ -1,5 +1,7 @@
 'use strict';
 
+const { stripNegatedDirectives, extractNegatedClauses } = require('./NegatedDirective');
+
 /**
  * P0 #1110 — Operational read intent.
  *
@@ -96,6 +98,16 @@ const EXECUTION_RE = new RegExp(
   'i'
 );
 
+// A negated clause runs to the next sentence boundary, so a comma does not end
+// it. Keep execution when the clause turns affirmative: a contrast ("do not
+// send, but assign …"), or an idiomatic negation that is not a prohibition
+// ("never mind …, send …", "do not wait, assign …"). Conservative: such a turn
+// stays out of the read path, as it did before negated clauses were ignored.
+const NEGATION_TURNS_AFFIRMATIVE_RE = /\b(?:but|instead|rather|however)\b|\bnever\s+mind\b|\b(?:do\s+not|don['’]?t|dont)\s+(?:wait|hesitate|worry|forget|bother|delay)\b/i;
+function affirmativeExecutionInNegatedClause(q) {
+  return extractNegatedClauses(q).some(clause => NEGATION_TURNS_AFFIRMATIVE_RE.test(clause) && EXECUTION_RE.test(clause));
+}
+
 // Operator desk workflows (canary / preparation packages, letters, scripts,
 // verification tables) produce artifacts; they keep their dedicated handlers.
 const DESK_WORKFLOW_RE =
@@ -167,7 +179,13 @@ function classifyOperationalRead(question, opts = {}) {
   });
   if (!q) return none('empty');
 
-  if (EXECUTION_RE.test(q)) return none('execution_language');
+  // Prohibitions are constraints, not requests: "Do not send messages, assign
+  // prospects, …" must not classify a read as execution. Affirmative execution
+  // language anywhere outside a negated clause still wins, and so does
+  // execution language inside a negated clause that turns affirmative.
+  if (EXECUTION_RE.test(stripNegatedDirectives(q)) || affirmativeExecutionInNegatedClause(q)) {
+    return none('execution_language');
+  }
   if (PERSISTENCE_RE.test(q)) return none('objective_persistence');
   if (DESK_WORKFLOW_RE.test(q)) return none('desk_workflow');
 
