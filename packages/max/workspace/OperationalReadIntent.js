@@ -90,7 +90,7 @@ const EXECUTION_RE = new RegExp(
     String.raw`\b(?:import|upload)\s+(?:these|this|them|the\s+following|my|our|a|the)\b`,
     String.raw`\bstart\s+(?:the\s+)?(?:outreach|campaign|sequence)\b`,
     String.raw`\b(?:create|add|make)\s+(?:a|an|the|new)?\s*(?:task|campaign|mission|sequence|list|follow[- ]?up)\b`,
-    String.raw`\b(?:mark|update|change|set)\s+(?:the\s+|this\s+|that\s+|their\s+)?(?:status|stage|prospect|lead|contact|task)\b`,
+    String.raw`\b(?:mark|update|change|set)\s+(?:the\s+|this\s+|that\s+|their\s+)?(?:review[- ]states?|status|stage|prospect|lead|contact|task)\b`,
     String.raw`\b(?:email|text|call|contact)\s+(?:them|those|these|him|her|each)\b`,
   ].join('|'),
   'i'
