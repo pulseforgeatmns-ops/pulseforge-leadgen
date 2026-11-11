@@ -1,7 +1,9 @@
 name: Setup PostgreSQL Environment
 description: >-
-  SPEC-120 — cached PostgreSQL binary installation for disposable harness tests.
-  Validates runner prerequisites and records environment observability.
+  SPEC-120 — PostgreSQL binaries for disposable harness tests. Uses the runner
+  image's PostgreSQL when pg_config, initdb, pg_ctl and psql validate; falls
+  back to cached apt installation otherwise. Validates runner prerequisites
+  and records environment observability.
 
 inputs:
   stage-file:
@@ -53,26 +55,11 @@ runs:
     - name: Install PostgreSQL binaries
       id: provision
       shell: bash
-      run: |
-        set -euo pipefail
-        CACHE_DIR="${{ runner.temp }}/apt-cache"
-        sudo mkdir -p "$CACHE_DIR"
-        if [ -n "$(ls -A "$CACHE_DIR" 2>/dev/null || true)" ]; then
-          echo "Restoring cached apt archives"
-          sudo cp -a "$CACHE_DIR/." /var/cache/apt/archives/ 2>/dev/null || true
-        fi
-        export DEBIAN_FRONTEND=noninteractive
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq --no-install-recommends postgresql postgresql-client
-        sudo mkdir -p "$CACHE_DIR"
-        sudo cp -a /var/cache/apt/archives/. "$CACHE_DIR/" 2>/dev/null || true
-        bindir="$(pg_config --bindir)"
-        echo "$bindir" >> "$GITHUB_PATH"
-        echo "postgres-source=apt-cached" >> "$GITHUB_OUTPUT"
-        echo "bindir=$bindir" >> "$GITHUB_OUTPUT"
-        echo "PostgreSQL bindir: $bindir"
-        "$bindir/initdb" --version
-        "$bindir/pg_ctl" --version
+      env:
+        CACHE_DIR: ${{ runner.temp }}/apt-cache
+      # Runner-image binaries first (validated pg_config, initdb, pg_ctl,
+      # psql); the previous apt installation is the fallback. See provision.sh.
+      run: bash "${{ github.action_path }}/provision.sh"
 
     - name: Record environment stage duration
       shell: bash
@@ -81,13 +68,14 @@ runs:
         start="${CI_STAGE_START_environment:-$end}"
         duration=$((end - start))
         cache_hit="${{ steps.apt-cache.outputs.cache-hit }}"
+        postgres_source="${{ steps.provision.outputs.postgres-source }}"
         line=$(node -e "console.log(JSON.stringify({
           stage: 'environment',
           durationSeconds: Number(process.argv[1]),
           cacheHit: process.argv[2] === 'true',
-          postgresSource: 'apt-cached',
+          postgresSource: process.argv[3] || 'unknown',
           runnerImage: process.env.ImageOS || 'unknown',
           infrastructureHealth: 'ok'
-        }))" "$duration" "$cache_hit")
+        }))" "$duration" "$cache_hit" "$postgres_source")
         echo "$line" >> "${{ inputs.stage-file }}"
-        echo "Environment stage: ${duration}s (apt cache hit: ${cache_hit})"
+        echo "Environment stage: ${duration}s (source: ${postgres_source}; apt cache hit: ${cache_hit})"

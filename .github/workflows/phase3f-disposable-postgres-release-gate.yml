@@ -67,10 +67,11 @@ jobs:
           node-version: '22'
           cache: npm
       - name: Install PostgreSQL binaries for gated disposable tests
+        id: postgres
+        uses: ./.github/actions/setup-postgres-environment
+      - name: Link PostgreSQL binaries for gated disposable tests
         run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql
-          bindir="$(pg_config --bindir)"
+          bindir="${{ steps.postgres.outputs.bindir }}"
           sudo ln -sf "$bindir/initdb" /usr/local/bin/initdb
           sudo ln -sf "$bindir/pg_ctl" /usr/local/bin/pg_ctl
       - name: Install dependencies

@@ -36,7 +36,7 @@ jobs:
         with:
           node-version: '22'
       - name: Verify CI selection and fail-closed gate contracts
-        run: node --test test/ciPlanPr.test.js
+        run: node --test test/ciPlanPr.test.js test/ciPostgresProvisioning.test.js
       - name: Select CI suites
         id: plan
         run: node .github/scripts/ci-plan-pr.js changed-files.txt --github-output
@@ -84,10 +84,11 @@ jobs:
         with:
           node-version: '22'
       - name: Install disposable PostgreSQL prerequisites
+        id: postgres
+        uses: ./.github/actions/setup-postgres-environment
+      - name: Link disposable PostgreSQL binaries
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y postgresql
-          bindir="$(pg_config --bindir)"
+          bindir="${{ steps.postgres.outputs.bindir }}"
           sudo ln -sf "$bindir/initdb" /usr/local/bin/initdb
           sudo ln -sf "$bindir/pg_ctl" /usr/local/bin/pg_ctl
       - run: npm ci
@@ -309,10 +310,7 @@ jobs:
           node-version: '22'
       - run: npm ci
       - name: Install disposable PostgreSQL binaries
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql
-          echo "$(pg_config --bindir)" >> "$GITHUB_PATH"
+        uses: ./.github/actions/setup-postgres-environment
       - run: node --test test/walkthroughNotification.test.js test/walkthroughNotificationPostgres.test.js
       - run: node --test --test-name-pattern='walkthrough' test/walkthroughRoutes.test.js
 

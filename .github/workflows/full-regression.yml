@@ -72,12 +72,11 @@ jobs:
           node-version: '22'
           cache: npm
       - if: matrix.postgres == true
+        id: postgres
         uses: ./.github/actions/setup-postgres-environment
       - if: matrix.postgres == true && matrix.docker == 'signal'
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y postgresql
-          bindir="$(pg_config --bindir)"
+          bindir="${{ steps.postgres.outputs.bindir }}"
           sudo ln -sf "$bindir/initdb" /usr/local/bin/initdb
           sudo ln -sf "$bindir/pg_ctl" /usr/local/bin/pg_ctl
       - run: npm ci --ignore-scripts
