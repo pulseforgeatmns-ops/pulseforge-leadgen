@@ -106,6 +106,8 @@ test('conflicting amounts, unsupported amount formats and unknown security do no
   assert.ok(r.items.every(i => i.priority === null)); assert.match(r.prose, /Conflicting or unparsed/);
   assert.equal(recordedDetails('Financing request: $12k').amount, null);
   assert.equal(recordedDetails('Security position: unknown').count, 0);
+  const blankStage = recordedDetails('Deal stage:   \nSecurity position: first lien claimed');
+  assert.equal(blankStage.count, 1); assert.equal(blankStage.values.stage, undefined);
 });
 test('deterministic order and stable fingerprints are independent of input and object key order', () => {
   const rows = fixture(); assert.deepEqual(answerFor(rows).items, answerFor([...rows].reverse()).items);

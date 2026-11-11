@@ -36,10 +36,10 @@ function recordedDetails(notes) {
   const values = {};
   const conflicts = [];
   for (const [key, labels] of Object.entries(LABELS)) {
-    const regex = new RegExp(`(?:^|[;\\n])\\s*(?:${labels.join('|')}):\\s*([^;\\n]+)`, 'gi');
+    const regex = new RegExp(`(?:^|[;\\n])[ \\t]*(?:${labels.join('|')}):[ \\t]*([^;\\n]+)`, 'gi');
     const allClaims = String(notes || '').replace(/^(?:Fit evidence|Risks):\s*/gmi, '');
-    const allMatches = [...allClaims.matchAll(regex)].map(m => clean(m[1]));
-    const matches = [...input.matchAll(regex)].map(m => clean(m[1]));
+    const allMatches = [...allClaims.matchAll(regex)].map(m => clean(m[1])).filter(Boolean);
+    const matches = [...input.matchAll(regex)].map(m => clean(m[1])).filter(Boolean);
     const unique = [...new Set(matches)];
     if (new Set(allMatches).size > 1) { conflicts.push(key); continue; }
     if (unique.length === 1 && !/\b(?:unknown|unclear|missing|not recorded|not known|not verified|unverified|none|no|TBD|to be determined)\b/i.test(unique[0])) values[key] = unique[0];
