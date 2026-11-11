@@ -76,7 +76,7 @@ function evaluate(row) {
       !ready ? 'Verify missing information before proposing outreach.' :
         'Propose an operator review of the recorded contact channel and notes before any outreach; separate authorization is required.' };
 }
-function composeRecords(bundle, read) {
+function composeRecords(bundle, read, { businessUnderstanding } = {}) {
   const result = bundle.prospects?.records;
   if (!result) return null; // Legacy/injected count-only loaders keep their disclosure.
   const status = result.status;
@@ -96,6 +96,10 @@ function composeRecords(bundle, read) {
     candidates.push(evaluate(row));
   }
   candidates.sort((a, b) => a.id.localeCompare(b.id));
+  const investigation = require('./ProspectInvestigationPriority');
+  if (investigation.shouldCompose(read, candidates)) {
+    return investigation.composeInvestigation(bundle, read, candidates, duplicates, businessUnderstanding);
+  }
   const filtered = read.reviewState ? candidates.filter(c => c.review === read.reviewState) : candidates;
   const eligible = filtered.filter(c => c.eligible);
   const rankable = read.wantsRanking && !duplicates && !result.after && result.complete === true && eligible.length > 0 && eligible.every(c => c.ready);

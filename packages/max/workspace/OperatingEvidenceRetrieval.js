@@ -1684,7 +1684,7 @@ function composeOperatingEvidenceAnswer(question, bundle, extras = {}) {
     extras.operationalRead &&
     require('./OperationalReadIntent').operationalReadFocusedEvidenceEnabled()
   ) {
-    return composeOperationalReadAnswer(question, bundle, extras.operationalRead);
+    return composeOperationalReadAnswer(question, bundle, extras.operationalRead, extras);
   }
 
   const {
@@ -2061,6 +2061,8 @@ function operatingStructured(answer, extras = {}) {
           sourceKind: item.sourceKind,
           recordRef: item.recordRef,
           recordId: item.recordId,
+          recordFingerprint: item.recordFingerprint,
+          recordedClaims: item.recordedClaims,
           priority: item.priority,
           limitations: item.limitations,
           retrievalStatus: item.retrievalStatus,
@@ -2107,6 +2109,7 @@ function operatingStructured(answer, extras = {}) {
       cognitiveMode: extras.cognitiveMode || 'retrieval',
       retrievalBeforeDelegation: true,
       recordIntelligence: extras.recordIntelligence === true,
+      investigationPriority: extras.investigationPriority || null,
       operatingEvidenceRetrieval: true,
       evidenceGroundedRecommendation: extras.recommend === true,
       claimChallenge: extras.claimChallenge === true,
@@ -2336,9 +2339,9 @@ const SOURCE_LABELS = Object.freeze({
   activity: 'touchpoints and setter activity log',
 });
 
-function composeOperationalReadAnswer(question, bundle, read) {
+function composeOperationalReadAnswer(question, bundle, read, extras = {}) {
   if (require('./ProspectRecordIntelligence').requested({ operationalRead: read })) {
-    const records = require('./ProspectRecordIntelligence').composeRecords(bundle, read);
+    const records = require('./ProspectRecordIntelligence').composeRecords(bundle, read, extras);
     if (records) return records;
   }
   const objects = (read && Array.isArray(read.objects) && read.objects.length)

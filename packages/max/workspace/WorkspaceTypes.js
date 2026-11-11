@@ -64,6 +64,7 @@ function buildResponseMetadata(partial = {}) {
   if (partial.sourceStatuses && typeof partial.sourceStatuses === 'object') {
     meta.sourceStatuses = { ...partial.sourceStatuses };
   }
+  if (partial.investigationPriority) meta.investigationPriority = partial.investigationPriority;
   if (partial.recordIntelligence === true) meta.recordIntelligence = true;
   if (partial.operationalRead && typeof partial.operationalRead === 'object') {
     meta.operationalRead = { ...partial.operationalRead };
@@ -433,6 +434,8 @@ function normalizeEvidenceRef(ref) {
     layer: ref.layer != null ? String(ref.layer) : null,
     recordRef: ref.recordRef != null ? String(ref.recordRef) : null,
     recordId: ref.recordId != null ? String(ref.recordId) : null,
+    recordFingerprint: ref.recordFingerprint || null,
+    recordedClaims: ref.recordedClaims || null,
     retrievalStatus: ref.retrievalStatus || null,
     priority: ref.priority || null,
     limitations: Array.isArray(ref.limitations) ? ref.limitations.map(String) : [],
