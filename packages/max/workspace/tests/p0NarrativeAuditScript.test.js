@@ -94,7 +94,7 @@ test('read-only: READ ONLY transaction verified, guarded statements, always roll
   }, release() { released++; } };
   const out = []; const code = await audit.main({ pool: { connect: async () => client }, out: s => out.push(s), deps: blueprintDeps(), argv: [] });
   assert.equal(code, 0, out.join('\n'));
-  assert.equal(statements[0], 'BEGIN TRANSACTION READ ONLY'); assert.equal(statements[1], 'SHOW transaction_read_only');
+  assert.equal(statements[0], 'BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY'); assert.equal(statements[1], 'SHOW transaction_read_only');
   assert.equal(statements.at(-1), 'ROLLBACK'); assert.equal(released, 1);
   assert.ok(!statements.some(s => /^\s*(insert|update|delete|create|alter|drop|truncate)\b/i.test(s)));
   assert.match(out[0], /READ ONLY transaction, rolled back/);

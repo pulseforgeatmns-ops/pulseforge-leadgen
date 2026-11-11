@@ -5,24 +5,11 @@
 require('./workspaceTestHarness');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const audit = require('../../../../scripts/investigationNarrativeAudit');
-const { deriveBlueprintCompatibility } = require('../../../../lib/canonicalProjection');
 const { extractDealClaims } = require('../ProspectDealClaims');
 
-test('diagnostic: the audit guard rejects the canonical projection\'s own BEGIN READ ONLY, so CANONICAL_PROJECTION_FAILURE is produced before any database read', async () => {
-  const reachedDb = [];
-  const boundary = { reads: 0, writesBlocked: 0 };
-  const conn = audit.guardedConnection({ query: async sql => { reachedDb.push(sql); return { rows: [] }; } }, boundary);
-  const facts = await deriveBlueprintCompatibility({ tenant_id: 't', snapshot_id: 's', pool: conn });
-  // Current behaviour (the defect): the projection reports UNAVAILABLE because
-  // the guard threw on BEGIN; getApprovedClientBlueprint turns that into
-  // CANONICAL_PROJECTION_FAILURE. No canonical data was ever queried, so the
-  // audit's Blueprint result says nothing about the production Blueprint.
-  assert.equal(facts._projection_metadata.completeness, 'UNAVAILABLE');
-  assert.equal(facts._projection_metadata.error, 'operational_inspection_read_only_violation');
-  assert.deepEqual(reachedDb, []);
-  assert.equal(boundary.writesBlocked, 2); // its BEGIN READ ONLY, then its cleanup ROLLBACK
-});
+// The first root cause (the guard rejecting the canonical projection's own
+// BEGIN READ ONLY / ROLLBACK, producing CANONICAL_PROJECTION_FAILURE before any
+// read) is fixed by savepoint-based nesting; see p0NarrativeAuditTransactions.
 
 test('diagnostic: "in rehab funds" is currently misread as a deal stage (false positive found while probing amount phrasing)', () => {
   const d = extractDealClaims('Fit evidence: $35K in rehab funds needed.');
