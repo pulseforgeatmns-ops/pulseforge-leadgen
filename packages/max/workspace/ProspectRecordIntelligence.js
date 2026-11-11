@@ -105,6 +105,10 @@ function composeRecords(bundle, read, extras = {}) {
     candidates.push(evaluate(row));
   }
   candidates.sort((a, b) => a.id.localeCompare(b.id));
+  const investigation = require('./ProspectInvestigationPriority');
+  if (investigation.shouldCompose(read, candidates)) {
+    return investigation.composeInvestigation(bundle, read, candidates, duplicates, businessUnderstanding);
+  }
   const filtered = read.reviewState ? candidates.filter(c => c.review === read.reviewState) : candidates;
   const eligible = filtered.filter(c => c.eligible);
   const rankable = read.wantsRanking && !duplicates && !result.after && result.complete === true && eligible.length > 0 && eligible.every(c => c.ready);

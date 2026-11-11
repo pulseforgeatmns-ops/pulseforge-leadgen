@@ -90,7 +90,7 @@ const EXECUTION_RE = new RegExp(
     String.raw`\b(?:import|upload)\s+(?:these|this|them|the\s+following|my|our|a|the)\b`,
     String.raw`\bstart\s+(?:the\s+)?(?:outreach|campaign|sequence)\b`,
     String.raw`\b(?:create|add|make)\s+(?:a|an|the|new)?\s*(?:task|campaign|mission|sequence|list|follow[- ]?up)\b`,
-    String.raw`\b(?:mark|update|change|set)\s+(?:the\s+|this\s+|that\s+|their\s+)?(?:status|stage|prospect|lead|contact|task)\b`,
+    String.raw`\b(?:mark|update|change|set)\s+(?:the\s+|this\s+|that\s+|their\s+)?(?:review[- ]states?|status|stage|prospect|lead|contact|task)\b`,
     String.raw`\b(?:email|text|call|contact)\s+(?:them|those|these|him|her|each)\b`,
   ].join('|'),
   'i'
@@ -187,6 +187,9 @@ function classifyOperationalRead(question, opts = {}) {
       reviewState: opts.session.context.lastOperationalRead.reviewState || null,
       wantsRecordList: false,
       wantsRanking: true,
+      reviewState: opts.session?.context?.lastOperationalRead?.reviewState || null,
+      priorityMode: opts.session?.context?.lastOperationalRead?.investigationRanking ? 'investigation' : null,
+      previousRanking: opts.session?.context?.lastOperationalRead?.investigationRanking || null,
     };
   }
 
@@ -218,7 +221,7 @@ function classifyOperationalRead(question, opts = {}) {
   // Advisory "should we" without any existing-record anchor stays advisory.
   if (
     /\b(?:should\s+(?:we|i)|would\s+you\s+recommend|do\s+you\s+recommend)\b/i.test(q) &&
-    !tenantAnchored
+    !tenantAnchored && !(stateAnchored && RANKING_RE.test(q))
   ) {
     return none('advisory_without_records');
   }
@@ -234,6 +237,14 @@ function classifyOperationalRead(question, opts = {}) {
     wantsRecordList: RECORD_LIST_RE.test(q),
     wantsRanking: RANKING_RE.test(q),
   };
+}
+
+function explicitTopCount(q) {
+  const match = q.match(/\b(?:top|best)\s+(\d+|one|two|three|four|five|six|ten)\b/i) ||
+    q.match(/\b(\d+|one|two|three|four|five|six|ten)\s+highest[- ]priority\b/i);
+  if (!match) return null;
+  const words = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, ten: 10 };
+  return Math.max(1, Number(words[match[1].toLowerCase()] || match[1]));
 }
 
 function isOperationalReadRequest(question, opts = {}) {
