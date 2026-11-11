@@ -427,7 +427,7 @@
   "escalationRules": [
     {
       "id": "ci-workflows",
-      "paths": [".github/workflows/", ".github/ci/", ".github/scripts/ci-plan-pr.js"],
+      "paths": [".github/workflows/", ".github/actions/", ".github/ci/", ".github/scripts/ci-plan-pr.js"],
       "suites": [
         "global",
         "signal-v1",
