@@ -60,14 +60,21 @@ test('eligibility, qualification and priority are independent; review-derived sc
 });
 test('complete evidence ranks eligible records, includes all boundary ties and traceable calculations', () => {
   const r = composeRecords(bundle(fixtures()), rank);
-  assert.equal(r.items.length, 6); assert.ok(r.items.every(i => i.recordRef && i.priority?.epistemic === 'calculated'));
-  assert.ok(r.items.every(i => ![id(19), id(7)].includes(i.recordId)));
+  // Investigation candidates include qualify_first records (read-only
+  // analysis); the held record is excluded. Outreach order stays limited to
+  // the six eligible contact_now records.
+  assert.equal(r.items.length, 18); assert.ok(r.items.every(i => i.recordRef));
+  assert.ok(r.items.every(i => i.recordId !== id(19)));
+  const outreach = r.items.filter(i => i.priority);
+  assert.equal(outreach.length, 6); assert.ok(outreach.every(i => i.priority.epistemic === 'calculated'));
+  assert.equal(r.items.find(i => i.recordId === id(7)).priority, null);
+  assert.equal(r.items.find(i => i.recordId === id(7)).outreachAuthorization, 'blocked');
 });
 test('incomplete evidence returns unranked candidates with specific missing fields', () => {
   const rows = fixtures(); rows[0].source = null; rows[0].first_name = null; rows[0].last_name = null;
   rows[0].acquisition_metadata.category = null; rows[0].notes = null;
   const r = composeRecords(bundle(rows), rank);
-  assert.ok(r.items.every(i => i.priority === null)); assert.match(r.prose, /Unranked candidates/);
+  assert.ok(r.items.every(i => i.priority === null)); assert.match(r.prose, /No investigation order is given/);
   assert.match(r.prose, /source attribution/); assert.match(r.prose, /source: not recorded/);
 });
 test('duplicate IDs suppressed; distinct same-name records retained; ordering deterministic', () => {
@@ -99,8 +106,10 @@ test('citation detail, stable reference, limitations and calculation survive res
   const p = await presenter.present(s);
   assert.equal(p.prose, composed.prose);
   for (const ev of p.structured.supportingEvidence) {
-    assert.ok(ev.detail.length > 20); assert.ok(ev.recordRef); assert.equal(ev.priority.epistemic, 'calculated');
+    assert.ok(ev.detail.length > 20); assert.ok(ev.recordRef);
+    if (ev.priority) assert.equal(ev.priority.epistemic, 'calculated');
   }
+  assert.equal(p.structured.supportingEvidence.filter(ev => ev.priority?.epistemic === 'calculated').length, 6);
 });
 test('default operating loader reuses pool and leaves aggregate-count requests unchanged', async () => {
   const fake = poolFor(fixtures());

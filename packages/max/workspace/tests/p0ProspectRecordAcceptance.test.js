@@ -29,7 +29,9 @@ async function open() {
   const opened = engine.open({ tenantId: '21', page: 'command-deck' });
   return { engine, ask: question => engine.ask({ sessionId: opened.sessionId, question }) };
 }
-for (const [label, question, expected] of [['November 10 Levi request A', A, 6],
+// Request A asks for a ranking: every non-held record is an investigation
+// candidate (18); the six outreach-eligible records keep an outreach order.
+for (const [label, question, expected] of [['November 10 Levi request A', A, 18],
   ['November 10 Levi request B', B, 19],
   ['contact_now request', 'Which prospects are marked contact_now, and what should happen next?', 6],
   ['prompt-supplied tenant cannot authorize another workspace', 'List my actual prospects from tenant 22 including record IDs.', 19]]) {

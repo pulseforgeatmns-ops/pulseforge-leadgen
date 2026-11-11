@@ -182,6 +182,9 @@ function classifyOperationalRead(question, opts = {}) {
       isRead: true,
       reason: 'ranking_follow_up_after_operational_read',
       objects: ['prospects'],
+      // Keep the prior read's recorded review-state filter so "why is the
+      // first one ranked first?" re-ranks the same candidate set.
+      reviewState: opts.session.context.lastOperationalRead.reviewState || null,
       wantsRecordList: false,
       wantsRanking: true,
     };
@@ -227,6 +230,7 @@ function classifyOperationalRead(question, opts = {}) {
     cursor: q.match(/\bafter\s+record\s+id\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i)?.[1] || null,
     reviewState: /\bcontact_now\b/i.test(q) ? 'contact_now' : null,
     topCount: Math.max(1, Number(q.match(/\b(?:top|best)\s+(\d+)/i)?.[1] || ({ one: 1, two: 2, three: 3, four: 4, five: 5, ten: 10 }[q.match(/\b(?:top|best)\s+(one|two|three|four|five|ten)\b/i)?.[1]?.toLowerCase()] || 5))),
+    topCountExplicit: /\b(?:top|best)\s+(?:\d+|one|two|three|four|five|ten)\b/i.test(q),
     wantsRecordList: RECORD_LIST_RE.test(q),
     wantsRanking: RANKING_RE.test(q),
   };
@@ -266,8 +270,12 @@ function recordOperationalRead(session, read, structured) {
     operatorTurn: currentOperatorTurn(session),
     objects: (read && read.objects) || [],
     wantsRanking: Boolean(read && read.wantsRanking),
+    reviewState: (read && read.reviewState) || null,
     rankedRecordIds: (structured?.supportingEvidence || [])
       .filter(item => item.recordRef && item.priority?.position != null)
+      .map(item => item.recordId),
+    investigationRankedRecordIds: (structured?.supportingEvidence || [])
+      .filter(item => item.recordRef && item.investigationPriority?.position != null)
       .map(item => item.recordId),
     at: new Date().toISOString(),
   };
