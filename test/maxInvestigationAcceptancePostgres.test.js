@@ -39,6 +39,9 @@ const { createMemoryStore, startClientInterview, postInterviewMessage, approveBl
 const { QUESTION } = require('../packages/max/workspace/tests/fixtures/investigationProspects');
 const { EXTRACTOR } = require('../packages/max/workspace/ProspectDealClaims');
 const { PRODUCTION_INVESTIGATION_PROMPT } = require('../packages/max/workspace/tests/fixtures/productionInvestigationPrompt');
+const amo = require('../packages/acquisition-mission');
+const AmoApproval = require('../packages/max/workspace/AmoOperatorApproval');
+const { liveScoutStub } = require('../packages/max/workspace/tests/amoTestRuntime');
 
 const AUDIT_PHRASE = 'Current waterfront flip has an executed $260,000 purchase contract';
 const COHORT = [
@@ -242,6 +245,77 @@ test('the exact production investigation prompt, fresh and after a previous Work
     assert.equal(engine.sessions.get(continued).executionDomain, 'workspace');
 
     assert.ok(statements.length > 0);
+    for (const sql of statements) assert.match(sql.trim(), /^(?:SELECT|WITH)\b/i, `non-read statement: ${sql.slice(0, 80)}`);
+    assert.equal(await snapshot(db), before, 'database unchanged');
+    assert.deepEqual(blocked, [], 'no network beyond the disposable database');
+  } finally {
+    await db.end();
+    await postgres.stop();
+  }
+});
+
+// P0 (production 2026-11-10 17:04): with an execution approval pending, short
+// operational reads ("brief me on my prospects") were captured by the pending
+// decision and answered with the approval card. They now reach the read
+// handler over the real prospect SQL; the decision stays pending, unchanged.
+test('operational reads while an execution approval is pending, on disposable PostgreSQL', { timeout: 180000 }, async () => {
+  const postgres = await startDisposablePostgres('max-pending-decision-read-');
+  allowedPort = Number(postgres.port);
+  const db = new Pool({ connectionString: postgres.connectionString });
+  try {
+    await schema(db);
+    await importReviewOnlyContacts(COHORT.map((c, i) => input(c, i)), { clientId: 21, db, actorId: null });
+    await importReviewOnlyContacts([input(['Foreign Example', 'FOREIGN_SECRET requesting $99k with a first lien.'], 9)], { clientId: 22, db, actorId: null });
+    const before = await snapshot(db);
+    const tenantIds = (await db.query('SELECT id FROM prospects WHERE client_id = 21 ORDER BY id')).rows.map(r => r.id);
+
+    // Tenant 21 mission at execution_approval (in-memory AMO runtime).
+    const missions = amo.createAcquisitionMissionEngine();
+    const mission = missions.create({ tenantId: '21', objective: 'Acquire recurring commercial cleaning clients in Greater Manchester.', targetSegment: 'Facility buyers' });
+    const g = () => missions.get(mission.id, '21');
+    await AmoApproval.advancePlanAfterApproval({ engine: missions, mission, tenantId: '21', question: 'Approved.' });
+    await AmoApproval.advanceDiscoveryAfterApproval({ engine: missions, mission, tenantId: '21', question: 'Approved. Begin Discovery.', runScout: liveScoutStub });
+    await AmoApproval.advancePrioritizationAfterApproval({ engine: missions, mission: g(), tenantId: '21', question: 'Approved prioritization.' });
+    await AmoApproval.advanceMaxPrioritization({ engine: missions, mission: g(), tenantId: '21', allowFixtureFallback: true });
+    await AmoApproval.advanceAcquisitionApproach({ engine: missions, mission: g(), tenantId: '21', allowFixtureFallback: true });
+    await AmoApproval.advancePaigeVariants({ engine: missions, mission: g(), tenantId: '21', allowFixtureFallback: true, question: 'Generate variants.' });
+    await AmoApproval.advanceEmmettCapacity({ engine: missions, mission: g(), tenantId: '21', allowFixtureFallback: true, question: 'Plan capacity.' });
+    assert.equal(g().pendingOperatorDecision.kind, 'execution_approval');
+    const missionBefore = JSON.stringify(g());
+
+    const statements = [];
+    const recording = { query: (sql, params) => { statements.push(String(sql.text || sql)); return db.query(sql, params); } };
+    const store = await approvedBlueprintWithoutRange();
+    const unknown = async () => ({ available: false, reason: 'acceptance_fixture_not_recorded' });
+    const opts = Object.fromEntries(['loadCampaignAo', 'loadScout', 'loadMissions', 'loadObjectives', 'loadActivity',
+      'loadOutcomes', 'loadOperatorAttested', 'loadCapability'].map(n => [n, unknown]));
+    const engine = createWorkspaceEngine({ disableLlm: true, missionsEnabled: true, resolverEnabled: true,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: missions }),
+      clientIntelligenceOpts: { store }, operatorObjectiveOpts: { store: createObjectiveMemoryStore() },
+      operatingEvidenceOpts: { ...opts, pool: recording } });
+
+    for (const q of ['brief me on my prospects', 'Brief me on my prospects.', 'show me my prospects']) {
+      const { sessionId } = engine.open({ tenantId: '21', page: 'command-deck' });
+      const session = engine.sessions.get(sessionId);
+      session.context.missionId = mission.id;
+      session.context.acquisitionMissionId = mission.id;
+      const r = await engine.ask({ sessionId, question: q });
+      assert.equal(r.workspaceOwnership.owner, 'knowledge_retrieval', q);
+      assert.equal(r.workspaceOwnership.reason, 'operational_read', q);
+      assert.equal(r.workspaceOwnership.pendingDecisionPreserved, true, q);
+      assert.equal(r.executionDomain, 'workspace', q);
+      assert.doesNotMatch(r.prose, /didn't catch a clear yes or no|Execution Ready|Authorize external execution/i, q);
+      // Prospects come from the tenant-21 rows in PostgreSQL, nothing foreign.
+      const listed = [...r.prose.matchAll(/\[prospect:21:([0-9a-f-]{36})\]/g)].map(m => m[1]).sort();
+      assert.ok(/6 existing prospects/.test(r.prose) || JSON.stringify(listed) === JSON.stringify(tenantIds), `${q}: tenant-21 prospects retrieved`);
+      assert.doesNotMatch(JSON.stringify(r), /FOREIGN_SECRET|prospect:22:|\$99k/, q);
+      assert.match(r.prose, /No action was executed|No (?:writes, )?emails, calls, assignments/, q);
+      // The pending decision is unresolved and byte-identical.
+      assert.equal(JSON.stringify(g()), missionBefore, q);
+    }
+
+    assert.ok(statements.length > 0);
+    assert.ok(statements.some(sql => /FROM prospects/i.test(sql)), 'real prospect SQL ran');
     for (const sql of statements) assert.match(sql.trim(), /^(?:SELECT|WITH)\b/i, `non-read statement: ${sql.slice(0, 80)}`);
     assert.equal(await snapshot(db), before, 'database unchanged');
     assert.deepEqual(blocked, [], 'no network beyond the disposable database');

@@ -380,3 +380,28 @@ The shared negation helper, the extractor, the ranking, the Blueprint criteria, 
 - `test/maxInvestigationAcceptancePostgres.test.js`: a second test runs the exact production prompt through `WorkspaceEngine.ask` on disposable PostgreSQL, both in a fresh session and after a previous Workspace turn. It checks for six records ranked 1, 2, 2, 4, 5, 5, recorded-unverified claims, the financing-fit limitations, six outreach-blocked records, domain `workspace` with no switch message, SELECT-only statements, an unchanged database and no network access.
 - Both new files fail on `main` without the correction.
 - The prompt is stored verbatim in `tests/fixtures/productionInvestigationPrompt.js`.
+
+### Operational reads while an execution approval is pending (Nov 11 2026)
+
+**Evidence.** In production at 2026-11-10 17:04 UTC (tenant 10, with an execution approval pending), "brief me on my prospects" was routed to `active_mission` / `pending_decision_turn_ownership`. Replaying it on `main` (`3b57e31`) shows the same capture. Max replied "I didn't catch a clear yes or no for the pending decision" and showed the execution card again. No prospects were retrieved.
+
+**Root cause.** `PendingDecisionResolver` scores short imperatives such as "brief me on my prospects", "Brief me on my prospects." and "show me my prospects" as `ambiguous` (`ambiguous_short_response`). Under SPEC-202, an ambiguous reply keeps the turn with the pending decision. In `WorkspaceOwnershipResolver` that check runs before the operational-read claim.
+
+**Correction.** In `WorkspaceOwnershipResolver.js`, while a decision is pending, an operational read now takes the turn only when the message carries no decision signal. All of these must hold:
+- the resolver outcome is exactly `ambiguous`, with no requested-action mismatch;
+- there is no approval, execution or cancellation wording, affirmative or negated (`classifyAuthorizationPolarity`);
+- there is no explicit decision or filler word (yes/no/reject/hold/wait/later/pause/not yet/ok/sure/maybe/…);
+- `claimsOperationalRead` claims the turn, which already rejects affirmative execution language.
+
+The read returns `pendingDecisionPreserved: true`. The read path never resolves, consumes or advances the decision.
+
+Unchanged: approvals, rejections, genuine ambiguity, deferrals and mixed requests ("Yes, brief me…", "Approve it and brief me…", "…then go ahead", "…and send the approved emails") all keep approval handling. The shared negation behaviour, narrative extraction, investigation ranking, Google Ads routing and execution permissions are not touched.
+
+**Tests.**
+- `packages/max/workspace/tests/p0OperationalReadPendingDecision.test.js`:
+  - the resolver-level decision matrix;
+  - the three reads with a real AMO mission at `execution_approval`, checking that prospects are retrieved and the mission is byte-identical afterwards;
+  - approval, rejection, ambiguous and mixed requests keeping approval handling;
+  - another tenant's pending decision never redirecting a read.
+- The third test in `test/maxInvestigationAcceptancePostgres.test.js` runs the same reads on disposable PostgreSQL through the real prospect SQL. It checks that only tenant-21 records come back, no foreign record appears, the decision is unchanged, all SQL is SELECT, the database is unchanged and there is no network access.
+- The read tests fail on `main` without the correction. The approval-handling and isolation tests pass both before and after.
