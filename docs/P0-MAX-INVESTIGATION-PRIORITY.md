@@ -291,3 +291,53 @@ The warning stays if any cue touches the claimed amount (`requesting $35,000 for
 Tests: `packages/max/workspace/tests/p0NarrativeExecutedContract.test.js`. It covers the verbatim audit phrase and adversarial near-matches (historical, unsigned/proposed, negated, unrelated). It also runs full-record extraction through the real `importReviewOnlyContacts` INSERT and `ProspectRecordIntelligence.loadRecords` read, using an in-memory pool. Jon's record then has stage and exit recorded, no financing request, and no stage review finding; each near-match record keeps stage absent and still raises the missed-claim review. The attribution cases cover both directions.
 
 Unchanged: financing range policy, ranking thresholds, Blueprint criteria, tenant isolation, outreach authorization and rollback flags.
+
+### P0 acceptance verification at `491f7b70` (v5)
+
+**Production audit (operator-run, read-only, tenant 21), as reported by the operator:**
+- Six of six review-only `contact_now` records were retrieved.
+- Coverage: Zackary 3/5, Raul 2/5, Jon 2/5 (including the executed $260,000 purchase contract), Reginald 1/5, John 0/5, David 0/5.
+- No purchase price, rehab budget or ARV was promoted to a financing request.
+- The approved canonical Blueprint is available, but it has no recognized numeric financing range.
+- The read-only transaction completed with no writes or outreach.
+- The v4 false-positive warning on Zackary's `$35,000` request no longer appears.
+- Four records are reported with `possible_missed_claim`. By the script's definition the audit is therefore `FAIL`. The PASS rule is not changed, and no warning is suppressed. Each finding needs an individual disposition, recorded below once the redacted REVIEW lines are reviewed.
+
+**Disposition rules for missed-claim findings.**
+
+An *acceptable abstention* is a cue that the extractor deliberately does not promote:
+- amounts that are budgets, purchase prices, contract prices, ARVs or values;
+- generic strategy terms with no exit wording (`BRRRR investor`);
+- closing words that refer to past deals (`closed on 12 deals`);
+- exit or refinance timelines;
+- negated, hedged or historical statements.
+
+A *defect* is an explicit, current, deal-specific statement in Fit evidence, stated in a form the policy says should count, that the extractor misses (as Jon's contract was in v4).
+
+**Isolated end-to-end Max verification:** `test/maxInvestigationAcceptancePostgres.test.js`. The test:
+- Starts a disposable PostgreSQL 16 database. No production access is used.
+- Imports six tenant-21 records through the real `importReviewOnlyContacts`, plus one foreign tenant-22 record.
+- Records reproduce the audited coverage pattern 3/2/2/1/0/0 with synthetic text. Jon's sentence is the audit phrase verbatim.
+- Uses an approved Blueprint with no numeric range.
+- Runs `WorkspaceEngine.ask` with the original production prompt, the short investigation prompt and the "why first" follow-up.
+- Uses the real default prospect loader, both the aggregate SQL and the `loadRecords` keyset SQL.
+- Allows network access only to the disposable database. HTTP(S), fetch, TLS and DNS are denied.
+
+It asserts:
+- the exact six IDs, with the foreign record absent;
+- order by coverage, positions 1, 2, 2, 4, 5, 5;
+- every claim is `recorded_unverified`, and exact source sentences appear in the prose;
+- no within/outside-range conclusion: five records say "comparison unavailable", and the range record says the fit "cannot be assessed";
+- six "Outreach eligibility: blocked" lines;
+- `executed`, `specialistDelegated` and `delegated` are false;
+- every SQL statement Max sent was a SELECT;
+- the full `prospects` and `companies` tables are byte-identical before and after.
+
+The same synthetic cohort, run through the audit classifier, produces four records with `possible_missed_claim`, all acceptable abstentions: Raul's rehab budget, Jon's contract price, and generic BRRRR wording for Reginald and John. This shows the pattern but does not stand in for reviewing the real findings.
+
+**Limitation.** Production runs `main`, which does not contain this PR, so the production Max response path cannot exercise v5 until deployment is approved. The remaining acceptance test is steps 1–8 of the "Production acceptance procedure" above, run in an authorized tenant-21 session after deployment.
+
+**Follow-ups (separately scoped, not in this PR):**
+1. Zero-evidence ranking presentation: records with 0/5 claims receive a shared last position (`Investigation position 5`), which implies an ordering with no evidence behind it. They should be listed as "not ranked: no recorded deal claims".
+2. Exit-plan display casing: the raw value is shown (`exit plan: Sale`) rather than the normalized value (`sale`).
+3. The audit hypothesis list does not name contract prices (`$260,000 purchase contract`) as a non-request amount context. The confirmed fact (`no_pattern_matches_sentence`) is still reported.
