@@ -367,6 +367,7 @@ async function maybeHandleOperatingEvidenceTurn(input, question, mode) {
   const structured = attachContractMetadata(
     operatingStructured(composed.prose, {
       recordIntelligence: composed.recordIntelligence === true,
+      investigationPriority: composed.investigationPriority || null,
       used: composed.used,
       items: composed.items || bundle.items || [],
       cognitiveMode: mode.kind,
@@ -381,6 +382,7 @@ async function maybeHandleOperatingEvidenceTurn(input, question, mode) {
       operationalRead: operationalRead
         ? {
             reason: operationalRead.reason,
+            reviewState: operationalRead.reviewState || null,
             objects: operationalRead.objects,
             wantsRecordList: Boolean(operationalRead.wantsRecordList),
             wantsRanking: Boolean(operationalRead.wantsRanking),

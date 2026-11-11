@@ -184,6 +184,9 @@ function classifyOperationalRead(question, opts = {}) {
       objects: ['prospects'],
       wantsRecordList: false,
       wantsRanking: true,
+      reviewState: opts.session?.context?.lastOperationalRead?.reviewState || null,
+      priorityMode: opts.session?.context?.lastOperationalRead?.investigationRanking ? 'investigation' : null,
+      previousRanking: opts.session?.context?.lastOperationalRead?.investigationRanking || null,
     };
   }
 
@@ -215,7 +218,7 @@ function classifyOperationalRead(question, opts = {}) {
   // Advisory "should we" without any existing-record anchor stays advisory.
   if (
     /\b(?:should\s+(?:we|i)|would\s+you\s+recommend|do\s+you\s+recommend)\b/i.test(q) &&
-    !tenantAnchored
+    !tenantAnchored && !(stateAnchored && RANKING_RE.test(q))
   ) {
     return none('advisory_without_records');
   }
@@ -225,11 +228,21 @@ function classifyOperationalRead(question, opts = {}) {
     reason: 'operational_read',
     objects,
     cursor: q.match(/\bafter\s+record\s+id\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i)?.[1] || null,
-    reviewState: /\bcontact_now\b/i.test(q) ? 'contact_now' : null,
-    topCount: Math.max(1, Number(q.match(/\b(?:top|best)\s+(\d+)/i)?.[1] || ({ one: 1, two: 2, three: 3, four: 4, five: 5, ten: 10 }[q.match(/\b(?:top|best)\s+(one|two|three|four|five|ten)\b/i)?.[1]?.toLowerCase()] || 5))),
+    reviewState: q.match(/\b(contact_now|qualify_first|hold|reject)\b/i)?.[1]?.toLowerCase() || null,
+    topCount: explicitTopCount(q),
+    priorityMode: /\boutreach priority\b|\brank.*outreach[- ]eligible/i.test(q) ? 'outreach' :
+      /\binvestigat|\banalyt|\bfinanc|\bfunded transaction|\bdeal readiness|\bsecurity position/i.test(q) ? 'investigation' : null,
     wantsRecordList: RECORD_LIST_RE.test(q),
     wantsRanking: RANKING_RE.test(q),
   };
+}
+
+function explicitTopCount(q) {
+  const match = q.match(/\b(?:top|best)\s+(\d+|one|two|three|four|five|six|ten)\b/i) ||
+    q.match(/\b(\d+|one|two|three|four|five|six|ten)\s+highest[- ]priority\b/i);
+  if (!match) return null;
+  const words = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, ten: 10 };
+  return Math.max(1, Number(words[match[1].toLowerCase()] || match[1]));
 }
 
 function isOperationalReadRequest(question, opts = {}) {
@@ -266,6 +279,12 @@ function recordOperationalRead(session, read, structured) {
     operatorTurn: currentOperatorTurn(session),
     objects: (read && read.objects) || [],
     wantsRanking: Boolean(read && read.wantsRanking),
+    reviewState: read?.reviewState || null,
+    investigationRanking: structured?.metadata?.investigationPriority?.ranked ? {
+      ...structured.metadata.investigationPriority,
+      selectedRecordIds: structured.supportingEvidence.filter(item => item.recordRef).map(item => item.recordId),
+      fingerprints: Object.fromEntries(structured.supportingEvidence.filter(item => item.recordRef).map(item => [item.recordId, item.recordFingerprint])),
+    } : null,
     rankedRecordIds: (structured?.supportingEvidence || [])
       .filter(item => item.recordRef && item.priority?.position != null)
       .map(item => item.recordId),
