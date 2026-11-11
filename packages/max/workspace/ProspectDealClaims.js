@@ -28,7 +28,7 @@
 // property values are never financing requests; exit timelines are never
 // closing dates; nothing here produces tenant financing criteria.
 
-const EXTRACTOR = 'fit-narrative-claims-v2';
+const EXTRACTOR = 'fit-narrative-claims-v3';
 const LABELLED_ONLY = 'labelled-claims-v1';
 // Rollback switch for narrative extraction only. Labelled claims, integer-k
 // amounts and record-local "unparsed" handling stay in force when disabled.
@@ -66,6 +66,20 @@ function parseAmount(raw) {
   return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
+// v3: an explicit range is a recorded request in its own right. It is kept
+// verbatim with its bounds; it is never collapsed into one amount. Returns
+// null when the bounds cannot be read unambiguously.
+function parseRange(raw) {
+  const m = clean(raw).match(/^\$\s?(\d{1,3}(?:,\d{3})+|\d+)\s?([kK])?\s*(?:-|–|—|to)\s*\$?\s?(\d{1,3}(?:,\d{3})+|\d+)\s?([kK])?$/);
+  if (!m) return null;
+  const [, a, ka, b, kb] = m;
+  // "$35–45k" leaves the first bound's unit implicit: not read as a range.
+  if (!ka && kb && !/,/.test(a) && Number(a) < 1000) return null;
+  const min = Number(a.replace(/,/g, '')) * (ka ? 1000 : 1);
+  const max = Number(b.replace(/,/g, '')) * (kb ? 1000 : 1);
+  return Number.isSafeInteger(min) && Number.isSafeInteger(max) && min > 0 && max > min ? { min, max } : null;
+}
+
 const MONEY = String.raw`\$\s?\d[\d,]*(?:\.\d+)?(?:\s?(?:mm|MM|k|K|m|M)\b|\s(?:million|thousand)\b)?\+?`;
 const RANGE_TAIL = String.raw`\s*(?:-|–|—|to)\s*\$?\s?\d[\d,]*(?:\.\d+)?(?:\s?(?:k|K|m|M)\b)?`;
 const APPROX = String.raw`about|approximately|approx\.?|roughly|around|up\s+to|at\s+least|over|under|nearly|~`;
@@ -92,9 +106,24 @@ const AMOUNT_PATTERNS = [
 ];
 // Forms whose following words must be checked for a non-request object.
 const GUARDED_AMOUNT_PATTERNS = new Set([AMOUNT_PATTERNS[0], AMOUNT_PATTERNS[4]]);
-const COORDINATED_AMOUNT = new RegExp(`^(?:\\s+[\\w'-]+){0,4}?\\s+(?:and|or|plus)\\s+(?:another\\s+)?(${MONEY})`, 'i');
+const COORDINATED_AMOUNT = new RegExp(`^(?:\\s+[\\w'-]+){0,4}?\\s+(?:and|or|plus)\\s+(?:another\\s+)?(${MONEY}(?:${RANGE_TAIL})?)`, 'i');
 // What follows an amount that is NOT a financing request.
 const NOT_REQUEST_AFTER = /^\s*\+?\s*(?:(?:rehab|renovation|construction|repair)\s+)?(?:budgets?|costs?|estimates?|purchase(?:\s+price)?|prices?|ARVs?|after[- ]repair|values?|valuations?|appraisals?|propert(?:y|ies)|houses?|homes?|SFRs?|duplex(?:es)?|deals?|flips?|projects?|listings?|down\s+payments?|portfolio|in\s+equity|of\s+equity)\b/i;
+
+// v3: general borrowing preferences, history and other/future deals are not
+// a current financing request for this deal (exact amounts and ranges alike).
+const NOT_CURRENT_REQUEST = /\b(?:typically|usually|generally|normally|in\s+general|often|tends?\s+to|prefers?|preferred|preference|historically|previously|in\s+the\s+past|past|prior|earlier|last\s+(?:year|month|quarter|deal|project|flip)|in\s+(?:19|20)\d{2}|per\s+(?:deal|project|flip|property)|each\s+(?:deal|project|flip)|any\s+(?:deal|project)|on\s+average|average|next\s+(?:deal|project|flip|property|purchase)|future\s+(?:deals?|projects?|flips?|properties|purchases?)|for\s+deals\b|loans?\s+of\s+\$[\d,]+\w*\s*(?:-|–|—|to)\s*\$?[\d,]+\w*\s+(?:in\s+general|typically))\b/i;
+// The financing need an amount is attached to, read from the matched words
+// and the few words after them ("gap positions", "rehab request").
+const NEED_RE = /\b(rehab|renovation|construction|gap|bridge|purchase|acquisition|refinanc\w*|refi|down\s+payment)\b/i;
+const needOf = text => { const m = String(text || '').match(NEED_RE); return m ? m[1].toLowerCase().replace(/^renovation$/, 'rehab').replace(/^refi\w*$/, 'refinance') : null; };
+// Words that make a single amount an explicit narrowing/update of a request.
+// An update of a request ("narrowed to $40k", "; now $40k"). Never a request
+// on its own: it only matters next to a recorded range in the same statement.
+const UPDATE_AMOUNT = new RegExp(String.raw`(?:\b(?:narrowed|revised|updated|reduced|lowered|increased|firmed\s+up|finali[sz]ed|settled|confirmed)\s+(?:it\s+)?(?:down\s+|up\s+)?(?:to|at|on)|(?:^|;\s*|,\s*)now(?:\s+(?:requesting|needs?|seeking|asking\s+for))?)\s+(${MONEY})(?!\s*(?:-|–|—|to)\s*\$?\d)`, 'gi');
+// The thing being updated is not the request ("purchase price reduced to").
+const NOT_REQUEST_SUBJECT_BEFORE = /\b(?:price|purchase|budgets?|costs?|ARVs?|values?|valuations?|appraisals?|offers?|rents?|payoff|balance|taxes|insurance|profit|proceeds|equity|down\s+payment)\b[^,;]*$/i;
+const SUPERSEDE_CUE = /\b(?:narrowed|revised|updated|reduced|lowered|increased|firmed\s+up|now|specifically|finali[sz]ed|confirmed\s+at|settled\s+on|of\s+which)\b/i;
 
 // ------------------------------------------------------------- security
 const SECURITY_RE = /\b(first|1st|second|2nd|third|3rd)(?:[- ](?:position|priority))?[- ](?:lien|mortgage|deed\s+of\s+trust|trust\s+deed|position)\b/gi;
@@ -203,8 +232,14 @@ function asserted(sentence, index, length, field) {
 
 function narrativeFindings(fit) {
   const found = Object.fromEntries(FIELDS.map(f => [f, []]));
+  found.amountUpdates = [];
   let previous = '';
+  let sentenceIndex = -1;
+  let group = -1;
   for (const sentence of sentences(fit)) {
+    sentenceIndex += 1;
+    // A ";"-joined clause belongs to the same statement group as the previous one.
+    if (!/;$/.test(previous)) group += 1;
     // v2: a ";"-joined clause continues the previous one, so "Exit plan is a
     // refinance; target close in 90 days" keeps its exit context.
     const continued = /;$/.test(previous) ? previous : '';
@@ -218,20 +253,37 @@ function narrativeFindings(fit) {
         const after = sentence.slice(m.index + m[0].length);
         if (GUARDED_AMOUNT_PATTERNS.has(re) && NOT_REQUEST_AFTER.test(after)) continue;
         const raw = clean(money);
+        if (NOT_CURRENT_REQUEST.test(clauseAround(sentence, m.index, m[0].length).clause)) continue;
         const n = parseAmount(raw.replace(/\+$/, ''));
-        const reason = range ? 'range' : approx || /\+$/.test(raw) ? 'approximate' : n == null ? 'unsupported_format' : null;
-        add('amount', { match: clean(m[0]), value: clean(money + (range || '')), amount: reason ? null : n, reason,
-          normalized: reason ? `${reason}:${clean(money + (range || ''))}` : String(n) }, m.index, m[0].length);
+        const value = clean(money + (range || ''));
+        const bounds = range && !approx ? parseRange(value) : null;
+        const reason = approx || /\+$/.test(raw) ? 'approximate' : range ? (bounds ? null : 'unsupported_format') : n == null ? 'unsupported_format' : null;
+        const need = needOf(m[0] + ' ' + after.split(/\s+/).slice(0, 4).join(' '));
+        add('amount', { match: clean(m[0]), value, amount: reason || bounds ? null : n, reason,
+          ...(bounds ? { form: 'range', range: bounds } : {}), need, group, sentenceIndex,
+          supersedeCue: SUPERSEDE_CUE.test(sentence),
+          normalized: reason ? `${reason}:${value}` : bounds ? `range:${bounds.min}-${bounds.max}` : String(n) }, m.index, m[0].length);
         // "requesting $12k on one and $18k on the other": a coordinated second
         // amount is a competing request value, never silently dropped.
         const coordinated = after.match(COORDINATED_AMOUNT);
         if (coordinated && !NOT_REQUEST_AFTER.test(after.slice(coordinated.index + coordinated[0].length))) {
           const second = clean(coordinated[1]);
-          const n2 = parseAmount(second);
-          add('amount', { match: clean(coordinated[0]), value: second, amount: n2, reason: n2 == null ? 'unsupported_format' : null,
-            normalized: n2 == null ? `unsupported_format:${second}` : String(n2) }, m.index, m[0].length);
+          const b2 = parseRange(second);
+          const n2 = b2 ? null : parseAmount(second);
+          add('amount', { match: clean(coordinated[0]), value: second, amount: n2, reason: n2 == null && !b2 ? 'unsupported_format' : null,
+            ...(b2 ? { form: 'range', range: b2 } : {}), group, sentenceIndex,
+            normalized: b2 ? `range:${b2.min}-${b2.max}` : n2 == null ? `unsupported_format:${second}` : String(n2) }, m.index, m[0].length);
         }
       }
+    }
+    for (const m of sentence.matchAll(UPDATE_AMOUNT)) {
+      const after = sentence.slice(m.index + m[0].length);
+      if (NOT_REQUEST_AFTER.test(after)) continue;
+      if (NOT_REQUEST_SUBJECT_BEFORE.test(clauseAround(sentence, m.index, m[0].length).before + ' ' + m[0].replace(m[1], ''))) continue;
+      const n = parseAmount(clean(m[1]));
+      if (n == null || !asserted(sentence, m.index, m[0].length, 'amount')) continue;
+      found.amountUpdates.push({ match: clean(m[0]), value: clean(m[1]), amount: n, normalized: String(n), group,
+        need: needOf(m[0] + ' ' + after.split(/\s+/).slice(0, 4).join(' ')), snippet: sentence });
     }
     for (const m of sentence.matchAll(SECURITY_RE)) {
       if (OTHER_DEBT_BEFORE.test(clauseAround(sentence, m.index, m[0].length).before)) continue;
@@ -266,7 +318,7 @@ function narrativeFindings(fit) {
 
 // Collapse one field's narrative findings into a claim or a record-local
 // "unparsed" entry. Never a cohort-level conflict.
-function resolveNarrative(field, entries) {
+function resolveNarrative(field, entries, updates = []) {
   if (!entries.length) return null;
   const seen = new Map();
   for (const e of entries) if (!seen.has(e.normalized)) seen.set(e.normalized, e);
@@ -277,6 +329,38 @@ function resolveNarrative(field, entries) {
   }
   if (field === 'stage' && distinct.length === 2 && distinct.some(e => e.normalized === 'rehab underway') &&
     distinct.some(e => e.normalized === 'property acquired')) distinct = distinct.filter(e => e.normalized === 'rehab underway');
+  let supersedes = null;
+  if (field === 'amount' && distinct.length === 2) {
+    // v3: a single exact request supersedes a range only when it is clearly
+    // the same statement (same sentence or ";"-joined clause), carries an
+    // explicit narrowing/update cue, and names no different financing need.
+    const rangeEntry = distinct.find(e => e.form === 'range');
+    const exact = distinct.find(e => e.form !== 'range' && !e.reason && e.amount != null);
+    if (rangeEntry && exact && exact.group === rangeEntry.group && exact.supersedeCue &&
+      (!exact.need || !rangeEntry.need || exact.need === rangeEntry.need)) {
+      supersedes = { value: rangeEntry.value, range: rangeEntry.range, snippet: rangeEntry.snippet };
+      distinct = [exact];
+    }
+  }
+  if (field === 'amount' && distinct.length === 1 && distinct[0].form === 'range') {
+    // "Requesting $35k–$45k; narrowed to $40k": an update in the same
+    // statement supersedes the range only if it is the single update value and
+    // names no different financing need; otherwise both are retained as
+    // non-comparable.
+    const rangeEntry = distinct[0];
+    const sameStatement = updates.filter(u => u.group === rangeEntry.group);
+    const elsewhere = updates.filter(u => u.group !== rangeEntry.group);
+    const values = [...new Map([...sameStatement, ...elsewhere].map(u => [u.normalized, u])).values()];
+    // An update in a different sentence has unclear association: retained,
+    // never silently applied or dropped.
+    if (!elsewhere.length && values.length === 1 && (!values[0].need || !rangeEntry.need || values[0].need === rangeEntry.need)) {
+      supersedes = { value: rangeEntry.value, range: rangeEntry.range, snippet: rangeEntry.snippet };
+      distinct = [values[0]];
+    } else if (values.length) {
+      return { unparsed: { field, reason: 'multiple_values', values: [rangeEntry.value, ...values.map(u => u.value)],
+        snippets: [...new Set([rangeEntry.snippet, ...values.map(u => u.snippet)])] } };
+    }
+  }
   const snippets = [...new Set(entries.map(e => e.snippet))];
   if (distinct.length > 1) {
     return { unparsed: { field, reason: 'multiple_values', values: distinct.map(e => e.value), snippets } };
@@ -285,7 +369,8 @@ function resolveNarrative(field, entries) {
   if (only.reason) return { unparsed: { field, reason: only.reason, values: [only.value], snippets } };
   return { claim: { field, value: only.value, normalized: only.normalized, origin: 'fit_narrative',
     match: only.match, snippet: only.snippet, snippets, epistemic: 'recorded_unverified',
-    ...(only.amount != null ? { amount: only.amount } : {}), ...(only.relative ? { relative: true } : {}) } };
+    ...(only.amount != null ? { amount: only.amount } : {}), ...(only.form === 'range' ? { form: 'range', range: only.range } : {}),
+    ...(supersedes ? { supersedes } : {}), ...(only.relative ? { relative: true } : {}) } };
 }
 
 function extractDealClaims(notes) {
@@ -309,17 +394,18 @@ function extractDealClaims(notes) {
       const [first] = inFit;
       if (!first) { absent.push(field); continue; }
       if (ABSENT_VALUE.test(first.value) || ONLY_UNVERIFIED.test(first.value)) { absent.push(field); continue; }
-      if (field === 'amount' && parseAmount(first.value) == null) {
+      const labelledRange = field === 'amount' ? parseRange(first.value) : null;
+      if (field === 'amount' && parseAmount(first.value) == null && !labelledRange) {
         unparsed.push({ field, reason: 'unsupported_format', values: [first.value], snippets: [first.snippet] });
         continue;
       }
       values[field] = first.value;
       claims[field] = { field, value: first.value, origin: 'label', match: first.snippet, snippet: first.snippet,
         snippets: [first.snippet], epistemic: 'recorded_unverified',
-        ...(field === 'amount' ? { amount: parseAmount(first.value) } : {}) };
+        ...(field === 'amount' ? (labelledRange ? { amount: null, form: 'range', range: labelledRange } : { amount: parseAmount(first.value) }) : {}) };
       continue;
     }
-    const resolved = narrative && resolveNarrative(field, narrative[field]);
+    const resolved = narrative && resolveNarrative(field, narrative[field], field === 'amount' ? narrative.amountUpdates : []);
     if (resolved?.claim) { values[field] = resolved.claim.value; claims[field] = resolved.claim; }
     else if (resolved?.unparsed) unparsed.push(resolved.unparsed);
     else absent.push(field);
@@ -335,4 +421,4 @@ function dollarRangesInNotes(notes) {
   return [...new Set([...String(notes || '').matchAll(NOTE_RANGE)].map(m => clean(m[0])))];
 }
 
-module.exports = { EXTRACTOR, LABELLED_ONLY, extractorVersion, narrativeEnabled, FIELDS, LABELS, section, parseAmount, extractDealClaims, dollarRangesInNotes };
+module.exports = { EXTRACTOR, LABELLED_ONLY, extractorVersion, narrativeEnabled, FIELDS, LABELS, section, parseAmount, parseRange, extractDealClaims, dollarRangesInNotes };

@@ -43,7 +43,9 @@ test('real import format: narrative fit evidence yields recorded-unverified clai
   assert.equal(r.investigationPriority.ranked, true);
   assert.equal(r.items.length, 6);
   assert.deepEqual(r.items.map(i => i.priority?.position), [1, 2, 3, 4, 5, 5]);
-  assert.deepEqual(r.items.map(i => i.priority?.evidenceCoverage), [5, 4, 2, 1, 0, 0]);
+  // v3 policy: Cam's explicit current range ($8k–$12k) is recorded-unverified
+  // request evidence and counts (2 -> 3); positions are unchanged.
+  assert.deepEqual(r.items.map(i => i.priority?.evidenceCoverage), [5, 4, 3, 1, 0, 0]);
   assert.equal(r.investigationPriority.extractor, EXTRACTOR);
 });
 
@@ -117,10 +119,13 @@ test('ranges, competing amounts, multiple properties and conflicting narrative l
   assert.equal(eli.count, 0); assert.deepEqual(eli.conflicts, []);
   assert.deepEqual(eli.unparsed.map(u => [u.field, u.reason]), [['amount', 'multiple_values'], ['security', 'multiple_values']]);
   const cam = recordedDetails(rows[2].notes);
-  assert.deepEqual(cam.unparsed.map(u => [u.field, u.reason]), [['amount', 'range']]);
+  // v3 policy: an explicit current range is a recorded claim kept as a range.
+  assert.deepEqual(cam.unparsed, []);
+  assert.equal(cam.claims.amount.form, 'range'); assert.equal(cam.claims.amount.value, '$8k–$12k');
+  assert.deepEqual(cam.claims.amount.range, { min: 8000, max: 12000 }); assert.equal(cam.amount, null);
   const r = answerFor(rows);
   assert.equal(r.investigationPriority.ranked, true);
-  assert.match(r.prose, /No record contains contradictory labelled claims\. 2 record\(s\) contain recorded details that could not be compared/);
+  assert.match(r.prose, /No record contains contradictory labelled claims\. 1 record\(s\) contain recorded details that could not be compared/);
   assert.match(byName(r, rows, 'Eli').claim, /Recorded but not comparable for this record: financing request \(more than one competing value: "\$12k", "\$18k"\); lien\/security position/);
 
   for (const [text, field, reason] of [

@@ -41,8 +41,8 @@ const PRODUCTION_SHAPED = [
     risks: 'Lien position unverified.' },
 ];
 
-test('extractor version is bumped so rankings from v1 are treated as stale', () => {
-  assert.equal(EXTRACTOR, 'fit-narrative-claims-v2');
+test('extractor version is bumped so earlier rankings are treated as stale', () => {
+  assert.equal(EXTRACTOR, 'fit-narrative-claims-v3');
 });
 
 test('record-level extraction over the production-shaped cohort', () => {
@@ -50,7 +50,8 @@ test('record-level extraction over the production-shaped cohort', () => {
   const shapes = rows.map(r => shape(recordedDetails(r.notes)));
   assert.deepEqual(shapes, [
     { amount: '35000', stage: 'under contract', security: '-', exit: 'sale', closing: '-' },
-    { amount: 'unparsed:range', stage: 'property acquired', security: '-', exit: '-', closing: '-' },
+    // v3 policy: the explicit current range is recorded-unverified evidence.
+    { amount: 'range:35000-45000', stage: 'property acquired', security: '-', exit: '-', closing: '-' },
     { amount: '-', stage: '-', security: '-', exit: '-', closing: '-' },
     { amount: '-', stage: '-', security: '-', exit: '-', closing: '-' },
     { amount: '-', stage: '-', security: '-', exit: '-', closing: '-' },
@@ -69,14 +70,15 @@ test('"remaining rehab request" is a single-amount request; a public range reque
   const single = fit('$35,000 remaining rehab request.');
   assert.equal(single.amount, 35000); assert.deepEqual(single.unparsed, []);
   const range = fit('Current public request for $35,000–$45,000 gap positions.');
-  assert.equal(range.amount, null); assert.equal(range.values.amount, undefined);
-  assert.deepEqual(range.unparsed, [{ field: 'amount', reason: 'range', values: ['$35,000–$45,000'],
-    snippets: ['Current public request for $35,000–$45,000 gap positions.'] }]);
+  assert.equal(range.amount, null); assert.deepEqual(range.unparsed, []);
+  assert.equal(range.claims.amount.value, '$35,000–$45,000'); assert.equal(range.claims.amount.form, 'range');
+  assert.deepEqual(range.claims.amount.range, { min: 35000, max: 45000 });
+  assert.equal(range.claims.amount.snippet, 'Current public request for $35,000–$45,000 gap positions.');
   for (const [text, value] of [['Current public request for $35,000 to $45,000.', '$35,000 to $45,000'],
     ['Open request for $35k-$45k gap funding.', '$35k-$45k'], ['$35,000–$45,000 gap request.', '$35,000–$45,000']]) {
     const d = fit(text);
     assert.equal(d.amount, null, text);
-    assert.deepEqual(d.unparsed.map(u => [u.reason, u.values[0]]), [['range', value]], text);
+    assert.equal(d.claims.amount?.form, 'range', text); assert.equal(d.claims.amount.value, value, text);
   }
   assert.equal(fit('Current request for $35k.').amount, 35000);
   assert.equal(fit('$20k gap request.').amount, 20000);
@@ -194,13 +196,13 @@ test('ranking over the production-shaped cohort uses the unchanged coverage poli
   assert.equal(r.investigationPriority.ranked, true);
   assert.equal(r.investigationPriority.extractor, EXTRACTOR);
   const byId = Object.fromEntries(r.items.map(i => [i.recordId, i.priority]));
-  assert.deepEqual(rows.map(row => byId[row.id]?.evidenceCoverage), [3, 1, 0, 0, 0, 3]);
+  assert.deepEqual(rows.map(row => byId[row.id]?.evidenceCoverage), [3, 2, 0, 0, 0, 3]);
   assert.deepEqual(rows.map(row => byId[row.id]?.position), [1, 3, 4, 4, 4, 1]);
 });
 
-test('the original synthetic cohort keeps its v1 record-level shapes and positions', () => {
+test('the original synthetic cohort keeps its positions (Cam\'s range now counts: coverage 2 -> 3)', () => {
   const rows = narrativeFixture();
   const r = composeRecords(bundle(rows), rankRead, {});
   assert.deepEqual(r.items.map(i => i.priority?.position), [1, 2, 3, 4, 5, 5]);
-  assert.deepEqual(r.items.map(i => i.priority?.evidenceCoverage), [5, 4, 2, 1, 0, 0]);
+  assert.deepEqual(r.items.map(i => i.priority?.evidenceCoverage), [5, 4, 3, 1, 0, 0]);
 });

@@ -55,6 +55,9 @@ function financeConcern(details, criteria) {
   if (details.conflicts.length) return `Contradictory recorded claims (${details.conflicts.map(k => FIELD_NAMES[k] || k).join(', ')}); reconcile them before assessing suitability.`;
   const unparsedAmount = details.unparsed.find(u => u.field === 'amount');
   if (unparsedAmount) return `A financing request is recorded but is ${UNPARSED_REASONS[unparsedAmount.reason] || 'not comparable'} (${unparsedAmount.values.map(v => `"${v}"`).join(', ')}); financing fit cannot be assessed for this record.`;
+  // A prospect-stated range is recorded evidence, never business criteria and
+  // never collapsed into one amount for comparison.
+  if (details.claims?.amount?.form === 'range') return `A financing request is recorded but is a range, not a single amount ("${details.claims.amount.value}"); financing fit cannot be assessed for this record. The prospect-stated range is not compared with or used as business criteria.`;
   if (!criteria.range) return 'Financing-fit comparison unavailable: no unambiguous authorized financing range. No range assumed; ranges stated in the request or in prospect notes are not authorized criteria.';
   if (details.amount == null) return 'No explicit financing request recorded; financing fit cannot be assessed.';
   return details.amount < criteria.range.min || details.amount > criteria.range.max
@@ -127,7 +130,11 @@ function composeInvestigation(bundle, read, candidates, duplicates, understandin
     const sourceUrls = Array.isArray(r.acquisition_metadata?.sourceUrls) ? r.acquisition_metadata.sourceUrls : [];
     const sources = `Recorded source URLs (not independently checked): ${sourceUrls.join(', ') || 'none recorded'}${r.acquisition_metadata?.profileUrl ? `; recorded profile: ${r.acquisition_metadata.profileUrl}` : ''}.`;
     const d = c.details;
-    const display = (k, claim) => k === 'amount' && claim.amount != null && claim.value !== `$${claim.amount.toLocaleString('en-US')}`
+    const display = (k, claim) => k === 'amount' && claim.form === 'range'
+      ? `${claim.value} (stated range $${claim.range.min.toLocaleString('en-US')}–$${claim.range.max.toLocaleString('en-US')}; not a single amount)`
+      : k === 'amount' && claim.amount != null && claim.supersedes
+      ? `${claim.value}${claim.value !== `$${claim.amount.toLocaleString('en-US')}` ? ` (= $${claim.amount.toLocaleString('en-US')})` : ''} (supersedes the recorded range "${claim.supersedes.value}" in the same statement)`
+      : k === 'amount' && claim.amount != null && claim.value !== `$${claim.amount.toLocaleString('en-US')}`
       ? `${claim.value} (= $${claim.amount.toLocaleString('en-US')})`
       : k === 'closing' && claim.relative ? `${claim.value} (relative to when the note was recorded)`
       : k === 'stage' && claim.normalized && claim.normalized.toLowerCase() !== claim.value.toLowerCase() ? `${claim.normalized} (recorded as "${claim.value}")` : claim.value;

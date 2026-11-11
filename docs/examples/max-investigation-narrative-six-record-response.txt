@@ -4,7 +4,7 @@ Retrieved 6 unique authorized records; selected cohort 6; showing 6. Retrieval c
 
 Policy: compare coverage of five explicit recorded deal claims — financing request, deal stage, security position, exit plan and closing date. Claims come from labelled fields or narrowly defined explicit statements in the imported Fit evidence, shown with their exact recorded text; risk text is never mined, and budgets, purchase prices, ARVs, property values and exit timelines are not treated as financing requests or closing dates. Greater coverage makes a concrete case easier to investigate first; it does not make the claims true. Ties share position; ID orders display only.
 
-Conflicting or unparsed recorded claims are handled separately. No record contains contradictory labelled claims. 2 record(s) contain recorded details that could not be compared (a range, approximation, unsupported format, competing values or alternatives); those details count as unavailable for that record only.
+Conflicting or unparsed recorded claims are handled separately. No record contains contradictory labelled claims. 1 record(s) contain recorded details that could not be compared (a range, approximation, unsupported format, competing values or alternatives); those details count as unavailable for that record only.
 
 Dollar ranges appear in recorded prospect notes ("$5k–$20k", "$8k–$12k"). Prospect notes are not authorized business criteria; they were not used for financing fit.
 
@@ -38,16 +38,15 @@ Read-only next step: verify the recorded financing request, deal stage, lien/sec
 
 Cam Example [prospect:21:00000000-0000-0000-0000-100000000003]; type: borrower; review: contact_now; pipeline: cold; setter: not recorded; source: review_only_import.
 Recorded source URLs (not independently checked): https://example.invalid/narrative/3.
-Investigation position 3: 2/5 recorded deal claims available to check.
-Recorded claims (unverified): deal stage: property acquired (recorded as "owned free and clear"); exit plan: refinance
+Investigation position 3: 3/5 recorded deal claims available to check.
+Recorded claims (unverified): financing request: $8k–$12k (stated range $8,000–$12,000; not a single amount); deal stage: property acquired (recorded as "owned free and clear"); exit plan: refinance
 Claim source text (exact, as recorded): "Seeking $8k–$12k for cosmetic rehab on a property owned free and clear." | "Plans to refinance."
 Not recorded: lien/security position, closing date.
-Recorded but not comparable for this record: financing request (a range, not a single amount: "$8k–$12k").
 Recorded risks (unverified): Ownership not verified; timeline unknown.
-Financing fit: A financing request is recorded but is a range, not a single amount ("$8k–$12k"); financing fit cannot be assessed for this record.
+Financing fit: A financing request is recorded but is a range, not a single amount ("$8k–$12k"); financing fit cannot be assessed for this record. The prospect-stated range is not compared with or used as business criteria.
 Verification: every recorded claim above is unverified until checked against source documents. Contact channel not recorded.
 Outreach eligibility: blocked; existing gates remain in force.
-Read-only next step: verify the recorded deal stage, exit plan against source documents, and locate or reconcile evidence for lien/security position, closing date, financing request. Check title/lien documents and the exit evidence.
+Read-only next step: verify the recorded financing request, deal stage, exit plan against source documents, and locate or reconcile evidence for lien/security position, closing date. Check title/lien documents and the exit evidence.
 
 Dale Example [prospect:21:00000000-0000-0000-0000-100000000004]; type: borrower; review: contact_now; pipeline: cold; setter: not recorded; source: review_only_import.
 Recorded source URLs (not independently checked): https://example.invalid/narrative/4.

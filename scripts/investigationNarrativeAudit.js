@@ -223,7 +223,7 @@ function classifyRecord(row) {
     const unparsed = details.unparsed.find(u => u.field === field);
     let entry;
     if (details.conflicts.includes(field)) entry = { state: 'contradictory', phrase: null };
-    else if (claim) entry = { state: 'recorded_unverified', origin: claim.origin, phrase: redact(claim.match, row) };
+    else if (claim) entry = { state: 'recorded_unverified', origin: claim.origin, ...(claim.form ? { form: claim.form } : {}), phrase: redact(claim.match, row) };
     else if (unparsed) entry = { state: 'non_comparable', reason: unparsed.reason, phrase: redact(unparsed.values.join(' / '), row) };
     else entry = { state: 'absent', phrase: null };
     categories[field] = entry;
