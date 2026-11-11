@@ -28,7 +28,7 @@
 // property values are never financing requests; exit timelines are never
 // closing dates; nothing here produces tenant financing criteria.
 
-const EXTRACTOR = 'fit-narrative-claims-v4';
+const EXTRACTOR = 'fit-narrative-claims-v5';
 const LABELLED_ONLY = 'labelled-claims-v1';
 // Rollback switch for narrative extraction only. Labelled claims, integer-k
 // amounts and record-local "unparsed" handling stay in force when disabled.
@@ -160,9 +160,13 @@ function normalizeExit(s) {
 
 // ----------------------------------------------------------------- stage
 const PROPERTY = String.raw`(?:subject\s+)?(?:property|SFR|single[- ]family(?:\s+home)?|duplex|triplex|fourplex|quadplex|house|home|multifamily|building|condo|townhouse|lot)`;
+const CONTRACT_PRICE = String.raw`(?:\$\s?\d[\d,]*(?:\.\d+)?(?:\s?(?:k|K|m|M|mm|MM)\b|\s(?:million|thousand)\b)?\s+)?`;
 const STAGE_PATTERNS = [
   [/\bunder\s+contract\b/gi, 'under contract'],
-  [/\b(?:signed|executed)\s+purchase\s+(?:contract|agreement)\b|\bpurchase\s+(?:contract|agreement)\s+(?:is\s+)?(?:signed|executed|recorded|in\s+place)\b/gi, 'under contract'],
+  // v5: an optional single contract price may sit between the status and the
+  // noun ("an executed $260,000 purchase contract"). The price is never a
+  // financing request (no amount pattern matches it).
+  [new RegExp(String.raw`\b(?:signed|executed)\s+${CONTRACT_PRICE}purchase\s+(?:contract|agreement)\b|\bpurchase\s+(?:contract|agreement)\s+(?:is\s+)?(?:signed|executed|recorded|in\s+place)\b`, 'gi'), 'under contract'],
   [new RegExp(String.raw`\b(?:a|an|the|this)\s+(?:recently\s+)?(?:purchased|acquired)\s+${PROPERTY}\b`, 'gi'), 'property acquired'],
   [new RegExp(String.raw`\b(?:purchased|acquired|closed\s+on|owns)\s+(?:the|a|an|this)\s+${PROPERTY}\b`, 'gi'), 'property acquired'],
   [/\bowns?\s+(?:the\s+property\s+|it\s+)?free\s+and\s+clear\b|\bowned\s+free\s+and\s+clear\b/gi, 'property acquired'],
@@ -176,6 +180,12 @@ const STAGE_PATTERNS = [
   [new RegExp(String.raw`\b(?:${PROPERTY}\s+(?:was\s+|is\s+|has\s+been\s+)?)?already\s+(?:been\s+)?(?:purchased|acquired|bought|closed\s+on)\b`, 'gi'), 'property acquired'],
 ];
 const ALREADY_STAGE = STAGE_PATTERNS[STAGE_PATTERNS.length - 1][0];
+const CONTRACT_STAGE = STAGE_PATTERNS[1][0];
+// v5: an executed/signed purchase contract counts only for the current deal.
+// Before the phrase: a contract that is awaited, expected, proposed, needed or
+// in the past. After it (same clause): a contract that ended.
+const CONTRACT_NOT_CURRENT_BEFORE = /\b(?:awaiting|awaits?|pending|expects?|expected|expecting|anticipat\w*|once|until|upon|draft|proposed|unsigned|would|will|plans?\s+to|hopes?\s+to|intends?\s+to|needs?|needed|seeking|seeks?|looking\s+for|wants?|had|former|old)\b/i;
+const CONTRACT_ENDED_AFTER = /\b(?:fell\s+(?:through|apart)|terminated|cancel+ed|expired|voided|void|rescinded|lapsed|awaiting|to\s+be\s+(?:signed|executed))\b/i;
 // After "already purchased": a count, plural property noun or resale means a
 // track record, not the current property.
 const TRACK_RECORD_AFTER = /^\s*(?:(?:and|&)\s+(?:sold|flipped|resold|rented|refinanced)\b|(?:over\s+|more\s+than\s+|about\s+|nearly\s+)?(?:\d+|two|three|four|five|six|seven|eight|nine|ten|dozens?|several|many|multiple|numerous|hundreds?)\b|(?:\w+\s+){0,2}(?:properties|homes|houses|SFRs|units|deals|doors|flips|buildings)\b)/i;
@@ -311,6 +321,17 @@ function narrativeFindings(fit) {
       for (const m of sentence.matchAll(re)) {
         if (re === ALREADY_STAGE && (TRACK_RECORD_AFTER.test(sentence.slice(m.index + m[0].length)) ||
           TRACK_RECORD_CLAUSE.test(clauseAround(sentence, m.index, m[0].length).clause))) continue;
+        if (re === CONTRACT_STAGE) {
+          // Same current/history scoping as amounts: an explicitly current
+          // clause ("Current waterfront flip has …") is read on its own;
+          // otherwise earlier clauses of the sentence count too.
+          const { before, clause } = clauseAround(sentence, m.index, m[0].length);
+          const scope = CURRENT_CUE.test(clause) ? clause : sentence.slice(0, m.index) + clause;
+          const beforeScope = CURRENT_CUE.test(clause) ? before : sentence.slice(0, m.index);
+          const afterClause = clause.slice(before.length + m[0].length);
+          if (NOT_CURRENT_REQUEST.test(scope) || TRACK_RECORD_CLAUSE.test(scope) || OTHER_DEAL.test(clause) ||
+            CONTRACT_NOT_CURRENT_BEFORE.test(beforeScope) || CONTRACT_ENDED_AFTER.test(afterClause)) continue;
+        }
         add('stage', { match: m[0], value: m[0], normalized }, m.index, m[0].length);
       }
     }

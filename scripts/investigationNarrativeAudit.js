@@ -213,11 +213,46 @@ function explainOccurrence(row, field, occ) {
   return { context, contextWithheld: withheld || null, masked: masked || 0, confirmed, hypotheses };
 }
 
+// Possible-false-positive attribution for financing-request claims. A value
+// cue (ARV, budget, price, value, projected, …) is attributed to a DIFFERENT
+// dollar amount only when it sits within two words of that amount, with no
+// clause break or other amount between them, AND it is not within three words
+// of the claimed amount. If any cue occurrence fails that test, or the claimed
+// amount cannot be located in its sentence, the warning stays.
+const MONEY_TOKEN = /\$\s?\d[\d,]*(?:\.\d+)?(?:\s?(?:mm|MM|k|K|m|M)\b|\s(?:million|thousand)\b)?\+?(?:\s*(?:-|–|—|to)\s*\$?\s?\d[\d,]*(?:\.\d+)?(?:\s?[kKmM]\b)?)?/g;
+function gapWords(text) {
+  if (/[,;:()]|\$\s?\d/.test(text)) return Infinity;
+  return text.split(/\s+/).filter(Boolean).length;
+}
+// True when spans a and b of `text` overlap or are separated by at most
+// `maxWords` words with no clause break or other amount between them.
+function near(text, a, b, maxWords) {
+  const [first, second] = a.start <= b.start ? [a, b] : [b, a];
+  if (second.start < first.end) return true;
+  return gapWords(text.slice(first.end, second.start)) <= maxWords;
+}
+function valueCuesOnOtherAmounts(claim) {
+  const snippet = String(claim.snippet || '');
+  const match = String(claim.match || '');
+  const at = snippet.toLowerCase().indexOf(match.toLowerCase());
+  if (!match || at < 0) return false;
+  const inMatch = [...match.matchAll(MONEY_TOKEN)];
+  if (inMatch.length !== 1) return false;
+  const claimed = { start: at + inMatch[0].index, end: at + inMatch[0].index + inMatch[0][0].length };
+  const others = [...snippet.matchAll(MONEY_TOKEN)].map(m => ({ start: m.index, end: m.index + m[0].length }))
+    .filter(t => t.end <= claimed.start || t.start >= claimed.end);
+  const cueRe = new RegExp(SUSPICIOUS.amount.source, 'gi');
+  const cues = [...snippet.matchAll(cueRe)].map(m => ({ start: m.index, end: m.index + m[0].length }));
+  if (!cues.length || !others.length) return false;
+  return cues.every(c => !near(snippet, c, claimed, 3) && others.some(o => near(snippet, c, o, 2)));
+}
+
 function classifyRecord(row) {
   const details = extractDealClaims(row.notes);
   const fit = section(row.notes, 'Fit evidence') || '';
   const categories = {};
   const findings = [];
+  const notes = [];
   for (const field of FIELDS) {
     const claim = details.claims[field];
     const unparsed = details.unparsed.find(u => u.field === field);
@@ -233,6 +268,12 @@ function classifyRecord(row) {
         occurrences: occurrences.map(occ => ({ cue: redact(occ.cue, row), ...explainOccurrence(row, field, occ) })) });
     }
     if (claim && SUSPICIOUS[field] && SUSPICIOUS[field].test(claim.snippet)) {
+      if (field === 'amount' && valueCuesOnOtherAmounts(claim)) {
+        // Every value cue describes a different dollar amount (e.g. "ARV
+        // $250k") and none touches the claimed amount: informational only.
+        notes.push({ type: 'value_cue_on_other_amount', field, cue: redact(claim.snippet.match(SUSPICIOUS[field])[0], row) });
+        continue;
+      }
       const occ = cueOccurrences(claim.snippet, SUSPICIOUS[field], 1)[0];
       const { context, withheld } = safeContext(occ.window, row);
       findings.push({ type: 'possible_false_positive', field, cue: redact(occ.cue, row),
@@ -240,7 +281,7 @@ function classifyRecord(row) {
     }
   }
   if (!fit) findings.push({ type: 'no_fit_evidence_section', field: null, cue: null });
-  return { id: shortId(row.id), coverage: details.count, categories, findings, extractor: details.extractor };
+  return { id: shortId(row.id), coverage: details.count, categories, findings, notes, extractor: details.extractor };
 }
 
 // Only financing-related service facts are reported; nothing else from the
@@ -346,6 +387,9 @@ function formatReport(report) {
         const c = r.categories[f];
         if (c.state === 'absent') continue;
         lines.push(`  ${r.id} ${FIELD_NAMES[f]}: ${c.state}${c.reason ? ` (${c.reason})` : ''}${c.origin ? ` [${c.origin}]` : ''}${c.phrase ? ` "${c.phrase}"` : ''}`);
+      }
+      for (const n of r.notes || []) {
+        lines.push(`  ${r.id} NOTE ${FIELD_NAMES[n.field]}: value cue "${n.cue}" describes a different amount in the same sentence, not the claimed request (informational; not a review finding)`);
       }
       for (const x of r.findings) {
         lines.push(`  ${r.id} REVIEW ${x.type}${x.field ? ` ${FIELD_NAMES[x.field]}` : ''}`);
@@ -532,4 +576,4 @@ if (require.main === module) {
   main().then(code => { process.exitCode = code; });
 }
 
-module.exports = { TENANT_ID, EXPECTED_COHORT, redact, safeContext, cueOccurrences, explainOccurrence, classifyRecord, inspectBlueprint, guardedConnection, runAudit, formatReport, main };
+module.exports = { TENANT_ID, EXPECTED_COHORT, redact, safeContext, cueOccurrences, explainOccurrence, valueCuesOnOtherAmounts, classifyRecord, inspectBlueprint, guardedConnection, runAudit, formatReport, main };

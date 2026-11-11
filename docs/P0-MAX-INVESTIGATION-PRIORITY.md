@@ -268,3 +268,26 @@ The policy is unchanged and confirmed by the operator. Probing v3 against each p
 A superseding claim's `snippets` now include its own sentence as well as the superseded range's, so the answer shows both source texts.
 
 Tests: `packages/max/workspace/tests/p0NarrativeRangePolicyRegressions.test.js` covers exact requests, explicit ranges, superseded ranges, ambiguous precedence, conflicting requests, unrelated deals, general preferences, and an end-to-end check that a prospect range adds coverage, is never compared with Blueprint criteria, and leaves outreach blocked. Four of its eight tests fail against the v3 extractor. The synthetic example response is unchanged.
+
+### Executed-contract deal stage v5 (`fit-narrative-claims-v5`, after the v4 production audit)
+
+**Root cause.** The v4 audit found that Jon's record recognised `sale exit` but not `Current waterfront flip has an executed $260,000 purchase contract`. The deal-stage pattern required `signed|executed` to be directly followed by `purchase contract|agreement`. A contract price between the two words broke the match. No other pattern applied: `under contract` is absent, and the amount patterns correctly ignore a price that is not followed by request wording.
+
+**Change (stage only).**
+- The executed/signed form now accepts one optional price between the status word and the noun (`executed $260,000 purchase contract`, `signed $1.2M purchase agreement`, `executed $260k purchase contract`). The price is never a financing request.
+- Abstention rules now apply to this pattern family, both with and without a price. They reuse the amount extractor's current/history scoping: an explicitly current clause (`Current waterfront flip has …`) is read on its own; otherwise, earlier clauses in the sentence count too.
+  - **Historical:** `previously`, `prior`, `last year`, `in 2023`, `had`, plural `contracts`, track-record clauses, or a contract that `fell through`, `terminated`, `cancelled`, `expired` or `lapsed`.
+  - **Not executed:** `unsigned`, `proposed`, `draft`, `awaiting`, `expects`, `needs`, `will`, `to be signed`, or hedged (`may`).
+  - **Negated:** `no executed …`, `does not have an executed …`. Negation before or inside the phrase cancels it; negation after it does not (unchanged from v2).
+  - **Another deal:** `on a different property`, `on another flip`, `on the next deal`.
+- `under contract` and the other stage patterns are unchanged.
+
+**Audit warning attribution.** A financing-request claim was flagged `possible_false_positive` whenever its sentence contained a value cue (ARV, budget, price, value, projected, …). That flagged Zackary's correctly extracted `$35,000` request because an ARV for a different amount was in the same sentence. The warning is now downgraded to an informational `NOTE … value cue describes a different amount` only when **every** cue occurrence meets both conditions:
+- it is within two words of a **different** dollar amount, with no clause break or other amount in between (`$250k ARV`, `ARV of $250k`);
+- it is **not** within three words of the claimed amount.
+
+The warning stays if any cue touches the claimed amount (`requesting $35,000 for the budget`), has no amount of its own (`requesting $35k, projected`), is too far from the other amount to attribute, or if the claimed amount cannot be located in its sentence. Notes do not count toward FAIL. Missed-claim detection is unchanged.
+
+Tests: `packages/max/workspace/tests/p0NarrativeExecutedContract.test.js`. It covers the verbatim audit phrase and adversarial near-matches (historical, unsigned/proposed, negated, unrelated). It also runs full-record extraction through the real `importReviewOnlyContacts` INSERT and `ProspectRecordIntelligence.loadRecords` read, using an in-memory pool. Jon's record then has stage and exit recorded, no financing request, and no stage review finding; each near-match record keeps stage absent and still raises the missed-claim review. The attribution cases cover both directions.
+
+Unchanged: financing range policy, ranking thresholds, Blueprint criteria, tenant isolation, outreach authorization and rollback flags.
