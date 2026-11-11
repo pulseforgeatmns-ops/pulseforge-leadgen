@@ -133,7 +133,7 @@ function composeInvestigation(bundle, read, candidates, duplicates, understandin
       : k === 'stage' && claim.normalized && claim.normalized.toLowerCase() !== claim.value.toLowerCase() ? `${claim.normalized} (recorded as "${claim.value}")` : claim.value;
     const recorded = Object.keys(LABELS).filter(k => d.claims[k]);
     const evidence = recorded.map(k => `${FIELD_NAMES[k]}: ${display(k, d.claims[k])}`).join('; ') ||
-      `No explicit deal claims recorded.${fit ? ` Recorded fit narrative (unverified): ${fit}` : ''}`;
+      `${d.unparsed.length ? 'No comparable deal claims recorded (see the non-comparable details below).' : 'No explicit deal claims recorded.'}${fit ? ` Recorded fit narrative (unverified): ${fit}` : ''}`;
     const snippets = [...new Set(recorded.flatMap(k => d.claims[k].snippets))];
     const notRecorded = Object.keys(LABELS).filter(k => d.absent.includes(k)).map(k => FIELD_NAMES[k]);
     const unparsedText = d.unparsed.map(u => `${FIELD_NAMES[u.field]} (${UNPARSED_REASONS[u.reason] || u.reason}: ${u.values.map(v => `"${v}"`).join(', ')})`);

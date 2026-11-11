@@ -69,7 +69,7 @@ function parseAmount(raw) {
 const MONEY = String.raw`\$\s?\d[\d,]*(?:\.\d+)?(?:\s?(?:mm|MM|k|K|m|M)\b|\s(?:million|thousand)\b)?\+?`;
 const RANGE_TAIL = String.raw`\s*(?:-|–|—|to)\s*\$?\s?\d[\d,]*(?:\.\d+)?(?:\s?(?:k|K|m|M)\b)?`;
 const APPROX = String.raw`about|approximately|approx\.?|roughly|around|up\s+to|at\s+least|over|under|nearly|~`;
-const REQUEST_VERB = String.raw`\b(?:request(?:s|ed|ing)?|need(?:s|ed|ing)?|seek(?:s|ing)?|sought|looking\s+for|asking\s+for|ask(?:s|ing)?\s+for|wants?|raising|to\s+borrow|borrow(?:s|ing)?)`;
+const REQUEST_VERB = String.raw`\b(?:request(?:s|ed|ing)?|need(?:s|ed|ing)?|seek(?:s|ing)?|sought|looking\s+for|asking\s+for|ask(?:s|ing)?\s+for|wants?|to\s+borrow|borrow(?:s|ing)?)`;
 const FINANCING_NOUN = String.raw`(?:bridge\s+|private\s+|short[- ]term\s+|hard[- ]money\s+|gap\s+|rehab\s+)?(?:loan|financing|funding|capital)`;
 const AMOUNT_PATTERNS = [
   // "requesting $35k for rehab", "needs $15,000 equity gap"
@@ -85,7 +85,8 @@ const NOT_REQUEST_AFTER = /^\s*\+?\s*(?:(?:rehab|renovation|construction|repair)
 
 // ------------------------------------------------------------- security
 const SECURITY_RE = /\b(first|1st|second|2nd|third|3rd)(?:[- ](?:position|priority))?[- ](?:lien|mortgage|deed\s+of\s+trust|trust\s+deed|position)\b/gi;
-const OTHER_DEBT_BEFORE = /\b(?:existing|current|prior|underlying|senior|outstanding|behind)\b/i;
+// Debt the borrower already carries is not the security offered for this request.
+const OTHER_DEBT_BEFORE = /\b(?:existing|current|prior|underlying|senior|outstanding|behind|owes?|owed|owing|carr(?:y|ies|ying)|holds?|held|payoff|paying\s+off|assum(?:e|es|ed|ing)|encumbered|subject\s+to)\b/i;
 const normalizeSecurity = s => (/^(?:first|1st)/i.test(s) ? 'first lien' : /^(?:second|2nd)/i.test(s) ? 'second lien' : 'third lien');
 
 // ------------------------------------------------------------------ exit
@@ -130,6 +131,8 @@ const EXIT_CONTEXT_BEFORE = /\b(?:exit|refinanc\w*|refi|resale|resell|sell|sale|
 // ------------------------------------------------- negation and hedging
 const VERIFICATION_STATUS = /\bnot\s+(?:yet\s+)?(?:been\s+)?(?:independently\s+)?(?:verified|confirmed|validated|documented)\b/gi;
 const NEGATION = /\b(?:no|not|never|without|unknown|unclear|missing|tbd|none|nor|lacks?|isn't|aren't|wasn't|doesn't|don't|didn't|hasn't|haven't|n\/a)\b/i;
+// Projections and estimates are not an explicit financing request.
+const AMOUNT_HEDGE = /\b(?:expects?|expected|expecting|anticipat\w*|projected|projects|projection|estimated?|estimates|budgeted|forecast\w*)\b/i;
 const HEDGE = /\b(?:may|might|could|possibly|perhaps|maybe|if|whether|considering|potentially|hypothetical(?:ly)?)\b/i;
 const ABSENT_VALUE = /^(?:unknown|unclear|missing|none|no\b|n\/?a\b|tbd\b|to be determined|pending|not\s+(?:recorded|known|provided|stated|available|specified|disclosed|identified|determined))/i;
 const ONLY_UNVERIFIED = /^(?:unverified|not\s+(?:yet\s+)?verified|needs\s+verification)\.?$/i;
@@ -154,17 +157,17 @@ function clauseAround(sentence, index, length) {
   }
   return { before: sentence.slice(start, index), clause: sentence.slice(start, end) };
 }
-function asserted(sentence, index, length) {
+function asserted(sentence, index, length, field) {
   const { clause } = clauseAround(sentence, index, length);
   const text = clause.replace(VERIFICATION_STATUS, ' ');
-  return !NEGATION.test(text) && !HEDGE.test(text);
+  return !NEGATION.test(text) && !HEDGE.test(text) && !(field === 'amount' && AMOUNT_HEDGE.test(text));
 }
 
 function narrativeFindings(fit) {
   const found = Object.fromEntries(FIELDS.map(f => [f, []]));
   for (const sentence of sentences(fit)) {
     const add = (field, entry, index, length) => {
-      if (asserted(sentence, index, length)) found[field].push({ ...entry, snippet: sentence });
+      if (asserted(sentence, index, length, field)) found[field].push({ ...entry, snippet: sentence });
     };
     for (const re of AMOUNT_PATTERNS) {
       for (const m of sentence.matchAll(re)) {

@@ -10,7 +10,7 @@ Dollar ranges appear in recorded prospect notes ("$5k–$20k", "$8k–$12k"). Pr
 
 All deal details are recorded claims requiring independent verification. Borrower intent, current readiness, security and likelihood of funding are unverified. Missing contact channels do not block read-only investigation.
 
-Recorded tenant criteria [blueprint:21:996e38ff-2eb0-43ca-9377-65e3421497ad]: Bridge loans. Financing range: $5,000–$20,000. | Unsupported borrowers.
+Recorded tenant criteria [blueprint:21:1fb08f83-5f8e-4fb3-bbcc-c1ae56bc719a]: Bridge loans. Financing range: $5,000–$20,000. | Unsupported borrowers.
 Criteria describe the approved business context, not verified prospect suitability. Only a single explicit dollar range can be compared; currency, terms and current capacity still require verification.
 
 Zane Example [prospect:21:00000000-0000-0000-0000-100000000001]; type: borrower; review: contact_now; pipeline: cold; setter: not recorded; source: review_only_import.
@@ -64,7 +64,7 @@ Read-only next step: verify the recorded exit plan against source documents, and
 Eli Example [prospect:21:00000000-0000-0000-0000-100000000005]; type: borrower; review: contact_now; pipeline: cold; setter: not recorded; source: review_only_import.
 Recorded source URLs (not independently checked): https://example.invalid/narrative/5.
 Investigation position 5: 0/5 recorded deal claims available to check.
-Recorded claims (unverified): No explicit deal claims recorded. Recorded fit narrative (unverified): Two properties: requesting $12k on one and $18k on the other. First lien on one property, second lien on the other.
+Recorded claims (unverified): No comparable deal claims recorded (see the non-comparable details below). Recorded fit narrative (unverified): Two properties: requesting $12k on one and $18k on the other. First lien on one property, second lien on the other.
 Not recorded: deal stage, exit plan, closing date.
 Recorded but not comparable for this record: financing request (more than one competing value: "$12k", "$18k"); lien/security position (more than one competing value: "First lien", "second lien").
 Recorded risks (unverified): Unclear which property the request applies to.

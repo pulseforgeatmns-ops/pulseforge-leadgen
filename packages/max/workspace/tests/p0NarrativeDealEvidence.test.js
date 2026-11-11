@@ -304,3 +304,25 @@ test('MAX_PROSPECT_NARRATIVE_CLAIMS=false rolls back narrative extraction only, 
   } finally { if (old === undefined) delete process.env.MAX_PROSPECT_NARRATIVE_CLAIMS; else process.env.MAX_PROSPECT_NARRATIVE_CLAIMS = old; }
   assert.equal(answerFor().investigationPriority.extractor, EXTRACTOR);
 });
+
+test('projections, unrelated amounts and existing debt never become request or security claims', () => {
+  for (const text of ['Projected profit of $45k on resale.', 'Expects net proceeds of $60k.', 'Sold a duplex for $240k last year.',
+    'Comps support $310k ARV.', 'Expects to need $30k.', 'Estimated need of $25k.', 'Raising $500k for a fund.',
+    'Portfolio of 8 rentals worth $1.2M.', 'Seeking deals around $150k.']) {
+    const d = fit(text); assert.equal(d.values.amount, undefined, text);
+  }
+  const owes = fit('Needs $20k, and owes $80k on a first mortgage.');
+  assert.equal(owes.amount, 20000); assert.equal(owes.values.security, undefined);
+  for (const text of ['Has an existing first lien; requesting second lien.', 'Prior lender held first position; offering second position.']) {
+    assert.equal(fit(text).claims.security.normalized, 'second lien', text);
+  }
+  assert.equal(fit('Requesting $35k; property value $220k; purchase price $160k.').amount, 35000);
+  const otherSections = extractDealClaims('Fit evidence: Public profile only.\nRisks: Requesting $40k, first lien, exit via sale.\nNext action: Confirm $25k request and first lien.\nMarket: Requesting $50k first lien');
+  assert.equal(otherSections.count, 0); assert.deepEqual(otherSections.unparsed, []);
+});
+
+test('a record with only non-comparable details is not described as having no recorded details', () => {
+  const rows = narrativeFixture(); const eli = byName(answerFor(rows), rows, 'Eli').claim;
+  assert.match(eli, /Recorded claims \(unverified\): No comparable deal claims recorded \(see the non-comparable details below\)\./);
+  assert.match(eli, /Verification: no comparable deal claims; the recorded but non-comparable details above need reconciliation/);
+});
