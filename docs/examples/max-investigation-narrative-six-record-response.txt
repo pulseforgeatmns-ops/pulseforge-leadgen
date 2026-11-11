@@ -1,0 +1,87 @@
+Provisional investigation priority — analytical attention only, not outreach priority or predicted funding likelihood.
+
+Retrieved 6 unique authorized records; selected cohort 6; showing 6. Retrieval complete.
+
+Policy: compare coverage of five explicit recorded deal claims — financing request, deal stage, security position, exit plan and closing date. Claims come from labelled fields or narrowly defined explicit statements in the imported Fit evidence, shown with their exact recorded text; risk text is never mined, and budgets, purchase prices, ARVs, property values and exit timelines are not treated as financing requests or closing dates. Greater coverage makes a concrete case easier to investigate first; it does not make the claims true. Ties share position; ID orders display only.
+
+Conflicting or unparsed recorded claims are handled separately. No record contains contradictory labelled claims. 2 record(s) contain recorded details that could not be compared (a range, approximation, unsupported format, competing values or alternatives); those details count as unavailable for that record only.
+
+Dollar ranges appear in recorded prospect notes ("$5k–$20k", "$8k–$12k"). Prospect notes are not authorized business criteria; they were not used for financing fit.
+
+All deal details are recorded claims requiring independent verification. Borrower intent, current readiness, security and likelihood of funding are unverified. Missing contact channels do not block read-only investigation.
+
+Recorded tenant criteria [blueprint:21:996e38ff-2eb0-43ca-9377-65e3421497ad]: Bridge loans. Financing range: $5,000–$20,000. | Unsupported borrowers.
+Criteria describe the approved business context, not verified prospect suitability. Only a single explicit dollar range can be compared; currency, terms and current capacity still require verification.
+
+Zane Example [prospect:21:00000000-0000-0000-0000-100000000001]; type: borrower; review: contact_now; pipeline: cold; setter: not recorded; source: review_only_import.
+Recorded source URLs (not independently checked): https://example.invalid/narrative/1.
+Investigation position 1: 5/5 recorded deal claims available to check.
+Recorded claims (unverified): financing request: $35k (= $35,000); deal stage: property acquired (recorded as "a purchased SFR"); lien/security position: first lien; exit plan: DSCR refinance; closing date: ~3 weeks (relative to when the note was recorded)
+Claim source text (exact, as recorded): "Active flipper requesting $35k for rehab on a purchased SFR." | "Proposed first lien on the subject property." | "Exit via DSCR refinance after rehab." | "Targeting close in ~3 weeks."
+Recorded risks (unverified): Request exceeds the $5k–$20k working range. Title, lien position and DSCR eligibility unverified.
+Financing fit: Recorded request $35,000 is outside the recorded business range $5,000–$20,000; this is a potential mismatch, not a financing decision.
+Verification: every recorded claim above is unverified until checked against source documents. Contact channel not recorded.
+Outreach eligibility: blocked; existing gates remain in force.
+Read-only next step: verify the recorded financing request, deal stage, lien/security position, exit plan, closing date against source documents. Check title/lien documents and the exit evidence.
+
+Brook Example [prospect:21:00000000-0000-0000-0000-100000000002]; type: borrower; review: contact_now; pipeline: cold; setter: not recorded; source: review_only_import.
+Recorded source URLs (not independently checked): https://example.invalid/narrative/2.
+Investigation position 2: 4/5 recorded deal claims available to check.
+Recorded claims (unverified): financing request: $15,000; deal stage: Under contract; lien/security position: first-position lien; exit plan: sale
+Claim source text (exact, as recorded): "needs $15,000 equity gap." | "Under contract on a duplex;" | "Offers first-position lien." | "Exit: sale after 4-month rehab."
+Not recorded: closing date.
+Recorded risks (unverified): Contract and ARV not verified. Closing date not recorded.
+Financing fit: Recorded request is within the recorded business range; this alone does not establish suitability, lien security or probability of funding.
+Verification: every recorded claim above is unverified until checked against source documents. Contact channel not recorded.
+Outreach eligibility: blocked; existing gates remain in force.
+Read-only next step: verify the recorded financing request, deal stage, lien/security position, exit plan against source documents, and locate or reconcile evidence for closing date. Check title/lien documents and the exit evidence.
+
+Cam Example [prospect:21:00000000-0000-0000-0000-100000000003]; type: borrower; review: contact_now; pipeline: cold; setter: not recorded; source: review_only_import.
+Recorded source URLs (not independently checked): https://example.invalid/narrative/3.
+Investigation position 3: 2/5 recorded deal claims available to check.
+Recorded claims (unverified): deal stage: property acquired (recorded as "owned free and clear"); exit plan: refinance
+Claim source text (exact, as recorded): "Seeking $8k–$12k for cosmetic rehab on a property owned free and clear." | "Plans to refinance."
+Not recorded: lien/security position, closing date.
+Recorded but not comparable for this record: financing request (a range, not a single amount: "$8k–$12k").
+Recorded risks (unverified): Ownership not verified; timeline unknown.
+Financing fit: A financing request is recorded but is a range, not a single amount ("$8k–$12k"); financing fit cannot be assessed for this record.
+Verification: every recorded claim above is unverified until checked against source documents. Contact channel not recorded.
+Outreach eligibility: blocked; existing gates remain in force.
+Read-only next step: verify the recorded deal stage, exit plan against source documents, and locate or reconcile evidence for lien/security position, closing date, financing request. Check title/lien documents and the exit evidence.
+
+Dale Example [prospect:21:00000000-0000-0000-0000-100000000004]; type: borrower; review: contact_now; pipeline: cold; setter: not recorded; source: review_only_import.
+Recorded source URLs (not independently checked): https://example.invalid/narrative/4.
+Investigation position 4: 1/5 recorded deal claims available to check.
+Recorded claims (unverified): exit plan: sale
+Claim source text (exact, as recorded): "Exit via sale after a 5-month rehab."
+Not recorded: financing request, deal stage, lien/security position, closing date.
+Recorded risks (unverified): No specific financing request recorded.
+Financing fit: No explicit financing request recorded; financing fit cannot be assessed.
+Verification: every recorded claim above is unverified until checked against source documents. Contact channel not recorded.
+Outreach eligibility: blocked; existing gates remain in force.
+Read-only next step: verify the recorded exit plan against source documents, and locate or reconcile evidence for financing request, deal stage, lien/security position, closing date. Check title/lien documents and the exit evidence.
+
+Eli Example [prospect:21:00000000-0000-0000-0000-100000000005]; type: borrower; review: contact_now; pipeline: cold; setter: not recorded; source: review_only_import.
+Recorded source URLs (not independently checked): https://example.invalid/narrative/5.
+Investigation position 5: 0/5 recorded deal claims available to check.
+Recorded claims (unverified): No explicit deal claims recorded. Recorded fit narrative (unverified): Two properties: requesting $12k on one and $18k on the other. First lien on one property, second lien on the other.
+Not recorded: deal stage, exit plan, closing date.
+Recorded but not comparable for this record: financing request (more than one competing value: "$12k", "$18k"); lien/security position (more than one competing value: "First lien", "second lien").
+Recorded risks (unverified): Unclear which property the request applies to.
+Financing fit: A financing request is recorded but is more than one competing value ("$12k", "$18k"); financing fit cannot be assessed for this record.
+Verification: no comparable deal claims; the recorded but non-comparable details above need reconciliation against source documents. Contact channel not recorded.
+Outreach eligibility: blocked; existing gates remain in force.
+Read-only next step: inspect existing supporting documents and locate or reconcile evidence for deal stage, exit plan, closing date, financing request, lien/security position. Check title/lien documents and the exit evidence.
+
+Fay Example [prospect:21:00000000-0000-0000-0000-100000000006]; type: borrower; review: contact_now; pipeline: cold; setter: not recorded; source: review_only_import.
+Recorded source URLs (not independently checked): https://example.invalid/narrative/6.
+Investigation position 5: 0/5 recorded deal claims available to check.
+Recorded claims (unverified): No explicit deal claims recorded. Recorded fit narrative (unverified): Public profile describes BRRRR investing; no specific funding request or lien position recorded.
+Not recorded: financing request, deal stage, lien/security position, exit plan, closing date.
+Recorded risks (unverified): No active deal recorded.
+Financing fit: No explicit financing request recorded; financing fit cannot be assessed.
+Verification: no deal claims recorded to verify. Contact channel not recorded.
+Outreach eligibility: blocked; existing gates remain in force.
+Read-only next step: inspect existing supporting documents and locate or reconcile evidence for financing request, deal stage, lien/security position, exit plan, closing date. Check title/lien documents and the exit evidence.
+
+All actions above are proposals for read-only review. No writes, emails, calls, assignments, imports, review-state changes or specialist execution occurred.

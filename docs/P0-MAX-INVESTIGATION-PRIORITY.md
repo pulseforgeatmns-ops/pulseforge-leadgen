@@ -150,3 +150,53 @@ Correction (routing only): operator updates, claim challenges and claim correcti
 Rollback: `MAX_OPERATIONAL_READ_PRECEDENCE=false` restores pre-#1110 routing (the legacy route claims these turns again), or revert the commit.
 
 Tests: `packages/max/workspace/tests/p0RecordReadPrecedence.test.js`: the exact production prompt through the full engine, a trigger-word routing matrix, legacy non-record controls, operator update / challenge / correction guards, record-modification controls and plain listings.
+
+## Narrative deal-evidence correction (Nov 11 2026)
+
+After #1117 routed the LA Endeavors prompt correctly, all six real `contact_now` records were still **unranked**, and Max listed financing request, deal stage, security position, exit plan and closing date as missing even though the recorded notes stated them (for example a `$35k` request, a proposed first lien and a DSCR-refinance exit).
+
+### Root cause
+
+- The review-only import (`services/reviewOnlyProspectImportService.js`) accepts free-text `fit`/`risks` and `noteFor()` stores them as prose in `prospects.notes` (`Fit evidence: …`, `Risks: …`). There are **no structured deal columns**; `acquisition_metadata` holds only import mode, outreach flag, review state, category and source URLs.
+- `recorded-deal-coverage-v1` counted a claim only when written as an exact `Label: value` line. The real import never produces that format, so every record scored 0/5, no two records differed and the cohort was unranked. The #1115 fixture had been authored in the labelled format, so the mismatch was not caught.
+- Three parser defects compounded it: `$35k` was "unparsed", and an unparsed amount was pushed into `conflicts`, so one shorthand amount blocked the **whole** cohort; a value was discarded if it contained `no`/`unverified` anywhere; and the response said "Missing verification: <field>" for fields that were recorded.
+- The `$5k–$20k` range appears in prospect risk prose and in the operator's question. Neither is an authorized criterion by design; only approved tenant Blueprint facts are. This correction keeps that rule and does not change the Blueprint criteria parser.
+
+### Correction
+
+`packages/max/workspace/ProspectDealClaims.js` (pure, deterministic) replaces the label-only parser behind the unchanged `recordedDetails()` export:
+
+| State | Meaning | Effect |
+| --- | --- | --- |
+| `claim` | Labelled value, or a narrowly defined explicit statement in **Fit evidence** only. Keeps the exact recorded sentence (`snippet`) and matched text; `epistemic: recorded_unverified`. | Counts toward coverage. |
+| `absent` | Not recorded, or recorded only as unknown/TBD/not verified. | Listed under "Not recorded". |
+| `unparsed` | Recorded but not comparable: amount range, approximate amount, unsupported format (`$12.5k`, `$1.2M`), competing values (`$12k … and $18k`, first and second lien in one record), exit alternatives (`sale or refinance`). | **Record-local**: the field does not count for that record; the cohort can still rank. |
+| `conflict` | Contradictory **labelled** claims (Fit vs Risks), unchanged rule. | Withholds the cohort ranking, as before. |
+
+Narrative patterns are deliberately narrow: request verb + single amount (`requesting $35k`, `needs $15,000`), `$35k bridge loan request`, `funding request of $20k`; `first/second(-position) lien|mortgage|position` (ignoring existing/senior/underlying debt); `exit via/plan …`, `plans to refinance/sell`; `under contract`, `a purchased/acquired <property>`, `owned free and clear`, `property identified`, `rehab underway`; `closing scheduled/set for <date>`, `targeting close in <N weeks>`. A clause with a negation (`not`, `no`, `unknown`, …) or a hedge (`may`, `might`, `if`, …) is not a claim; "not yet verified" is a verification status, not a negation. Rehab budgets, purchase prices, ARVs, property values, deal sizes and down payments are never a financing request. A timeline after an exit/refinance in the same sentence is never a closing date. `Risks`, `Next action` and other sections are never mined. Dollar ranges found in notes are disclosed as "not authorized business criteria; not used for financing fit". This is not an underwriting engine.
+
+Presentation: `Recorded claims (unverified)` lists each claim with field names, `Claim source text (exact, as recorded)` quotes the source sentences, then `Not recorded`, `Recorded but not comparable for this record`, `Contradictory labelled claims`, financing fit (contradictory vs non-comparable amount vs criteria comparison) and verification status. Structured evidence carries `recordedClaims.claims` (value, origin, snippet, match), `notRecorded`, `unparsed`, `contradictory` and `extractor`.
+
+Unchanged: the coverage policy and ranking thresholds (≥2 comparable candidates, differentiated coverage, ties share position, no implicit cutoff), contradiction abstention, tenant isolation, the Blueprint criteria parser, outreach gates, and the no-write/no-send/no-assignment behaviour. `investigationPriority.extractor` is recorded in the continuity marker; a ranking produced by a different extractor is treated as stale on follow-up.
+
+### Approved assertion change
+
+`recordedDetails('Financing request: $12k').amount` now equals `12000` (was `null`). Real imports write amounts as integer-k shorthand; rejecting it left the request "unrecorded" and, because unparsed amounts were then treated as conflicts, blocked the whole cohort. The same test now also asserts that a genuinely unsupported format (`$12.5k`) stays out of the amount and is record-local `unparsed`, not a conflict. The second approved change (unparsed vs conflicting amounts) needed no assertion edit: the existing test's `$12,000` vs `$18,000` case is a genuine labelled contradiction and still blocks; the existing `/Conflicting or unparsed/` assertions still hold through a cohort summary line that now reports the two categories separately.
+
+### Evidence
+
+Same six synthetic narrative records (built through `normalizeContact`/`noteFor`), same approved synthetic Blueprint (`Financing range: $5,000–$20,000`), same production prompt, through `WorkspaceEngine.ask`:
+
+- Before: [`max-investigation-narrative-six-record-response.before.txt`](examples/max-investigation-narrative-six-record-response.before.txt) — "Unranked investigation candidates"; Zane: "No explicit financing request recorded … Missing verification: financing request, deal stage, lien/security position, exit plan, closing date."
+- After: [`max-investigation-narrative-six-record-response.txt`](examples/max-investigation-narrative-six-record-response.txt) — positions 1, 2, 3, 4, 5, 5 at coverage 5, 4, 2, 1, 0, 0; Zane's `$35k (= $35,000)` request is flagged outside `$5,000–$20,000` while remaining investigation position 1; Cam's `$8k–$12k` range and Eli's competing amounts/liens are record-local; outreach blocked for all six.
+- The labelled #1115 example keeps identical positions and counts; only wording changed.
+
+The real production notes were not read for this change (database credentials were not available to this session). Before relying on the ranking, compare one read-only tenant-scoped read of the six records' `notes` against these patterns.
+
+### Rollback
+
+- Narrative extraction only: `MAX_PROSPECT_NARRATIVE_CLAIMS=false` (also `0`, `off`, `no`, `disabled`) and restart. Labelled claims, `$Nk` amounts and record-local unparsed handling remain; narrative cohorts return to unranked. Extractor becomes `labelled-claims-v1`, so earlier rankings are stale.
+- Whole analytical path: `MAX_PROSPECT_INVESTIGATION_PRIORITY=false` (unchanged).
+- Code: revert this PR. No schema, data or configuration change was made.
+
+Tests: `packages/max/workspace/tests/p0NarrativeDealEvidence.test.js` (fixture `tests/fixtures/narrativeInvestigationProspects.js`). 14 of its 15 original tests fail against the pre-correction composer; the remaining one is the budget/ARV guard, which the old parser also satisfied.
