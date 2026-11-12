@@ -8,7 +8,6 @@
 const {
   STAGES,
   STAGE_ORDER,
-  STAGE_LABELS,
   SPECIALISTS,
   EVENT_KINDS,
   CONTRIBUTION_KINDS,
@@ -20,6 +19,7 @@ const {
   amoError,
   round2,
 } = require('./types');
+const { missionStatusLabel } = require('./MissionStatus');
 const { createMission } = require('./Mission');
 const { assertContract } = require('./Contracts');
 const {
@@ -211,7 +211,7 @@ function refresh(store, mission) {
   const manual = (mission.blockers || []).filter((row) => row.manual);
   mission.blockers = [...manual, ...inferred.filter((row) => !manual.some((m) => m.kind === row.kind))];
   mission.progressPercent = progressPercent(mission.stage, refreshedCtx);
-  mission.status = STAGE_LABELS[mission.stage] || mission.status;
+  mission.status = missionStatusLabel(mission.stage, mission.pendingOperatorDecision) || mission.status;
   mission.updatedAt = nowIso();
   return { mission: store.putMission(mission), ctx: { ...refreshedCtx, ...extra }, contributions };
 }

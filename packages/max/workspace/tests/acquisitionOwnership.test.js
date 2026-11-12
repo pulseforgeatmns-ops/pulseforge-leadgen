@@ -107,7 +107,8 @@ describe('SPEC-124 — Acquisition Ownership Convergence', () => {
     assert.match(turn.prose, /Approve discovery|Approve mission plan|Operator Decision/i);
     assert.deepEqual(
       turn.structured.metadata.missionCommunicationPayload.sources,
-      ['acquisition_mission', 'scout']
+      // P0 — no Scout contribution yet, so Scout is not cited as a source.
+      ['acquisition_mission']
     );
     assert.doesNotMatch(turn.prose, /Mission Engine/);
     assert.doesNotMatch(turn.prose, /Blueprint attached/);
@@ -150,7 +151,8 @@ describe('SPEC-124 — Acquisition Ownership Convergence', () => {
     assert.match(turn.prose, /Mission Resumed/);
     assert.deepEqual(
       turn.structured.metadata.missionCommunicationPayload.sources,
-      ['acquisition_mission', 'scout']
+      // P0 — no Scout contribution yet, so Scout is not cited as a source.
+      ['acquisition_mission']
     );
     assert.doesNotMatch(turn.prose, /Continue in mission workspace\?/);
     assert.equal(turn.mission.id, existing.id);

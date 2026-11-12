@@ -48,10 +48,15 @@ const CI_EVIDENCE = {
   constraints: [],
 };
 
-function assertAmoPresentation(comm, prose, structured) {
-  assert.deepEqual(comm.sources, AMO_SOURCES.slice());
+// P0 — Scout is cited only once a Scout contribution exists; a created or
+// still-planning mission cites the mission alone.
+function assertAmoPresentation(comm, prose, structured, { scout = false } = {}) {
+  assert.deepEqual(
+    comm.sources,
+    scout ? AMO_SOURCES.slice() : AMO_SOURCES.filter((source) => source !== 'scout')
+  );
   assert.ok(comm.sources.includes('acquisition_mission'));
-  assert.ok(comm.sources.includes('scout'));
+  assert.equal(comm.sources.includes('scout'), scout);
   assert.equal(comm.sources.includes('Mission Engine'), false);
   assert.equal(comm.sources.includes('Client Intelligence'), false);
   assert.doesNotMatch(prose, /Mission Engine/);
@@ -59,7 +64,8 @@ function assertAmoPresentation(comm, prose, structured) {
   assert.doesNotMatch(prose, /Blueprint attached/);
   assert.doesNotMatch(prose, /Continue in mission workspace\?/);
   assert.match(prose, /acquisition_mission/);
-  assert.match(prose, /scout/);
+  if (scout) assert.match(prose, /scout/);
+  else assert.doesNotMatch(prose, /\bscout\b/);
   assert.equal(structured.metadata.presentationContract, 'amo');
   assert.equal(structured.metadata.missionRuntime, 'AMO');
   assert.equal(structured.metadata.acquisitionOwnership, true);
@@ -135,7 +141,7 @@ describe('SPEC-134 — Preserve AMO Presentation Contract', { concurrency: false
       question: ANCHOR_OBJECTIVE,
     });
 
-    assertAmoPresentation(response.comm, response.prose, response.structured);
+    assertAmoPresentation(response.comm, response.prose, response.structured, { scout: true });
     assert.ok(response.comm.discoveryResults);
     assert.equal(response.comm.discoveryResults.companies.length, 2);
     assert.match(response.prose, /Scout Discovery/i);

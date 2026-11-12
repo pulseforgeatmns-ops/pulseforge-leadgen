@@ -98,6 +98,7 @@ const {
 const { serializeExecutionState, getExecutionState } = require('./ExecutionState');
 const { maybeHandleOperatorCognitionTurn } = require('./CognitionRouting');
 const { maybeHandlePendingDecisionTurn } = require('./PendingDecisionTurn');
+const { maybeHandleProhibitedCommandTurn } = require('./ProhibitedCommandGuard');
 const { pendingDecisionOwnsTurn } = require('./PendingDecisionResolver');
 const { advanceConversationalState } = require('./ConversationalStateMachine');
 const { advanceActiveReasoningContext } = require('./ActiveReasoningContext');
@@ -2021,13 +2022,21 @@ class WorkspaceEngine {
       } else if (runtimeDecision.runtime === MISSION_RUNTIMES.AMO) {
         askPathTrace.traceBranch('runtime:amo');
 
-        const pendingDecisionTurn = await maybeHandlePendingDecisionTurn({
+        const pendingTurnInput = {
           question,
           session,
           context: rawContext || session.context,
           operatorIntent,
           ...this._amoRuntimeInput(),
-        });
+        };
+        // P0 — a command the mission's authorization forbids is refused with the
+        // restriction named, whatever decision is pending. Checked before pending
+        // capture so it cannot be read as an unclear yes/no or a generic decline.
+        // Refuses only; commands for the pending decision's own action keep the
+        // router path, which enforces the same constraints.
+        const pendingDecisionTurn =
+          (await maybeHandleProhibitedCommandTurn(pendingTurnInput)) ||
+          (await maybeHandlePendingDecisionTurn(pendingTurnInput));
         if (pendingDecisionTurn) {
           session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
           if (session.context && typeof session.context === 'object') {

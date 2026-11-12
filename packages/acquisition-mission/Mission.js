@@ -9,7 +9,6 @@ const { mergeAuthorizationConstraints } = require('./AuthorizationConstraints');
 
 const {
   STAGES,
-  STAGE_LABELS,
   PRIORITIES,
   SPECIALISTS,
   OPERATOR_DECISION_KINDS,
@@ -23,6 +22,7 @@ const {
   clamp,
   round2,
 } = require('./types');
+const { missionStatusLabel } = require('./MissionStatus');
 const { deriveMissionTitle } = require('./MissionNaming');
 const { planFromObjective, planMission } = require('./MissionPlanner');
 const {
@@ -140,7 +140,7 @@ function createMission(input = {}) {
     stage,
     status: input.planCancelled === true
       ? 'Cancelled'
-      : STAGE_LABELS[stage] || 'Discovering',
+      : missionStatusLabel(stage, pendingOperatorDecision),
     confidence: round2(confidence),
     owner: asText(input.owner) || 'Operator',
     createdBy: asText(input.createdBy || input.created_by) || SPECIALISTS.MAX,

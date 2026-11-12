@@ -1793,6 +1793,7 @@ function applyExecutionTruth(response, execution) {
 }
 
 module.exports = {
+  buildConstraintBlockedTurn,
   presentedExecutionRevision,
   recordPresentedExecutionDecision,
   applyExecutionTruth,

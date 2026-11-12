@@ -598,6 +598,12 @@ function normalizePlanClarificationAnswer(answer, ambiguity) {
   } else if (ambiguity && ambiguity.field === 'geography.region') {
     text = text.replace(/^\s*(?:decision\s*:\s*)?region\s*[:=]\s*/i, '').trim();
   }
+  if (ambiguity && ambiguity.field === 'geography.region') {
+    // "Nashua NH." is the same answer as "Nashua NH". Only sentence-ending
+    // periods/exclamations are dropped: a "?" stays, so questions are still
+    // detected and never captured as an answer.
+    text = text.replace(/\s*[.!]+$/, '').trim();
+  }
   return text;
 }
 
