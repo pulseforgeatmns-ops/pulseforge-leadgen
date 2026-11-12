@@ -27,6 +27,7 @@ function loadRouter(auth, runtime, guard) {
     '../utils/clientFacingPresentation': { presentMaxResultForClient: value => value },
     '../services/apiUsageService': { isApiUsageQuestion: () => false, parseApiSpendCommand: () => null, answerApiUsageQuestion: deny },
     '../utils/meteredAnthropic': { forAgent: () => class { constructor() { deny(); } } },
+    '../utils/meteredGemini': { createGeminiClient: deny },
     '../services/reviewNavigation': { reviewNavigationForRequest: async () => null },
     './reviewNavigation': { createReviewNavigationRouter: () => express.Router() },
     '../services/tenantWorkspace': { getTenantWorkspace: async () => ({ status: {}, client: { name: 'Synthetic tenant' } }) },
