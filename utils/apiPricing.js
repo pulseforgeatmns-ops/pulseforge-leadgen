@@ -23,6 +23,10 @@ const CLAUDE_RATES = Object.freeze({
   'claude-opus-4-1': [15, 75],
   'claude-opus-4': [15, 75],
 });
+const GEMINI_RATES = Object.freeze({
+  // Google Gemini API standard paid tier, verified 2026-11-12.
+  'gemini-3.1-flash-lite': [0.25, 1.50],
+});
 
 function modelRates(model) {
   const name = String(model || '');
@@ -77,4 +81,31 @@ function estimateClaudeReservation(params = {}) {
   return (bytes * rates[0] * 2 + params.max_tokens * rates[1]) / 1e6;
 }
 
-module.exports = { PLACES_UPPER_BOUND, CLAUDE_RATES, modelRates, sanitizedUsage, estimateClaudeUsage, estimateClaudeReservation };
+function sanitizedGeminiUsage(usage = {}) {
+  const result = {};
+  for (const [source, target] of [['promptTokenCount', 'input_tokens'], ['candidatesTokenCount', 'output_tokens'],
+    ['thoughtsTokenCount', 'thinking_tokens'], ['totalTokenCount', 'total_tokens']]) {
+    const n = tokenCount(usage[source]);
+    if (n !== null) result[target] = n;
+  }
+  return result;
+}
+function estimateGeminiUsage(model, rawUsage) {
+  const rates = GEMINI_RATES[model];
+  const usage = sanitizedGeminiUsage(rawUsage);
+  if (!rates || usage.input_tokens == null || usage.total_tokens == null) return null;
+  const output = Math.max(usage.output_tokens || 0, usage.total_tokens - usage.input_tokens);
+  return (usage.input_tokens * rates[0] + output * rates[1]) / 1e6;
+}
+function estimateGeminiReservation(params = {}) {
+  const rates = GEMINI_RATES[params.model];
+  const max = params.body?.generationConfig?.maxOutputTokens;
+  if (!rates || !Number.isSafeInteger(max) || max < 1) return null;
+  const bytes = Buffer.byteLength(JSON.stringify({ systemInstruction: params.body?.systemInstruction,
+    contents: params.body?.contents }), 'utf8') + 4096;
+  if (bytes > 180000) return null;
+  return (bytes * rates[0] * 2 + max * rates[1]) / 1e6;
+}
+
+module.exports = { PLACES_UPPER_BOUND, CLAUDE_RATES, GEMINI_RATES, modelRates, sanitizedUsage,
+  estimateClaudeUsage, estimateClaudeReservation, sanitizedGeminiUsage, estimateGeminiUsage, estimateGeminiReservation };

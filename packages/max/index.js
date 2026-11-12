@@ -241,7 +241,7 @@ function createMaxReasoningRuntime(options = {}) {
     clientIntelligenceOpts: options.clientIntelligenceOpts,
     operatorObjectiveService: options.operatorObjectiveService,
     operatorObjectiveOpts: options.operatorObjectiveOpts,
-    anthropic: options.anthropic,
+    gemini: options.gemini,
     disableLlm: options.disableLlm,
     model: options.workspaceModel,
     missionEngine: options.missionEngine || null,

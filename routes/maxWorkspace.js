@@ -11,7 +11,7 @@
 
 const express = require('express');
 const { isApiUsageQuestion, parseApiSpendCommand, answerApiUsageQuestion } = require('../services/apiUsageService');
-const Anthropic = require('../utils/meteredAnthropic').forAgent('max_workspace');
+const { createGeminiClient } = require('../utils/meteredGemini');
 const router = express.Router();
 const { reviewNavigationForRequest } = require('../services/reviewNavigation');
 const { requireAuth, requireRole } = require('../middleware/auth');
@@ -35,11 +35,11 @@ const requireDashboardRead = [
   requireRole('admin', 'manager', 'viewer', 'client'),
 ];
 
-let anthropicClient = null;
-function getAnthropic() {
-  if (!process.env.ANTHROPIC_API_KEY) return null;
-  if (!anthropicClient) anthropicClient = new Anthropic();
-  return anthropicClient;
+let geminiClient = null;
+function getGemini() {
+  if (!process.env.GEMINI_API_KEY) return null;
+  if (!geminiClient) geminiClient = createGeminiClient();
+  return geminiClient;
 }
 
 /**
@@ -241,11 +241,11 @@ router.post(
 
 async function getWorkspaceRuntime() {
   const max = await getMaxRuntime();
-  // Ensure presentation engine can use Claude when key is present
+  // Ensure only the presentation writer uses Gemini when its dedicated key is present.
   if (max.workspace && max.workspace._presentation) {
-    const client = getAnthropic();
+    const client = getGemini();
     if (client) {
-      max.workspace._presentation._anthropic = client;
+      max.workspace._presentation._gemini = client;
       max.workspace._presentation._disableLlm = false;
     }
   }

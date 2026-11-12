@@ -3,13 +3,13 @@
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { randomUUID } = require('node:crypto');
 const turns = new AsyncLocalStorage();
-const TYPES = new Set(['invalid_request_error', 'authentication_error', 'permission_error',
-  'not_found_error', 'request_too_large', 'rate_limit_error', 'api_error', 'overloaded_error']);
+const TYPES = new Set(['INVALID_ARGUMENT', 'UNAUTHENTICATED', 'PERMISSION_DENIED', 'NOT_FOUND',
+  'RESOURCE_EXHAUSTED', 'DEADLINE_EXCEEDED', 'UNAVAILABLE', 'INTERNAL']);
 const CODES = new Set(['provider_auth', 'rate_limited', 'provider_overloaded', 'timeout',
   'provider_unreachable', 'spend_blocked', 'billing_unavailable', 'invalid_request', 'provider_error']);
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 // Only known request-schema paths, never arbitrary keys or user-supplied values.
-const FIELD = /^(?:model|max_tokens|temperature|top_p|top_k|stream|stop_sequences|system|thinking(?:\.(?:type|budget_tokens))?|output_config(?:\.effort)?|tools|tool_choice|messages(?:\.[0-9]{1,6})?(?:\.(?:role|content)(?:\.[0-9]{1,6})?(?:\.(?:type|text|source|tool_use_id|name|input))?)?)$/;
+const FIELD = /^(?:model|system(?:_instruction|Instruction)(?:\.parts(?:\.[0-9]{1,6})?(?:\.text)?)?|contents(?:\.[0-9]{1,6})?(?:\.(?:role|parts)(?:\.[0-9]{1,6})?(?:\.text)?)?|generation(?:_config|Config)(?:\.(?:max(?:_output_tokens|OutputTokens)|thinking(?:_config|Config)(?:\.thinking(?:_budget|Budget))?))?)$/;
 
 // Do not invoke exception getters, toJSON, coercion hooks, or read headers.
 function own(object, key) {
@@ -22,9 +22,25 @@ function matched(value, pattern, max) {
 }
 function field(value) { return matched(value, FIELD, 120); }
 
+function googleViolation(inner) {
+  const details = own(inner, 'details');
+  if (!Array.isArray(details)) return null;
+  for (const detail of details.slice(0, 10)) {
+    if (own(detail, '@type') !== 'type.googleapis.com/google.rpc.BadRequest') continue;
+    const violations = own(detail, 'fieldViolations');
+    if (!Array.isArray(violations)) continue;
+    for (const violation of violations.slice(0, 10)) {
+      const parameter = field(own(violation, 'field'));
+      if (parameter) return { parameter, message: own(violation, 'description') };
+    }
+  }
+  return null;
+}
+
 function validation(inner) {
-  const explicit = field(own(inner, 'param')) || field(own(inner, 'parameter'));
-  const message = own(inner, 'message');
+  const violation = googleViolation(inner);
+  const explicit = violation?.parameter || field(own(inner, 'param')) || field(own(inner, 'parameter'));
+  const message = violation ? violation.message : own(inner, 'message');
   if (typeof message !== 'string' || message.length > 4096) {
     return { parameter: explicit, description: 'Provider validation details unavailable or omitted.' };
   }
@@ -47,19 +63,19 @@ function validation(inner) {
 function buildFailureDiagnostic(error, errorCode) {
   const envelope = own(error, 'error');
   const inner = own(envelope, 'error') || envelope;
-  const type = own(inner, 'type');
-  const status = own(error, 'status');
+  const type = own(inner, 'status') || own(inner, 'type');
+  const status = own(error, 'status') || own(inner, 'code');
   const context = turns.getStore() || {};
   const details = validation(inner);
   return {
     event: 'MAX_PRESENTATION_PROVIDER_FAILURE', schemaVersion: 1,
-    provider: 'anthropic', stage: 'presentation.messages.create',
+    provider: 'google_gemini', stage: 'presentation.models.generateContent',
     errorCode: CODES.has(errorCode) ? errorCode : 'provider_error',
     providerErrorType: TYPES.has(type) ? type : null,
     httpStatus: Number.isInteger(status) && status >= 100 && status <= 599 ? status : null,
-    requestId: matched(own(error, 'requestID'), /^req_[A-Za-z0-9]{1,100}$/, 104)
-      || matched(own(error, 'request_id'), /^req_[A-Za-z0-9]{1,100}$/, 104)
-      || matched(own(envelope, 'request_id'), /^req_[A-Za-z0-9]{1,100}$/, 104),
+    requestId: matched(own(error, 'requestID'), /^[A-Za-z0-9_-]{1,128}$/, 128)
+      || matched(own(error, 'request_id'), /^[A-Za-z0-9_-]{1,128}$/, 128)
+      || matched(own(envelope, 'request_id'), /^[A-Za-z0-9_-]{1,128}$/, 128),
     parameter: details.parameter, validationDescription: details.description,
     turnId: matched(context.turnId, UUID, 36),
     sessionId: matched(context.sessionId, UUID, 36),

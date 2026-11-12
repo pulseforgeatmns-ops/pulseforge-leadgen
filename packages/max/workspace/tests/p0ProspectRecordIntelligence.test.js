@@ -95,7 +95,7 @@ test('query bound is explicit and incomplete retrieval cannot produce full-set r
 test('citation detail, stable reference, limitations and calculation survive response presenter without model execution', async () => {
   const composed = composeRecords(bundle(fixtures()), rank);
   const s = operatingStructured(composed.prose, { items: composed.items, recordIntelligence: true });
-  const presenter = new PresentationEngine({ anthropic: { messages: { create: () => { throw new Error('must not call model'); } } } });
+  const presenter = new PresentationEngine({ gemini: { generateContent: () => { throw new Error('must not call model'); } } });
   const p = await presenter.present(s);
   assert.equal(p.prose, composed.prose);
   for (const ev of p.structured.supportingEvidence) {
