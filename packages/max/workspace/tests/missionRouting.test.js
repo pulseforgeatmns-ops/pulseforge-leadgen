@@ -973,6 +973,59 @@ describe('Max activeWorkContext (session desk memory)', () => {
     assert.equal(awc.constraints.noLaunch, true);
   });
 
+  it('preserves fillable-table rows across the production presentation boundary', async () => {
+    const previousKey = process.env.GEMINI_API_KEY;
+    process.env.GEMINI_API_KEY = 'test-key-not-used';
+    let geminiCalls = 0;
+
+    try {
+      const workspace = createWorkspaceEngine({
+        missionEngine: testMissionEngine(),
+        missionsEnabled: true,
+        disableLlm: false,
+        gemini: {
+          generateContent: async () => {
+            geminiCalls += 1;
+            return {
+              candidates: [{
+                content: {
+                  parts: [{
+                    text: 'The verification work order was converted into a fillable table.',
+                  }],
+                },
+              }],
+            };
+          },
+        },
+      });
+
+      const first = await workspace.ask({
+        question: CANARY_WORK_ORDER_PROMPT,
+        context: { tenantId: 'acceptance', page: 'command-deck' },
+      });
+      const callsAfterOrdinaryResponse = geminiCalls;
+      const result = await workspace.ask({
+        sessionId: first.sessionId,
+        question: 'Convert this to a fillable table.',
+      });
+
+      assert.equal(result.structured.metadata.fillableTable, true);
+      assert.match(result.prose, /PM-001/);
+      assert.match(result.prose, /PM-002/);
+      assert.match(result.prose, /PM-003/);
+      assert.match(result.prose, /prospect_id/);
+      assert.match(result.prose, /mailing_address_(?:value|status)/);
+      assert.match(result.prose, /website_(?:value|status)/);
+      assert.match(result.prose, /phone_(?:value|status)/);
+      assert.match(result.prose, /contact_role_status/);
+      assert.ok(callsAfterOrdinaryResponse > 0, 'ordinary response still uses Gemini');
+      assert.equal(geminiCalls, callsAfterOrdinaryResponse, 'fillable table bypasses Gemini');
+    } finally {
+      if (previousKey === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = previousKey;
+    }
+  });
+
   it('Test 3: explicit new prospects override activeWorkContext', async () => {
     const missionEngine = testMissionEngine();
     const workspace = createWorkspaceEngine({
