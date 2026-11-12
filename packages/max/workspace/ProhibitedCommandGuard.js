@@ -90,17 +90,26 @@ function commandedIntents(question) {
 }
 
 /**
- * Prohibited commands for this mission, excluding those that target the
- * pending decision's own action (those keep the router path).
+ * Prohibited commands for this mission, excluding those the pending decision
+ * itself executes under the same action class (those keep the router path,
+ * which enforces the same constraint).
  * @param {object} mission
  * @param {string} question
  */
 function prohibitedCommands(mission, question) {
   if (!mission || !mission.authorizationConstraints) return [];
-  const pendingKind = mission.pendingOperatorDecision && mission.pendingOperatorDecision.kind;
-  const ownTargets = (pendingKind && KIND_TARGETS[pendingKind]) || [];
+  const pending = mission.pendingOperatorDecision || null;
+  const ownTargets = (pending && KIND_TARGETS[pending.kind]) || [];
+  const pendingIntent = amo.intentFromPendingDecision(pending);
+  const pendingClass = pendingIntent ? amo.intentActionClass(pendingIntent) : null;
+  // A command is left to the pending decision only when executing that
+  // decision enforces the same action class. "Approve discovery" while plan
+  // approval is pending would otherwise approve the plan (planning) instead of
+  // refusing the discovery the mission forbids.
+  const ownsCommand = (row) => ownTargets.includes(row.target) &&
+    pendingClass === amo.intentActionClass(row.intent);
   return commandedIntents(question)
-    .filter((row) => !ownTargets.includes(row.target))
+    .filter((row) => !ownsCommand(row))
     .map((row) => ({ ...row, verdict: amo.evaluateAction(mission, amo.intentActionClass(row.intent)) }))
     .filter((row) => !row.verdict.allowed);
 }

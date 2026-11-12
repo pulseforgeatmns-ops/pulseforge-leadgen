@@ -7,6 +7,7 @@ const {
   outputIsSynthetic,
   SYNTHETIC_PROVENANCE,
 } = require('./AuthorizationConstraints');
+const { assertResearchPlanningComplete } = require('./ResearchPlanning');
 
 /**
  * SPEC-131 — Transactional Mission Execution (TME).
@@ -246,6 +247,7 @@ async function executeMissionStage(input = {}) {
     // P0 — durable operator restrictions bind every stage, whichever surface
     // (chat, approval button, REST, autonomous progression) reached it.
     assertActionAuthorized(prior, stageActionClass(specialist, stage), { specialist, stage });
+    assertResearchPlanningComplete(prior, stageActionClass(specialist, stage), { specialist, stage });
     // P0 — synthetic (fixture) evidence never reaches outreach.
     assertNotSyntheticForAction(prior, stageActionClass(specialist, stage), { specialist, stage });
     runtimeState = isStructuredMissionApproved(prior)

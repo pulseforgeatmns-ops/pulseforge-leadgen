@@ -26,6 +26,7 @@ const {
   isReadyForLock,
   MISSION_TYPES,
   EXECUTION_STATES,
+  SUCCESS_METRIC_TYPES,
 } = require('./StructuredMission');
 const { mayAssign, pickByPrecedence } = require('./ContextPrecedence');
 const {
@@ -34,6 +35,23 @@ const {
   tenantGeographyChoices,
 } = require('./CanonicalGeographyEvidence');
 const { responseTypeForAmbiguity } = require('./PendingDecisionResponseType');
+const { ACTION_CLASSES, evaluateAction } = require('./AuthorizationConstraints');
+
+/** Clarifications that only target Scout research (who and where to search). */
+const RESEARCH_PLANNING_FIELDS = Object.freeze(['market.segment', 'geography.region']);
+
+/**
+ * P0 — a mission whose authorization prohibits provider research cannot run
+ * Scout, so asking which market and region Scout should pursue, or setting a
+ * customer-acquisition target, plans work that can never happen. Planning
+ * defers those fields and records what was deferred, so it can be reopened
+ * (and re-approved) if research is later authorized.
+ * @param {object|null} authorizationConstraints
+ */
+function researchProhibited(authorizationConstraints) {
+  if (!authorizationConstraints) return false;
+  return !evaluateAction({ authorizationConstraints }, ACTION_CLASSES.PROVIDER_RESEARCH).allowed;
+}
 
 const GREATER_MANCHESTER_CITIES = Object.freeze([
   'Manchester',
@@ -505,12 +523,29 @@ function planMission(resolvedObjective, opts = {}) {
   const evidence = resolvedObjective.evidence || inferEvidence(objective, opts);
   addProvenance(provenance, 'evidence.minimum_confidence', evidence.minimumConfidence, 0.8, `Evidence threshold ${evidence.thresholdLabel}.`, 'general_knowledge');
 
-  const ambiguities = Array.isArray(resolvedObjective.ambiguities)
+  const allAmbiguities = Array.isArray(resolvedObjective.ambiguities)
     ? resolvedObjective.ambiguities
     : [];
+  const deferResearch = researchProhibited(opts.authorizationConstraints || null);
+  const ambiguities = deferResearch
+    ? allAmbiguities.filter((row) => !RESEARCH_PLANNING_FIELDS.includes(row && row.field))
+    : allAmbiguities;
+  const researchPlanning = deferResearch
+    ? {
+      deferred: true,
+      reason: 'provider_research_prohibited',
+      missing: [
+        ...(segmentKey ? [] : ['market.segment']),
+        ...(extractedGeography.region || (extractedGeography.cities || []).length ? [] : ['geography.region']),
+      ],
+      deferredAmbiguities: allAmbiguities.filter((row) => RESEARCH_PLANNING_FIELDS.includes(row && row.field)),
+    }
+    : undefined;
   const success = resolvedObjective.successCriteria || {};
-  const successType = success.type || (/recurr/i.test(objective) ? 'recurring_clients' : 'customers');
-  const successTarget = success.target || success.customers || 1;
+  const successType = deferResearch
+    ? SUCCESS_METRIC_TYPES.OPERATOR_REVIEW
+    : success.type || (/recurr/i.test(objective) ? 'recurring_clients' : 'customers');
+  const successTarget = deferResearch ? 1 : success.target || success.customers || 1;
 
   const draft = createStructuredMission({
     missionType: resolvedObjective.missionType || intent.type,
@@ -528,6 +563,7 @@ function planMission(resolvedObjective, opts = {}) {
     ambiguities,
     sourceText: asText(resolvedObjective.provenanceSource) || objective,
     execution: { state: ambiguities.length ? EXECUTION_STATES.DRAFTING : EXECUTION_STATES.PLANNED },
+    researchPlanning,
   }, { allowIncomplete: true });
 
   const readyForConfirmation = isReadyForLock(draft);

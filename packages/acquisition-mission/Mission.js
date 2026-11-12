@@ -53,6 +53,7 @@ function planMissionFromInput(objective, input = {}) {
       resolutions: input.planResolutions || input.resolutions || null,
       missionType: input.missionType || input.type || null,
       evidence: input.evidence || null,
+      authorizationConstraints: input.authorizationConstraints || null,
     });
   }
   return planFromObjective(objective, {
@@ -64,6 +65,7 @@ function planMissionFromInput(objective, input = {}) {
     missionType: input.missionType || input.type || null,
     evidence: input.evidence || null,
     executionContract: input.executionContract || null,
+    authorizationConstraints: input.authorizationConstraints || null,
   });
 }
 

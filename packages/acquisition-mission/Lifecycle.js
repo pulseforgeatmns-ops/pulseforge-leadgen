@@ -240,7 +240,7 @@ function deriveStageLifecycle(mission, targetStage, contributions = []) {
   const pendingOperatorDecision = derivePendingOperatorDecisionForStage(mission, targetStage, contributions);
   return {
     stage: targetStage,
-    status: missionStatusLabel(targetStage, pendingOperatorDecision),
+    status: missionStatusLabel(targetStage, pendingOperatorDecision, mission),
     pendingOperatorDecision,
   };
 }

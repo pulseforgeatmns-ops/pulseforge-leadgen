@@ -85,7 +85,8 @@ const {
   createMissionApprovalAudit,
   logMissionApprovalMatched,
 } = require('./audit/MissionApprovalAudit');
-const { formatMissionUnderstandingProse } = require('../../acquisition-mission/StructuredMission');
+const { formatMissionUnderstandingProse, isResearchPlanningDeferred } = require('../../acquisition-mission/StructuredMission');
+const { RESEARCH_PLANNING_REQUIRED } = require('../../acquisition-mission/ResearchPlanning');
 const { isMissionPlanningTurn } = require('./MissionPlanningTurn');
 const askPathTrace = require('./audit/AskPathTrace');
 const {
@@ -736,18 +737,23 @@ function buildExecutionMissionResponse({
       (executionResult.structuredMission &&
         formatMissionUnderstandingProse(executionResult.structuredMission)) ||
       '';
+    // P0 — a review-only plan never invites discovery the mission forbids.
+    const reviewOnlyPlan = isResearchPlanningDeferred(mission.structuredMission) &&
+      !amo.evaluateAction(mission, amo.ACTION_CLASSES.PROVIDER_RESEARCH).allowed;
     const comm = buildMissionCommunication({
       headline: 'Mission Plan Approved',
       mission: mission.title || mission.id,
       objective: mission.objective,
-      status: 'Plan Approved',
+      status: reviewOnlyPlan ? 'Plan approved (review only)' : 'Plan Approved',
       stage: 'Discover',
       progress,
       health: snapshot.health && snapshot.health.label ? snapshot.health.label : 'Healthy',
-      waitingOn: 'Discovery approval',
+      waitingOn: reviewOnlyPlan ? 'Operator review' : 'Discovery approval',
       confidence: mission.confidence,
-      nextStep: 'Mission plan is now immutable. Approve discovery to begin Scout.',
-      operatorDecision: 'Approve discovery?',
+      nextStep: reviewOnlyPlan
+        ? 'Mission plan is now immutable. This mission is review-only: discovery, outreach and content stay blocked unless an operator lifts the restriction.'
+        : 'Mission plan is now immutable. Approve discovery to begin Scout.',
+      operatorDecision: reviewOnlyPlan ? 'None. Review only.' : 'Approve discovery?',
       evidenceStatus: understanding || 'Structured mission contract frozen',
       sources: ['acquisition_mission', 'mission_planner'],
       includeReasoningMarker: false,
@@ -1563,6 +1569,7 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
       });
     } catch (err) {
       if (amo.isSyntheticEvidenceError(err)) return buildSyntheticBlockedTurn({ mission, action, intent });
+      if (err && err.code === RESEARCH_PLANNING_REQUIRED) return buildResearchPlanningRequiredTurn({ err, mission, action, intent });
       if (!amo.isAuthorizationConstraintError(err)) throw err;
       return buildConstraintBlockedTurn({ err, mission, action, intent });
     }
@@ -1631,6 +1638,48 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     executionRequest,
     execution,
     audit,
+  };
+}
+
+/**
+ * P0 — discovery requested on a review-only plan whose research planning was
+ * never collected or approved. Nothing was dispatched.
+ */
+function buildResearchPlanningRequiredTurn({ err, mission, action, intent }) {
+  const answer = [
+    'Not executed: this mission was planned as review-only, so its research planning',
+    (err.missing && err.missing.length ? `(${err.missing.join(', ')})` : ''),
+    'was never collected or approved.',
+    'No specialist was dispatched. Answer the planning questions and approve the plan before discovery.',
+  ].filter(Boolean).join(' ');
+  const structured = buildStructuredResponse({
+    answer,
+    reasoning: [`Mission ${mission.id} has a review-only plan; discovery requires an approved research plan.`],
+    relatedEntities: [{ id: mission.id, type: 'acquisition_mission', name: mission.title || mission.id }],
+  });
+  Object.assign(structured.metadata, {
+    acquisitionMission: true,
+    acquisitionMissionExecution: true,
+    missionExecutionAction: action,
+    executionState: 'blocked',
+    executionVerified: false,
+    blocker: RESEARCH_PLANNING_REQUIRED,
+  });
+  return {
+    reason: 'acquisition_mission_research_planning_required',
+    structured,
+    prose: answer,
+    mission,
+    action,
+    executionResult: null,
+    executionRequest: null,
+    execution: {
+      state: 'blocked',
+      verified: false,
+      reason: RESEARCH_PLANNING_REQUIRED,
+      evidence: { missing: err.missing || [] },
+      correlation: { missionId: mission.id, intent, specialist: amo.specialistForIntent(intent) },
+    },
   };
 }
 

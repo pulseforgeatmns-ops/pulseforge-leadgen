@@ -391,6 +391,8 @@ function advancePlanClarification(input = {}) {
     prior: { ambiguities: current.planAmbiguities, draft: current.missionPlanDraft, resolutions: current.planResolutions },
     resolutions: current.planResolutions,
     context: input.context,
+    // P0 — replanning keeps the mission's restrictions (review-only defers research planning).
+    authorizationConstraints: current.authorizationConstraints || null,
   });
   if (planned.unmatchedClarification) {
     return {
@@ -467,6 +469,7 @@ function applyPlanEdits(input = {}) {
     constraints: current.constraints,
     resolutions: current.planResolutions,
     context: input.context,
+    authorizationConstraints: current.authorizationConstraints || null,
   });
   engine.contribute(
     mission.id,

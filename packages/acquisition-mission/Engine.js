@@ -211,7 +211,7 @@ function refresh(store, mission) {
   const manual = (mission.blockers || []).filter((row) => row.manual);
   mission.blockers = [...manual, ...inferred.filter((row) => !manual.some((m) => m.kind === row.kind))];
   mission.progressPercent = progressPercent(mission.stage, refreshedCtx);
-  mission.status = missionStatusLabel(mission.stage, mission.pendingOperatorDecision) || mission.status;
+  mission.status = missionStatusLabel(mission.stage, mission.pendingOperatorDecision, mission) || mission.status;
   mission.updatedAt = nowIso();
   return { mission: store.putMission(mission), ctx: { ...refreshedCtx, ...extra }, contributions };
 }

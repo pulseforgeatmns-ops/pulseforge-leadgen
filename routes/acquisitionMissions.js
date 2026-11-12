@@ -78,6 +78,7 @@ function fail(res, err, fallbackCode, fallbackStatus = 500) {
         || code === 'synthetic_evidence_blocked' ? 403
       : code === 'amo_mission_exists' ? 409
       : code === 'authorization_amendment_stale' ? 409
+      : code === 'research_planning_required' ? 409
       : code === 'authorization_amendment_invalid' || code === 'authorization_amendment_noop' ? 400
       : code === 'MISSION_RUNTIME_BOUNDARY_VIOLATION' ? 409
       : code === 'amo_tenant_required'

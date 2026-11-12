@@ -201,6 +201,7 @@ async function applyAuthorizationAmendment(input = {}) {
   }
 
   const { executeMissionStage } = require('./TransactionalExecution');
+  const { reopenResearchPlanning } = require('./ResearchPlanning');
   const staged = await executeMissionStage({
     engine,
     missionId,
@@ -250,7 +251,15 @@ async function applyAuthorizationAmendment(input = {}) {
         ...recomputed.after,
         amendments: [...recomputed.after.amendments, { ...record, contributionId: contribution.id }],
       };
-      engine.store.putMission({ ...engine.get(missionId, tenantId), authorizationConstraints: amended });
+      // P0 — permitting research on a review-only plan reopens planning in this
+      // same commit: the deferred market/region questions become a pending
+      // clarification and the plan must be approved again before discovery.
+      const reopened = reopenResearchPlanning(engine.get(missionId, tenantId), amended);
+      engine.store.putMission({
+        ...engine.get(missionId, tenantId),
+        ...(reopened || {}),
+        authorizationConstraints: amended,
+      });
       return { contribution, constraints: amended, snapshot: engine.inspect(missionId, { tenantId }) };
     },
     persistDurable: input.persistDurable || null,

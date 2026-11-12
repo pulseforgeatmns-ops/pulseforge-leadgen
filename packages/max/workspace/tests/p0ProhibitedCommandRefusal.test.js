@@ -108,8 +108,9 @@ describe('P0 S2 — prohibited commands are refused with the restriction named',
     assert.equal(h.engine.list(TENANT).length, 1);
     assert.equal(mission.authorizationConstraints.reviewOnly, true);
     assert.deepEqual(mission.authorizationConstraints.prohibited, PROHIBITED_CLASSES);
-    assert.equal(mission.pendingOperatorDecision.kind, 'plan_clarification');
-    assert.equal(mission.status, 'Clarification required', 'no "Discovering" before discovery is authorized');
+    // Review-only planning defers Scout targeting, so the plan is ready at once.
+    assert.equal(mission.pendingOperatorDecision.kind, 'plan_approval');
+    assert.equal(mission.status, 'Plan ready for approval', 'no "Discovering" before discovery is authorized');
     assert.doesNotMatch(created.prose, /Status\s*\|*\s*Discovering/);
     assert.doesNotMatch(created.prose, /Sources[^]*\bscout\b/i, 'Scout is not a source before it contributes');
     assert.deepEqual(h.engine.store.listContributions(mission.id), []);
@@ -125,7 +126,7 @@ describe('P0 S2 — prohibited commands are refused with the restriction named',
     ['Draft the outreach content.', 'content'],
     ['Launch paid ads.', 'paid media'],
   ]) {
-    it(`while a plan clarification is pending: "${command}"`, async () => {
+    it(`review-only, while plan approval is pending: "${command}"`, async () => {
       const h = harness();
       await h.ask(REVIEW_ONLY);
       const mission = h.mission();
@@ -136,34 +137,63 @@ describe('P0 S2 — prohibited commands are refused with the restriction named',
 
       assertConstraintRefusal(result, actionClassText);
       assert.equal(result.structured.metadata.prohibitedCommandGuard, true);
-      assert.equal(result.structured.metadata.pendingDecisionKind, 'plan_clarification');
-      assert.deepEqual(missionFingerprint(h.engine, mission), before, 'mission unchanged');
+      assert.equal(result.structured.metadata.pendingDecisionKind, 'plan_approval');
+      assert.deepEqual(missionFingerprint(h.engine, mission), before, 'mission unchanged; plan not approved as a side effect');
       assert.deepEqual(dispatchedIntents(), [], 'nothing dispatched');
       assert.ok(listExecutionRouterAudit().every((row) => row.outcome === 'blocked_by_constraint'));
       assert.equal(fetchCalls, 0, 'no provider or network call');
     });
   }
 
-  it('walks the documented S2 flow: clarifications, plan approval, then refusals at discovery approval', async () => {
+  // Research allowed, outreach/content prohibited: Scout planning questions
+  // are still asked, and prohibited commands are refused while one is pending.
+  const RESTRICTED_RESEARCH_ALLOWED =
+    'Set up a contact intake mission for an existing customer. No outreach, calls, content, or campaign activation.';
+  for (const [command, actionClassText] of [
+    ['Send the emails.', 'outreach'],
+    ['Call the prospects.', 'outreach'],
+    ['Approve the emails.', 'outreach authorization'],
+    ['Draft the outreach content.', 'content'],
+  ]) {
+    it(`while a plan clarification is pending: "${command}"`, async () => {
+      const h = harness();
+      await h.ask(RESTRICTED_RESEARCH_ALLOWED);
+      const mission = h.mission();
+      assert.equal(mission.pendingOperatorDecision.kind, 'plan_clarification');
+      const before = missionFingerprint(h.engine, mission);
+      clearExecutionRouterAudit();
+
+      const result = await h.ask(command);
+
+      assert.match(result.prose, new RegExp(`^Not executed: this mission's authorization forbids ${actionClassText}\\.`));
+      assert.equal(result.structured.metadata.blocker, amo.AUTHORIZATION_CONSTRAINT_BLOCKED);
+      assert.equal(result.structured.metadata.pendingDecisionKind, 'plan_clarification');
+      assert.deepEqual(missionFingerprint(h.engine, mission), before);
+      assert.deepEqual(dispatchedIntents(), []);
+      assert.equal(fetchCalls, 0);
+    });
+  }
+
+  it('a punctuated region answer resumes planning on a research-allowed mission', async () => {
+    const h = harness();
+    await h.ask(RESTRICTED_RESEARCH_ALLOWED);
+    assert.equal(h.mission().pendingOperatorDecision.field, 'geography.region');
+    const region = await h.ask('Nashua NH.');
+    assert.notEqual(region.workspaceOwnership.owner, 'reasoning', 'captured, not a generic briefing');
+    assert.equal(h.mission().pendingOperatorDecision.field, 'market.segment');
+    assert.equal(h.mission().status, 'Clarification required');
+  });
+
+  it('walks the documented S2 flow: plan approval, then refusals at discovery approval', async () => {
     const h = harness();
     await h.ask(REVIEW_ONLY);
-
-    const region = await h.ask('Nashua NH.');
-    assert.notEqual(region.workspaceOwnership.owner, 'reasoning', 'region answer is captured, not a generic briefing');
-    const afterRegion = h.mission();
-    assert.equal(afterRegion.pendingOperatorDecision.field, 'market.segment', 'planner advanced to the next clarification');
-    assert.equal(afterRegion.status, 'Clarification required');
-
-    await h.ask('Property managers');
     assert.equal(h.mission().pendingOperatorDecision.kind, 'plan_approval');
-    assert.equal(h.mission().status, 'Plan ready for approval');
 
-    // Plan approval is planning, not a prohibited class: the pending decision's
-    // own action keeps its normal path.
+    // Plan approval is planning, not a prohibited class: it keeps its normal path.
     const approved = await h.ask('Approve the plan.');
     assert.equal(approved.structured.metadata.blocker, undefined);
     assert.equal(h.mission().pendingOperatorDecision.kind, 'discovery_approval');
-    assert.equal(h.mission().status, 'Awaiting discovery approval');
+    assert.equal(h.mission().status, 'Plan approved (review only)');
 
     const mission = h.mission();
     const before = missionFingerprint(h.engine, mission);
