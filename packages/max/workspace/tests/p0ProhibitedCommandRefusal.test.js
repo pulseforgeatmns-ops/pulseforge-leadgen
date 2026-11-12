@@ -184,7 +184,7 @@ describe('P0 S2 — prohibited commands are refused with the restriction named',
     assert.equal(h.mission().status, 'Clarification required');
   });
 
-  it('walks the documented S2 flow: plan approval, then refusals at discovery approval', async () => {
+  it('walks the documented S2 flow: plan approval, then refusals on the resting review-only mission', async () => {
     const h = harness();
     await h.ask(REVIEW_ONLY);
     assert.equal(h.mission().pendingOperatorDecision.kind, 'plan_approval');
@@ -192,23 +192,22 @@ describe('P0 S2 — prohibited commands are refused with the restriction named',
     // Plan approval is planning, not a prohibited class: it keeps its normal path.
     const approved = await h.ask('Approve the plan.');
     assert.equal(approved.structured.metadata.blocker, undefined);
-    assert.equal(h.mission().pendingOperatorDecision.kind, 'discovery_approval');
+    // A locked review-only plan advertises no discovery approval.
+    assert.equal(h.mission().pendingOperatorDecision, null);
     assert.equal(h.mission().status, 'Plan approved (review only)');
 
     const mission = h.mission();
     const before = missionFingerprint(h.engine, mission);
     clearExecutionRouterAudit();
 
-    // Pending decision's own action: refused by the router (same constraint).
     const discovery = await h.ask('Approve discovery.');
     assertConstraintRefusal(discovery, 'provider research');
+    assert.equal(discovery.structured.metadata.pendingDecisionKind, null);
 
-    // A different action while discovery approval is pending: refused, not
-    // read as an unclear yes/no.
     const send = await h.ask('Send the emails.');
     assertConstraintRefusal(send, 'outreach');
     assert.equal(send.structured.metadata.prohibitedCommandGuard, true);
-    assert.equal(send.structured.metadata.pendingDecisionKind, 'discovery_approval');
+    assert.equal(send.structured.metadata.pendingDecisionKind, null);
 
     assert.deepEqual(missionFingerprint(h.engine, mission), before, 'no approval consumed, no stage change');
     assert.deepEqual(dispatchedIntents(), []);
@@ -318,6 +317,43 @@ describe('P0 S2 — guard boundaries (precedence, polarity, scope, tenant)', () 
       acquisitionMissionRuntime: createTestAmoRuntime({ engine }),
     });
     assert.equal(turn, null, 'discovery approval stays with the router, which enforces the same restriction');
+  });
+});
+
+describe('P0 S2 — bare go-ahead on a resting review-only mission', () => {
+  for (const command of ['approved', 'Approved.', 'go ahead', 'continue', 'proceed']) {
+    it(`"${command}" is refused as discovery and changes nothing`, async () => {
+      const h = harness();
+      await h.ask(REVIEW_ONLY);
+      await h.ask('Approve the plan.');
+      const mission = h.mission();
+      assert.equal(mission.pendingOperatorDecision, null);
+      const before = missionFingerprint(h.engine, mission);
+      clearExecutionRouterAudit();
+      const result = await h.ask(command);
+      assertConstraintRefusal(result, 'provider research');
+      assert.equal(result.structured.metadata.prohibitedCommandGuard, true);
+      assert.deepEqual(missionFingerprint(h.engine, mission), before, 'no approval recorded, no state change');
+      assert.deepEqual(dispatchedIntents(), []);
+      assert.equal(fetchCalls, 0);
+    });
+  }
+
+  it('a negated go-ahead is not refused as a command', async () => {
+    const h = harness();
+    await h.ask(REVIEW_ONLY);
+    await h.ask('Approve the plan.');
+    const result = await h.ask("Don't proceed.");
+    assert.notEqual(result.structured.metadata.prohibitedCommandGuard, true);
+  });
+
+  it('a bare go-ahead keeps its normal meaning while a decision is pending', async () => {
+    const h = harness();
+    await h.ask(REVIEW_ONLY);
+    assert.equal(h.mission().pendingOperatorDecision.kind, 'plan_approval');
+    const result = await h.ask('Approved.');
+    assert.notEqual(result.structured.metadata.prohibitedCommandGuard, true);
+    assert.equal(h.mission().structuredMission.immutable, true, 'the pending plan approval was consumed normally');
   });
 });
 

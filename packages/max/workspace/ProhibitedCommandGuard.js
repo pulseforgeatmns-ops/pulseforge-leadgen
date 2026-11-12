@@ -28,6 +28,7 @@ const { stripNegatedDirectives } = require('./NegatedDirective');
 const { ACTION_TARGETS, KIND_TARGETS } = require('./PendingDecisionResolver');
 const { buildConstraintBlockedTurn } = require('./AcquisitionMissionExecution');
 const { resolveAcquisitionActiveMission } = require('./ActiveMissionGuard');
+const { isResearchPlanningDeferred } = require('../../acquisition-mission/StructuredMission');
 
 const { EXECUTION_INTENTS } = amo;
 
@@ -48,6 +49,29 @@ const OUTREACH_CHANNEL_RE =
   /\b(?:call(?:s|ing)?|phone|texts?|texting|sms|mail(?:ing)?|letters?|messages?)\b/i;
 const PAID_MEDIA_TARGET_RE =
   /\b(?:ads?|advertis\w*|paid\s+(?:media|search|social|acquisition)|ppc)\b/i;
+
+/**
+ * A bare go-ahead names no action: "approved", "yes", "proceed", "continue".
+ * On a resting review-only mission (locked plan, nothing pending) the only
+ * next step it could mean is discovery, which the mission forbids.
+ */
+const BARE_GO_AHEAD_RE =
+  /^(?:yes|yep|yeah|ok(?:ay)?|sure|approved?|approve it|go(?:\s+ahead)?|proceed|continue|keep going|do it|start|begin|run it|launch it|execute it|next)$/i;
+
+function isBareGoAhead(question) {
+  const text = stripNegatedDirectives(String(question || '')).replace(/[\s.!]+$/g, '').trim();
+  return Boolean(text) && !/\?\s*$/.test(String(question || '')) && BARE_GO_AHEAD_RE.test(text);
+}
+
+function restsReviewOnly(mission) {
+  return Boolean(
+    mission &&
+    !mission.pendingOperatorDecision &&
+    mission.structuredMission &&
+    mission.structuredMission.immutable &&
+    isResearchPlanningDeferred(mission.structuredMission)
+  );
+}
 
 function affirmativeCommandSentences(question) {
   return String(question || '')
@@ -120,7 +144,8 @@ function prohibitedCommands(mission, question) {
  */
 async function maybeHandleProhibitedCommandTurn(input = {}) {
   const question = String(input.question || '');
-  if (!commandedIntents(question).length) return null;
+  const bareGoAhead = isBareGoAhead(question);
+  if (!commandedIntents(question).length && !bareGoAhead) return null;
   let mission = null;
   try {
     ({ mission } = await resolveAcquisitionActiveMission(input));
@@ -128,7 +153,12 @@ async function maybeHandleProhibitedCommandTurn(input = {}) {
     // Fail to the existing path: the router and TME still enforce constraints.
     return null;
   }
-  const blocked = prohibitedCommands(mission, question);
+  let blocked = prohibitedCommands(mission, question);
+  if (!blocked.length && bareGoAhead && restsReviewOnly(mission)) {
+    const intent = EXECUTION_INTENTS.APPROVE_DISCOVERY;
+    const verdict = amo.evaluateAction(mission, amo.intentActionClass(intent));
+    if (!verdict.allowed) blocked = [{ target: 'discovery', intent, verdict, bareGoAhead: true }];
+  }
   if (!blocked.length) return null;
 
   const [first] = blocked;
@@ -154,6 +184,11 @@ async function maybeHandleProhibitedCommandTurn(input = {}) {
       `Every commanded action is forbidden here: ${classes.map((c) => c.replace(/_/g, ' ')).join(', ')}.`
     );
   }
+  if (blocked.some((row) => row.bareGoAhead)) {
+    turn.structured.reasoning.push(
+      'The review-only plan is already approved and nothing is pending; the only next step would be discovery.'
+    );
+  }
   if (mission.pendingOperatorDecision && mission.pendingOperatorDecision.prompt) {
     turn.structured.reasoning.push(
       `The pending decision is unchanged: ${mission.pendingOperatorDecision.prompt}`
@@ -168,6 +203,7 @@ async function maybeHandleProhibitedCommandTurn(input = {}) {
 }
 
 module.exports = {
+  isBareGoAhead,
   commandedIntents,
   prohibitedCommands,
   maybeHandleProhibitedCommandTurn,

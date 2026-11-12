@@ -19,7 +19,7 @@ const {
   inferSegmentKey,
   segmentMeta,
 } = require('../../acquisition-mission/MissionPlanner');
-const { MISSION_TYPES } = require('../../acquisition-mission/StructuredMission');
+const { MISSION_TYPES, isResearchPlanningDeferred } = require('../../acquisition-mission/StructuredMission');
 const { objectivesSimilar } = require('../scoutAcquisition/NeedAssessment');
 
 const SEGMENT_PATTERNS = Object.freeze([
@@ -179,7 +179,9 @@ function extractSegmentScope(text, structuredMission) {
 }
 
 function extractSuccessMetric(text, structuredMission) {
-  if (structuredMission && structuredMission.successMetric) {
+  // P0 — a review-only plan's operator_review metric reflects its restriction,
+  // not the business goal; resume compares the goal stated in the objective.
+  if (structuredMission && structuredMission.successMetric && !isResearchPlanningDeferred(structuredMission)) {
     return {
       type: asText(structuredMission.successMetric.type || structuredMission.successMetric.metric),
       target: Number(structuredMission.successMetric.target) || 1,

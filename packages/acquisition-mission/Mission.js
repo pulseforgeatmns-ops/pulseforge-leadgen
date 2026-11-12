@@ -23,6 +23,7 @@ const {
   round2,
 } = require('./types');
 const { missionStatusLabel } = require('./MissionStatus');
+const { isResearchPlanningDeferred } = require('./StructuredMission');
 const { deriveMissionTitle } = require('./MissionNaming');
 const { planFromObjective, planMission } = require('./MissionPlanner');
 const {
@@ -186,6 +187,10 @@ function buildPendingOperatorDecision({
   if (input.planCancelled === true) return null;
   if (stage !== STAGES.DISCOVER) return null;
   if (structuredMission && structuredMission.immutable) {
+    // P0 — a locked review-only plan deferred research planning: there is no
+    // discovery to approve, so nothing actionable is advertised. A governed
+    // amendment that permits research reopens planning (ResearchPlanning).
+    if (isResearchPlanningDeferred(structuredMission)) return null;
     return {
       stage: STAGES.DISCOVER,
       kind: OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL,

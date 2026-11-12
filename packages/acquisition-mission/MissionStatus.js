@@ -9,7 +9,9 @@
  * claimed Scout work that had not been authorized or started. While one of
  * those pre-discovery decisions is pending, the status names it instead.
  * "Discovering" is reported only once no pre-discovery decision is pending,
- * i.e. after discovery approval.
+ * i.e. after discovery approval. A locked review-only plan (research planning
+ * deferred) rests with no pending decision and reads "Plan approved (review
+ * only)".
  *
  * Presentation-level truth only: stage, pending decision, approvals and
  * authorization are untouched, and no terminal or custom status is rewritten.
@@ -40,26 +42,25 @@ const DISCOVER_STAGE_LABELS = new Set([
  * @returns {string}
  */
 function missionStatusLabel(stage, pendingOperatorDecision, mission = null) {
+  if (
+    stage === STAGES.DISCOVER &&
+    reviewOnlyPlan(mission) &&
+    (!pendingOperatorDecision || pendingOperatorDecision.kind === OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL)
+  ) {
+    return REVIEW_ONLY_PLAN_APPROVED;
+  }
   if (stage === STAGES.DISCOVER && pendingOperatorDecision) {
-    if (
-      pendingOperatorDecision.kind === OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL &&
-      reviewOnlyPlan(mission)
-    ) {
-      return REVIEW_ONLY_PLAN_APPROVED;
-    }
     const label = PRE_DISCOVERY_STATUS[pendingOperatorDecision.kind];
     if (label) return label;
   }
   return STAGE_LABELS[stage] || stage;
 }
 
-/** A locked plan that deferred research, on a mission that still prohibits it. */
+/** A locked plan that deferred research planning (review-only). */
 function reviewOnlyPlan(mission) {
-  if (!mission || !mission.structuredMission) return false;
+  if (!mission || !mission.structuredMission || !mission.structuredMission.immutable) return false;
   const { isResearchPlanningDeferred } = require('./StructuredMission');
-  const { ACTION_CLASSES, evaluateAction } = require('./AuthorizationConstraints');
-  return isResearchPlanningDeferred(mission.structuredMission) &&
-    !evaluateAction(mission, ACTION_CLASSES.PROVIDER_RESEARCH).allowed;
+  return isResearchPlanningDeferred(mission.structuredMission);
 }
 
 /**

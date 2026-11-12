@@ -16,7 +16,7 @@ const {
   nowIso,
 } = require('./types');
 const { createEvent } = require('./Timeline');
-const { isReadyForLock } = require('./StructuredMission');
+const { isReadyForLock, isResearchPlanningDeferred } = require('./StructuredMission');
 const {
   hasPendingPlanClarification,
   hasPendingPlanApproval,
@@ -220,6 +220,8 @@ function isDiscoveryRunning(snapshot = {}) {
   if (hasDiscoveryArtifact(snapshot)) return false;
   if (!isStructuredMissionApproved(mission)) return false;
   if (mission.stage && mission.stage !== STAGES.DISCOVER) return false;
+  // P0 — a locked review-only plan rests without discovery; it is not running.
+  if (isResearchPlanningDeferred(mission.structuredMission)) return false;
   return true;
 }
 

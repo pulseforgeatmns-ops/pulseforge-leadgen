@@ -7,6 +7,8 @@
  */
 
 const amo = require('../packages/acquisition-mission');
+const { assertActionAuthorized } = require('../packages/acquisition-mission/AuthorizationConstraints');
+const { recordRouterAudit } = require('../packages/acquisition-mission/ExecutionRouter');
 const { STAGE_ORDER } = amo;
 const { normalizeScoutDiscoveryPayload } = require('../packages/acquisition-mission/DiscoveryPayload');
 const {
@@ -95,6 +97,12 @@ async function answerOperator(question, input = {}, opts = {}) {
   return runtime.answerOperator(question, input, opts);
 }
 
+/** Intents that send, or approve a prepared package for sending. */
+const SENDER_REQUIRED_INTENTS = new Set([
+  amo.EXECUTION_INTENTS.EXECUTE_OUTBOUND,
+  amo.EXECUTION_INTENTS.APPROVE_EXECUTION,
+]);
+
 async function executeCanonical(input = {}, opts = {}) {
   const runtime = runtimeFromOpts(opts);
   const tenantId = String(input.tenantId || opts.tenantId || '');
@@ -152,8 +160,37 @@ async function executeCanonical(input = {}, opts = {}) {
     source,
   });
 
+  // P0 — mission authorization is decided before any sender configuration is
+  // read: a prohibited action is refused (authorization_constraint_blocked,
+  // audited like the router does) even when the tenant's sender is incomplete.
+  const actionClass = amo.intentActionClass(intent);
+  if (!amo.evaluateAction(mission, actionClass).allowed) {
+    recordRouterAudit({
+      requestId: request.id,
+      source: request.source,
+      intent: request.intent,
+      missionId: request.missionId,
+      operatorId: request.operatorId,
+      runtimeOwner: request.runtimeOwner,
+      specialist: amo.specialistForIntent(request.intent),
+      action: null,
+      outcome: 'blocked_by_constraint',
+      executionState: 'blocked',
+      errorCode: amo.AUTHORIZATION_CONSTRAINT_BLOCKED,
+      request,
+    });
+    assertActionAuthorized(mission, actionClass, { requestId: request.id, intent: request.intent });
+  }
+
+  // The canonical sender is needed only to send, or to approve a package for
+  // sending. Other intents never read it, so its configuration cannot fail them.
+  // Resolution still fails closed for the intents that need it.
   let canonicalSender = input.canonicalSender || opts.canonicalSender || null;
-  if (!canonicalSender && (opts.pool || opts.client || input.client || typeof opts.loadClient === 'function')) {
+  if (
+    !canonicalSender &&
+    SENDER_REQUIRED_INTENTS.has(intent) &&
+    (opts.pool || opts.client || input.client || typeof opts.loadClient === 'function')
+  ) {
     const { resolveCanonicalSenderIdentity } = require('../utils/canonicalSenderIdentity');
     const resolved = await resolveCanonicalSenderIdentity({
       tenantId,

@@ -170,7 +170,10 @@ describe('Gap 1 — durable authorization constraints', () => {
     const engine = amo.createAcquisitionMissionEngine();
     const mission = missionWith(engine, 'Review only.');
     await approval.advancePlanAfterApproval({ engine, mission, tenantId: '10', question: 'Approved.' });
-    assert.equal(engine.get(mission.id, '10').pendingOperatorDecision.kind, 'discovery_approval');
+    // P0 — a locked review-only plan rests with no actionable decision (no
+    // discovery approval is advertised for discovery the mission forbids).
+    assert.equal(engine.get(mission.id, '10').pendingOperatorDecision, null);
+    const contributionsBefore = engine.store.listContributions(mission.id).length;
     let scoutCalls = 0;
     const ws = createWorkspaceEngine({
       disableLlm: true,
@@ -186,7 +189,8 @@ describe('Gap 1 — durable authorization constraints', () => {
     const result = await ws.ask({ sessionId: opened.sessionId, question: 'approved' });
     assert.equal(scoutCalls, 0);
     assert.match(result.prose, /forbids provider research/);
-    assert.equal(engine.get(mission.id, '10').pendingOperatorDecision.kind, 'discovery_approval', 'approval not consumed');
+    assert.equal(engine.get(mission.id, '10').pendingOperatorDecision, null, 'nothing advertised or consumed');
+    assert.equal(engine.store.listContributions(mission.id).length, contributionsBefore, 'no approval recorded');
   });
 
   it('autonomous progression cannot reach a prohibited specialist', async () => {

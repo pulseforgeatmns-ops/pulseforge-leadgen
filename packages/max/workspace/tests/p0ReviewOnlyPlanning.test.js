@@ -161,6 +161,7 @@ describe('P0 review-only planning — creation and approval flow', () => {
     const mission = h.mission();
     assert.equal(mission.structuredMission.immutable, true);
     assert.equal(mission.structuredMission.researchPlanning.deferred, true);
+    assert.equal(mission.pendingOperatorDecision, null, 'durable resting state: nothing actionable advertised');
     assert.equal(mission.status, 'Plan approved (review only)');
     assert.doesNotMatch(approved.prose, /Approve discovery to begin Scout/);
     assert.match(approved.prose, /review-only/i);
@@ -257,7 +258,7 @@ describe('P0 review-only planning — authorization amendment', () => {
     const after = h.mission();
     assert.equal(after.structuredMission.immutable, true);
     assert.equal(after.structuredMission.researchPlanning.deferred, true);
-    assert.equal(after.pendingOperatorDecision.kind, 'discovery_approval');
+    assert.equal(after.pendingOperatorDecision, null);
     assert.equal(after.status, 'Plan approved (review only)');
   });
 
@@ -274,7 +275,7 @@ describe('P0 review-only planning — authorization amendment', () => {
       createdBy: 'test',
       structuredMission: freezeStructuredMission(planned.draft, { approvedBy: 'test' }),
     });
-    assert.equal(mission.pendingOperatorDecision.kind, 'discovery_approval');
+    assert.equal(mission.pendingOperatorDecision, null, 'a locked deferred plan advertises no discovery approval');
     assert.equal(mission.authorizationConstraints, null, 'no prohibition: only the planning gate stands');
     const request = amo.createExecutionRequestFromApi({
       intent: amo.EXECUTION_INTENTS.APPROVE_DISCOVERY,
@@ -295,5 +296,72 @@ describe('P0 review-only planning — authorization amendment', () => {
     );
     assert.equal(spies.scoutCalls, 0);
     assert.ok(listExecutionRouterAudit().some((row) => row.outcome === 'blocked_research_planning'));
+  });
+});
+
+describe('P0 sender validation ordering (executeCanonical)', () => {
+  const INCOMPLETE = { id: 25, sender_email: 'ops@example.invalid', sender_name: 'Ops', sending_domain: null };
+  const MISMATCH = { id: 25, sender_email: 'ops@example.invalid', sender_name: 'Ops', sending_domain: 'other.invalid' };
+
+  function loader(client) {
+    const calls = [];
+    const loadClient = async (id) => { calls.push(id); return client; };
+    return { calls, loadClient };
+  }
+
+  async function unrestrictedMission() {
+    const runtime = createTestAmoRuntime();
+    const engine = runtime.engine();
+    const mission = engine.create({
+      tenantId: TENANT, clientId: Number(TENANT), createdBy: 'test',
+      objective: 'Acquire one recurring commercial cleaning client from a property manager in Nashua NH.',
+    });
+    return { runtime, engine, mission };
+  }
+
+  function run(ctx, intent, loadClient, extra = {}) {
+    return svc.executeCanonical({
+      tenantId: TENANT, missionId: ctx.mission.id, intent, role: 'operator', operatorId: 'op',
+      runScout: spies.scout, sendEmail: spies.send, ...extra,
+    }, { acquisitionMissionRuntime: ctx.runtime, persist: false, loadClient });
+  }
+
+  it('a prohibited action is refused before the sender is read, and audited once', async () => {
+    const h = harness();
+    await h.ask(REVIEW_ONLY);
+    const ctx = { runtime: h.runtime, mission: h.mission() };
+    for (const intent of ['EXECUTE_OUTBOUND', 'APPROVE_EXECUTION', 'APPROVE_DISCOVERY']) {
+      clearExecutionRouterAudit();
+      const { calls, loadClient } = loader(INCOMPLETE);
+      await assert.rejects(run(ctx, intent, loadClient), (err) => err.code === amo.AUTHORIZATION_CONSTRAINT_BLOCKED, intent);
+      assert.deepEqual(calls, [], `${intent}: sender never read`);
+      const audit = listExecutionRouterAudit();
+      assert.equal(audit.length, 1, intent);
+      assert.equal(audit[0].outcome, 'blocked_by_constraint');
+      assert.equal(audit[0].intent, intent);
+    }
+    assert.equal(spies.sendCalls, 0);
+    assert.equal(spies.scoutCalls, 0);
+  });
+
+  it('intents that do not send never read the sender configuration', async () => {
+    const ctx = await unrestrictedMission();
+    const { calls, loadClient } = loader(INCOMPLETE);
+    const routed = await run(ctx, 'APPROVE_PLAN', loadClient).catch((err) => ({ error: err }));
+    assert.ok(!routed.error || !String(routed.error.code || '').startsWith('canonical_sender_'),
+      routed.error && routed.error.code);
+    assert.deepEqual(calls, []);
+  });
+
+  it('outbound intents still fail closed on missing or mismatched sender identity', async () => {
+    for (const [client, code] of [[INCOMPLETE, 'canonical_sender_incomplete'], [MISMATCH, 'canonical_sender_domain_mismatch'], [null, 'canonical_sender_client_not_found']]) {
+      for (const intent of ['EXECUTE_OUTBOUND', 'APPROVE_EXECUTION']) {
+        const ctx = await unrestrictedMission();
+        const { calls, loadClient } = loader(client);
+        await assert.rejects(run(ctx, intent, loadClient), (err) => err.code === code, `${intent} ${code}`);
+        assert.equal(calls.length, 1, `${intent}: sender resolved once`);
+      }
+    }
+    assert.equal(spies.sendCalls, 0, 'nothing sent');
   });
 });
