@@ -6,7 +6,7 @@
  * into natural language. Never queries, scores, ranks, or invents.
  */
 
-const DEFAULT_MODEL = process.env.MAX_PRESENTATION_MODEL || 'gemini-2.5-flash-lite';
+const DEFAULT_MODEL = process.env.MAX_PRESENTATION_MODEL || 'gemini-3.1-flash-lite';
 const { PRESENTATION_IDENTITY } = require('../identity/MaxIdentity');
 const { logPresentationFailure } = require('./PresentationDiagnostics');
 

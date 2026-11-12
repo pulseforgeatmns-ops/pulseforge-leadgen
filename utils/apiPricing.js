@@ -25,7 +25,7 @@ const CLAUDE_RATES = Object.freeze({
 });
 const GEMINI_RATES = Object.freeze({
   // Google Gemini API standard paid tier, verified 2026-11-12.
-  'gemini-2.5-flash-lite': [0.10, 0.40],
+  'gemini-3.1-flash-lite': [0.25, 1.50],
 });
 
 function modelRates(model) {

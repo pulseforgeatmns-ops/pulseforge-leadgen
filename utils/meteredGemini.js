@@ -24,7 +24,7 @@ function createGeminiClient({ apiKey = process.env.GEMINI_API_KEY, fetchImpl = g
         tenantId: options.apiUsageContext?.tenantId ?? (typeof tenantId === 'function' ? tenantId() : tenantId),
         operation: 'models.generateContent', model: params.model,
         estimatedUsd: estimateGeminiReservation(params),
-        pricingBasis: 'gemini_2_5_flash_lite_standard_2026_11_12' }, { db });
+        pricingBasis: 'gemini_3_1_flash_lite_standard_2026_11_12' }, { db });
       const controller = new AbortController();
       const timeoutMs = Number.isFinite(options.timeout) && options.timeout > 0 ? options.timeout : 30000;
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
