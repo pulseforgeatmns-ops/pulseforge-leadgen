@@ -34,7 +34,7 @@ function buildReport({ rows, policies = [], availability, earliest, requestedSin
     requested: { since: requestedSince, until, ...aggregate(windowRows) },
   };
   const alerts = [];
-  const providerSummary = ['google_places', 'anthropic'].map(provider => {
+  const providerSummary = ['google_places', 'anthropic', 'google_gemini'].map(provider => {
     const source = provider === 'google_places' ? availability.places || availability.events : availability.events;
     const providerRows = rows.filter(r => r.provider === provider);
     const policy = policies.find(p => p.provider === provider) || null;
@@ -140,14 +140,14 @@ function formatApiUsageBrief(report) {
   return lines.join('\n');
 }
 function isApiUsageQuestion(question) {
-  return /\b(api\s+(?:usage|spend(?:ing)?|costs?|billing|budgets?)|(?:usage|spend|costs?|billing|budget)\s+(?:of|for|on)?\s*(?:our\s+)?apis?|google\s+(?:places|cloud).*(?:costs?|spend(?:ing)?|usage|bill(?:ing)?|budgets?)|(?:claude|anthropic|model).*(?:costs?|spend(?:ing)?|usage|bill(?:ing)?|budgets?))\b/i.test(String(question));
+  return /\b(api\s+(?:usage|spend(?:ing)?|costs?|billing|budgets?)|(?:usage|spend|costs?|billing|budget)\s+(?:of|for|on)?\s*(?:our\s+)?apis?|google\s+(?:places|cloud|gemini).*(?:costs?|spend(?:ing)?|usage|bill(?:ing)?|budgets?)|(?:claude|anthropic|gemini|model).*(?:costs?|spend(?:ing)?|usage|bill(?:ing)?|budgets?))\b/i.test(String(question));
 }
 function parseApiSpendCommand(question) {
   const text = String(question).trim().replace(/^max[,!:]?\s+/i, '');
-  const providerFor = name => /google/i.test(name) ? 'google_places' : 'anthropic';
-  const pause = text.match(/^(?:pause|stop)\s+(google places|claude|anthropic)(?:\s+api)?(?:\s+requests)?[.!]?$/i);
+  const providerFor = name => /gemini/i.test(name) ? 'google_gemini' : /google/i.test(name) ? 'google_places' : 'anthropic';
+  const pause = text.match(/^(?:pause|stop)\s+(google places|gemini|claude|anthropic)(?:\s+api)?(?:\s+requests)?[.!]?$/i);
   if (pause) return { provider: providerFor(pause[1]), patch: { paused: true } };
-  const cap = text.match(/^(?:cap|limit)\s+(google places|claude|anthropic)(?:\s+api)?\s+(?:at|to)\s+\$(\d+(?:\.\d{1,2})?)\s+(?:per|a)\s+(day|month)[.!]?$/i);
+  const cap = text.match(/^(?:cap|limit)\s+(google places|gemini|claude|anthropic)(?:\s+api)?\s+(?:at|to)\s+\$(\d+(?:\.\d{1,2})?)\s+(?:per|a)\s+(day|month)[.!]?$/i);
   return cap ? { provider: providerFor(cap[1]), patch: { [cap[3].toLowerCase() === 'day' ? 'daily_usd_limit' : 'monthly_usd_limit']: Number(cap[2]) } } : null;
 }
 async function answerApiUsageQuestion(question, deps = {}) {

@@ -249,7 +249,7 @@ class WorkspaceEngine {
    * @param {object} [options]
    * @param {SessionStore} [options.sessions]
    * @param {PresentationEngine} [options.presentation]
-   * @param {object} [options.anthropic]
+   * @param {object} [options.gemini]
    * @param {boolean} [options.disableLlm]
    * @param {object} [options.missionEngine] - SPEC-022 MissionEngine
    * @param {boolean} [options.missionsEnabled]
@@ -286,7 +286,7 @@ class WorkspaceEngine {
     this._presentation =
       options.presentation ||
       new PresentationEngine({
-        anthropic: options.anthropic,
+        gemini: options.gemini,
         disableLlm: options.disableLlm,
         model: options.model,
       });

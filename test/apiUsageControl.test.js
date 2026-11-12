@@ -82,10 +82,11 @@ test('missing meters and unknown prices never become a complete zero-dollar bill
   assert.ok(priced.alerts.some(a=>a.code==='partial_history'));
 });
 test('spend questions are deterministic and unrelated sales/ads requests are not intercepted', () => {
-  for (const q of ['audit our API usage','API spend for the last two weeks','Google Places billing','Anthropic token cost']) assert.equal(isApiUsageQuestion(q),true,q);
+  for (const q of ['audit our API usage','API spend for the last two weeks','Google Places billing','Anthropic token cost','Gemini model cost']) assert.equal(isApiUsageQuestion(q),true,q);
   for (const q of ['spend $25 on Google Ads','create an outbound campaign','what is our sales budget']) assert.equal(isApiUsageQuestion(q),false,q);
   assert.deepEqual(parseApiSpendCommand('Max, cap Google Places at $5 per day'),{provider:'google_places',patch:{daily_usd_limit:5}});
   assert.deepEqual(parseApiSpendCommand('Pause Claude API requests'),{provider:'anthropic',patch:{paused:true}});
+  assert.deepEqual(parseApiSpendCommand('Cap Gemini API at $2 per day'),{provider:'google_gemini',patch:{daily_usd_limit:2}});
   assert.equal(parseApiSpendCommand('could we perhaps increase the API budget?'),null);
 });
 test('audit CLI requires explicit production flag and rejects SQL, URLs or unexpected arguments', () => {
@@ -93,11 +94,13 @@ test('audit CLI requires explicit production flag and rejects SQL, URLs or unexp
   for (const args of [['--sql','SELECT 1'],['--days','NaN'],['--days','500']])assert.throws(()=>parseArgs(args),/invalid_arguments/);
 });
 test('runtime clients use the shared meter, and operator route excludes client/viewer roles', () => {
-  for (const file of ['maxAgent.js','paigeAgent.js','rileyAgent.js','rexAgent.js','routes/maxChat.js','routes/maxWorkspace.js','routes/cron.js','routes/webhooks.js']) {
+  for (const file of ['maxAgent.js','paigeAgent.js','rileyAgent.js','rexAgent.js','routes/maxChat.js','routes/cron.js','routes/webhooks.js']) {
     const source=fs.readFileSync(require('path').join(__dirname,'..',file),'utf8');
     assert.ok(source.includes('meteredAnthropic'),file);
     assert.ok(!source.includes("require('@anthropic-ai/sdk')"),file);
   }
+  const presentationRoute=fs.readFileSync(require('path').join(__dirname,'../routes/maxWorkspace.js'),'utf8');
+  assert.ok(presentationRoute.includes('meteredGemini'));
   const route=fs.readFileSync(require('path').join(__dirname,'../routes/apiUsage.js'),'utf8');
   assert.match(route,/requireRole\('admin', 'manager'\)/);
 });

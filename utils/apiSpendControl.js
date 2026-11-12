@@ -5,7 +5,7 @@ const { readFileSync } = require('fs');
 const path = require('path');
 const { PLACES_UPPER_BOUND } = require('./apiPricing');
 const ready = new WeakMap();
-const PROVIDERS = new Set(['google_places', 'anthropic']);
+const PROVIDERS = new Set(['google_places', 'anthropic', 'google_gemini']);
 const LIMITS = ['daily_request_limit', 'monthly_request_limit', 'daily_usd_limit', 'monthly_usd_limit'];
 const COST_SQL = `CASE endpoint ${Object.entries(PLACES_UPPER_BOUND).map(([k, v]) => `WHEN '${k}' THEN ${v}`).join(' ')} ELSE NULL END`;
 const defaultDb = () => require('../db');

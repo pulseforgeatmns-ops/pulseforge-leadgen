@@ -2,11 +2,11 @@
 
 /**
  * PresentationEngine — ADR-005.
- * Claude (or deterministic fallback) translates a StructuredResponseObject
+ * Gemini (or deterministic fallback) translates a StructuredResponseObject
  * into natural language. Never queries, scores, ranks, or invents.
  */
 
-const DEFAULT_MODEL = process.env.MAX_WORKSPACE_MODEL || process.env.MAX_CHAT_MODEL || 'claude-sonnet-4-6';
+const DEFAULT_MODEL = process.env.MAX_PRESENTATION_MODEL || 'gemini-2.5-flash-lite';
 const { PRESENTATION_IDENTITY } = require('../identity/MaxIdentity');
 const { logPresentationFailure } = require('./PresentationDiagnostics');
 
@@ -14,14 +14,14 @@ const PRESENTATION_TIMEOUT_MS = 30000;
 
 /** Operator-actionable guidance per sanitized model error code. */
 const MODEL_ERROR_ACTIONS = Object.freeze({
-  provider_auth: 'Check ANTHROPIC_API_KEY for this environment.',
+  provider_auth: 'Check GEMINI_API_KEY and Gemini API access for this environment.',
   rate_limited: 'Provider rate limit reached; retry shortly.',
   provider_overloaded: 'Provider overloaded or unavailable; retry shortly.',
   timeout: 'Model request timed out; retry.',
   provider_unreachable: 'Could not reach the model provider; check network egress.',
   spend_blocked: 'Blocked by the API spend policy; review API usage limits.',
-  billing_unavailable: 'Model provider billing is unavailable. Check the Anthropic account billing and credits for this key, then retry.',
-  invalid_request: 'Model request rejected; check MAX_WORKSPACE_MODEL.',
+  billing_unavailable: 'Model provider billing is unavailable. Check the Google AI account billing for this key, then retry.',
+  invalid_request: 'Model request rejected; check MAX_PRESENTATION_MODEL.',
   provider_error: 'Model request failed; check server logs.',
 });
 
@@ -51,8 +51,7 @@ function classifyModelError(err) {
   if (status === 401 || status === 403 || name === 'AuthenticationError' || name === 'PermissionDeniedError') {
     return 'provider_auth';
   }
-  // Billing / credit-balance refusals arrive as HTTP 400 invalid_request_error
-  // (or 402). Matched on the provider text, which is never returned or logged.
+  // Billing refusals may arrive as HTTP 400 or 402. Provider text is never returned or logged.
   if ((status === 400 || status === 402 || name === 'BadRequestError') && isBillingRefusal(e)) {
     return 'billing_unavailable';
   }
@@ -60,7 +59,7 @@ function classifyModelError(err) {
   if (status === 529 || status === 503 || status === 502 || name === 'InternalServerError') {
     return 'provider_overloaded';
   }
-  if (name === 'APIConnectionTimeoutError' || /timed?\s*out|ETIMEDOUT/i.test(String(e.message || ''))) {
+  if (name === 'APIConnectionTimeoutError' || name === 'AbortError' || /timed?\s*out|ETIMEDOUT/i.test(String(e.message || ''))) {
     return 'timeout';
   }
   if (name === 'APIConnectionError' || /ECONNREFUSED|ENOTFOUND|ECONNRESET/.test(code)) {
@@ -98,12 +97,12 @@ Rules:
 class PresentationEngine {
   /**
    * @param {object} [options]
-   * @param {object} [options.anthropic] - Anthropic client instance
+   * @param {object} [options.gemini] - Gemini client instance
    * @param {string} [options.model]
    * @param {boolean} [options.disableLlm=false]
    */
   constructor(options = {}) {
-    this._anthropic = options.anthropic || null;
+    this._gemini = options.gemini || null;
     this._model = options.model || DEFAULT_MODEL;
     this._disableLlm = options.disableLlm === true;
   }
@@ -242,7 +241,7 @@ class PresentationEngine {
 
     // Strict output-shape / packet-review artifact mode: answer is already the
     // operator artifact — do not append Reasoning / Unavailable / Next, and do
-    // not rephrase via Claude.
+    // not rephrase via a model writer.
     if (metadata.strictOutputShape === true) {
       prose = formatDeterministicProse(structured);
       return {
@@ -289,10 +288,10 @@ class PresentationEngine {
     // actually happened so a deterministic fallback is never mistaken for one,
     // and never surface raw provider error text to the client.
     let modelCompletion;
-    if (!this._disableLlm && this._anthropic && process.env.ANTHROPIC_API_KEY) {
+    if (!this._disableLlm && this._gemini && process.env.GEMINI_API_KEY) {
       try {
-        prose = await this._presentWithClaude(structured);
-        presentation = 'claude';
+        prose = await this._presentWithGemini(structured);
+        presentation = 'gemini';
         modelCompletion = { attempted: true, ok: true };
       } catch (err) {
         let errorCode = 'provider_error';
@@ -331,30 +330,27 @@ class PresentationEngine {
     };
   }
 
-  async _presentWithClaude(structured) {
+  async _presentWithGemini(structured) {
     const metadata = structured.metadata || {};
     const system =
       metadata.missionCommunication === true
         ? MISSION_PRESENTATION_SYSTEM
         : DEFAULT_PRESENTATION_SYSTEM;
-    const message = await this._anthropic.messages.create(
-      {
-        model: this._model,
-        max_tokens: 900,
-        system,
-        messages: [
-          {
-            role: 'user',
-            content: `Translate this verified Structured Response Object into natural language for an operator. Preserve every fact; do not add any.\n\n${JSON.stringify(structured, null, 2)}`,
-          },
-        ],
+    const response = await this._gemini.generateContent({
+      model: this._model,
+      body: {
+        systemInstruction: { parts: [{ text: system }] },
+        contents: [{ role: 'user', parts: [{
+          text: `Translate this verified Structured Response Object into natural language for an operator. Preserve every fact; do not add any.\n\n${JSON.stringify(structured, null, 2)}`,
+        }] }],
+        generationConfig: { maxOutputTokens: 900, thinkingConfig: { thinkingBudget: 0 } },
       },
-      // Bound the operator's wait; the SDK default (10 min) outlives the HTTP request.
-      { timeout: PRESENTATION_TIMEOUT_MS }
-    );
+    }, { timeout: PRESENTATION_TIMEOUT_MS });
 
-    const prose = (Array.isArray(message && message.content) ? message.content : [])
-      .filter((part) => part.type === 'text')
+    const parts = response && response.candidates && response.candidates[0]
+      && response.candidates[0].content && response.candidates[0].content.parts;
+    const prose = (Array.isArray(parts) ? parts : [])
+      .filter((part) => typeof part.text === 'string')
       .map((part) => part.text)
       .join('\n')
       .trim();
@@ -367,7 +363,7 @@ class PresentationEngine {
 }
 
 /**
- * Deterministic formatter — used when Claude is unavailable.
+ * Deterministic formatter — used when Gemini is unavailable.
  * @param {object} structured
  */
 function formatDeterministicProse(structured) {

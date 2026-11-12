@@ -10,7 +10,7 @@ const { createTestAmoRuntime } = require('./amoTestRuntime');
 
 function hermeticWorkspaceOptions(options = {}) {
   const supplied = { disableLlm: true, ...options };
-  if (supplied.disableLlm === false && !supplied.anthropic && !supplied.presentation) {
+  if (supplied.disableLlm === false && !supplied.gemini && !supplied.presentation) {
     throw new Error('Hermetic workspace requires an explicit fake LLM/presentation when LLM is enabled');
   }
   if (!supplied.runtimeProvider && !supplied.acquisitionMissionRuntime) {

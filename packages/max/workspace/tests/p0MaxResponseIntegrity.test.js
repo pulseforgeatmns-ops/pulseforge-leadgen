@@ -173,9 +173,9 @@ describe('P0 response integrity — model failures are reported, sanitized and a
     return buildStructuredResponse({ answer: 'Pipeline has 3 qualified prospects.', reasoning: ['Counted from CRM.'] });
   }
 
-  const savedKey = process.env.ANTHROPIC_API_KEY;
-  beforeEach(() => { process.env.ANTHROPIC_API_KEY = 'test-key-not-used'; });
-  process.on('exit', () => { if (savedKey === undefined) delete process.env.ANTHROPIC_API_KEY; });
+  const savedKey = process.env.GEMINI_API_KEY;
+  beforeEach(() => { process.env.GEMINI_API_KEY = 'test-key-not-used'; });
+  process.on('exit', () => { if (savedKey === undefined) delete process.env.GEMINI_API_KEY; });
 
   for (const [label, err, code] of CASES) {
     it(`${label} → fallback_error with sanitized code ${code}`, async () => {
@@ -184,7 +184,7 @@ describe('P0 response integrity — model failures are reported, sanitized and a
       const logged = [];
       console.warn = (...args) => logged.push(args);
       try {
-        const engine = new PresentationEngine({ anthropic: { messages: { create: async () => { throw err; } } } });
+        const engine = new PresentationEngine({ gemini: { generateContent: async () => { throw err; } } });
         const s = structured();
         const out = await engine.present(s);
         assert.equal(out.presentation, 'fallback_error');
@@ -205,10 +205,10 @@ describe('P0 response integrity — model failures are reported, sanitized and a
   it('successful completion is recorded and bounded by a timeout', async () => {
     let seenOptions = null;
     const engine = new PresentationEngine({
-      anthropic: { messages: { create: async (_params, options) => { seenOptions = options; return { content: [{ type: 'text', text: 'Three qualified prospects.' }] }; } } },
+      gemini: { generateContent: async (_params, options) => { seenOptions = options; return { candidates: [{ content: { parts: [{ text: 'Three qualified prospects.' }] } }] }; } },
     });
     const out = await engine.present(structured());
-    assert.equal(out.presentation, 'claude');
+    assert.equal(out.presentation, 'gemini');
     assert.deepEqual(out.metadata.modelCompletion, { attempted: true, ok: true });
     assert.equal(out.metadata.presentationError, undefined);
     assert.equal(seenOptions.timeout, PRESENTATION_TIMEOUT_MS);
@@ -228,7 +228,7 @@ describe('P0 response integrity — model failures are reported, sanitized and a
     try {
       const engine = createWorkspaceEngine({
         disableLlm: false,
-        anthropic: { messages: { create: async () => { throw providerError({ status: 401, name: 'AuthenticationError' }); } } },
+        gemini: { generateContent: async () => { throw providerError({ status: 401, name: 'AuthenticationError' }); } },
       });
       const opened = await engine.open({ tenantId: '10' });
       const result = await engine.ask({ sessionId: opened.sessionId, question: 'What is the weather like for prospecting today?' });

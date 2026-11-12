@@ -28,7 +28,7 @@ test('explicit services, memory store, runtime and other options retain identity
   const runtime = createTestAmoRuntime();
   const provider = () => runtime;
   const objectiveOpts = { store: objectives.createMemoryStore() };
-  const options = { operatorObjectiveOpts: objectiveOpts, clientIntelligenceOpts: cieOpts, clientIntelligenceService: service, runtimeProvider: provider, acquisitionMissionRuntime: runtime, disableLlm: false, anthropic: { fixture: true } };
+  const options = { operatorObjectiveOpts: objectiveOpts, clientIntelligenceOpts: cieOpts, clientIntelligenceService: service, runtimeProvider: provider, acquisitionMissionRuntime: runtime, disableLlm: false, gemini: { fixture: true } };
   const actual = hermeticWorkspaceOptions(options);
   assert.equal(actual.clientIntelligenceOpts, cieOpts);
   assert.equal(actual.operatorObjectiveOpts, objectiveOpts);

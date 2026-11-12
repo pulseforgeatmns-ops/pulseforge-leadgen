@@ -418,12 +418,12 @@ describe('P0 #1087 — legitimate mission routing is preserved', { concurrency: 
 
 describe('P0 #1087 — presentation never rewrites the operational report', () => {
   it('returns the persisted-state report verbatim even when a model is configured', async () => {
-    const prev = process.env.ANTHROPIC_API_KEY;
-    process.env.ANTHROPIC_API_KEY = 'test-key';
+    const prev = process.env.GEMINI_API_KEY;
+    process.env.GEMINI_API_KEY = 'test-key';
     try {
       const presentation = new PresentationEngine({
         disableLlm: false,
-        anthropic: { messages: { create: async () => { throw new Error('model must not be called'); } } },
+        gemini: { generateContent: async () => { throw new Error('model must not be called'); } },
       });
       const out = await presentation.present({
         answer: 'Operational status — tenant 10\n- ✗ missions: UNAVAILABLE (x)',
@@ -432,8 +432,8 @@ describe('P0 #1087 — presentation never rewrites the operational report', () =
       assert.equal(out.presentation, 'operational_inspection');
       assert.equal(out.prose, 'Operational status — tenant 10\n- ✗ missions: UNAVAILABLE (x)');
     } finally {
-      if (prev === undefined) delete process.env.ANTHROPIC_API_KEY;
-      else process.env.ANTHROPIC_API_KEY = prev;
+      if (prev === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = prev;
     }
   });
 });
