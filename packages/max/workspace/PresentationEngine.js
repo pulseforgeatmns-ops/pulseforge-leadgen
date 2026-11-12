@@ -255,6 +255,18 @@ class PresentationEngine {
       };
     }
 
+    // Fillable tables are canonical operator artifacts. A model rewrite can
+    // summarize the table and drop required rows or columns, so preserve the
+    // verified structured answer exactly at the presentation boundary.
+    if (metadata.fillableTable === true) {
+      return {
+        prose: structured.answer ? String(structured.answer).trim() : '',
+        structured,
+        metadata: { ...metadata, presentation: 'fillable_table' },
+        presentation: 'fillable_table',
+      };
+    }
+
     // Packet-review / call-script-review artifacts default to answer-only
     // unless debug explicitly disabled strict shaping (strictOutputShape === false).
     if (
