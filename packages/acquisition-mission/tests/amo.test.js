@@ -94,7 +94,10 @@ describe('SPEC-118 mission object', () => {
     assert.equal(created.targetSegment, 'Commercial Law Firms');
     assert.equal(created.campaign, 'Fall Outreach');
     assert.equal(created.priority, 'high');
-    assert.equal(created.status, 'Discovering');
+    // P0 — a new mission is awaiting plan approval; discovery has not been
+    // authorized, so the status names the pending decision, not "Discovering".
+    assert.equal(created.pendingOperatorDecision.kind, 'plan_approval');
+    assert.equal(created.status, 'Plan ready for approval');
     assert.equal(created.confidence, 0.82);
     assert.equal(created.owner, 'Operator');
     assert.equal(created.createdBy, 'max');

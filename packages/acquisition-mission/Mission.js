@@ -9,7 +9,6 @@ const { mergeAuthorizationConstraints } = require('./AuthorizationConstraints');
 
 const {
   STAGES,
-  STAGE_LABELS,
   PRIORITIES,
   SPECIALISTS,
   OPERATOR_DECISION_KINDS,
@@ -23,6 +22,8 @@ const {
   clamp,
   round2,
 } = require('./types');
+const { missionStatusLabel } = require('./MissionStatus');
+const { isResearchPlanningDeferred } = require('./StructuredMission');
 const { deriveMissionTitle } = require('./MissionNaming');
 const { planFromObjective, planMission } = require('./MissionPlanner');
 const {
@@ -53,6 +54,7 @@ function planMissionFromInput(objective, input = {}) {
       resolutions: input.planResolutions || input.resolutions || null,
       missionType: input.missionType || input.type || null,
       evidence: input.evidence || null,
+      authorizationConstraints: input.authorizationConstraints || null,
     });
   }
   return planFromObjective(objective, {
@@ -64,6 +66,7 @@ function planMissionFromInput(objective, input = {}) {
     missionType: input.missionType || input.type || null,
     evidence: input.evidence || null,
     executionContract: input.executionContract || null,
+    authorizationConstraints: input.authorizationConstraints || null,
   });
 }
 
@@ -140,7 +143,10 @@ function createMission(input = {}) {
     stage,
     status: input.planCancelled === true
       ? 'Cancelled'
-      : STAGE_LABELS[stage] || 'Discovering',
+      : missionStatusLabel(stage, pendingOperatorDecision, {
+        structuredMission: structuredMission || null,
+        authorizationConstraints: mergeAuthorizationConstraints(input.authorizationConstraints || null),
+      }),
     confidence: round2(confidence),
     owner: asText(input.owner) || 'Operator',
     createdBy: asText(input.createdBy || input.created_by) || SPECIALISTS.MAX,
@@ -184,6 +190,10 @@ function buildPendingOperatorDecision({
   if (input.planCancelled === true) return null;
   if (stage !== STAGES.DISCOVER) return null;
   if (structuredMission && structuredMission.immutable) {
+    // P0 — a locked review-only plan deferred research planning: there is no
+    // discovery to approve, so nothing actionable is advertised. A governed
+    // amendment that permits research reopens planning (ResearchPlanning).
+    if (isResearchPlanningDeferred(structuredMission)) return null;
     return {
       stage: STAGES.DISCOVER,
       kind: OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL,
@@ -211,9 +221,13 @@ function buildPendingOperatorDecision({
       kind: OPERATOR_DECISION_KINDS.PLAN_APPROVAL,
       prompt: 'Approve mission plan?',
       responseType: OPERATOR_DECISION_RESPONSE_TYPES.YES_NO,
-      missionUnderstanding: formatOperatorConfirmation(missionPlanDraft)
+      missionUnderstanding: formatOperatorConfirmation(missionPlanDraft, {
+        authorizationConstraints: (input && input.authorizationConstraints) || null,
+      })
         || (planned && planned.confirmation)
-        || formatMissionUnderstandingProse(missionPlanDraft),
+        || formatMissionUnderstandingProse(missionPlanDraft, {
+          authorizationConstraints: (input && input.authorizationConstraints) || null,
+        }),
       actions: ['Approve', 'Edit', 'Cancel'],
     };
   }

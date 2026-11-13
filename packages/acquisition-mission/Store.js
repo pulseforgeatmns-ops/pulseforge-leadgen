@@ -6,6 +6,7 @@
 
 const { clone, asText, nowIso, amoError } = require('./types');
 const { assertMissionStateConsistent } = require('./PendingOperatorDecision');
+const { reconcileMissionStatus } = require('./MissionStatus');
 
 function createMemoryAmoStore(opts = {}) {
   const missions = new Map();
@@ -28,6 +29,9 @@ function createMemoryAmoStore(opts = {}) {
     assertMissionStateConsistent(mission, { contributions: missionContributions });
     const copy = clone(mission);
     copy.updatedAt = copy.updatedAt || nowIso();
+    // P0 — never store "Discovering" while a pre-discovery decision is pending.
+    const status = reconcileMissionStatus(copy);
+    if (status !== undefined) copy.status = status;
     missions.set(copy.id, copy);
     return clone(copy);
   }

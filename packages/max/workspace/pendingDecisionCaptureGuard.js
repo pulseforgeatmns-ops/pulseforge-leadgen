@@ -183,7 +183,8 @@ function isExactOfferedClarification(message, pendingDecision) {
 
 function isExplicitRegionClarification(message, pendingDecision) {
   if (pendingDecision.field !== 'geography.region') return false;
-  if (message.includes('?') || /^(?:why|what|how|when|where|who|which)\b/i.test(message)) return false;
+  // A question is never an answer, with or without "?" ("Is it Nashua NH.").
+  if (message.includes('?') || /^(?:why|what|how|when|where|who|which|is|are|was|were|can|could|should|would|will|shall|may|might|do|does|did)\b/i.test(message)) return false;
   if (matchesAny(message, STATUS_INSPECTION_PATTERNS)) return false;
   if (/\b(?:do not|don't|don’t|never|not)\s+approve\b|\bapproval\s*:\s*(?:not|no|rejected|pending)\b|\b(?:hold off|not yet|cancel)\b/i.test(message)) return false;
 

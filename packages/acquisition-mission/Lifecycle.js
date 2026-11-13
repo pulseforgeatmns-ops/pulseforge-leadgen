@@ -7,7 +7,6 @@
 const {
   STAGES,
   STAGE_ORDER,
-  STAGE_LABELS,
   STAGE_PROGRESS_BASE,
   SPECIALISTS,
   CONTRIBUTION_KINDS,
@@ -15,6 +14,7 @@ const {
   amoError,
   clamp,
 } = require('./types');
+const { missionStatusLabel } = require('./MissionStatus');
 const { buildPendingOperatorDecision } = require('./Mission');
 const { assertMissionStateConsistent } = require('./PendingOperatorDecision');
 const {
@@ -237,10 +237,11 @@ function derivePendingOperatorDecisionForStage(mission, targetStage, contributio
  * One place computes stage, status, and pendingOperatorDecision together.
  */
 function deriveStageLifecycle(mission, targetStage, contributions = []) {
+  const pendingOperatorDecision = derivePendingOperatorDecisionForStage(mission, targetStage, contributions);
   return {
     stage: targetStage,
-    status: STAGE_LABELS[targetStage] || targetStage,
-    pendingOperatorDecision: derivePendingOperatorDecisionForStage(mission, targetStage, contributions),
+    status: missionStatusLabel(targetStage, pendingOperatorDecision, mission),
+    pendingOperatorDecision,
   };
 }
 

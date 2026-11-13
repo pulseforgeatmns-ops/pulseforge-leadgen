@@ -223,6 +223,16 @@ function amoOperatorDecision(mission, snapshot, discovery) {
   return null;
 }
 
+/**
+ * P0 — Scout is a source only once a Scout contribution exists. A newly
+ * created or still-planning mission has no Scout evidence to cite.
+ */
+function amoSources(snapshot) {
+  const contributions = (snapshot && snapshot.contributions) || [];
+  const hasScout = contributions.some((row) => row && row.specialist === amo.SPECIALISTS.SCOUT);
+  return hasScout ? AMO_SOURCES.slice() : AMO_SOURCES.filter((source) => source !== 'scout');
+}
+
 function amoEvidenceStatus(discovery) {
   if (discovery && discovery.summary) return discovery.summary;
   if (discovery) return 'Scout discovery attached';
@@ -244,7 +254,7 @@ function applyAmoPresentationContract(baseComm, { mission, snapshot, created } =
     objective: (mission && mission.objective) || baseComm.objective,
     operatorDecision: operatorDecision || baseComm.operatorDecision,
     evidenceStatus: amoEvidenceStatus(discovery),
-    sources: AMO_SOURCES.slice(),
+    sources: amoSources(snapshot),
     discoveryResults: discovery || baseComm.discoveryResults || null,
   });
 }
@@ -290,7 +300,9 @@ function buildOwnershipMissionResponse({
   const missionUnderstanding =
     (mission.pendingOperatorDecision && mission.pendingOperatorDecision.clarificationPrompt) ||
     formatCanonicalObjectiveDisplay(mission) ||
-    (mission.missionPlanDraft && formatMissionUnderstandingProse(mission.missionPlanDraft)) ||
+    (mission.missionPlanDraft && formatMissionUnderstandingProse(mission.missionPlanDraft, {
+      authorizationConstraints: mission.authorizationConstraints || null,
+    })) ||
     (mission.pendingOperatorDecision && mission.pendingOperatorDecision.missionUnderstanding) ||
     null;
   const structured = applyMissionCommunication(

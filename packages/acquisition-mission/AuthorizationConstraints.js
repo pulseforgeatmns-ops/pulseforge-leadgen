@@ -285,6 +285,28 @@ function isSyntheticEvidenceError(err) {
   return Boolean(err.cause && err.cause.code === SYNTHETIC_EVIDENCE_BLOCKED);
 }
 
+/** Operator-facing names for action classes (no internal identifiers). */
+const ACTION_CLASS_LABELS = Object.freeze({
+  [ACTION_CLASSES.PROVIDER_RESEARCH]: 'discovery (provider research)',
+  [ACTION_CLASSES.OUTREACH]: 'outreach',
+  [ACTION_CLASSES.OUTREACH_AUTHORIZATION]: 'outreach approval',
+  [ACTION_CLASSES.OUTREACH_PREPARATION]: 'outreach preparation',
+  [ACTION_CLASSES.CONTENT]: 'content',
+  [ACTION_CLASSES.PAID_MEDIA]: 'paid media',
+  [ACTION_CLASSES.PLANNING]: 'planning',
+});
+
+/**
+ * P0 — operator-facing restriction text, derived only from the mission's
+ * actual prohibited classes (never from assumed review-only scope).
+ * @param {object|null} constraints
+ * @returns {string[]}
+ */
+function describeProhibitedActions(constraints) {
+  const prohibited = (constraints && Array.isArray(constraints.prohibited)) ? constraints.prohibited : [];
+  return prohibited.map((cls) => ACTION_CLASS_LABELS[cls] || String(cls).replace(/_/g, ' '));
+}
+
 /** @param {unknown} err */
 function isAuthorizationConstraintError(err) {
   if (!err) return false;
@@ -305,6 +327,7 @@ module.exports = {
   evaluateAction,
   assertActionAuthorized,
   isAuthorizationConstraintError,
+  describeProhibitedActions,
   SYNTHETIC_PROVENANCE,
   SYNTHETIC_EVIDENCE_BLOCKED,
   outputIsSynthetic,

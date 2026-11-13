@@ -85,7 +85,8 @@ const {
   createMissionApprovalAudit,
   logMissionApprovalMatched,
 } = require('./audit/MissionApprovalAudit');
-const { formatMissionUnderstandingProse } = require('../../acquisition-mission/StructuredMission');
+const { formatMissionUnderstandingProse, isResearchPlanningDeferred } = require('../../acquisition-mission/StructuredMission');
+const { RESEARCH_PLANNING_REQUIRED } = require('../../acquisition-mission/ResearchPlanning');
 const { isMissionPlanningTurn } = require('./MissionPlanningTurn');
 const askPathTrace = require('./audit/AskPathTrace');
 const {
@@ -730,24 +731,46 @@ function buildExecutionMissionResponse({
   }
 
   if (executionResult && action === 'plan_approved') {
+    const understandingOpts = { authorizationConstraints: mission.authorizationConstraints || null };
     const understanding =
       (mission.structuredMission &&
-        formatMissionUnderstandingProse(mission.structuredMission)) ||
+        formatMissionUnderstandingProse(mission.structuredMission, understandingOpts)) ||
       (executionResult.structuredMission &&
-        formatMissionUnderstandingProse(executionResult.structuredMission)) ||
+        formatMissionUnderstandingProse(executionResult.structuredMission, understandingOpts)) ||
       '';
+    // P0 — never invite discovery the mission forbids. Copy is derived from the
+    // mission's actual restrictions, not an assumed review-only scope.
+    const restingPlan = isResearchPlanningDeferred(mission.structuredMission);
+    const researchAllowed = amo.evaluateAction(mission, amo.ACTION_CLASSES.PROVIDER_RESEARCH).allowed;
+    const restrictions = amo.describeProhibitedActions(mission.authorizationConstraints);
+    const restrictionText = restrictions.length ? `Not authorized: ${restrictions.join(', ')}.` : '';
+    let status = 'Plan Approved';
+    let waitingOn = 'Discovery approval';
+    let nextStep = 'Mission plan is now immutable. Approve discovery to begin Scout.';
+    let operatorDecision = 'Approve discovery?';
+    if (restingPlan) {
+      status = mission.status || 'Plan approved (review only)';
+      waitingOn = researchAllowed ? 'Research planning and plan approval' : 'No pending decision';
+      nextStep = (researchAllowed
+        ? `Mission plan is now immutable. ${restrictionText} Discovery is permitted, but research planning (market, region) must be collected and the plan approved again first.`
+        : `Mission plan is now immutable. ${restrictionText} Discovery cannot run, so nothing that depends on it can start, unless an operator lifts that restriction.`
+      ).replace(/\s+/g, ' ').trim();
+      operatorDecision = 'None pending.';
+    } else if (!researchAllowed) {
+      nextStep = `Mission plan is now immutable. ${restrictionText} Approving discovery will be refused unless an operator lifts the restriction.`.replace(/\s+/g, ' ').trim();
+    }
     const comm = buildMissionCommunication({
       headline: 'Mission Plan Approved',
       mission: mission.title || mission.id,
       objective: mission.objective,
-      status: 'Plan Approved',
+      status,
       stage: 'Discover',
       progress,
       health: snapshot.health && snapshot.health.label ? snapshot.health.label : 'Healthy',
-      waitingOn: 'Discovery approval',
+      waitingOn,
       confidence: mission.confidence,
-      nextStep: 'Mission plan is now immutable. Approve discovery to begin Scout.',
-      operatorDecision: 'Approve discovery?',
+      nextStep,
+      operatorDecision,
       evidenceStatus: understanding || 'Structured mission contract frozen',
       sources: ['acquisition_mission', 'mission_planner'],
       includeReasoningMarker: false,
@@ -1563,6 +1586,7 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
       });
     } catch (err) {
       if (amo.isSyntheticEvidenceError(err)) return buildSyntheticBlockedTurn({ mission, action, intent });
+      if (err && err.code === RESEARCH_PLANNING_REQUIRED) return buildResearchPlanningRequiredTurn({ err, mission, action, intent });
       if (!amo.isAuthorizationConstraintError(err)) throw err;
       return buildConstraintBlockedTurn({ err, mission, action, intent });
     }
@@ -1631,6 +1655,48 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     executionRequest,
     execution,
     audit,
+  };
+}
+
+/**
+ * P0 — discovery requested on a review-only plan whose research planning was
+ * never collected or approved. Nothing was dispatched.
+ */
+function buildResearchPlanningRequiredTurn({ err, mission, action, intent }) {
+  const answer = [
+    'Not executed: this mission was planned as review-only, so its research planning',
+    (err.missing && err.missing.length ? `(${err.missing.join(', ')})` : ''),
+    'was never collected or approved.',
+    'No specialist was dispatched. Answer the planning questions and approve the plan before discovery.',
+  ].filter(Boolean).join(' ');
+  const structured = buildStructuredResponse({
+    answer,
+    reasoning: [`Mission ${mission.id} has a review-only plan; discovery requires an approved research plan.`],
+    relatedEntities: [{ id: mission.id, type: 'acquisition_mission', name: mission.title || mission.id }],
+  });
+  Object.assign(structured.metadata, {
+    acquisitionMission: true,
+    acquisitionMissionExecution: true,
+    missionExecutionAction: action,
+    executionState: 'blocked',
+    executionVerified: false,
+    blocker: RESEARCH_PLANNING_REQUIRED,
+  });
+  return {
+    reason: 'acquisition_mission_research_planning_required',
+    structured,
+    prose: answer,
+    mission,
+    action,
+    executionResult: null,
+    executionRequest: null,
+    execution: {
+      state: 'blocked',
+      verified: false,
+      reason: RESEARCH_PLANNING_REQUIRED,
+      evidence: { missing: err.missing || [] },
+      correlation: { missionId: mission.id, intent, specialist: amo.specialistForIntent(intent) },
+    },
   };
 }
 
@@ -1793,6 +1859,8 @@ function applyExecutionTruth(response, execution) {
 }
 
 module.exports = {
+  buildConstraintBlockedTurn,
+  resolveChatOperatorId,
   presentedExecutionRevision,
   recordPresentedExecutionDecision,
   applyExecutionTruth,

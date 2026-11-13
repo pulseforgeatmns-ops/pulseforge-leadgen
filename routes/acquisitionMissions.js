@@ -78,6 +78,11 @@ function fail(res, err, fallbackCode, fallbackStatus = 500) {
         || code === 'synthetic_evidence_blocked' ? 403
       : code === 'amo_mission_exists' ? 409
       : code === 'authorization_amendment_stale' ? 409
+      : code === 'research_planning_required' ? 409
+      // P0 — tenant sender configuration problems are client-correctable
+      // preconditions, never a generic server error. Still fail closed.
+      : code === 'canonical_sender_tenant_required' ? 400
+      : typeof code === 'string' && code.startsWith('canonical_sender_') ? 422
       : code === 'authorization_amendment_invalid' || code === 'authorization_amendment_noop' ? 400
       : code === 'MISSION_RUNTIME_BOUNDARY_VIOLATION' ? 409
       : code === 'amo_tenant_required'

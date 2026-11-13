@@ -98,6 +98,7 @@ const {
   isReadyForLock,
   formatOperatorConfirmation,
   formatAmbiguityPrompt,
+  isResearchPlanningDeferred,
 } = require('../../acquisition-mission/StructuredMission');
 const {
   scoutDelegationFromMission,
@@ -293,11 +294,16 @@ async function advancePlanAfterApproval(input = {}) {
       updated.structuredMission = output.frozen;
       updated.structuredMissionApproved = true;
       updated.planAmbiguities = [];
-      updated.pendingOperatorDecision = {
-        stage: STAGES.DISCOVER,
-        kind: OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL,
-        prompt: 'Approve discovery?',
-      };
+      // P0 — a review-only plan (research planning deferred) has no discovery
+      // to approve; it rests with no actionable decision until an amendment
+      // permits research and planning reopens.
+      updated.pendingOperatorDecision = isResearchPlanningDeferred(output.frozen)
+        ? null
+        : {
+          stage: STAGES.DISCOVER,
+          kind: OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL,
+          prompt: 'Approve discovery?',
+        };
       bumpMissionVersion(updated, transactionId);
       amoEngine.store.putMission(updated);
 
@@ -370,7 +376,9 @@ function putPlannedMission(engine, mission, planned, extra = {}) {
       stage: STAGES.DISCOVER,
       kind: OPERATOR_DECISION_KINDS.PLAN_APPROVAL,
       prompt: 'Approve mission plan?',
-      missionUnderstanding: planned.confirmation || formatOperatorConfirmation(planned.draft),
+      missionUnderstanding: planned.confirmation || formatOperatorConfirmation(planned.draft, {
+        authorizationConstraints: mission.authorizationConstraints || null,
+      }),
       actions: ['Approve', 'Edit', 'Cancel'],
     };
   }
@@ -391,6 +399,8 @@ function advancePlanClarification(input = {}) {
     prior: { ambiguities: current.planAmbiguities, draft: current.missionPlanDraft, resolutions: current.planResolutions },
     resolutions: current.planResolutions,
     context: input.context,
+    // P0 — replanning keeps the mission's restrictions (review-only defers research planning).
+    authorizationConstraints: current.authorizationConstraints || null,
   });
   if (planned.unmatchedClarification) {
     return {
@@ -467,6 +477,7 @@ function applyPlanEdits(input = {}) {
     constraints: current.constraints,
     resolutions: current.planResolutions,
     context: input.context,
+    authorizationConstraints: current.authorizationConstraints || null,
   });
   engine.contribute(
     mission.id,

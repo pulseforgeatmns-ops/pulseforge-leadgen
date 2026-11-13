@@ -714,6 +714,8 @@ function pendingDecisionRequestsExecution(resolution) {
 }
 
 module.exports = {
+  ACTION_TARGETS,
+  KIND_TARGETS,
   authorizationPolarityVerdict,
   mismatchedActionTargets,
   RESOLUTION_OUTCOMES,

@@ -16,7 +16,8 @@ const {
   nowIso,
 } = require('./types');
 const { createEvent } = require('./Timeline');
-const { isReadyForLock } = require('./StructuredMission');
+const { isReadyForLock, isResearchPlanningDeferred } = require('./StructuredMission');
+const { restingPlanState, RESTING_PLAN_STATES } = require('./ResearchPlanning');
 const {
   hasPendingPlanClarification,
   hasPendingPlanApproval,
@@ -46,6 +47,10 @@ const PROGRESSION_STAGES = Object.freeze({
   OUTREACH_PLANNING: 'outreach_planning',
   ACQUISITION_PLANNING: 'acquisition_planning',
   EXECUTION: 'execution',
+  /** P0 — approved plan of a mission still classified review-only. */
+  REVIEW_ONLY: 'review_only',
+  /** P0 — approved deferred plan; no longer review-only, but discovery is prohibited. */
+  DISCOVERY_NOT_AUTHORIZED: 'discovery_not_authorized',
   /** @deprecated Use MISSION_PLANNING */
   UNDERSTANDING: 'mission_planning',
   /** @deprecated Use DISCOVERY_APPROVAL or DISCOVERY_RUNNING */
@@ -60,6 +65,8 @@ const PROGRESSION_STAGE_LABELS = Object.freeze({
   [PROGRESSION_STAGES.OUTREACH_PLANNING]: 'Outreach Planning',
   [PROGRESSION_STAGES.ACQUISITION_PLANNING]: 'Acquisition Planning',
   [PROGRESSION_STAGES.EXECUTION]: 'Execution',
+  [PROGRESSION_STAGES.REVIEW_ONLY]: 'Review Only',
+  [PROGRESSION_STAGES.DISCOVERY_NOT_AUTHORIZED]: 'Discovery Not Authorized',
 });
 
 const SCOUT_PIPELINE_STAGES = Object.freeze([
@@ -76,6 +83,26 @@ const SCOUT_PIPELINE_STAGES = Object.freeze([
 ]);
 
 const MISSION_STAGE_CONTRACTS = Object.freeze({
+  // P0 — a locked review-only plan rests here: no automatic step and no
+  // operator decision exists until a governed amendment reopens planning.
+  [PROGRESSION_STAGES.REVIEW_ONLY]: {
+    stage: PROGRESSION_STAGES.REVIEW_ONLY,
+    amoStage: STAGES.DISCOVER,
+    executesAutomatically: false,
+    requiresHumanDecision: false,
+    completionCriteria: 'Review-only plan approved; every action the mission authorization prohibits stays blocked.',
+    nextStage: null,
+  },
+  // P0 — no longer review-only, but discovery (provider research) is still
+  // prohibited, so nothing that depends on discovery can start.
+  [PROGRESSION_STAGES.DISCOVERY_NOT_AUTHORIZED]: {
+    stage: PROGRESSION_STAGES.DISCOVERY_NOT_AUTHORIZED,
+    amoStage: STAGES.DISCOVER,
+    executesAutomatically: false,
+    requiresHumanDecision: false,
+    completionCriteria: 'Plan approved; discovery (provider research) is not authorized by the mission authorization.',
+    nextStage: null,
+  },
   [PROGRESSION_STAGES.MISSION_PLANNING]: {
     stage: PROGRESSION_STAGES.MISSION_PLANNING,
     amoStage: STAGES.DISCOVER,
@@ -220,12 +247,25 @@ function isDiscoveryRunning(snapshot = {}) {
   if (hasDiscoveryArtifact(snapshot)) return false;
   if (!isStructuredMissionApproved(mission)) return false;
   if (mission.stage && mission.stage !== STAGES.DISCOVER) return false;
+  // P0 — a locked review-only plan rests without discovery; it is not running.
+  if (isResearchPlanningDeferred(mission.structuredMission)) return false;
   return true;
 }
 
 function deriveProgressionStage(snapshot = {}) {
   const mission = snapshot.mission || snapshot;
   if (!mission) return null;
+
+  // P0 — a locked plan whose research planning was deferred is classified from
+  // the mission's CURRENT authorization (shared with status and workspace mode):
+  // review-only and discovery-not-authorized are non-executing resting states;
+  // if research is permitted again, research planning is still required.
+  if ((!mission.stage || mission.stage === STAGES.DISCOVER) && !hasDiscoveryArtifact(snapshot)) {
+    const resting = restingPlanState(mission);
+    if (resting === RESTING_PLAN_STATES.REVIEW_ONLY) return PROGRESSION_STAGES.REVIEW_ONLY;
+    if (resting === RESTING_PLAN_STATES.DISCOVERY_NOT_AUTHORIZED) return PROGRESSION_STAGES.DISCOVERY_NOT_AUTHORIZED;
+    if (resting === RESTING_PLAN_STATES.RESEARCH_PLANNING_REQUIRED) return PROGRESSION_STAGES.MISSION_PLANNING;
+  }
 
   if (hasPendingPlanClarification(snapshot)) {
     return PROGRESSION_STAGES.MISSION_PLANNING;
