@@ -211,7 +211,7 @@ async function maybeHandleProhibitedCommandTurn(input = {}) {
   }
   if (blocked.some((row) => row.bareGoAhead)) {
     turn.structured.reasoning.push(
-      'The review-only plan is already approved and nothing is pending; the only next step would be discovery.'
+      'The plan is already approved and nothing is pending; the only next step would be discovery, which this mission\'s authorization forbids.'
     );
   }
   if (mission.pendingOperatorDecision && mission.pendingOperatorDecision.prompt) {

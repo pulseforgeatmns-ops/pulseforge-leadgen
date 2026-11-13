@@ -23,6 +23,33 @@ const { isResearchPlanningDeferred } = require('./StructuredMission');
 
 const RESEARCH_PLANNING_REQUIRED = 'research_planning_required';
 
+/**
+ * P0 — classification of a locked plan whose research planning was deferred,
+ * derived from the mission's CURRENT authorization (so it follows amendments):
+ *  - review_only: the mission is still explicitly review-only;
+ *  - discovery_not_authorized: no longer review-only, research still prohibited;
+ *  - research_planning_required: research is permitted but was never planned.
+ * Returns null for every other mission (ordinary plans, drafts, legacy plans).
+ * The single source for status, progression stage and workspace mode.
+ */
+const RESTING_PLAN_STATES = Object.freeze({
+  REVIEW_ONLY: 'review_only',
+  DISCOVERY_NOT_AUTHORIZED: 'discovery_not_authorized',
+  RESEARCH_PLANNING_REQUIRED: 'research_planning_required',
+});
+
+/** @param {object|null} mission */
+function restingPlanState(mission) {
+  if (!mission || !mission.structuredMission || !mission.structuredMission.immutable) return null;
+  if (!isResearchPlanningDeferred(mission.structuredMission)) return null;
+  const constraints = mission.authorizationConstraints || null;
+  if (constraints && constraints.reviewOnly === true) return RESTING_PLAN_STATES.REVIEW_ONLY;
+  if (!evaluateAction(mission, ACTION_CLASSES.PROVIDER_RESEARCH).allowed) {
+    return RESTING_PLAN_STATES.DISCOVERY_NOT_AUTHORIZED;
+  }
+  return RESTING_PLAN_STATES.RESEARCH_PLANNING_REQUIRED;
+}
+
 /** @param {object|null} mission */
 function researchPlanningIncomplete(mission) {
   if (!mission) return false;
@@ -96,6 +123,8 @@ function reopenResearchPlanning(mission, authorizationConstraints) {
 
 module.exports = {
   RESEARCH_PLANNING_REQUIRED,
+  RESTING_PLAN_STATES,
+  restingPlanState,
   researchPlanningIncomplete,
   assertResearchPlanningComplete,
   reopenResearchPlanning,

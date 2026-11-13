@@ -750,9 +750,12 @@ function buildExecutionMissionResponse({
     let operatorDecision = 'Approve discovery?';
     if (restingPlan) {
       status = mission.status || 'Plan approved (review only)';
-      waitingOn = 'Nothing (no action is authorized)';
-      nextStep = `Mission plan is now immutable. ${restrictionText} These stay blocked unless an operator lifts the restriction.`.replace(/\s+/g, ' ').trim();
-      operatorDecision = 'None.';
+      waitingOn = researchAllowed ? 'Research planning and plan approval' : 'No pending decision';
+      nextStep = (researchAllowed
+        ? `Mission plan is now immutable. ${restrictionText} Discovery is permitted, but research planning (market, region) must be collected and the plan approved again first.`
+        : `Mission plan is now immutable. ${restrictionText} Discovery cannot run, so nothing that depends on it can start, unless an operator lifts that restriction.`
+      ).replace(/\s+/g, ' ').trim();
+      operatorDecision = 'None pending.';
     } else if (!researchAllowed) {
       nextStep = `Mission plan is now immutable. ${restrictionText} Approving discovery will be refused unless an operator lifts the restriction.`.replace(/\s+/g, ' ').trim();
     }

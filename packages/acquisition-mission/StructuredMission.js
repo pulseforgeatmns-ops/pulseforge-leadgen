@@ -346,21 +346,40 @@ function isStructuredMissionApproved(mission) {
 }
 
 /**
- * P0 — scope lines for a review-only plan, derived from the mission's actual
- * authorization constraints when supplied. Without them only what the
- * review-only classification guarantees is stated.
+ * P0 — scope lines for a plan whose research planning was deferred, derived
+ * from the mission's CURRENT authorization when supplied (canonical
+ * describeProhibitedActions). Discovery is called out separately because
+ * nothing that depends on it can start; other actions are listed only if the
+ * authorization actually prohibits them. Without constraints, only the plan's
+ * own history is stated, never a claim about current authorization.
  * @param {object|null} authorizationConstraints
  * @returns {string[]}
  */
-function reviewOnlyScopeLines(authorizationConstraints) {
-  const { describeProhibitedActions } = require('./AuthorizationConstraints');
-  const restricted = describeProhibitedActions(authorizationConstraints);
-  const reviewOnly = Boolean(authorizationConstraints && authorizationConstraints.reviewOnly);
-  return [
-    reviewOnly || !authorizationConstraints ? 'Review only.' : 'Discovery is not authorized.',
-    restricted.length ? `Not authorized: ${restricted.join(', ')}.` : 'Discovery (provider research) is not authorized.',
-    'Market and region are collected only if discovery is later authorized.',
-  ];
+function deferredPlanScopeLines(authorizationConstraints) {
+  if (!authorizationConstraints) {
+    return ['Planned as review-only.', 'Market and region were not collected.'];
+  }
+  const {
+    describeProhibitedActions,
+    evaluateAction,
+    ACTION_CLASSES,
+  } = require('./AuthorizationConstraints');
+  const researchAllowed = evaluateAction({ authorizationConstraints }, ACTION_CLASSES.PROVIDER_RESEARCH).allowed;
+  const others = describeProhibitedActions({
+    prohibited: (authorizationConstraints.prohibited || []).filter((cls) => cls !== ACTION_CLASSES.PROVIDER_RESEARCH),
+  });
+  const lines = [];
+  if (authorizationConstraints.reviewOnly === true) lines.push('Review only.');
+  if (!researchAllowed) {
+    lines.push('Discovery (provider research) is not authorized.');
+  } else {
+    lines.push('Research planning has not been completed.');
+  }
+  if (others.length) lines.push(`Also not authorized: ${others.join(', ')}.`);
+  lines.push(researchAllowed
+    ? 'Market and region must be collected and the plan approved again before discovery.'
+    : 'Market and region are collected only if discovery is later authorized.');
+  return lines;
 }
 
 function formatMissionUnderstanding(plan, opts = {}) {
@@ -386,7 +405,7 @@ function formatMissionUnderstanding(plan, opts = {}) {
         ? 'One recurring client.'
         : `${success.target || 1} ${success.type || success.metric || 'customers'}`,
     ...(isResearchPlanningDeferred(plan)
-      ? { researchPlanningDeferred: true, scope: reviewOnlyScopeLines(opts.authorizationConstraints || null) }
+      ? { researchPlanningDeferred: true, scope: deferredPlanScopeLines(opts.authorizationConstraints || null) }
       : {}),
     cities: geography.cities || [],
     evidenceThreshold: evidence.thresholdLabel || evidenceThresholdLabel(evidence.minimumConfidence),

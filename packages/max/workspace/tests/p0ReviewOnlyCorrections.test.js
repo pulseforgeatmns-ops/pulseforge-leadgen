@@ -166,7 +166,7 @@ describe('Review-only creation and approval (truthful, non-executing)', () => {
     await h.ask(REVIEW_ONLY);
     // The plan confirmation the operator approves states the actual restrictions.
     const confirmation = h.mission().pendingOperatorDecision.missionUnderstanding;
-    assert.match(confirmation, /Not authorized: content, outreach, outreach approval, paid media, discovery \(provider research\)\./);
+    assert.match(confirmation, /Discovery \(provider research\) is not authorized\.\nAlso not authorized: content, outreach, outreach approval, paid media\./);
     assert.doesNotMatch(confirmation, /\bcustomers\b|Which market/);
     const approved = await h.ask('Approve the plan.');
     const mission = h.mission();
@@ -336,6 +336,117 @@ describe('M4 — guard refusals are audited with correlation identifiers', () =>
       assert.equal(row.request.sessionId, h.sessionId());
       assert.doesNotMatch(JSON.stringify(row), /Send the emails|draft the content/i, 'no message text in audit');
     }
+    assertNoDispatch();
+  });
+});
+
+describe('L1–L4 — classification follows current authorization after amendments', () => {
+  const { restingPlanState, RESTING_PLAN_STATES, RESEARCH_PLANNING_REQUIRED } =
+    require('../../../acquisition-mission/ResearchPlanning');
+  const { routeExecutionRequest } = require('../../../acquisition-mission/ExecutionRouter');
+  const { freezeStructuredMission, formatMissionUnderstandingProse } =
+    require('../../../acquisition-mission/StructuredMission');
+
+  it('lifting outreach ends review-only: status, progression and workspace mode all say discovery not authorized', async () => {
+    const h = harness();
+    await h.ask(REVIEW_ONLY);
+    const approved = await h.ask('Approve the plan.');
+    assert.match(approved.prose, /No pending decision/);
+    assert.match(approved.prose, /Discovery cannot run, so nothing that depends on it can start/);
+    assert.doesNotMatch(approved.prose, /no action is authorized/i);
+    const mission = h.mission();
+    const versionBefore = mission.version;
+
+    await amend(h.engine, mission, { lift: ['outreach'] }, 'p0-l1-lift-outreach');
+    const after = h.mission();
+    const snapshot = h.engine.inspect(after.id, { tenantId: TENANT });
+    assert.equal(after.authorizationConstraints.reviewOnly, false);
+    assert.ok(after.authorizationConstraints.prohibited.includes('provider_research'));
+    assert.equal(restingPlanState(after), RESTING_PLAN_STATES.DISCOVERY_NOT_AUTHORIZED);
+    assert.equal(after.status, 'Plan approved (discovery not authorized)');
+    assert.equal(deriveProgressionStage(snapshot), PROGRESSION_STAGES.DISCOVERY_NOT_AUTHORIZED);
+    assert.equal(deriveWorkspaceMode({ missionId: after.id, snapshot }), WORKSPACE_MODES.DISCOVERY_NOT_AUTHORIZED);
+    assert.notEqual(deriveProgressionStage(snapshot), PROGRESSION_STAGES.REVIEW_ONLY);
+
+    // Authorization, approval and dispatch behaviour unchanged.
+    assert.equal(after.pendingOperatorDecision, null);
+    assert.equal(after.structuredMission.immutable, true, 'no reopen: research is still prohibited');
+    assert.equal(after.version, versionBefore, 'constraints-only amendment does not bump the version');
+
+    const scope = formatMissionUnderstandingProse(after.structuredMission, { authorizationConstraints: after.authorizationConstraints });
+    assert.doesNotMatch(scope, /Review only/);
+    assert.match(scope, /Discovery \(provider research\) is not authorized\.\nAlso not authorized: content, outreach approval, paid media\./);
+    assert.doesNotMatch(scope, /Also not authorized:[^\n]*\boutreach,/, 'lifted outreach is not listed');
+
+    const before = fingerprint(h.engine, after);
+    const bare = await h.ask('approved');
+    assert.match(bare.prose, /^Not executed: this mission's authorization forbids provider research\./);
+    assert.doesNotMatch(bare.prose, /review-only mission/);
+    assert.equal(fingerprint(h.engine, after), before);
+
+    for (const intent of ['APPROVE_DISCOVERY', 'START_DISCOVERY']) {
+      await assert.rejects(
+        svc.executeCanonical({ tenantId: TENANT, missionId: after.id, intent, role: 'operator', operatorId: 'op', runScout: spies.scout },
+          { acquisitionMissionRuntime: h.runtime, persist: false }),
+        (err) => err.code === amo.AUTHORIZATION_CONSTRAINT_BLOCKED, intent);
+    }
+    // Outreach is lifted, but with no approved package nothing can be sent.
+    const send = await svc.executeCanonical({
+      tenantId: TENANT, missionId: after.id, intent: 'EXECUTE_OUTBOUND', role: 'operator', operatorId: 'op',
+      canonicalSender: { tenantId: TENANT, senderEmail: 'ops@example.invalid', senderName: 'Ops', sendingDomain: 'example.invalid' },
+      sendEmail: spies.send,
+    }, { acquisitionMissionRuntime: h.runtime, persist: false }).catch((err) => ({ error: err }));
+    assert.ok(send.error || !(send.execution && send.execution.state === 'completed_verified'));
+    const progressed = await runAutonomousProgression({
+      engine: h.engine, missionId: after.id, tenantId: TENANT, maxSteps: 3, runScout: spies.scout,
+    }).catch((err) => ({ error: err }));
+    assert.equal((progressed.transitions || []).length, 0);
+    assert.equal(fingerprint(h.engine, after), before);
+    assertNoDispatch();
+  });
+
+  it('a deferred plan with research permitted reads "research planning required" and discovery stays gated', async () => {
+    const engine = amo.createAcquisitionMissionEngine();
+    const planned = planFromObjective('Set up a contact intake mission for an existing customer.', {
+      authorizationConstraints: amo.extractAuthorizationConstraints('Review-only.'),
+    });
+    const mission = engine.create({
+      tenantId: TENANT, clientId: Number(TENANT), createdBy: 'test',
+      objective: 'Set up a contact intake mission for an existing customer.',
+      structuredMission: freezeStructuredMission(planned.draft, { approvedBy: 'test' }),
+    });
+    const snapshot = engine.inspect(mission.id, { tenantId: TENANT });
+    assert.equal(restingPlanState(snapshot.mission), RESTING_PLAN_STATES.RESEARCH_PLANNING_REQUIRED);
+    assert.equal(snapshot.mission.status, 'Research planning required');
+    assert.equal(deriveProgressionStage(snapshot), PROGRESSION_STAGES.MISSION_PLANNING);
+    // L4 — no false claim that discovery is unauthorized.
+    const scope = formatMissionUnderstandingProse(snapshot.mission.structuredMission, { authorizationConstraints: { prohibited: [] } });
+    assert.match(scope, /Research planning has not been completed\.\nMarket and region must be collected and the plan approved again before discovery\./);
+    assert.doesNotMatch(scope, /not authorized/i);
+    // Execution behaviour unchanged: the research-planning gate still refuses discovery.
+    const request = amo.createExecutionRequestFromApi({
+      intent: amo.EXECUTION_INTENTS.APPROVE_DISCOVERY, missionId: mission.id, mission, operatorId: 'op',
+      stage: mission.stage, objective: mission.objective, runtimeOwner: amo.resolveMissionRuntimeOwner(mission),
+      permissions: { canExecute: true }, pendingOperatorDecision: mission.pendingOperatorDecision, payload: {}, metadata: {},
+    });
+    await assert.rejects(
+      routeExecutionRequest(request, { engine, tenantId: TENANT, persist: false, runScout: spies.scout }),
+      (err) => err.code === RESEARCH_PLANNING_REQUIRED
+    );
+    assertNoDispatch();
+  });
+
+  it('still review-only after a non-external lift (content): stays Review Only', async () => {
+    const h = harness();
+    await h.ask(REVIEW_ONLY);
+    await h.ask('Approve the plan.');
+    await amend(h.engine, h.mission(), { lift: ['content'] }, 'p0-l1-lift-content');
+    const after = h.mission();
+    const snapshot = h.engine.inspect(after.id, { tenantId: TENANT });
+    assert.equal(after.authorizationConstraints.reviewOnly, true);
+    assert.equal(after.status, 'Plan approved (review only)');
+    assert.equal(deriveProgressionStage(snapshot), PROGRESSION_STAGES.REVIEW_ONLY);
+    assert.equal(deriveWorkspaceMode({ missionId: after.id, snapshot }), WORKSPACE_MODES.REVIEW_ONLY);
     assertNoDispatch();
   });
 });

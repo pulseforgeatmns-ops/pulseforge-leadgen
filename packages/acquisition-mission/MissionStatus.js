@@ -32,6 +32,8 @@ const REVIEW_ONLY_PLAN_APPROVED = 'Plan approved (review only)';
 const RESEARCH_DEFERRED_PLAN_APPROVED = 'Plan approved (discovery not authorized)';
 /** Discovery approval is pending but the mission's authorization prohibits discovery. */
 const DISCOVERY_NOT_AUTHORIZED = 'Discovery not authorized';
+/** Locked deferred plan whose mission now permits research: planning must be completed first. */
+const RESEARCH_PLANNING_REQUIRED_LABEL = 'Research planning required';
 
 /** Labels this module owns for the discover stage; anything else is left alone. */
 const DISCOVER_STAGE_LABELS = new Set([
@@ -40,6 +42,7 @@ const DISCOVER_STAGE_LABELS = new Set([
   REVIEW_ONLY_PLAN_APPROVED,
   RESEARCH_DEFERRED_PLAN_APPROVED,
   DISCOVERY_NOT_AUTHORIZED,
+  RESEARCH_PLANNING_REQUIRED_LABEL,
 ]);
 
 function researchProhibited(mission) {
@@ -48,12 +51,16 @@ function researchProhibited(mission) {
   return !evaluateAction(mission, ACTION_CLASSES.PROVIDER_RESEARCH).allowed;
 }
 
-/** A locked plan whose research planning was deferred (planned review-only). */
-function restingPlan(mission) {
-  if (!mission || !mission.structuredMission || !mission.structuredMission.immutable) return false;
-  const { isResearchPlanningDeferred } = require('./StructuredMission');
-  return isResearchPlanningDeferred(mission.structuredMission);
+/** Shared classification (ResearchPlanning.restingPlanState); lazy to avoid load cycles. */
+function restingPlanState(mission) {
+  return require('./ResearchPlanning').restingPlanState(mission);
 }
+
+const RESTING_PLAN_LABELS = Object.freeze({
+  review_only: REVIEW_ONLY_PLAN_APPROVED,
+  discovery_not_authorized: RESEARCH_DEFERRED_PLAN_APPROVED,
+  research_planning_required: RESEARCH_PLANNING_REQUIRED_LABEL,
+});
 
 /**
  * @param {string} stage
@@ -64,10 +71,9 @@ function restingPlan(mission) {
 function missionStatusLabel(stage, pendingOperatorDecision, mission = null) {
   if (stage === STAGES.DISCOVER) {
     const pendingKind = pendingOperatorDecision ? pendingOperatorDecision.kind : null;
-    if (restingPlan(mission) && (!pendingKind || pendingKind === OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL)) {
-      return mission.authorizationConstraints && mission.authorizationConstraints.reviewOnly === true
-        ? REVIEW_ONLY_PLAN_APPROVED
-        : RESEARCH_DEFERRED_PLAN_APPROVED;
+    const resting = restingPlanState(mission);
+    if (resting && (!pendingKind || pendingKind === OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL)) {
+      return RESTING_PLAN_LABELS[resting];
     }
     if (pendingKind === OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL && researchProhibited(mission)) {
       return DISCOVERY_NOT_AUTHORIZED;
@@ -97,6 +103,7 @@ module.exports = {
   REVIEW_ONLY_PLAN_APPROVED,
   RESEARCH_DEFERRED_PLAN_APPROVED,
   DISCOVERY_NOT_AUTHORIZED,
+  RESEARCH_PLANNING_REQUIRED_LABEL,
   missionStatusLabel,
   reconcileMissionStatus,
 };
