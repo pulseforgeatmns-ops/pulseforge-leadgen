@@ -26,41 +26,56 @@ const PRE_DISCOVERY_STATUS = Object.freeze({
   [OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL]: 'Awaiting discovery approval',
 });
 
-/** Review-only mission whose plan is locked: discovery is prohibited, not awaited. */
+/** Locked review-only plan (explicit review-only classification). */
 const REVIEW_ONLY_PLAN_APPROVED = 'Plan approved (review only)';
+/** Locked deferred plan whose mission is no longer review-only but still cannot research. */
+const RESEARCH_DEFERRED_PLAN_APPROVED = 'Plan approved (discovery not authorized)';
+/** Discovery approval is pending but the mission's authorization prohibits discovery. */
+const DISCOVERY_NOT_AUTHORIZED = 'Discovery not authorized';
 
 /** Labels this module owns for the discover stage; anything else is left alone. */
 const DISCOVER_STAGE_LABELS = new Set([
   STAGE_LABELS[STAGES.DISCOVER],
   ...Object.values(PRE_DISCOVERY_STATUS),
   REVIEW_ONLY_PLAN_APPROVED,
+  RESEARCH_DEFERRED_PLAN_APPROVED,
+  DISCOVERY_NOT_AUTHORIZED,
 ]);
+
+function researchProhibited(mission) {
+  if (!mission || !mission.authorizationConstraints) return false;
+  const { ACTION_CLASSES, evaluateAction } = require('./AuthorizationConstraints');
+  return !evaluateAction(mission, ACTION_CLASSES.PROVIDER_RESEARCH).allowed;
+}
+
+/** A locked plan whose research planning was deferred (planned review-only). */
+function restingPlan(mission) {
+  if (!mission || !mission.structuredMission || !mission.structuredMission.immutable) return false;
+  const { isResearchPlanningDeferred } = require('./StructuredMission');
+  return isResearchPlanningDeferred(mission.structuredMission);
+}
 
 /**
  * @param {string} stage
  * @param {object|null} pendingOperatorDecision
+ * @param {object|null} [mission] needed for restriction-aware labels
  * @returns {string}
  */
 function missionStatusLabel(stage, pendingOperatorDecision, mission = null) {
-  if (
-    stage === STAGES.DISCOVER &&
-    reviewOnlyPlan(mission) &&
-    (!pendingOperatorDecision || pendingOperatorDecision.kind === OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL)
-  ) {
-    return REVIEW_ONLY_PLAN_APPROVED;
-  }
-  if (stage === STAGES.DISCOVER && pendingOperatorDecision) {
-    const label = PRE_DISCOVERY_STATUS[pendingOperatorDecision.kind];
+  if (stage === STAGES.DISCOVER) {
+    const pendingKind = pendingOperatorDecision ? pendingOperatorDecision.kind : null;
+    if (restingPlan(mission) && (!pendingKind || pendingKind === OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL)) {
+      return mission.authorizationConstraints && mission.authorizationConstraints.reviewOnly === true
+        ? REVIEW_ONLY_PLAN_APPROVED
+        : RESEARCH_DEFERRED_PLAN_APPROVED;
+    }
+    if (pendingKind === OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL && researchProhibited(mission)) {
+      return DISCOVERY_NOT_AUTHORIZED;
+    }
+    const label = pendingKind ? PRE_DISCOVERY_STATUS[pendingKind] : null;
     if (label) return label;
   }
   return STAGE_LABELS[stage] || stage;
-}
-
-/** A locked plan that deferred research planning (review-only). */
-function reviewOnlyPlan(mission) {
-  if (!mission || !mission.structuredMission || !mission.structuredMission.immutable) return false;
-  const { isResearchPlanningDeferred } = require('./StructuredMission');
-  return isResearchPlanningDeferred(mission.structuredMission);
 }
 
 /**
@@ -79,6 +94,9 @@ function reconcileMissionStatus(mission) {
 
 module.exports = {
   PRE_DISCOVERY_STATUS,
+  REVIEW_ONLY_PLAN_APPROVED,
+  RESEARCH_DEFERRED_PLAN_APPROVED,
+  DISCOVERY_NOT_AUTHORIZED,
   missionStatusLabel,
   reconcileMissionStatus,
 };

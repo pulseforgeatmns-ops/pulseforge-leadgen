@@ -113,8 +113,12 @@ describe('P0 review-only planning — planner', () => {
       ['geography.region', 'market.segment']
     );
     assert.equal(isReadyForLock(planned.draft), true, 'review-only plan can be approved without market/region');
+    // Without constraints only what review-only guarantees is stated.
     const prose = formatMissionUnderstandingProse(planned.draft);
-    assert.match(prose, /Review only\. No discovery, outreach, or content\./);
+    assert.match(prose, /Review only\.\nDiscovery \(provider research\) is not authorized\./);
+    // With constraints the scope lists exactly the mission's prohibitions.
+    const scoped = formatMissionUnderstandingProse(planned.draft, { authorizationConstraints: reviewOnly });
+    assert.match(scoped, /Not authorized: content, outreach, outreach approval, paid media, discovery \(provider research\)\./);
     assert.match(prose, /Operator review complete \(no acquisition target\)/);
     assert.doesNotMatch(prose, /\bcustomers\b|Market\nUnknown|Buyer\nUnknown/);
   });

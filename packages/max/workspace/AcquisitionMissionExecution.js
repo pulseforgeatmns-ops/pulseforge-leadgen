@@ -731,29 +731,43 @@ function buildExecutionMissionResponse({
   }
 
   if (executionResult && action === 'plan_approved') {
+    const understandingOpts = { authorizationConstraints: mission.authorizationConstraints || null };
     const understanding =
       (mission.structuredMission &&
-        formatMissionUnderstandingProse(mission.structuredMission)) ||
+        formatMissionUnderstandingProse(mission.structuredMission, understandingOpts)) ||
       (executionResult.structuredMission &&
-        formatMissionUnderstandingProse(executionResult.structuredMission)) ||
+        formatMissionUnderstandingProse(executionResult.structuredMission, understandingOpts)) ||
       '';
-    // P0 — a review-only plan never invites discovery the mission forbids.
-    const reviewOnlyPlan = isResearchPlanningDeferred(mission.structuredMission) &&
-      !amo.evaluateAction(mission, amo.ACTION_CLASSES.PROVIDER_RESEARCH).allowed;
+    // P0 — never invite discovery the mission forbids. Copy is derived from the
+    // mission's actual restrictions, not an assumed review-only scope.
+    const restingPlan = isResearchPlanningDeferred(mission.structuredMission);
+    const researchAllowed = amo.evaluateAction(mission, amo.ACTION_CLASSES.PROVIDER_RESEARCH).allowed;
+    const restrictions = amo.describeProhibitedActions(mission.authorizationConstraints);
+    const restrictionText = restrictions.length ? `Not authorized: ${restrictions.join(', ')}.` : '';
+    let status = 'Plan Approved';
+    let waitingOn = 'Discovery approval';
+    let nextStep = 'Mission plan is now immutable. Approve discovery to begin Scout.';
+    let operatorDecision = 'Approve discovery?';
+    if (restingPlan) {
+      status = mission.status || 'Plan approved (review only)';
+      waitingOn = 'Nothing (no action is authorized)';
+      nextStep = `Mission plan is now immutable. ${restrictionText} These stay blocked unless an operator lifts the restriction.`.replace(/\s+/g, ' ').trim();
+      operatorDecision = 'None.';
+    } else if (!researchAllowed) {
+      nextStep = `Mission plan is now immutable. ${restrictionText} Approving discovery will be refused unless an operator lifts the restriction.`.replace(/\s+/g, ' ').trim();
+    }
     const comm = buildMissionCommunication({
       headline: 'Mission Plan Approved',
       mission: mission.title || mission.id,
       objective: mission.objective,
-      status: reviewOnlyPlan ? 'Plan approved (review only)' : 'Plan Approved',
+      status,
       stage: 'Discover',
       progress,
       health: snapshot.health && snapshot.health.label ? snapshot.health.label : 'Healthy',
-      waitingOn: reviewOnlyPlan ? 'Operator review' : 'Discovery approval',
+      waitingOn,
       confidence: mission.confidence,
-      nextStep: reviewOnlyPlan
-        ? 'Mission plan is now immutable. This mission is review-only: discovery, outreach and content stay blocked unless an operator lifts the restriction.'
-        : 'Mission plan is now immutable. Approve discovery to begin Scout.',
-      operatorDecision: reviewOnlyPlan ? 'None. Review only.' : 'Approve discovery?',
+      nextStep,
+      operatorDecision,
       evidenceStatus: understanding || 'Structured mission contract frozen',
       sources: ['acquisition_mission', 'mission_planner'],
       includeReasoningMarker: false,
@@ -1843,6 +1857,7 @@ function applyExecutionTruth(response, execution) {
 
 module.exports = {
   buildConstraintBlockedTurn,
+  resolveChatOperatorId,
   presentedExecutionRevision,
   recordPresentedExecutionDecision,
   applyExecutionTruth,

@@ -141,8 +141,10 @@ test('review-only lifecycle, governed amendment and REST sender ordering are dur
   assert.equal(recovered.status, 'Plan approved (review only)');
 
   // --- Governed amendment permitting research: one durable commit reopens planning.
+  const versionBeforeAmendment = row.payload.version;
+  const approvedContractHash = row.payload.structuredMission.contractHash;
   const preview = await svc.previewMissionAuthorization({ tenantId: TENANT, missionId }, { pool });
-  await svc.amendMissionAuthorization({
+  const amendment = await svc.amendMissionAuthorization({
     tenantId: TENANT,
     missionId,
     change: { add: [], lift: ['provider_research'], reason: 'Acceptance: allow research' },
@@ -159,6 +161,13 @@ test('review-only lifecycle, governed amendment and REST sender ordering are dur
   assert.equal(row.status, 'Clarification required');
   assert.deepEqual(row.payload.authorizationConstraints.prohibited,
     ['content', 'outreach', 'outreach_authorization', 'paid_media']);
+  // M1 — the reopen is a versioned mutation carrying the amendment's transaction.
+  assert.equal(row.payload.version, versionBeforeAmendment + 1, 'mission version bumped durably');
+  assert.equal(row.payload.lastTransactionId, amendment.transactionId);
+  const durableRecord = row.payload.authorizationConstraints.amendments.at(-1);
+  assert.equal(durableRecord.planningReopened, true);
+  assert.deepEqual(durableRecord.supersededPlan, { contractHash: approvedContractHash, approved: true });
+  assert.equal(durableRecord.transactionId, amendment.transactionId);
   const amendments = (await pool.query(
     `SELECT count(*)::int AS n FROM acquisition_mission_contributions
       WHERE mission_id = $1 AND payload->'payload'->>'amendmentId' = 'p0-pg-lift-research-1'
@@ -177,6 +186,8 @@ test('review-only lifecycle, governed amendment and REST sender ordering are dur
     expectedConstraintsHash: preview.constraintsHash, amendmentId: 'p0-pg-lift-research-1', approver: ADMIN,
   }, { pool, persist: true });
   assert.equal(replay.alreadyApplied, true);
+  const afterReplay = (await pool.query('SELECT payload FROM acquisition_missions WHERE id = $1', [missionId])).rows[0];
+  assert.equal(afterReplay.payload.version, versionBeforeAmendment + 1, 'replay does not bump again');
 
   // Discovery before the research plan is approved never reaches Scout.
   let scoutCalls = 0;

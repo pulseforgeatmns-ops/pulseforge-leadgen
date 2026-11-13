@@ -143,7 +143,10 @@ function createMission(input = {}) {
     stage,
     status: input.planCancelled === true
       ? 'Cancelled'
-      : missionStatusLabel(stage, pendingOperatorDecision),
+      : missionStatusLabel(stage, pendingOperatorDecision, {
+        structuredMission: structuredMission || null,
+        authorizationConstraints: mergeAuthorizationConstraints(input.authorizationConstraints || null),
+      }),
     confidence: round2(confidence),
     owner: asText(input.owner) || 'Operator',
     createdBy: asText(input.createdBy || input.created_by) || SPECIALISTS.MAX,
@@ -218,9 +221,13 @@ function buildPendingOperatorDecision({
       kind: OPERATOR_DECISION_KINDS.PLAN_APPROVAL,
       prompt: 'Approve mission plan?',
       responseType: OPERATOR_DECISION_RESPONSE_TYPES.YES_NO,
-      missionUnderstanding: formatOperatorConfirmation(missionPlanDraft)
+      missionUnderstanding: formatOperatorConfirmation(missionPlanDraft, {
+        authorizationConstraints: (input && input.authorizationConstraints) || null,
+      })
         || (planned && planned.confirmation)
-        || formatMissionUnderstandingProse(missionPlanDraft),
+        || formatMissionUnderstandingProse(missionPlanDraft, {
+          authorizationConstraints: (input && input.authorizationConstraints) || null,
+        }),
       actions: ['Approve', 'Edit', 'Cancel'],
     };
   }

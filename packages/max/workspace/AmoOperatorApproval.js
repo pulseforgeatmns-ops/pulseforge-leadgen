@@ -376,7 +376,9 @@ function putPlannedMission(engine, mission, planned, extra = {}) {
       stage: STAGES.DISCOVER,
       kind: OPERATOR_DECISION_KINDS.PLAN_APPROVAL,
       prompt: 'Approve mission plan?',
-      missionUnderstanding: planned.confirmation || formatOperatorConfirmation(planned.draft),
+      missionUnderstanding: planned.confirmation || formatOperatorConfirmation(planned.draft, {
+        authorizationConstraints: mission.authorizationConstraints || null,
+      }),
       actions: ['Approve', 'Edit', 'Cancel'],
     };
   }

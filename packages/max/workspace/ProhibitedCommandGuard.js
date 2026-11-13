@@ -26,7 +26,8 @@ const amo = require('../../acquisition-mission');
 const { recordRouterAudit } = require('../../acquisition-mission/ExecutionRouter');
 const { stripNegatedDirectives } = require('./NegatedDirective');
 const { ACTION_TARGETS, KIND_TARGETS } = require('./PendingDecisionResolver');
-const { buildConstraintBlockedTurn } = require('./AcquisitionMissionExecution');
+const crypto = require('crypto');
+const { buildConstraintBlockedTurn, resolveChatOperatorId } = require('./AcquisitionMissionExecution');
 const { resolveAcquisitionActiveMission } = require('./ActiveMissionGuard');
 const { isResearchPlanningDeferred } = require('../../acquisition-mission/StructuredMission');
 
@@ -162,14 +163,38 @@ async function maybeHandleProhibitedCommandTurn(input = {}) {
   if (!blocked.length) return null;
 
   const [first] = blocked;
+  // Correlate guard refusals like router rows: a request id per refused intent,
+  // the chat operator, the mission's runtime owner and the workspace session.
+  // No message text or credentials are recorded.
+  const operatorId = resolveChatOperatorId(input);
+  const runtimeOwner = amo.resolveMissionRuntimeOwner(mission);
+  const sessionId = (input.session && input.session.id) || null;
+  const auditRequestIds = [];
   for (const row of blocked) {
+    const requestId = `cer_guard_${crypto.randomUUID()}`;
+    auditRequestIds.push(requestId);
     recordRouterAudit({
+      requestId,
       source: amo.EXECUTION_SOURCES.CHAT,
       intent: row.intent,
       missionId: mission.id,
+      operatorId,
+      runtimeOwner,
+      specialist: amo.specialistForIntent(row.intent),
+      action: 'prohibited_command',
       outcome: 'blocked_by_constraint',
       executionState: 'blocked',
       errorCode: amo.AUTHORIZATION_CONSTRAINT_BLOCKED,
+      request: {
+        id: requestId,
+        source: amo.EXECUTION_SOURCES.CHAT,
+        intent: row.intent,
+        missionId: mission.id,
+        operatorId,
+        runtimeOwner,
+        sessionId,
+        guard: 'prohibited_command',
+      },
     });
   }
   const turn = buildConstraintBlockedTurn({
@@ -197,6 +222,7 @@ async function maybeHandleProhibitedCommandTurn(input = {}) {
   Object.assign(turn.structured.metadata, {
     prohibitedCommandGuard: true,
     blockedActionClasses: classes,
+    auditRequestIds,
     pendingDecisionKind: (mission.pendingOperatorDecision && mission.pendingOperatorDecision.kind) || null,
   });
   return turn;

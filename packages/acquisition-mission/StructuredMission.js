@@ -117,7 +117,7 @@ function normalizeResearchPlanning(input) {
   if (!input || typeof input !== 'object' || input.deferred !== true) return undefined;
   return {
     deferred: true,
-    reason: asText(input.reason) || 'provider_research_prohibited',
+    reason: asText(input.reason) || 'review_only',
     missing: Array.isArray(input.missing) ? [...new Set(input.missing.map(asText).filter(Boolean))] : [],
     deferredAmbiguities: normalizeAmbiguities(input.deferredAmbiguities),
   };
@@ -345,7 +345,25 @@ function isStructuredMissionApproved(mission) {
   return Boolean(mission.structuredMissionApproved);
 }
 
-function formatMissionUnderstanding(plan) {
+/**
+ * P0 — scope lines for a review-only plan, derived from the mission's actual
+ * authorization constraints when supplied. Without them only what the
+ * review-only classification guarantees is stated.
+ * @param {object|null} authorizationConstraints
+ * @returns {string[]}
+ */
+function reviewOnlyScopeLines(authorizationConstraints) {
+  const { describeProhibitedActions } = require('./AuthorizationConstraints');
+  const restricted = describeProhibitedActions(authorizationConstraints);
+  const reviewOnly = Boolean(authorizationConstraints && authorizationConstraints.reviewOnly);
+  return [
+    reviewOnly || !authorizationConstraints ? 'Review only.' : 'Discovery is not authorized.',
+    restricted.length ? `Not authorized: ${restricted.join(', ')}.` : 'Discovery (provider research) is not authorized.',
+    'Market and region are collected only if discovery is later authorized.',
+  ];
+}
+
+function formatMissionUnderstanding(plan, opts = {}) {
   if (!plan) return null;
   const marketLabel =
     (plan.market && (plan.market.label || [plan.market.buyer, plan.market.segment].filter(Boolean).join(' · '))) ||
@@ -367,15 +385,17 @@ function formatMissionUnderstanding(plan) {
       : success.target === 1 && /recurr/i.test(String(plan.objective || ''))
         ? 'One recurring client.'
         : `${success.target || 1} ${success.type || success.metric || 'customers'}`,
-    ...(isResearchPlanningDeferred(plan) ? { researchPlanningDeferred: true } : {}),
+    ...(isResearchPlanningDeferred(plan)
+      ? { researchPlanningDeferred: true, scope: reviewOnlyScopeLines(opts.authorizationConstraints || null) }
+      : {}),
     cities: geography.cities || [],
     evidenceThreshold: evidence.thresholdLabel || evidenceThresholdLabel(evidence.minimumConfidence),
     missionType: plan.missionType || plan.type,
   };
 }
 
-function formatMissionUnderstandingProse(plan) {
-  const understanding = formatMissionUnderstanding(plan);
+function formatMissionUnderstandingProse(plan, opts = {}) {
+  const understanding = formatMissionUnderstanding(plan, opts);
   if (!understanding) return '';
   const lines = [
     'Mission Understanding',
@@ -385,11 +405,7 @@ function formatMissionUnderstandingProse(plan) {
     '',
   ];
   if (understanding.researchPlanningDeferred) {
-    lines.push(
-      'Scope',
-      'Review only. No discovery, outreach, or content.',
-      'Market and region are not collected unless research is later authorized.'
-    );
+    lines.push('Scope', ...understanding.scope);
   } else {
     lines.push('Market', understanding.market || 'Unknown');
     if (understanding.industry) {
@@ -438,8 +454,8 @@ function formatCanonicalObjectiveDisplay(mission) {
 /**
  * Operator confirmation copy. Approve / Edit / Cancel — never silent execute.
  */
-function formatOperatorConfirmation(plan) {
-  const prose = formatMissionUnderstandingProse(plan);
+function formatOperatorConfirmation(plan, opts = {}) {
+  const prose = formatMissionUnderstandingProse(plan, opts);
   if (!prose) return '';
   return [prose, '', 'Proceed?', 'Approve', 'Edit', 'Cancel'].join('\n');
 }

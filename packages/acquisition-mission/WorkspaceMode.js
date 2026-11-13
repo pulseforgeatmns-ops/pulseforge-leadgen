@@ -25,6 +25,8 @@ const WORKSPACE_MODES = Object.freeze({
   EXECUTION: 'execution',
   OBSERVING: 'observing',
   COMPLETE: 'complete',
+  /** P0 — approved review-only plan: inspect only, nothing executable. */
+  REVIEW_ONLY: 'review_only',
   /** @deprecated Use MISSION_PLANNING */
   UNDERSTANDING: 'mission_planning',
   /** @deprecated Use DISCOVERY_APPROVAL or DISCOVERY_RUNNING */
@@ -49,6 +51,7 @@ const WORKSPACE_MODE_LABELS = Object.freeze({
   [WORKSPACE_MODES.EXECUTION]: 'Execution',
   [WORKSPACE_MODES.OBSERVING]: 'Observing',
   [WORKSPACE_MODES.COMPLETE]: 'Complete',
+  [WORKSPACE_MODES.REVIEW_ONLY]: 'Review Only',
 });
 
 const INSPECT_LIKE_MODES = Object.freeze([
@@ -60,6 +63,7 @@ const INSPECT_LIKE_MODES = Object.freeze([
   WORKSPACE_MODES.EXECUTION,
   WORKSPACE_MODES.OBSERVING,
   WORKSPACE_MODES.COMPLETE,
+  WORKSPACE_MODES.REVIEW_ONLY,
 ]);
 
 /** Top-level component contracts — each declares supportedModes. */
@@ -83,6 +87,7 @@ const COMPONENTS = Object.freeze({
       WORKSPACE_MODES.EXECUTION,
       WORKSPACE_MODES.OBSERVING,
       WORKSPACE_MODES.COMPLETE,
+      WORKSPACE_MODES.REVIEW_ONLY,
     ],
   },
   missionTimeline: {
@@ -147,6 +152,7 @@ const PROGRESSION_TO_WORKSPACE = Object.freeze({
   [PROGRESSION_STAGES.ACQUISITION_PLANNING]: WORKSPACE_MODES.OUTREACH,
   [PROGRESSION_STAGES.OUTREACH_PLANNING]: WORKSPACE_MODES.OUTREACH,
   [PROGRESSION_STAGES.EXECUTION]: WORKSPACE_MODES.EXECUTION,
+  [PROGRESSION_STAGES.REVIEW_ONLY]: WORKSPACE_MODES.REVIEW_ONLY,
 });
 
 const TERMINAL_STAGES = Object.freeze([STAGES.LEARN, STAGES.IMPROVE]);

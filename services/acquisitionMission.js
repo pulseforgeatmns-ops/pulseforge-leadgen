@@ -173,7 +173,7 @@ async function executeCanonical(input = {}, opts = {}) {
       operatorId: request.operatorId,
       runtimeOwner: request.runtimeOwner,
       specialist: amo.specialistForIntent(request.intent),
-      action: null,
+      action: amo.actionFromIntent(request.intent),
       outcome: 'blocked_by_constraint',
       executionState: 'blocked',
       errorCode: amo.AUTHORIZATION_CONSTRAINT_BLOCKED,

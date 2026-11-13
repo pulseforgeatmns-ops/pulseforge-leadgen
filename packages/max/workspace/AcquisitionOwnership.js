@@ -300,7 +300,9 @@ function buildOwnershipMissionResponse({
   const missionUnderstanding =
     (mission.pendingOperatorDecision && mission.pendingOperatorDecision.clarificationPrompt) ||
     formatCanonicalObjectiveDisplay(mission) ||
-    (mission.missionPlanDraft && formatMissionUnderstandingProse(mission.missionPlanDraft)) ||
+    (mission.missionPlanDraft && formatMissionUnderstandingProse(mission.missionPlanDraft, {
+      authorizationConstraints: mission.authorizationConstraints || null,
+    })) ||
     (mission.pendingOperatorDecision && mission.pendingOperatorDecision.missionUnderstanding) ||
     null;
   const structured = applyMissionCommunication(

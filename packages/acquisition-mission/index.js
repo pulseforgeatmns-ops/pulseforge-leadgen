@@ -87,6 +87,7 @@ module.exports = {
   stageActionClass: authorizationConstraints.stageActionClass,
   intentActionClass: authorizationConstraints.intentActionClass,
   isAuthorizationConstraintError: authorizationConstraints.isAuthorizationConstraintError,
+  describeProhibitedActions: authorizationConstraints.describeProhibitedActions,
   SYNTHETIC_EVIDENCE_BLOCKED: authorizationConstraints.SYNTHETIC_EVIDENCE_BLOCKED,
   missionHasSyntheticEvidence: authorizationConstraints.missionHasSyntheticEvidence,
   isSyntheticEvidenceError: authorizationConstraints.isSyntheticEvidenceError,

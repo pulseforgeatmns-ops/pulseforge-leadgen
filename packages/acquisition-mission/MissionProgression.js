@@ -46,6 +46,8 @@ const PROGRESSION_STAGES = Object.freeze({
   OUTREACH_PLANNING: 'outreach_planning',
   ACQUISITION_PLANNING: 'acquisition_planning',
   EXECUTION: 'execution',
+  /** P0 — approved review-only plan: nothing is authorized to execute. */
+  REVIEW_ONLY: 'review_only',
   /** @deprecated Use MISSION_PLANNING */
   UNDERSTANDING: 'mission_planning',
   /** @deprecated Use DISCOVERY_APPROVAL or DISCOVERY_RUNNING */
@@ -60,6 +62,7 @@ const PROGRESSION_STAGE_LABELS = Object.freeze({
   [PROGRESSION_STAGES.OUTREACH_PLANNING]: 'Outreach Planning',
   [PROGRESSION_STAGES.ACQUISITION_PLANNING]: 'Acquisition Planning',
   [PROGRESSION_STAGES.EXECUTION]: 'Execution',
+  [PROGRESSION_STAGES.REVIEW_ONLY]: 'Review Only',
 });
 
 const SCOUT_PIPELINE_STAGES = Object.freeze([
@@ -76,6 +79,16 @@ const SCOUT_PIPELINE_STAGES = Object.freeze([
 ]);
 
 const MISSION_STAGE_CONTRACTS = Object.freeze({
+  // P0 — a locked review-only plan rests here: no automatic step and no
+  // operator decision exists until a governed amendment reopens planning.
+  [PROGRESSION_STAGES.REVIEW_ONLY]: {
+    stage: PROGRESSION_STAGES.REVIEW_ONLY,
+    amoStage: STAGES.DISCOVER,
+    executesAutomatically: false,
+    requiresHumanDecision: false,
+    completionCriteria: 'Review-only plan approved; no discovery, outreach or content is authorized.',
+    nextStage: null,
+  },
   [PROGRESSION_STAGES.MISSION_PLANNING]: {
     stage: PROGRESSION_STAGES.MISSION_PLANNING,
     amoStage: STAGES.DISCOVER,
@@ -228,6 +241,17 @@ function isDiscoveryRunning(snapshot = {}) {
 function deriveProgressionStage(snapshot = {}) {
   const mission = snapshot.mission || snapshot;
   if (!mission) return null;
+
+  // P0 — an approved review-only plan is a non-executing resting state, never
+  // planning or discovery. A governed amendment reopens planning explicitly.
+  if (
+    isStructuredMissionApproved(mission) &&
+    isResearchPlanningDeferred(mission.structuredMission) &&
+    (!mission.stage || mission.stage === STAGES.DISCOVER) &&
+    !hasDiscoveryArtifact(snapshot)
+  ) {
+    return PROGRESSION_STAGES.REVIEW_ONLY;
+  }
 
   if (hasPendingPlanClarification(snapshot)) {
     return PROGRESSION_STAGES.MISSION_PLANNING;

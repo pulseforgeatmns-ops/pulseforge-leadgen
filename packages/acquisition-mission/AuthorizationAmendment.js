@@ -202,6 +202,7 @@ async function applyAuthorizationAmendment(input = {}) {
 
   const { executeMissionStage } = require('./TransactionalExecution');
   const { reopenResearchPlanning } = require('./ResearchPlanning');
+  const { bumpMissionVersion } = require('./TransactionalExecution');
   const staged = await executeMissionStage({
     engine,
     missionId,
@@ -225,6 +226,12 @@ async function applyAuthorizationAmendment(input = {}) {
     commit: ({ transactionId }) => {
       const current = engine.get(missionId, tenantId);
       const recomputed = computeAmendedConstraints(current.authorizationConstraints || null, input.change);
+      // P0 — permitting research on a review-only plan reopens planning in this
+      // same commit: the deferred market/region questions become a pending
+      // clarification and the plan must be approved again before discovery.
+      // Computed before the audit record so the record states what changed.
+      const reopened = reopenResearchPlanning(current, recomputed.after);
+      const supersededPlan = reopened ? (current.structuredMission || current.missionPlanDraft || null) : null;
       const record = {
         amendmentId,
         lifted: recomputed.lifted,
@@ -236,6 +243,16 @@ async function applyAuthorizationAmendment(input = {}) {
         transactionId,
         beforeHash: expectedHash,
         revision: recomputed.after.revision,
+        ...(reopened ? {
+          planningReopened: true,
+          // The prior (review-only) plan and any approval of it no longer stand.
+          supersededPlan: {
+            contractHash: (supersededPlan && supersededPlan.contractHash) || null,
+            approved: Boolean(current.structuredMission && current.structuredMission.immutable),
+          },
+          missionVersionBefore: Number(current.version) || 0,
+          pendingDecisionAfter: (reopened.pendingOperatorDecision && reopened.pendingOperatorDecision.kind) || null,
+        } : {}),
       };
       const contribution = engine.contribute(missionId, {
         specialist: SPECIALISTS.OPERATOR,
@@ -251,15 +268,16 @@ async function applyAuthorizationAmendment(input = {}) {
         ...recomputed.after,
         amendments: [...recomputed.after.amendments, { ...record, contributionId: contribution.id }],
       };
-      // P0 — permitting research on a review-only plan reopens planning in this
-      // same commit: the deferred market/region questions become a pending
-      // clarification and the plan must be approved again before discovery.
-      const reopened = reopenResearchPlanning(engine.get(missionId, tenantId), amended);
-      engine.store.putMission({
+      const next = {
         ...engine.get(missionId, tenantId),
         ...(reopened || {}),
         authorizationConstraints: amended,
-      });
+      };
+      // Reopening replaces the plan and the pending decision: a mission mutation,
+      // so it carries a new version and this transaction's id (same convention
+      // as plan approval). A constraints-only amendment is unchanged.
+      if (reopened) bumpMissionVersion(next, transactionId);
+      engine.store.putMission(next);
       return { contribution, constraints: amended, snapshot: engine.inspect(missionId, { tenantId }) };
     },
     persistDurable: input.persistDurable || null,

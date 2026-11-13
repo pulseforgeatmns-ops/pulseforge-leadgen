@@ -41,15 +41,20 @@ const { ACTION_CLASSES, evaluateAction } = require('./AuthorizationConstraints')
 const RESEARCH_PLANNING_FIELDS = Object.freeze(['market.segment', 'geography.region']);
 
 /**
- * P0 — a mission whose authorization prohibits provider research cannot run
- * Scout, so asking which market and region Scout should pursue, or setting a
- * customer-acquisition target, plans work that can never happen. Planning
+ * P0 — a mission the operator explicitly classified as review-only cannot
+ * run Scout, so asking which market and region Scout should pursue, or setting
+ * a customer-acquisition target, plans work that can never happen. Planning
  * defers those fields and records what was deferred, so it can be reopened
  * (and re-approved) if research is later authorized.
+ *
+ * Only an explicit review-only classification qualifies. A provider-research
+ * prohibition alone (e.g. derived from "No paid ads" / "No spending") is not
+ * review-only intent: those missions keep ordinary acquisition planning and
+ * the router/TME refuse the prohibited discovery as before.
  * @param {object|null} authorizationConstraints
  */
-function researchProhibited(authorizationConstraints) {
-  if (!authorizationConstraints) return false;
+function reviewOnlyPlanning(authorizationConstraints) {
+  if (!authorizationConstraints || authorizationConstraints.reviewOnly !== true) return false;
   return !evaluateAction({ authorizationConstraints }, ACTION_CLASSES.PROVIDER_RESEARCH).allowed;
 }
 
@@ -526,14 +531,14 @@ function planMission(resolvedObjective, opts = {}) {
   const allAmbiguities = Array.isArray(resolvedObjective.ambiguities)
     ? resolvedObjective.ambiguities
     : [];
-  const deferResearch = researchProhibited(opts.authorizationConstraints || null);
+  const deferResearch = reviewOnlyPlanning(opts.authorizationConstraints || null);
   const ambiguities = deferResearch
     ? allAmbiguities.filter((row) => !RESEARCH_PLANNING_FIELDS.includes(row && row.field))
     : allAmbiguities;
   const researchPlanning = deferResearch
     ? {
       deferred: true,
-      reason: 'provider_research_prohibited',
+      reason: 'review_only',
       missing: [
         ...(segmentKey ? [] : ['market.segment']),
         ...(extractedGeography.region || (extractedGeography.cities || []).length ? [] : ['geography.region']),
@@ -571,8 +576,10 @@ function planMission(resolvedObjective, opts = {}) {
     draft,
     ambiguities,
     readyForConfirmation,
-    understanding: formatMissionUnderstanding(draft),
-    confirmation: readyForConfirmation ? formatOperatorConfirmation(draft) : null,
+    understanding: formatMissionUnderstanding(draft, { authorizationConstraints: opts.authorizationConstraints || null }),
+    confirmation: readyForConfirmation
+      ? formatOperatorConfirmation(draft, { authorizationConstraints: opts.authorizationConstraints || null })
+      : null,
     clarification: ambiguities[0] || null,
     clarificationPrompt: ambiguities[0] ? formatAmbiguityPrompt(ambiguities[0]) : null,
     intent,
