@@ -26,16 +26,22 @@ The script runs same-origin in the tablet browser, so it uses the session
 cookie the browser already has and never reads it. It halts rather than
 just logging errors:
 
-- Preconditions **throw** and nothing is sent: origin is production; active tenant is 25;
-  `GET …/authorization` shows `reviewOnly: true`, exactly the five classes, revision 0, a hash;
-  `GET …/:id` shows tenant 25, no pending decision, no synthetic evidence. An expired
-  session (redirect to `/login`) halts as `read_non_json`.
+- Preconditions **throw** and nothing is sent:
+  - the origin is production, and the active tenant is 25;
+  - `GET …/authorization` shows `reviewOnly: true`, exactly the five classes, and a hash.
+    `revision` must be present and equal to the number `0`. If it is missing, `null`, `"0"` or `1`, the run halts.
+    Missions always persist `revision` via `mergeAuthorizationConstraints`, so a correct mission passes;
+  - `GET /api/v1/amo/missions` lists **exactly one** tenant 25 mission, it is the target mission,
+    and its status is exactly `Plan approved (review only)`;
+  - `GET …/:id` returns a `mission` object with the same id and status, no pending decision,
+    and no synthetic evidence.
+  An expired session (redirect to `/login`) halts as `read_non_json`.
 - A `confirm()` dialog is required before the first POST.
 - Requests are sequential and each is sent once. Nothing is retried, including on a network
   error, because the outcome is then unknown.
 - The restriction hash is re-read before each POST. Any change halts the run.
 - Any response other than `403` + `authorization_constraint_blocked` halts the run. The remaining intents are not sent.
-- Post-checks: the hash and the mission version are unchanged, and there is still no pending decision.
+- Post-checks: the hash, status and mission version are unchanged, there is still one tenant 25 mission, and there is still no pending decision.
 - Body is only `{"intent": X, "allowFixtureFallback": false}`.
 
 Steps:
@@ -57,6 +63,26 @@ Steps:
 
 Source: `scripts/s2-rest-acceptance/s2RestAcceptance.js`. Rebuild with
 `node scripts/s2-rest-acceptance/buildBookmarklet.js > scripts/s2-rest-acceptance/bookmarklet.txt`.
+Mock-server tests run the built `bookmarklet.txt`, with no network:
+`node --test scripts/s2-rest-acceptance/bookmarklet.mock.test.js`. There are 25 cases, and each halt case asserts that no POST was sent.
+
+### `postAudit.sql` schema validation
+
+- **Timestamps:** `acquisition_mission_contributions`, `acquisition_mission_events` and `acquisition_mission_execution_audit`
+  use `at`. `api_usage_events`, `touchpoints` and `pending_comments` use `created_at`.
+  `acquisition_missions.payload` is the whole mission object, so `payload->'authorizationConstraints'` is correct.
+- **`pending_comments`:** `client_id`, `channel`, `status` and `created_at` are read by live production code
+  (`dbClient.js:223`, `services/contentReview.js:46`, `routes/api.js:612–614`). The table has no DDL in the repo.
+- **Live check:** the script checks every table and column it uses against the live `information_schema`
+  before running any audit query. If one is missing it raises an error and stops (`ON_ERROR_STOP`, exit 3).
+  It runs as `BEGIN TRANSACTION READ ONLY … ROLLBACK`, and a missing `run_start` also exits 3.
+- **Local validation on PostgreSQL 16:** run against the repo's startup DDL (`ensureAcquisitionMissionSchema`,
+  `ensureExecutionAuditSchema`, captured statement by statement) plus `migrations/2026-10-14-api-usage-control.sql`:
+  - the full audit passes with exit 0;
+  - a missing `pending_comments.created_at`, a missing `pending_comments.client_id`, or
+    `acquisition_mission_events.at` renamed each stops at the preflight with no audit output;
+  - an `UPDATE` inside the transaction is refused.
+  This shows the SQL is correct and fails closed. It does not replace the live preflight, which is the production check.
 
 ## Determination rule
 
