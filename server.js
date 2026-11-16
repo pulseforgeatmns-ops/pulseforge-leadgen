@@ -1,3 +1,7 @@
+// Migration staging is intentionally isolated from all production startup side effects.
+if (process.env.PF_MIGRATION_STAGING === '1') {
+  require('./migrationStagingServer');
+} else {
 process.on('uncaughtException', err => { console.error('UNCAUGHT:', err); process.exit(1); });
 process.on('unhandledRejection', reason => { console.error('UNHANDLED:', reason); process.exit(1); });
 
@@ -1052,3 +1056,5 @@ try {
   throw err;
 }
 
+
+}
