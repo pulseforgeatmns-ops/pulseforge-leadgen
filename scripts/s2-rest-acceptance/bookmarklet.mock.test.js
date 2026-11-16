@@ -35,6 +35,7 @@ async function run(opts = {}) {
   const sent = [];
   let panel = null;
   const J = (status, body) => ({ status, redirected: false, text: async () => JSON.stringify(body) });
+  global.window = globalThis;
   global.location = { origin: o.origin || 'https://pulseforge-leadgen-production.up.railway.app' };
   global.document = { createElement: () => ({ style: {} }), body: { appendChild: (el) => { panel = el; } } };
   global.confirm = () => o.confirm;
@@ -143,4 +144,54 @@ test('post-check: version changed after run halts', async () => {
 test('post-check: a second tenant-25 mission appeared halts', async () => {
   const r = await run({ missions: (posts) => (posts >= 6 ? [mission(), mission({ id: 'mission_new' })] : [mission()]) });
   assert.strictEqual(r.log.haltReason, 'tenant_25_mission_count_changed_after_run');
+});
+
+test('startup panel is visible before the first request', async () => {
+  let textAtFirstFetch = null;
+  let appended = null;
+  const realCreate = () => ({ style: {} });
+  global.window = globalThis;
+  global.location = { origin: 'https://pulseforge-leadgen-production.up.railway.app' };
+  global.document = { createElement: realCreate, body: { appendChild: (el) => { appended = el; } } };
+  global.confirm = () => false;
+  global.alert = () => {};
+  global.fetch = async () => {
+    if (textAtFirstFetch === null) textAtFirstFetch = appended ? appended.textContent : '(no panel)';
+    throw new Error('stop here');
+  };
+  await eval(code); // eslint-disable-line no-eval
+  await new Promise((r) => setTimeout(r, 20));
+  assert.match(textAtFirstFetch, /^S2 acceptance bookmarklet STARTED \(build [0-9a-f]{12}\)/);
+  assert.match(textAtFirstFetch, /No request sent yet/);
+  assert.strictEqual(JSON.parse(appended.textContent).haltReason, 'read_network_error');
+});
+
+test('missions:null still halts through the existing guard, zero POSTs', async () => {
+  const r = await run({ missions: null, snapshot: () => null });
+  assert.strictEqual(r.log.haltReason, 'mission_list_malformed');
+  assert.strictEqual(r.posts, 0);
+});
+
+test('a TypeError inside the script renders verdict SCRIPT_ERROR with postsSent 0', async () => {
+  let panel = null;
+  let alerted = null;
+  global.window = globalThis;
+  global.location = { origin: 'https://pulseforge-leadgen-production.up.railway.app' };
+  global.document = { createElement: () => ({ style: {} }), body: { appendChild: (el) => { panel = el; } } };
+  global.confirm = () => true;
+  global.alert = (m) => { alerted = m; };
+  let posts = 0;
+  global.fetch = async (url, init = {}) => {
+    if (init.method === 'POST') posts += 1;
+    /* tenant context body is JSON null -> ctx.active_client_id throws TypeError */
+    return { status: 200, redirected: false, text: async () => 'null' };
+  };
+  await eval(code); // eslint-disable-line no-eval
+  await new Promise((r) => setTimeout(r, 20));
+  const log = JSON.parse(panel.textContent);
+  assert.strictEqual(log.verdict, 'SCRIPT_ERROR');
+  assert.strictEqual(log.scriptError.name, 'TypeError');
+  assert.strictEqual(log.scriptError.postsSent, 0);
+  assert.strictEqual(posts, 0);
+  assert.ok(alerted);
 });

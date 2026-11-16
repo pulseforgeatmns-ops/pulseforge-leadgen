@@ -18,7 +18,7 @@
  *
  * Comments in this file use block syntax only so it collapses to one line.
  */
-(async () => {
+void (async () => {
   const EXPECT = {
     tenantId: '25',
     missionId: 'mission_bdf1e016-ae3b-4d97-be54-3f1dc366d169',
@@ -36,11 +36,17 @@
     'APPROVE_DISCOVERY',
   ];
   const BASE = '/api/v1/amo/missions/' + encodeURIComponent(EXPECT.missionId);
-  const log = { startedAt: new Date().toISOString(), origin: location.origin, pre: {}, results: [], post: {}, verdict: null };
+  const log = { build: 'S2_BUILD_ID', startedAt: new Date().toISOString(), origin: location.origin, pre: {}, results: [], post: {}, verdict: null };
 
+  /* Visible startup panel BEFORE any request. top/right/bottom/left instead of
+     inset so older Chrome still covers the screen. */
   const out = document.createElement('pre');
-  out.style.cssText = 'position:fixed;inset:0;z-index:2147483647;margin:0;padding:12px;overflow:auto;background:#111;color:#eee;font:12px/1.4 monospace;white-space:pre-wrap';
-  document.body.appendChild(out);
+  out.id = 's2-acceptance-panel';
+  out.style.cssText = 'position:fixed;top:0;right:0;bottom:0;left:0;z-index:2147483647;margin:0;padding:12px;overflow:auto;background:#111;color:#eee;font:12px/1.4 monospace;white-space:pre-wrap';
+  out.textContent = 'S2 acceptance bookmarklet STARTED (build S2_BUILD_ID) at ' + log.startedAt + '\nNo request sent yet. Checking origin, then reading preconditions (GET only)...';
+  (document.body || document.documentElement).appendChild(out);
+  window.__s2Panel = out;
+  window.__s2Log = log;
   const render = () => { out.textContent = JSON.stringify(log, null, 2); };
   const halt = (reason, detail) => {
     log.verdict = 'HALTED';
@@ -185,4 +191,23 @@
   render();
   try { await navigator.clipboard.writeText(JSON.stringify(log, null, 2)); log.copiedToClipboard = true; } catch (e) { log.copiedToClipboard = false; }
   render();
-})().catch((e) => { try { alert(String(e && e.message)); } catch (_) { /* no-op */ } });
+})().catch((e) => {
+  /* Halts already rendered the log. Anything else (an unexpected script error)
+     is shown on the panel too, with the number of POSTs already sent. */
+  const msg = String(e && e.message);
+  try {
+    const lg = window.__s2Log;
+    const panel = window.__s2Panel;
+    if (lg && panel && lg.verdict !== 'HALTED') {
+      lg.verdict = 'SCRIPT_ERROR';
+      lg.scriptError = { name: String(e && e.name), message: msg, postsSent: lg.results.length };
+      panel.textContent = JSON.stringify(lg, null, 2);
+    } else if (!panel) {
+      const p = document.createElement('pre');
+      p.style.cssText = 'position:fixed;top:0;right:0;left:0;z-index:2147483647;margin:0;padding:12px;background:#600;color:#fff;font:12px/1.4 monospace;white-space:pre-wrap';
+      p.textContent = 'S2 acceptance bookmarklet ERROR before panel: ' + msg;
+      (document.body || document.documentElement).appendChild(p);
+    }
+  } catch (_) { /* fall through to alert */ }
+  try { alert(msg); } catch (_) { /* no-op */ }
+});

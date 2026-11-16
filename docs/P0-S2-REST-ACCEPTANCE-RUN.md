@@ -61,10 +61,43 @@ Steps:
 6. An operator with DB access runs `scripts/s2-rest-acceptance/postAudit.sql`.
    It runs in a `READ ONLY` transaction with `run_start` = the log's `startedAt`.
 
-Source: `scripts/s2-rest-acceptance/s2RestAcceptance.js`. Rebuild with
-`node scripts/s2-rest-acceptance/buildBookmarklet.js > scripts/s2-rest-acceptance/bookmarklet.txt`.
-Mock-server tests run the built `bookmarklet.txt`, with no network:
-`node --test scripts/s2-rest-acceptance/bookmarklet.mock.test.js`. There are 25 cases, and each halt case asserts that no POST was sent.
+Source: `scripts/s2-rest-acceptance/s2RestAcceptance.js`. Rebuild all three bookmarklets with
+`node scripts/s2-rest-acceptance/buildBookmarklet.js` (the script writes the files itself; `--check` verifies they are current).
+Tests, with no network to production:
+- `node --test scripts/s2-rest-acceptance/bookmarklet.mock.test.js` runs the built `bookmarklet.txt` against a mock. There are 28 cases, and each halt case asserts that no POST was sent.
+- `node --test scripts/s2-rest-acceptance/bookmarklets.static.test.js` checks the exact `javascript:` strings: they are fresh, one line, use a safe charset, end with the end marker, parse, and the diagnostics make no network call.
+- `node --test scripts/s2-rest-acceptance/bookmarklets.browser.test.js` clicks the exact `javascript:` strings in real Chromium. Every request is intercepted locally.
+
+### Tablet troubleshooting: "s2run is selected, nothing visible happens" (2026-11-16)
+
+If the acceptance script starts, it paints a full-screen panel **before** its first request.
+That was true in the earlier build too: it showed a 1280×720 black panel in Chromium.
+So "nothing visible" means the script never started. A `javascript:` bookmark can fail silently in these cases:
+
+1. **Parse failure.** If the 11–12 KB line was truncated or altered when it was pasted into the bookmark,
+   the whole program is rejected before it runs, including its `.catch`/`alert`.
+   The only trace is a console SyntaxError. `bookmarklets.browser.test.js` reproduces this.
+   Every built line now ends with `void%20'S2_END_OF_BOOKMARKLET'%3B`. Check the end of the bookmark URL for it.
+2. **Chrome Android ignores `javascript:` bookmarks opened from the Bookmarks screen or star menu.**
+   It runs one only from the address-bar suggestion list.
+3. **Page CSP.** A `script-src` without `'unsafe-inline'` blocks bookmarklets in Chrome, again silently (test reproduces).
+   `/dashboard` sets no CSP in this repo. `/admin/scout-research-approval`, the anchor approval page and the identity form do, so run bookmarklets only on `/dashboard`.
+4. **Old Chrome:** `async`/`await` needs Chrome 55 or later. `inset` (Chrome 87+) is no longer used.
+
+The acceptance script itself had one blind spot. An unexpected exception (not a `halt`) was reported only by `alert`.
+Now it renders `verdict: "SCRIPT_ERROR"` on the panel with `postsSent`.
+A startup line is shown before any request (`S2 acceptance bookmarklet STARTED (build <id>) … No request sent yet`).
+Its guards, their order and every stop condition are unchanged.
+
+**Bisect with two zero-network bookmarklets.** They make no request, change nothing on the server and contain no intent:
+- `diagnostic.bookmarklet.txt` (~1.5 KB, ES5): shows a green box with `S2 DIAGNOSTIC: bookmarklet RAN`, the page path and the Chrome version. Tap the box to close it.
+- `sizeprobe.bookmarklet.txt`: the same diagnostic, padded to at least the acceptance bookmarklet's length. The box shows its length.
+
+| diagnostic | size probe | meaning |
+|---|---|---|
+| no box | — | bookmarklets do not run here (launch method, CSP, page): fix that first |
+| box | no box | long-URL paste/storage problem: re-paste from the raw file and check the end marker |
+| box | box | the launch path works; re-paste `bookmarklet.txt` and check the end marker. The new startup line proves it started |
 
 ### `postAudit.sql` schema validation
 
