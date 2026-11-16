@@ -12,4 +12,4 @@ COPY --chown=pptruser:pptruser . .
 
 EXPOSE 3000
 
-CMD ["node", "server.js"]
+CMD ["sh", "-c", "if [ \"$PF_MIGRATION_STAGING\" = \"1\" ]; then exec node migrationStagingServer.js; else exec node server.js; fi"]
