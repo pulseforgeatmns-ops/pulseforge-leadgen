@@ -53,3 +53,10 @@
 - Physical capacities from catalog: Signal candidate tables **8,163,663,872 bytes** (~8.16 GB) and Pulseforge candidate tables **1,032,675,328 bytes** (~1.03 GB), excluding ~22 MB database-level overhead. These are source physical relation sizes, not dump or restored sizes.
 - Backup schema has 322 `TABLE` definitions vs the 319 current physical `r,p` tables; the separate 3 SQL views account for the observed difference in archive object classifications. This needs a schema restoration confirmation, not just inferred compatibility.
 - **Still NOT performed:** actual SQL restore to Render PostgreSQL, exact restored row counts, sequence and trigger verification, runtime identity/auth migration, or cutover.
+
+## 2026-11-17 Render staging gated test deployment passed
+- Render deploy `dep-dbu8g7l9fdbs73e0o05g`, commit `97e75623f894d0686c49870908a652a7d606a4db`, finished **live** at `2026-11-17T17:01:24Z`. Dockerfile's isolated-staging branch now runs both database-routing and catalog-manifest unit tests **before** starting `migrationStagingServer.js`.
+- Render application logs explicitly report **12 tests, 12 pass, 0 fail, 0 skipped**, then `[migration-probe] isolated read-only health service listening`. This is a bounded migration unit suite, not full repository integration/CI or restored-data validation.
+- Provisional owner mapping is in `docs/migration/source-ownership-candidates-20261117.json` (274 Pulseforge, 45 Signal). The catalog `docs/migration/railway-source-catalog-20261117.json` contains 378 relation/sequence/view objects, 319 physical tables, 361 FK edges, 80 triggers, and 7 view dependencies.
+- The one-time archive partition worker was removed. Final Railway environment check shows only original `Postgres` and `OpenClaw Main` services and retained `MigrationBackup` bucket; no staged changes.
+- **Blocked, not claimed complete**: physical restore into Render, Signal-only destination provisioning/budget, exact data reconciliation and standalone dashboard identity/auth separation. No schema or customer rows have been written to Render.
