@@ -1,0 +1,7 @@
+FROM postgres:18-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-boto3 ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+COPY scripts/migration/partitionBackupDataOnce.py /usr/local/bin/partitionBackupDataOnce.py
+COPY docs/migration/railway-source-catalog-20261117.json /usr/local/share/migration/railway-source-catalog-20261117.json
+USER postgres
+CMD ["python3", "/usr/local/bin/partitionBackupDataOnce.py"]
