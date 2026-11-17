@@ -10,7 +10,7 @@ function endpoint(urlString) {
   try { url = new URL(urlString); }
   catch { throw new Error('invalid_signal_database_url'); }
   if (!['postgres:', 'postgresql:'].includes(url.protocol) || !url.hostname ||
-      !url.username || !url.pathname || url.pathname === '/') {
+      !url.pathname || url.pathname === '/') {
     throw new Error('invalid_signal_database_url');
   }
   return { host: url.hostname.toLowerCase(), port: url.port || '5432', database: decodeURIComponent(url.pathname.slice(1)) };
