@@ -67,3 +67,12 @@ The two largest Signal tables total **8,157,003,776 bytes = 7.597 GiB = 88.49%**
 - The Signal split now requires **both** `SIGNAL_DB_SEPARATION_REQUIRED=1` and a distinct `SIGNAL_DATABASE_URL`. Providing a separate URL without the flag fails closed. This flag is **not** set in production.
 - Seven isolated Node unit checks of the database routing logic passed locally, using a stubbed PostgreSQL Pool; repository CI/full integration tests have **not** been confirmed.
 - Data copy has **not started**. No valid portable source backup exists yet. Railway's outstanding subscription and nearly full source volume remain urgent risks.
+
+## 2026-11-17 validation and tracking correction
+- The original staging PR #1128 was **closed** against an older branch head. Current migration work is tracked in **open DRAFT PR #1129**: https://github.com/pulseforgeatmns-ops/pulseforge-leadgen/pull/1129. **Do not merge** during the P0 freeze.
+- Added `scripts/migration/buildSplitManifest.js` plus `test/migrationSplitManifest.test.js`. It consumes the output of the existing read-only inventory query and provides a **provisional** table ownership, size breakdown, and cross-product FK alerts. It makes no database connections and is not approved for building pg_dump filters without human validation.
+- `signalDb.js` has an explicit flag: without `SIGNAL_DB_SEPARATION_REQUIRED=1`, provisioning `SIGNAL_DATABASE_URL` remains inert, preventing accidental premature cutover. With the flag enabled it checks the destination has a distinct host/port/database from `DATABASE_URL`. It cannot distinguish two different proxies for the same underlying physical database; infrastructure review is still necessary.
+- `services/signalV1ShadowScheduler.js` was also routed through the dedicated Signal pool under the explicit split flag.
+- **Local test**: 7 of 7 `signalDatabaseRouting.test.js` cases passed with a stubbed `pg` module on Node 22. Not a full repository CI or integration validation.
+- Render's current destination version is still PG16; source is PG18.6. Render's documented in-place upgrade is accessed from the PostgreSQL **Info** page. Upgrade not performed.
+- There is still **no verified offsite backup** and no data transfer. Do not imply the migration is complete.
