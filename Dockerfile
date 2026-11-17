@@ -1,8 +1,15 @@
-FROM postgres:18-bookworm
-RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-requests ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
-COPY scripts/migration/restoreGatewayRender.py /usr/local/bin/restoreGatewayRender.py
-COPY docs/migration/railway-source-catalog-20261117.json /usr/local/share/migration/railway-source-catalog-20261117.json
-USER postgres
-ENV PYTHONUNBUFFERED=1
-CMD ["python3", "/usr/local/bin/restoreGatewayRender.py"]
+FROM ghcr.io/puppeteer/puppeteer:24
+
+ENV NODE_ENV=production
+ENV PORT=3000
+
+WORKDIR /app
+
+COPY --chown=pptruser:pptruser package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+COPY --chown=pptruser:pptruser . .
+
+EXPOSE 3000
+
+CMD ["sh", "-c", "if [ \"$PF_MIGRATION_STAGING\" = \"1\" ]; then node --test test/migrationSplitManifest.test.js test/signalDatabaseRouting.test.js test/migrationDatabaseTarget.test.js && exec node migrationStagingServer.js; else exec node server.js; fi"]
