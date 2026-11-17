@@ -1,32 +1,52 @@
-# Pulseforge / Signal database separation: migration gate
+# Verified Railway source inventory: Pulseforge vs Signal
 
-Status: DESIGN + SOURCE AUDIT ONLY. No production writes, no new infrastructure, no cutover authorization.
+Status: READ-ONLY AUDIT COMPLETE FOR TABLE SIZES AND DECLARED FOREIGN KEYS. No rows exported, no destination restored, no production changes.
 
-## Confirmed code coupling
-- `db.js` constructs the shared Pool from `DATABASE_URL`.
-- `routes/signalV1.js:getStore()` explicitly imports `../db` when `DATABASE_URL` exists, so Signal V1 currently shares the Pulseforge DB.
-- `services/signalDashboard/store.js` receives an injected pool and writes `signal_dashboard_records` and `signal_dashboard_provider_budget`; callers must be audited before rerouting.
-- `standalone/signal-dashboard/migrate.js` currently uses `DATABASE_URL` and runs four dashboard migrations when explicitly approved. Do not run it as part of this audit.
-- `migrations/2026-10-25-signal-dashboard-opportunities.sql` defines `signal_opportunity_decisions` and `signal_opportunity_notifications` without declared foreign keys in that migration. This is NOT proof that the live DB has no dependencies.
+## Source and destination
+- Railway source database: `railway`, PostgreSQL **18.6**, 9,218,078,399 bytes (**8.585 GiB**). Measured through Railway's SQL Query tab (2026-11-16).
+- Render Pulseforge staging database: PostgreSQL **16**, 10 GB provisioned; independently connected by a read-only `SELECT 1` staging probe. Do not restore a PostgreSQL 18 dump into 16 without a verified compatibility plan. Prefer upgrading the *empty staging* database to 18; requires separate UI operation and subsequent connectivity test.
+- The source database is under a Railway past-due subscription warning. Prioritize an offsite, portable logical dump; Railway volume backups alone cannot be restored directly to Render.
 
-## Target ownership
-Pulseforge: tenants, authentication, agents, prospects, campaigns, billing, outreach and operational audit.
-Signal: research observations, caller feeds, market candles, opportunity decisions, dashboard records, positions, provider budgets and Signal-only audit.
-Cross-product relationships: stable opaque IDs and authenticated API contracts; no cross-database joins or shared write credentials.
+## Largest measured relations
+| Current source table | Total bytes | Source estimated rows | Proposed owner |
+|---|---:|---:|---|
+| signal_opportunity_decisions | 7,656,611,840 | 1,569,564 | Signal |
+| signal_dashboard_records | 500,391,936 | 314,600 | Signal |
+| places_api_requests | 670,425,088 | 1,191,455 | Pulseforge |
+| acquisition_outbound_events | 101,548,032 | 30,294 | Pulseforge |
+| agent_log | 47,620,096 | 90,110 | Pulseforge |
+| signal_distribution_request_attempts | 2,785,280 | 25,343 | Signal |
+| signal_market_observations | 1,556,480 | 1,585 | Signal |
 
-## Read-only discovery gates
-1. Execute `scripts/migration/railwaySourceInventory.sql` with read-only Railway credentials. Save output securely; redact secrets and customer data.
-2. Produce a table-by-table ownership manifest from actual live schemas and application references. Classify shared tables and every inbound/outbound FK, trigger, view, function, and materialized view.
-3. Collect precise relation sizes and row counts for critical tables, growth rates and retention constraints. Estimate restore headroom for *both* databases; do not assume 10 GB is sufficient.
-4. Identify all Signal consumers, background workers, migrations, scheduled tasks, and code paths that use the shared Pool. Require independent pool injection and fail-closed startup before any split.
-5. Establish backup, restore, row-count/hash reconciliation, cutover and rollback runbooks. Ensure write-freeze/delta replay design before switching sources.
-6. Price the dedicated Signal database and confirm authorization under the $68/month base ceiling (or request separate approval).
+The two largest Signal tables total **8,157,003,776 bytes = 7.597 GiB = 88.49%** of the database. The residual after excluding just these two is **1,061,074,623 bytes = 0.988 GiB**, including smaller Signal tables and all Pulseforge data. These are relation sizes, NOT dump sizes; indexes/TOAST affect physical storage. Estimated rows derive from pg_class.reltuples, not exact COUNT(*). Values of -1 mean no estimate, NOT zero rows.
 
-## No-go conditions
-- No dropping, truncating, moving, or archiving production data as a shortcut.
-- No copying live Stripe credentials to active staging app routes, no autonomous outbound, no Signal scheduler.
-- No public Render PostgreSQL inbound allowlist expansion.
-- No cutover or Railway service change until separately authorized after validated restores.
+### Important unexpected storage
+`signal_opportunity_decisions`: table total 7.657 GB, reported main heap 396.75 MB, main indexes 700.36 MB; approximately **6.559 GB** is storage outside those two measurements (primarily TOAST and its indexes). This warrants schema/JSON payload analysis; it does not prove bloat. Do not VACUUM FULL, REINDEX, truncate, or delete on Railway to 'fix' this.
 
-## Next concrete blocker
-Railway connector has no SQL query or pg_dump action. Run the inventory through a secure read-only database session or a purpose-built isolated read-only job with approved credentials. Never paste database URLs into chat or commit them to GitHub.
+## Ownership and declared FK graph findings
+- The supplied complete FK listing shows **no declared foreign keys** from either `signal_opportunity_decisions` or `signal_dashboard_records` to Pulseforge tables.
+- Signal research / distribution FK clusters appear internally connected: `signal_sources`, `signal_source_clusters`, `signal_tokens`, `signal_research_observations`, `signal_distribution_monitors`, and descendants. Preserve them together, including empty/low-volume tables.
+- **Do not classify by name alone**: `prospect_signal_events` joins `prospects`, `companies`, `clients`; `warm_signal_state` and `warm_signal_events` join `prospects`. These are Pulseforge acquisition signals, not Signal product data.
+- `market_observations` references `market_emails` and `market_companies`; treat as Pulseforge market intelligence pending code audit, not automatic Signal ownership.
+- Absence of cross-product declared foreign keys is not proof of independence. Check triggers, views, functions, implicit JSON relationships, code-level joins and process-level connection pools before moving any data.
+
+## Preliminary approach
+1. **Protect data first**: inspect Railway Postgres Backups tab; create/check backup if account/volume allows, and produce a *portable offsite PostgreSQL 18 logical dump* to a secure encrypted location. Do not put data or credentials in GitHub/chat. Retain source untouched.
+2. **Resolve versions**: align the empty Render Pulseforge destination with PG18 or validate an alternative schema/data conversion; PostgreSQL explicitly does not guarantee dumping to older major versions.
+3. **Freeze ownership manifest**: assign all source tables to Signal/Pulseforge; check non-FK dependencies. Preserve every relation in one of the destinations, or explicitly document a shared integration system.
+4. **Implement separate Signal pool** via `SIGNAL_DATABASE_URL` and inject into all Signal components. The current `routes/signalV1.js` imports `../db`; do not flip a variable alone and assume isolation.
+5. **Snapshot-and-copy rehearsal**: use schema + table-filtered exports and restore into isolated databases; validate exact counts, foreign keys, integrity, business-critical smoke tests, job suppression and ownership.
+6. **Follow-up data sync and cutover** require a delta strategy, cutover authorization and tested rollback. Railway remains production until then.
+
+## Go/no-go and budget
+- 10 GB is **plausibly adequate for Pulseforge-only data**: less than 1.1 GB remains after excluding only the two largest Signal relations, but check restore overhead and final ownership.
+- Signal needs an independent storage/cost calculation. Its largest two tables already use ~8.16 GB; don't provision a 10 GB DB until capacity headroom and a cost agreement are verified.
+- Approved base budget is $68/month total, excluding separately approved usage. No additional paid Signal instance until cost review.
+- Source is PostgreSQL 18.6; destination PostgreSQL 16. **Direct backward restore not guaranteed** by PostgreSQL docs.
+
+## Evidence
+- Source: user-run Railway SQL query result containing `tables`, `foreign_keys`, `database_bytes`, and `postgres_version`.
+- Catalog SQL: `scripts/migration/railwaySourceInventoryOneQuery.sql`.
+- PostgreSQL 18 pg_dump compatibility: https://www.postgresql.org/docs/18/app-pgdump.html
+- Render PG upgrade procedure: https://render.com/docs/postgresql-upgrading
+- Railway backup types and caveats: https://railway.com/guides/postgres-backups-restores
