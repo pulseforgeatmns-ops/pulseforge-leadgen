@@ -23,4 +23,10 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(503); res.end('Database unavailable');
   } finally { await pool.end().catch(() => {}); }
 });
+try {
+  validateMigrationDatabaseUrl(process.env.DATABASE_URL);
+  console.log('[migration-probe] isolated destination URL matches approved database name');
+} catch (error) {
+  console.error('[migration-probe] unsafe destination URL:',error.message);
+}
 server.listen(port, '0.0.0.0', () => console.log('[migration-probe] isolated read-only health service listening'));
