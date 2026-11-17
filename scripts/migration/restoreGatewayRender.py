@@ -311,6 +311,14 @@ if __name__=="__main__":
           "AND n.nspname NOT LIKE 'pg_toast%' AND c.relkind IN ('r','p','v','m','S');"))
         message("TARGET_CATALOG_INSPECTED",{"nonSystemObjectCount":total,
           "sampleObjectNames":objects})
+        size=int(sql_output("SELECT pg_database_size(current_database());"))
+        create_priv=sql_output("SELECT rolcreatedb::text FROM pg_roles WHERE rolname=current_user;")
+        sample=sql_output("SELECT 'users:'||COUNT(*)::text FROM public.users; "
+           + "SELECT 'prospects:'||COUNT(*)::text FROM public.prospects; "
+           + "SELECT 'signal_dashboard_records:'||COUNT(*)::text FROM public.signal_dashboard_records;")
+        message("TARGET_REHEARSAL_READINESS",{"dbBytes":size,
+          "canCreateLogicalDatabase":create_priv,
+          "sampleRowCounts":sample.splitlines()})
     except Exception as e:
         message("TARGET_CATALOG_INSPECTION_UNAVAILABLE",{
           "exceptionType":type(e).__name__,
