@@ -50,3 +50,12 @@ The two largest Signal tables total **8,157,003,776 bytes = 7.597 GiB = 88.49%**
 - PostgreSQL 18 pg_dump compatibility: https://www.postgresql.org/docs/18/app-pgdump.html
 - Render PG upgrade procedure: https://render.com/docs/postgresql-upgrading
 - Railway backup types and caveats: https://railway.com/guides/postgres-backups-restores
+
+## 2026-11-17 code staging status (no live cutover)
+- On `migration/render-isolated-staging`, `signalDb.js` offers `SIGNAL_DATABASE_URL`. When `SIGNAL_DB_SEPARATION_REQUIRED=1`, the shared `DATABASE_URL` fallback is blocked; matching connection strings are rejected.
+- Signal V1 route, dashboard runtime and worker, Signal operator, research replay/ingest, standalone dashboard server, and Signal dashboard migration entry point have been routed to the new helper. Legacy behavior remains available until cutover.
+- `test/signalDatabaseRouting.test.js` checks missing/matching/invalid Signal configuration. These changes remain unmerged and unactivated.
+- The standalone dashboard currently resolves owner identity from its database `users` table. A physically separated Signal DB without migrated auth/identity will fail. `SIGNAL_STANDALONE_AUTH_MIGRATED=1` is deliberately required in standalone split mode until schema, identity and session migration are validated. Do not set this flag merely to bypass the gate.
+- Render API staging branch is isolated by `PF_MIGRATION_STAGING=1`; no application routes, outbound or worker start. Render has 10 GB destination PostgreSQL 16; Railway source PG18.6. Do not transfer before a portable backup and PG major-version compatibility plan.
+- The failed tablet `pg_dump` attempts did not complete a backup. Never treat the failed Termux session as a recovery copy.
+- **Next blocking items**: portable verified source backup, separate Signal storage/budget approval, and comprehensive dependency/identity migration rehearsal.
