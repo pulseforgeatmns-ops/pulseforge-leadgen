@@ -1,0 +1,44 @@
+# Railway → Render: isolated restore rehearsal
+
+**Status: PREPARED, NOT EXECUTED.** Never run this checklist against production Railway or activate the Signal split before explicit cutover authorization.
+
+## Evidence already captured
+
+- Source Railway PostgreSQL 18.6 at last inventory: 9,218,078,399 bytes; source remains live and changing.
+- Private backup in Railway `MigrationBackup` S3 bucket: `migration-backups/railway-20261117-full-pg18.dump`. Completed 2026-11-17, 727,898,203 bytes, SHA-256 `4d44ad1f73ffcb5a3ee48ee8b30c78c2430f803da05915b40b84b6101a736628`.
+- Independent temporary worker verified object checksum and PostgreSQL 18 `pg_restore --list`: 2,137 TOC items, 322 TABLE definitions, 319 TABLE DATA items, 350 INDEX items. This confirms a readable archive directory, **not restored rows or schema correctness**.
+- User has downloaded `railway-20261117-full-pg18.dump` to tablet Downloads, with Android reporting 728 MB. **Do not mark tablet SHA verified solely from this screenshot**; independently compare checksum on the downloaded file.
+- Render destination `dpg-dbtgtloae00c73dd8040-a`: PostgreSQL **18**, 10 GB, available; isolated staging API only. It is intended for Pulseforge, not the full combined 9.2 GB source.
+- Draft PR #1129 is isolated/unmerged. `PF_MIGRATION_STAGING=1` must remain set. No outbound, workers, hooks, production scheduler or Stripe startup in the rehearsal.
+
+## Dependency and capacity gates (do first)
+
+1. Preserve the full archive in both Railway private bucket and a verified **non-Railway** private copy. Keep the Railway source online. Treat backup as sensitive.
+2. Produce a reviewed ownership manifest for **all** 322 source tables and dependencies before any table filter. Names alone are not sufficient. Explicitly keep `prospect_signal_events`, `warm_signal_state`, and `warm_signal_events` with Pulseforge, not the separate Signal product.
+3. Review PostgreSQL extensions, views, functions, triggers, sequences, FK edges, ownership, user identity/auth/session dependencies and application SQL joins. Record shared/duplicated tables and compatibility strategy.
+4. Reserve adequate target space and budget for both products. Source `signal_opportunity_decisions` ~7.657 GB and `signal_dashboard_records` ~0.500 GB; Pulseforge remaining data is ~1.061 GB **including** smaller Signal tables. Don't restore both largest Signal tables into the 10 GB Pulseforge database.
+5. Have a **secure transfer path** into the isolated Render environment. Render external Postgres IP allowlist is empty; do not turn on public access merely for convenience.
+6. Rehearsal must write only into an isolated empty/disposable destination, never the running production DB and never a shared staging DB holding irreplaceable records.
+
+## Archive and restore validation
+
+1. Check exact backup byte length, SHA-256, custom `PGDMP` header and `pg_restore --list`. The TOC listing is safe; it does not write to a database.
+2. Review the TOC and ownership manifest to produce a fully covered partition of selected **data** entries. Don't use `--exclude-table-data` or name-prefix-only filters as a substitute for reviewing dependencies.
+3. Restore reviewed schema, roles/privileges (using controlled owner/ACL strategy), sequences, TABLE DATA, indexes/constraints and post-data into the isolated database. Stop on errors; capture errors, warnings, and object counts. A successful `pg_restore --list` alone does not satisfy this.
+4. Compare every expected source table with its restored destination: existence, exact row counts captured from a consistent snapshot, sequence values, key constraints, indexes, FK checks, required extensions and app business queries. Treat estimations (`reltuples`) as **not** exact counts.
+5. Validate Render connectivity without enabling migrations, workers, outbound, Signal dashboards/collectors, or other side effects. Test client auth/session boundary explicitly.
+6. Confirm no customer secrets, PII, data payloads, URLs with credentials, or SQL dumps were logged or committed.
+
+## Production cutover is separate and explicitly gated
+
+- This 2026-11-17 dump is a point-in-time snapshot, **not a live synchronized replica**. New Railway writes since the dump must be reconciled using a planned delta or controlled write freeze.
+- Before cutover: test idempotent delta replay, owner/client mappings, count drift, rollback, DNS/secrets, background-job authority, and end-to-end P0 autonomous outbound + Max routing.
+- After authorized switch: track errors and a defined observation period. Keep Railway data and both backups until reconciliation and rollback window have passed.
+- Do **not** merge PR #1129, set `SIGNAL_DB_SEPARATION_REQUIRED=1`, provision extra paid Signal DB storage, or change Railway production on the strength of a TOC validation.
+
+## Current concrete blockers
+
+- Actual source-to-Render **restore** has not happened.
+- Need source ownership dependency review and a separately priced Signal destination with capacity headroom.
+- Need source snapshot vs current live write delta strategy.
+- Tablet copy download visible; local SHA-256 comparison wasn't returned to chat.
