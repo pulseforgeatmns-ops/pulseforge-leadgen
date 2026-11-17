@@ -30,7 +30,7 @@ let shadowPromise = null;
 
 async function getStore() {
   if (process.env.DATABASE_URL) {
-    const pool = require('../db');
+    const pool = require('../signalDb').getSignalPool();
     return createSignalStore(pool, { seedFixtures: true });
   }
   const store = new InMemorySignalStore();
