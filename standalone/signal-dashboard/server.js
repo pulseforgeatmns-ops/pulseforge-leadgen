@@ -10,6 +10,7 @@ const {SharedGeckoCandleBudget}=require('../../services/signalDashboard/publicCa
 const {ZoneStore}=require('../../services/signalDashboard/zoneStore');
 const {isValidSolanaAddress:address}=require('../../packages/signal-v1/acquisition/solanaAddress');
 async function boot({env=process.env,pool:providedPool,listen=true,collect=true}={}){
+ if(!providedPool && env.SIGNAL_DB_SEPARATION_REQUIRED==='1' && env.SIGNAL_DATABASE_URL && env.SIGNAL_STANDALONE_AUTH_MIGRATED!=='1') throw Error('signal_standalone_auth_migration_required');
  const pool=providedPool||require('../../signalDb').getSignalPool(env);
  await pool.query('SELECT tenant_id FROM signal_dashboard_records LIMIT 0');await pool.query('SELECT sid FROM signal_dashboard_session LIMIT 0');await pool.query('SELECT ip_hash FROM signal_dashboard_auth_attempts LIMIT 0');
  const owner=await resolveOwner(pool,env);
