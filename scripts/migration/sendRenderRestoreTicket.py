@@ -32,6 +32,10 @@ def main():
         region_name=os.environ["S3_REGION"],
         config=Config(s3={"addressing_style":"virtual",
                            "signature_version":"s3v4"}))
+    health=requests.get("https://pulseforge-api-migration.onrender.com/healthz",
+        allow_redirects=False,timeout=(12,25))
+    if health.status_code != 200:
+        raise RuntimeError("render_staging_health_not_ready_"+str(health.status_code))
     url=s3.generate_presigned_url("get_object",
         Params={"Bucket":os.environ["S3_BUCKET"],"Key":ARCHIVE_KEY},ExpiresIn=3600)
     # One tiny authenticated message; never emit the sensitive URL to any log.
