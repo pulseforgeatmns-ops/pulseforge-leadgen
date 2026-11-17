@@ -14,7 +14,7 @@ async function boot() {
   const token=process.env.SIGNAL_OPERATOR_FEED_TOKEN;
   const channelId=process.env.SIGNAL_REQUIRED_CALLER_CHANNEL_ID;
   if(!/^\d+$/.test(channelId||'') || !token || token.length<32)throw new Error('operator_identity_or_auth_not_ready');
-  const pool=require('../../db');
+  const pool=require('../../signalDb').getSignalPool();
   // Explicit operator enablement is required before these opt-in migrations run.
   await require('../../packages/signal-v1/storage/ensureSignalSchema').ensureSignalSchema(pool);
   for(const name of ['2026-10-07-signal-v1-operator-outbox.sql','2026-10-07-signal-v1-operator-relay.sql'])
