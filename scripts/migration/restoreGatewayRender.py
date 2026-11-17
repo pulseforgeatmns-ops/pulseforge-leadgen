@@ -53,8 +53,8 @@ def sql_output(query: str, *, timeout=45) -> str:
     env["PGCONNECT_TIMEOUT"] = "12"
     return subprocess.run(
         ["psql", "-X", "-A", "-t", "-w", "-v", "ON_ERROR_STOP=1",
-         "--dbname", url, "--command", query],
-        env=env, capture_output=True, text=True, timeout=timeout, check=True
+         "--dbname", url, "--file", "-"],
+        input=query, env=env, capture_output=True, text=True, timeout=timeout, check=True
     ).stdout.strip()
 
 
