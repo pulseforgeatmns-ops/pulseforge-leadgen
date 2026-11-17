@@ -12,6 +12,7 @@ function resolveSignalConnection(env = process.env) {
     if (separateRequired) throw new Error('signal_database_url_required');
     return null; // Temporary legacy route, until migration is explicitly activated.
   }
+  if (!separateRequired) throw new Error('signal_database_separation_requires_explicit_opt_in');
   if (!/^postgres(?:ql)?:\/\//i.test(signalUrl)) throw new Error('invalid_signal_database_url');
   if (env.DATABASE_URL && signalUrl === env.DATABASE_URL.trim()) {
     throw new Error('signal_database_must_be_separate');
