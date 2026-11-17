@@ -42,3 +42,14 @@
 - Need source ownership dependency review and a separately priced Signal destination with capacity headroom.
 - Need source snapshot vs current live write delta strategy.
 - Tablet copy download visible; local SHA-256 comparison wasn't returned to chat.
+
+## 2026-11-17 follow-on audit and data partition validation (completed)
+
+- One-shot read-only Railway metadata worker captured `docs/migration/railway-source-catalog-20261117.json` (full metadata, no customer rows); worker was deleted. At audit time: 319 physical tables, 361 declared FKs, 3 SQL views with 7 view dependencies, 80 application triggers, extensions `pgcrypto`, `plpgsql`, `uuid-ossp`.
+- Proposed physical owners: 274 Pulseforge and 45 Signal tables, based on table names and known acquisition-signal exceptions. **Zero declared FKs and zero view dependencies** cross this *provisional* boundary. This does **not** prove code-level isolation.
+- Candidate ownership map: `docs/migration/source-ownership-candidates-20261117.json`. Its classifications are not an approved export or restore list.
+- Backup one-shot validator `scripts/migration/partitionBackupDataOnce.py` re-downloaded the 727,898,203-byte private PG18 archive, rechecked SHA-256, and confirmed **319 / 319** archived `TABLE DATA` entries exactly correspond to the live catalog's 319 physical tables. Pulseforge subset **274 / 274** and Signal subset **45 / 45** were each successfully decompressed independently with `pg_restore --data-only --use-list ... --file /dev/null`. Status `PARTITION_CHECK_COMPLETE`, deployment `866577cd-59f3-49b3-94f5-ff93b1f021df`. No database writes, restorations, or customer data logged. The temporary worker was deleted.
+- **Critical code dependency**: `standalone/signal-dashboard/app.js` reads `public.users` for owner identity, password and session authorization, while Signal owns `signal_dashboard_session`. An isolated Signal database will not authenticate until identity is explicitly migrated/replicated or auth service is separated with tested revocation/authorization semantics.
+- Physical capacities from catalog: Signal candidate tables **8,163,663,872 bytes** (~8.16 GB) and Pulseforge candidate tables **1,032,675,328 bytes** (~1.03 GB), excluding ~22 MB database-level overhead. These are source physical relation sizes, not dump or restored sizes.
+- Backup schema has 322 `TABLE` definitions vs the 319 current physical `r,p` tables; the separate 3 SQL views account for the observed difference in archive object classifications. This needs a schema restoration confirmation, not just inferred compatibility.
+- **Still NOT performed:** actual SQL restore to Render PostgreSQL, exact restored row counts, sequence and trigger verification, runtime identity/auth migration, or cutover.
