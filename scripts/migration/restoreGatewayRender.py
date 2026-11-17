@@ -49,6 +49,10 @@ def sql_output(query: str, *, timeout=45) -> str:
     url = os.environ.get("DATABASE_URL", "")
     if not url.startswith(("postgresql://", "postgres://")):
         raise RuntimeError("missing_internal_render_database")
+    target = urlsplit(url)
+    if (target.path != "/pulseforge_production_migration" or
+            not (target.hostname or "").startswith("dpg-dbtgtloae00c73dd8040-a")):
+        raise RuntimeError("unapproved_restore_database_endpoint")
     env = os.environ.copy()
     env["PGCONNECT_TIMEOUT"] = "12"
     return subprocess.run(
@@ -76,14 +80,14 @@ def preflight() -> None:
     if os.environ.get("MIGRATION_RESTORE_ONE_TIME_APPROVED") != "ALLOW_EMPTY_RENDER_PG18_ONLY":
         raise RuntimeError("restore_authority_not_enabled")
     current = sql_output(
-        "SELECT current_setting('server_version_num') || ':' || "
+        "SELECT current_database() || ':' || current_setting('server_version_num') || ':' || "
         "(SELECT count(*) FROM pg_class c JOIN pg_namespace n ON c.relnamespace=n.oid "
         "WHERE n.nspname NOT IN ('pg_catalog','information_schema') "
         "AND n.nspname NOT LIKE 'pg_toast%' AND c.relkind IN ('r','p','v','m','S'));"
     )
-    version, count = current.split(":")
-    if not version.startswith("18") or int(count) != 0:
-        raise RuntimeError("target_is_not_empty_postgres18")
+    db_name, version, count = current.split(":")
+    if db_name != "pulseforge_production_migration" or not version.startswith("18") or int(count) != 0:
+        raise RuntimeError("target_is_not_empty_approved_postgres18")
 
 
 def download(url: str, filename: Path) -> None:
