@@ -33,6 +33,17 @@ def main():
     if not dbname:
         die("URL lacks database name.")
 
+    # Fail closed before pg_dump if the user copied Railway's internal URL
+    # or accidentally concatenated multiple URLs/variable references.
+    if parsed.hostname.endswith(".internal") or ".railway.internal" in parsed.hostname:
+        die("Private Railway host detected. In Railway Postgres use DATABASE_PUBLIC_URL (public TCP proxy), not DATABASE_URL.")
+    if "${{" in connection or "}}" in connection:
+        die("URL contains a Railway variable placeholder rather than a resolved value.")
+    if connection.count("postgres://") + connection.count("postgresql://") != 1:
+        die("Connection input appears to contain more than one URL.")
+    if dbname != "railway":
+        die("Unexpected database path. It should be exactly /railway. Copy only one resolved public connection URL.")
+
     if not shutil.which("pg_dump") or not shutil.which("pg_restore"):
         die("Install PostgreSQL 18 client tools: pg_dump and pg_restore.")
     version = subprocess.run(["pg_dump", "--version"], capture_output=True, text=True, check=True).stdout
