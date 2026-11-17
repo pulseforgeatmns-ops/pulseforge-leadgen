@@ -80,3 +80,10 @@
 - Temporary gateway token and activation variables were set to inert values. Dockerfile returned to the read-only Node staging probe, with staging guards and 15 migration unit tests. **Verify new deployment is live before declaring gateway retired.**
 - Source Railway production database was not modified. Railway bucket and downloaded tablet backup retained.
 - **Not a cutover**: point-in-time snapshot only; Railway has continued writing since export. Signal data remain on Railway. Separate Signal database budget, auth/identity coupling, app compatibility tests, full business-function reconciliation, write freeze/delta strategy, rollback, and production migration authorization remain unresolved.
+
+## 2026-11-17 post-restore service lockdown verified
+- One-time restore permission and bearer token reset to inert values in Render environment.
+- Restored branch's normal Dockerfile (Node read-only staging health probe with `PF_MIGRATION_STAGING=1` and **15** guard tests). Render deploy `dep-dbu94jgn74is73d8u4cg`, Git commit `a4ca2af53d1429f1d56e37c4168b2a49b1ddf835`, finished **LIVE** at `2026-11-17T17:44:19Z`.
+- Read-only startup logs: **15 tests passed, 0 failed**; approved database name `pulseforge_production_migration`, PostgreSQL version 18.6 (`180006`), **378 non-system objects**, restored database size **991,557,311 bytes** (~0.99 GB). No active restore endpoint on this service.
+- Render PostgreSQL instance remains **available** (10 GB provisioned). Railway inventory shows only original `Postgres` and `OpenClaw Main` services and retained private `MigrationBackup` bucket, no pending changes.
+- Draft PR #1129 remains **OPEN, DRAFT, UNMERGED**. No Railway production cutover or data deletion.
