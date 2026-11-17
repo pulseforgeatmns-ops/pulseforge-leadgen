@@ -59,3 +59,11 @@ The two largest Signal tables total **8,157,003,776 bytes = 7.597 GiB = 88.49%**
 - Render API staging branch is isolated by `PF_MIGRATION_STAGING=1`; no application routes, outbound or worker start. Render has 10 GB destination PostgreSQL 16; Railway source PG18.6. Do not transfer before a portable backup and PG major-version compatibility plan.
 - The failed tablet `pg_dump` attempts did not complete a backup. Never treat the failed Termux session as a recovery copy.
 - **Next blocking items**: portable verified source backup, separate Signal storage/budget approval, and comprehensive dependency/identity migration rehearsal.
+
+## Latest isolated verification (2026-11-17)
+- Render `pulseforge-api-migration` still tracks branch `migration/render-isolated-staging`; auto-deploy is disabled. Deployed instance remains the earlier isolated read-only `migrationStagingServer.js` health service, not the newly committed code.
+- Render logs confirm `[migration-probe] isolated read-only health service listening` and live deployment, with no evidence of worker startup in that log window. A request-level live test was not completed in this review.
+- Railway `amused-harmony/Postgres` latest deployment remains successful, no staged changes found.
+- The Signal split now requires **both** `SIGNAL_DB_SEPARATION_REQUIRED=1` and a distinct `SIGNAL_DATABASE_URL`. Providing a separate URL without the flag fails closed. This flag is **not** set in production.
+- Seven isolated Node unit checks of the database routing logic passed locally, using a stubbed PostgreSQL Pool; repository CI/full integration tests have **not** been confirmed.
+- Data copy has **not started**. No valid portable source backup exists yet. Railway's outstanding subscription and nearly full source volume remain urgent risks.
