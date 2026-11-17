@@ -5,7 +5,7 @@ const {DashboardStore,DurableBudget}=require('../services/signalDashboard/store'
 const {isValidSolanaAddress:address}=require('../packages/signal-v1/acquisition/solanaAddress');
 async function main(env=process.env) {
   const c=config(env);if(!c.enabled)return null;
-  const pool=require('../db'),store=new DashboardStore(pool,c),budget=new DurableBudget(pool);
+  const pool=require('../signalDb').getSignalPool(env),store=new DashboardStore(pool,c),budget=new DurableBudget(pool);
   await pool.query('SELECT tenant_id FROM signal_dashboard_records LIMIT 0');
   await pool.query('SELECT provider FROM signal_dashboard_provider_budget LIMIT 0');
   const watches=JSON.parse(env.SIGNAL_DASHBOARD_WATCH_TOKENS||'[]');
