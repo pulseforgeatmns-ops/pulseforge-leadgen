@@ -12,4 +12,4 @@ COPY --chown=pptruser:pptruser . .
 
 EXPOSE 3000
 
-CMD ["sh", "-c", "if [ \"$PF_MIGRATION_STAGING\" = \"1\" ]; then node --test test/migrationSplitManifest.test.js test/signalDatabaseRouting.test.js test/migrationDatabaseTarget.test.js && exec node migrationStagingServer.js; else exec node server.js; fi"]
+CMD ["sh", "-c", "if [ \"$PF_MIGRATION_STAGING\" = \"1\" ]; then node --test test/migrationSplitManifest.test.js test/signalDatabaseRouting.test.js test/migrationDatabaseTarget.test.js test/maxAnchorOperationalInspectionIntent.test.js && exec node migrationStagingServer.js; else exec node server.js; fi"]
