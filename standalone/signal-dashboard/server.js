@@ -10,7 +10,7 @@ const {SharedGeckoCandleBudget}=require('../../services/signalDashboard/publicCa
 const {ZoneStore}=require('../../services/signalDashboard/zoneStore');
 const {isValidSolanaAddress:address}=require('../../packages/signal-v1/acquisition/solanaAddress');
 async function boot({env=process.env,pool:providedPool,listen=true,collect=true}={}){
- const pool=providedPool||new Pool({connectionString:env.DATABASE_URL,ssl:env.DATABASE_SSL==='false'?false:{rejectUnauthorized:false},max:6,connectionTimeoutMillis:5000,query_timeout:10000});
+ const pool=providedPool||require('../../signalDb').getSignalPool(env);
  await pool.query('SELECT tenant_id FROM signal_dashboard_records LIMIT 0');await pool.query('SELECT sid FROM signal_dashboard_session LIMIT 0');await pool.query('SELECT ip_hash FROM signal_dashboard_auth_attempts LIMIT 0');
  const owner=await resolveOwner(pool,env);
  const cfg=config({...env,SIGNAL_DASHBOARD_TENANT_ID:env.SIGNAL_DASHBOARD_TENANT_ID||String(owner.client_id??1),SIGNAL_DASHBOARD_OWNER_USER_ID:String(owner.id)});
