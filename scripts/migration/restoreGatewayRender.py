@@ -299,5 +299,19 @@ if __name__=="__main__":
     if os.environ.get("PF_MIGRATION_STAGING")!="1":
         raise SystemExit("restore_gateway_requires_staging")
     port=int(os.environ.get("PORT","10000"))
+    try:
+        query=("SELECT n.nspname||'.'||c.relname||':'||c.relkind "
+          "FROM pg_class c JOIN pg_namespace n ON c.relnamespace=n.oid "
+          "WHERE n.nspname NOT IN ('pg_catalog','information_schema') "
+          "AND n.nspname NOT LIKE 'pg_toast%' AND c.relkind IN ('r','p','v','m','S') "
+          "ORDER BY n.nspname,c.relname LIMIT 40;")
+        objects=sql_output(query).splitlines()
+        total=int(sql_output("SELECT count(*) FROM pg_class c JOIN pg_namespace n "
+          "ON c.relnamespace=n.oid WHERE n.nspname NOT IN ('pg_catalog','information_schema') "
+          "AND n.nspname NOT LIKE 'pg_toast%' AND c.relkind IN ('r','p','v','m','S');"))
+        message("TARGET_CATALOG_INSPECTED",{"nonSystemObjectCount":total,
+          "sampleObjectNames":objects})
+    except Exception:
+        message("TARGET_CATALOG_INSPECTION_UNAVAILABLE")
     message("GATEWAY_READY")
     ThreadingHTTPServer(("0.0.0.0",port),Handler).serve_forever()
