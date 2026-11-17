@@ -311,7 +311,11 @@ if __name__=="__main__":
           "AND n.nspname NOT LIKE 'pg_toast%' AND c.relkind IN ('r','p','v','m','S');"))
         message("TARGET_CATALOG_INSPECTED",{"nonSystemObjectCount":total,
           "sampleObjectNames":objects})
-    except Exception:
-        message("TARGET_CATALOG_INSPECTION_UNAVAILABLE")
+    except Exception as e:
+        message("TARGET_CATALOG_INSPECTION_UNAVAILABLE",{
+          "exceptionType":type(e).__name__,
+          "pgExitCode":getattr(e,"returncode",None),
+          "pgError":getattr(e,"stderr","")[-350:] if hasattr(e,"stderr") else ""
+        })
     message("GATEWAY_READY")
     ThreadingHTTPServer(("0.0.0.0",port),Handler).serve_forever()
