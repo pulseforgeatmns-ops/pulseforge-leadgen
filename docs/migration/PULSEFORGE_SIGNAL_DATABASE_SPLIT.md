@@ -94,3 +94,9 @@ The two largest Signal tables total **8,157,003,776 bytes = 7.597 GiB = 88.49%**
 - **NEXT P0 SAFETY STEP**: download the `.dump` archive from Railway bucket Files tab (if available on account) to tablet or separate cloud account, confirm exact byte length and SHA-256 again. Railway billing arrears make independent copy urgent. The user has ~156 GB tablet free space.
 - Then upgrade isolated Render staging PostgreSQL from 16 to 18 using Render database Info page; perform a restore test on an approved isolated database with adequate capacity before schema split, verifying TOC, row counts, indexes, FKs and application read paths.
 - This archive contains **sensitive customer/business data**. Never expose a public URL or copy it into GitHub. Maintain private bucket until an independently verified restore and copies exist.
+
+## 2026-11-17 Render database upgrade completed
+- User initiated the PostgreSQL 16 -> 18 upgrade on isolated Render database `dpg-dbtgtloae00c73dd8040-a`. Render connector readback now reports **version 18**, **status available**, last updated `2026-11-17T16:30:57.464112Z`. No Railway production effect.
+- This is a version compatibility prerequisite only. The 10 GB Render database remains insufficiently proven for a full 9.218 GB source restoration with safety headroom, and it is intended to house only Pulseforge, not all large Signal tables.
+- Full source backup exists in Railway private `MigrationBackup` bucket, 727,898,203-byte compressed archive, SHA256 `4d44ad1f73ffcb5a3ee48ee8b30c78c2430f803da05915b40b84b6101a736628`. **No independent external copy, actual pg_restore test, or data reconciliation completed.**
+- Do not restore indiscriminately to the 10 GB Render destination. First secure an off-Railway copy, validate archive TOC, determine Signal/Pulseforge schema boundaries and minimum destination sizes, obtain approval for any paid Signal database, then rehearse the staged restore.
