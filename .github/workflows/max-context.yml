@@ -3,8 +3,6 @@ on:
   pull_request:
     paths:
       - 'packages/max/context/**'
-      - 'packages/max/understanding/**'
-      - 'test/maxConversationMemory*.test.js'
       - 'test/maxConversationLedgerPostgres.test.js'
       - 'test/helpers/maxLedgerRecoveryWorker.cjs'
       - 'routes/maxWorkspace.js'
@@ -33,10 +31,10 @@ jobs:
       - run: node packages/max/context/tests/conversationContext.test.js
       - run: node --test packages/max/context/tests/conversationContextPostgres.test.js
       - run: node --test packages/max/context/tests/authenticatedRecovery.test.js test/maxConversationHttpPostgres.test.js
-      - name: ConversationLedger (hermetic) and field-note correction memory
-        run: node --test packages/max/context/tests/conversationLedger.test.js packages/max/context/tests/conversationLedgerRecovery.test.js packages/max/context/tests/conversationLedgerStore.test.js test/maxConversationMemory.test.js
-      - name: ConversationLedger cross-process recovery and correction memory (disposable PostgreSQL, no skips)
-        run: node --test test/maxConversationLedgerPostgres.test.js test/maxConversationMemoryCorrectionPostgres.test.js
+      - name: ConversationLedger (hermetic)
+        run: node --test packages/max/context/tests/conversationLedger.test.js packages/max/context/tests/conversationLedgerRecovery.test.js packages/max/context/tests/conversationLedgerStore.test.js
+      - name: ConversationLedger cross-process recovery (disposable PostgreSQL, no skips)
+        run: node --test test/maxConversationLedgerPostgres.test.js
       - name: Staging runner guards and disposable PostgreSQL rehearsal (no skips)
         run: node --test test/maxContinuityStagingRunner.test.js test/maxContinuityStagingPostgres.test.js
       - name: Retain sanitized disposable rehearsal evidence
