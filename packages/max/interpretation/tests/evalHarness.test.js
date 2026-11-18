@@ -347,7 +347,9 @@ describe('final review: paid CLI path end to end against a local fake API', () =
         res.end(JSON.stringify({ id: `msg_${seen.length}`, type: 'message', role: 'assistant', ...ok(), model: params.model, stop_sequence: null }));
       });
     });
-    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    // No host argument: listening on a host makes Node perform a dns.lookup,
+    // which the unit lane's offline network guard (correctly) blocks.
+    await new Promise((r) => server.listen(0, r));
     t.after(() => server.close());
     const { port } = server.address();
     const env = {
