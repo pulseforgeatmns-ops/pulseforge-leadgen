@@ -72,7 +72,7 @@ PRs merged in order. The only conflicts were the known PR 1 / PR 2 pair: the eva
 | JEV `test:decision` | 115/115 |
 | Authorization / pending-decision / mission continuity / execution binding / operational read and inspection | **576/576** |
 | Lexical interpretation baseline | **unchanged**: 47.7% (44 cases), 53.2% (62 cases), same unsafe nominations, corpus sha256 `950eb659cd58…` |
-| Max unit lane (combined tree) | see PR description |
+| Max unit lane (combined tree) | **2,568 tests: 2,567 pass, 0 fail, 1 todo**. The first combined run found 1 failure: PR 1's eval-CLI fake-API test tripped the unit lane's offline network guard (`server.listen` with a host does a `dns.lookup`). It was fixed on PR 1 (#1131, `81e8ae7`) and re-run clean. |
 
 The cross-PR suite proves every evidence statement was SELECT/WITH and that no business table hash changed beyond the test's own fixture edits.
 
