@@ -87,6 +87,8 @@ function refuse(code, detail) {
         timeoutMs: Number(arg('--timeout-ms', 0)) || undefined,
       });
       if (out.model.refused) refuse(out.model.refused);
+      // Where the calls went (ANTHROPIC_BASE_URL can redirect the SDK).
+      out.model.apiHost = new URL(client.baseURL).host;
     }
   }
 
@@ -102,6 +104,7 @@ function refuse(code, detail) {
     if (out.model) {
       out.model.summaries.forEach((s, i) => printSummary(`model ${out.model.model} run ${i + 1}`, s));
       printSummary(`model ${out.model.model} pooled`, out.model.pooled);
+      console.log('  api host:', out.model.apiHost, '· served models (provider-reported):', out.model.servedModels, '· model interpretations:', out.model.modelInterpretations);
       console.log(`  latency p50 ${out.model.latencyMs.p50} ms · p95 ${out.model.latencyMs.p95} ms · tokens`, out.model.tokens,
         '· degraded', out.model.degraded, '· cost', out.model.cost);
       console.log(`  unstable cases: ${out.model.stability.unstable.map((u) => u.id).join(', ') || 'none'}`);

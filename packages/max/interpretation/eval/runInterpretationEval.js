@@ -12,7 +12,7 @@
 
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
-const { scoreProducer, summarize } = require('./scoreInterpretation');
+const { scoreProducer, summarize, gradeCase } = require('./scoreInterpretation');
 const { evaluatePromotionGates } = require('./promotionGates');
 const { createEvalSpendCap } = require('./evalSpendCap');
 const { produceLexicalFrame } = require('../producers/LexicalFrameProducer');
@@ -112,6 +112,23 @@ function disagreementsForReview(runs, cases) {
   return [...seen.values()].map((e) => ({ ...e, failedDimensions: [...e.failedDimensions] }));
 }
 
+/** The provider may report a dated snapshot of the requested alias; nothing else is the same model. */
+function servedModelMatches(requested, served) {
+  return served === requested || new RegExp(`^${requested.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-\\d{8}$`).test(served);
+}
+
+/**
+ * Grade one model call. A degraded call (timeout, HTTP error, refusal,
+ * truncation, invalid JSON or frame) is a FAILED model interpretation even if
+ * the lexical fallback frame happens to match the expectation. Safety is still
+ * graded on the frame that would actually have been produced.
+ */
+function gradeModelCall(testCase, frame, telemetry) {
+  const g = gradeCase(testCase, frame);
+  if (!telemetry.degradedReason) return { ...g, modelResponse: true };
+  return { ...g, pass: false, modelResponse: false, degradedReason: telemetry.degradedReason, dims: { ...g.dims, modelResponse: false } };
+}
+
 /**
  * @param {{
  *   cases: Array, client: { messages: { create: Function } }, model: string,
@@ -129,24 +146,48 @@ async function runModelEval({ cases, client, model, repeats = 1, maxUsd, timeout
     return { refused: error.code || 'eval_cost_cap_required', plan };
   }
   meterClient(client, { agentName: 'max_interpreter_eval', reserve: cap.reserve, settle: cap.settle });
+  // Track every metered attempt. A timed-out produce() returns before its
+  // request has settled; waiting here keeps the post-call cap check current
+  // before the next reservation and before the cost is reported.
+  const inflight = new Set();
+  const metered = client.messages.create;
+  client.messages.create = (...a) => {
+    const p = metered(...a);
+    const settled = p.then(() => {}, () => {});
+    inflight.add(settled);
+    settled.finally(() => inflight.delete(settled));
+    return p;
+  };
+  const settleInflight = () => Promise.all([...inflight]);
   const producer = new ModelFrameProducer({ client, model, timeoutMs });
 
   const runs = [];
   const telemetry = [];
+  const servedModels = {};
   let abortedReason = null;
   for (let r = 0; r < repeats && !abortedReason; r += 1) {
     const grades = [];
     for (const c of cases) {
+      await settleInflight();
       if (cap.exhausted) { abortedReason = cap.snapshot().refused; break; }
       const { frame, telemetry: t } = await producer.produce({ text: c.text, context: c.context, transcript: c.transcript || [] });
-      // A refused reservation never reached the provider; the degraded frame
-      // it produced is not model output and must not be scored as such.
-      if (cap.exhausted) { abortedReason = cap.snapshot().refused; break; }
+      await settleInflight();
+      const snap = cap.snapshot();
+      // Refused at reservation: the call never reached the provider, and the
+      // degraded frame it produced is not model output. Not scored, not counted.
+      if (snap.refused && snap.refusedPhase === 'reserve') { abortedReason = snap.refused; break; }
       telemetry.push(t);
-      grades.push((await scoreProducer([c], () => frame)).grades[0]);
+      if (t.servedModel) servedModels[t.servedModel] = (servedModels[t.servedModel] || 0) + 1;
+      grades.push(gradeModelCall(c, frame, t));
+      // Stop conditions after a call that did reach the provider. The call is
+      // counted above; nothing further is sent.
+      if (snap.refused) { abortedReason = snap.refused; break; }
+      if (t.servedModel && !servedModelMatches(model, t.servedModel)) { abortedReason = 'model_identity_mismatch'; break; }
+      if (t.degradedReason === 'stop_reason_max_tokens') { abortedReason = 'model_response_truncated'; break; }
     }
     if (grades.length) runs.push({ grades, summary: summarize(grades), complete: grades.length === cases.length });
   }
+  await settleInflight();
 
   const latencies = telemetry.map((t) => t.latencyMs).filter((x) => Number.isFinite(x));
   const sum = (k) => telemetry.reduce((a, t) => a + ((t.usage && t.usage[k]) || 0), 0);
@@ -160,14 +201,18 @@ async function runModelEval({ cases, client, model, repeats = 1, maxUsd, timeout
     calls: telemetry.length,
   };
   const latencyMs = { p50: percentile(latencies, 50), p95: percentile(latencies, 95), max: latencies.length ? Math.max(...latencies) : null };
+  const scored = pooled.length;
   return {
     model,
+    servedModels,
     repeats,
     plan,
     complete: !abortedReason && runs.length === repeats && runs.every((r) => r.complete),
     abortedReason,
     summaries: runs.map((r) => r.summary),
     pooled: summarize(pooled),
+    // Calls whose frame came from the model itself (not a degraded fallback).
+    modelInterpretations: { scored, fromModel: pooled.filter((g) => g.modelResponse).length, degraded: pooled.filter((g) => !g.modelResponse).length },
     stability: stability(runs),
     disagreements: disagreementsForReview(runs, cases),
     latencyMs,
@@ -178,4 +223,4 @@ async function runModelEval({ cases, client, model, repeats = 1, maxUsd, timeout
   };
 }
 
-module.exports = { evaluationMetadata, runLexical, planModelRun, runModelEval, stability, disagreementsForReview, percentile };
+module.exports = { evaluationMetadata, runLexical, planModelRun, runModelEval, stability, disagreementsForReview, percentile, servedModelMatches, gradeModelCall };

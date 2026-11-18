@@ -244,3 +244,135 @@ describe('evaluation CLI', () => {
     assert.match(noKey.stderr, /eval_credentials_missing/);
   });
 });
+
+describe('final review: degraded, truncated, timed-out and mis-served responses', () => {
+  const { produceLexicalFrame } = require('../producers/LexicalFrameProducer');
+  const { gradeCase } = require('../eval/scoreInterpretation');
+  // A case today's lexical producer gets right, so a fallback frame would pass.
+  const lexicalPass = HELDOUT.find((c) => gradeCase(c, produceLexicalFrame({ text: c.text, context: c.context })).pass);
+
+  it('never counts a degraded call as a successful model interpretation, even when the fallback frame is correct', async () => {
+    assert.ok(lexicalPass, 'fixture: a lexically passing case exists');
+    const client = fakeClient(() => Promise.reject(Object.assign(new Error('server error'), { status: 500 })));
+    const result = await runModelEval({ cases: [lexicalPass], client, model: PRICED_MODEL, maxUsd: 1 });
+    assert.equal(result.pooled.pass, 0);
+    assert.deepEqual(result.modelInterpretations, { scored: 1, fromModel: 0, degraded: 1 });
+    assert.equal(result.disagreements[0].failedDimensions.includes('modelResponse'), true);
+  });
+
+  it('stops the run on the first truncated response and counts it as failed', async () => {
+    const client = fakeClient(() => ({ ...ok(), stop_reason: 'max_tokens', content: [{ type: 'text', text: '{"intent":"quest' }] }));
+    const result = await runModelEval({ cases: CASES, client, model: PRICED_MODEL, repeats: 3, maxUsd: 5 });
+    assert.equal(result.abortedReason, 'model_response_truncated');
+    assert.equal(result.complete, false);
+    assert.equal(client.calls.length, 1);
+    assert.deepEqual(result.degraded.byReason, { stop_reason_max_tokens: 1 });
+    assert.equal(result.pooled.pass, 0);
+  });
+
+  it('scores refusals and invalid frames as failed model interpretations', async () => {
+    const client = fakeClient((n) => (n === 1 ? { ...ok(), stop_reason: 'refusal' } : { ...ok(), content: [{ type: 'text', text: '{"intent":"question"}' }] }));
+    const result = await runModelEval({ cases: CASES.slice(0, 2), client, model: PRICED_MODEL, maxUsd: 5 });
+    assert.deepEqual(result.degraded.byReason, { stop_reason_refusal: 1, invalid_frame: 1 });
+    assert.equal(result.modelInterpretations.fromModel, 0);
+    assert.equal(result.pooled.pass, 0);
+  });
+
+  it('treats a timed-out call as failed, keeps its full reservation, and settles it before the next reservation', async () => {
+    const client = fakeClient((n, params) => new Promise(() => {}));
+    // The SDK rejects on abort; emulate that through the signal.
+    client.messages.create = async (params, options) => new Promise((_, reject) => {
+      client.calls.push({ params, options });
+      options.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+    });
+    const result = await runModelEval({ cases: CASES.slice(0, 2), client, model: PRICED_MODEL, maxUsd: 5, timeoutMs: 20 });
+    assert.deepEqual(result.degraded.byReason, { timeout: 2 });
+    assert.equal(result.cost.openReservations, 0);
+    assert.equal(result.cost.uncertain, 2);
+    const plan = planModelRun({ cases: CASES.slice(0, 2), model: PRICED_MODEL });
+    assert.ok(Math.abs(result.cost.settledUsd - plan.reservationUpperBoundUsd) < 1e-6, 'uncertain calls are charged at reservation');
+    assert.equal(result.pooled.pass, 0);
+  });
+
+  it('stops after a call whose actual cost exceeds its reservation, and counts that call', async () => {
+    const client = fakeClient(() => ({ ...ok(), usage: { input_tokens: 150000, output_tokens: 600 } }));
+    const result = await runModelEval({ cases: CASES, client, model: PRICED_MODEL, repeats: 3, maxUsd: 5 });
+    assert.equal(result.abortedReason, 'eval_reservation_overrun');
+    assert.equal(client.calls.length, 1);
+    assert.equal(result.tokens.calls, 1);
+    assert.equal(result.cost.overruns, 1);
+    assert.equal(result.cost.refusedPhase, 'settle');
+  });
+
+  it('cap: overrun and post-settlement excess exhaust the cap in the settle phase', async () => {
+    const cap = createEvalSpendCap({ maxUsd: 0.06 });
+    const id = await cap.reserve({ estimatedUsd: 0.05 });
+    await cap.settle(id, { status: 'ok', estimatedUsd: 0.08 });
+    const s = cap.snapshot();
+    assert.equal(s.refused, 'eval_reservation_overrun');
+    assert.equal(s.refusedPhase, 'settle');
+    assert.ok(s.committedUsd > s.maxUsd, 'the overrun is reported, not hidden');
+    await assert.rejects(cap.reserve({ estimatedUsd: 0.001 }), /eval_reservation_overrun/);
+  });
+
+  it('stops when the provider serves a different model, and reports what was served', async () => {
+    const client = fakeClient(() => ({ ...ok(), model: 'claude-sonnet-5' }));
+    const result = await runModelEval({ cases: CASES, client, model: PRICED_MODEL, maxUsd: 5 });
+    assert.equal(result.abortedReason, 'model_identity_mismatch');
+    assert.deepEqual(result.servedModels, { 'claude-sonnet-5': 1 });
+    assert.equal(client.calls.length, 1);
+  });
+
+  it('accepts a dated snapshot of the requested model', async () => {
+    const client = fakeClient(() => ({ ...ok(), model: `${PRICED_MODEL}-20261001` }));
+    const result = await runModelEval({ cases: CASES, client, model: PRICED_MODEL, maxUsd: 5 });
+    assert.equal(result.complete, true);
+    assert.deepEqual(result.servedModels, { [`${PRICED_MODEL}-20261001`]: CASES.length });
+  });
+});
+
+describe('final review: paid CLI path end to end against a local fake API', () => {
+  const http = require('node:http');
+  const { spawn } = require('node:child_process');
+
+  it('sends only the requested model, reports served model, host and cost, and never connects to a database', async (t) => {
+    const seen = [];
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (d) => { body += d; });
+      req.on('end', () => {
+        const params = JSON.parse(body);
+        seen.push({ path: req.url, model: params.model, maxTokens: params.max_tokens });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ id: `msg_${seen.length}`, type: 'message', role: 'assistant', ...ok(), model: params.model, stop_sequence: null }));
+      });
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    t.after(() => server.close());
+    const { port } = server.address();
+    const env = {
+      ...process.env,
+      ANTHROPIC_API_KEY: 'test-key-not-real',
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:${port}`,
+      DATABASE_URL: 'postgresql://must-not-be-used.invalid:5432/prod',
+      NO_PROXY: '127.0.0.1', no_proxy: '127.0.0.1',
+    };
+    const preload = path.join(__dirname, 'fixtures', 'recordPgConnect.cjs');
+    const child = spawn(process.execPath, ['-r', preload, 'scripts/maxInterpretationEval.js', '--model', '--model-id', PRICED_MODEL, '--max-usd', '5', '--json'], { cwd: ROOT, env });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+    const status = await new Promise((r) => child.on('close', r));
+    assert.equal(status, 0, stderr);
+    const out = JSON.parse(stdout).model;
+    assert.equal(seen.length, HELDOUT.length);
+    assert.ok(seen.every((s) => s.model === PRICED_MODEL && s.path === '/v1/messages'));
+    assert.equal(out.complete, true);
+    assert.deepEqual(out.servedModels, { [PRICED_MODEL]: HELDOUT.length });
+    assert.equal(out.apiHost, `127.0.0.1:${port}`);
+    assert.equal(out.cost.attempts, HELDOUT.length);
+    assert.ok(out.cost.settledUsd > 0 && out.cost.settledUsd < 5);
+    assert.doesNotMatch(stderr, /PG_CONNECT_ATTEMPT/);
+  });
+});
