@@ -142,6 +142,21 @@ describe('gate-bound approvals — every reachable gate', { concurrency: false }
       assert.deepEqual(intents(), [APPROVE[kind]]);
     });
 
+    if (kind === K.EXECUTION_APPROVAL) {
+      it(`${kind}: not gate-bound twice — the reviewed-package binding refuses an unshown package`, async () => {
+        flagOn();
+        const f = await fixture(kind);
+        const c = await f.openSession();
+        const before = f.fingerprint();
+        const r = await c.ask('Approved.');
+        assert.ok(amo.listExecutionRouterAudit().every((a) => a.outcome !== 'committed'), 'nothing committed');
+        assert.equal(f.fingerprint(), before);
+        assert.match(String(r.prose), /The prepared outreach has not been shown in this conversation yet/);
+        assert.ok(!G.GATE_APPROVAL_INTENTS.has('APPROVE_EXECUTION'));
+      });
+      continue;
+    }
+
     it(`${kind}: never presented in this conversation → not executed, current decision shown, next approval answers it`, async () => {
       flagOn();
       const f = await fixture(kind);
@@ -210,21 +225,6 @@ describe('gate-bound approvals — every reachable gate', { concurrency: false }
     await c.ask('Cancel it.');
     assert.deepEqual(intents(), ['CANCEL_PLAN']);
     assert.equal(f.g().planCancelled, true);
-  });
-
-  it('execution gate: the reviewed-package binding still applies on top', async () => {
-    flagOn();
-    const f = await fixture(K.EXECUTION_APPROVAL);
-    const c = await f.openSession();
-    // The gate card was presented by a refusal (no "## Execution Ready"
-    // package is required for gate binding) — the TME package binding still
-    // refuses an unreviewed package.
-    c.session.context.presentedDecision = { missionId: f.mission.id, kind: K.EXECUTION_APPROVAL, key: G.pendingDecisionKey(f.g()) };
-    c.session.context.presentedExecutionDecision = null;
-    const before = f.fingerprint();
-    await c.ask('Approved.');
-    assert.ok(amo.listExecutionRouterAudit().every((a) => a.outcome !== 'committed'), 'nothing committed');
-    assert.equal(f.fingerprint(), before);
   });
 
   it('known limit (documented): a duplicated "Approved." still approves the next gate, because the first answer presents it', async () => {

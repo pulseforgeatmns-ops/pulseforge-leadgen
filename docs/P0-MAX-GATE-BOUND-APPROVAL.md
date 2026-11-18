@@ -21,12 +21,12 @@ An approval applies only to the **decision package this conversation last presen
 
 1. **Identity.** `pendingDecisionKey(mission)` = `<kind>:` + a SHA-256 digest of the mission id and the pending decision object, with volatile keys (`…At`, timestamps) removed. The object covers kind, stage, prompt, plan understanding, field, prepared revision and digest. Any change to the package changes the key.
 2. **Presentation.** After every mission turn, `WorkspaceEngine` records `session.context.presentedDecision = { missionId, kind, key }` for the bound mission. This uses the same hook as the execution-package recorder. A mission turn with nothing pending clears it; other turns leave it unchanged.
-3. **Binding.** In `maybeHandleAcquisitionMissionExecution`, before a chat approval intent is submitted (`APPROVE_PLAN`, `APPROVE_DISCOVERY`, `CONTINUE_INVESTIGATION`, `APPROVE_PRIORITIZATION`, `APPROVE_EXECUTION`, `OPERATOR_APPROVED`), the current key must equal the presented key. If it doesn't, nothing is dispatched. Max answers *"Not executed: the decision you are approving has not been shown in this conversation yet / the pending decision changed after it was shown … Nothing was approved, sent, or cancelled."* and shows the current decision. That answer is itself a presentation, so the next explicit "Approved." answers the decision the operator has now seen.
+3. **Binding.** In `maybeHandleAcquisitionMissionExecution`, before a chat approval intent is submitted (`APPROVE_PLAN`, `APPROVE_DISCOVERY`, `CONTINUE_INVESTIGATION`, `APPROVE_PRIORITIZATION`, `OPERATOR_APPROVED`), the current key must equal the presented key. If it doesn't, nothing is dispatched. Max answers *"Not executed: the decision you are approving has not been shown in this conversation yet / the pending decision changed after it was shown … Nothing was approved, sent, or cancelled."* and shows the current decision. That answer is itself a presentation, so the next explicit "Approved." answers the decision the operator has now seen.
 
 ### What it does not change (no bypass, no silent contract change)
 
 - **It only narrows.** It adds one check at the chat surface, ahead of the existing path. `routeExecutionRequest`, the TME, `ExecutionRequest` and every other surface are unchanged.
-- **The execution gate keeps its own binding.** The TME package-revision check still applies on top; a test covers both.
+- **The execution gate is not bound twice.** `APPROVE_EXECUTION` already has a stricter binding to the reviewed package revision, enforced inside the TME with its own refusal. Gate binding leaves it to that binding; a test asserts the existing refusal still applies with the flag on.
 - **Not bound:**
   - cancellation, revision, edit and clarification answers (they are not approvals);
   - approvals the operator names in the same message ("Approved, begin discovery" → discovery is chained from the plan approval, as today);
@@ -43,24 +43,25 @@ The `decisionKey` is already computed here, so that is an additive follow-up. Th
 
 ## Tests
 
-`packages/max/workspace/tests/p0GateBoundApproval.test.js` (real `WorkspaceEngine.ask()`), 21 tests:
+`packages/max/workspace/tests/p0GateBoundApproval.test.js` (real `WorkspaceEngine.ask()`), 19 tests:
 - the identity is stable, distinct per gate and changes with the package; the flag must be exactly `true`;
 - default-off parity: an unpresented approval and a drifted gate behave exactly as today;
-- at the plan, discovery, prioritization and execution gates:
-  - a presented decision is approved as before;
+- at all four gates, a presented decision is approved as before;
+- at the plan, discovery and prioritization gates:
   - a never-presented one is refused with 0 dispatch and an unchanged mission, the current decision is shown, and the next approval answers it;
   - a package changed after presentation is refused;
+- at the execution gate, an unshown package is refused by the existing reviewed-package binding;
 - drift to the next gate is refused, then approved after it is shown;
 - another conversation's presentation does not count;
-- cancellation is unaffected; the execution package binding still applies;
+- cancellation is unaffected;
 - the documented duplicate-message limit.
 
-Mutation check: with the binding disabled, 10 of the 21 fail.
+Mutation check: with the binding disabled, 7 of the 19 fail.
 
 ## Rollout recommendation
 
 1. Review and merge with the flag off (no behavior change).
-2. In staging, set `MAX_GATE_BOUND_APPROVAL=true` and run the Max unit lane with it on. Each existing test that approves without first presenting the decision documents the contract change and needs a presenting turn, not a weaker check.
+2. **Contract impact, measured:** the Max unit lane with the flag on shows the existing tests that approve a gate without first presenting it (see the PR). Each one documents the contract change. Before enabling, give each a presenting turn, or run it with the flag explicitly off; never weaken the check. Then set `MAX_GATE_BOUND_APPROVAL=true` in staging.
 3. Add the client `clientMessageId` / `decisionKey` echo for duplicate protection.
 4. Production only with owner approval.
 

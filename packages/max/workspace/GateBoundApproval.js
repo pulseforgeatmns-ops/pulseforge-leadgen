@@ -10,7 +10,8 @@
  * or the server restarted — the approval silently applies to a decision the
  * operator never saw. The execution gate already binds to the reviewed
  * prepared-package revision (tme_execution_approval_*); this extends the same
- * rule to every approval gate, at the chat surface.
+ * rule to the plan, discovery, investigation and prioritization gates, at the
+ * chat surface.
  *
  * Contract when enabled:
  *   - after every mission turn, the session records the identity of the
@@ -43,8 +44,11 @@ const GATE_APPROVAL_INTENTS = new Set([
   EXECUTION_INTENTS.APPROVE_DISCOVERY,
   EXECUTION_INTENTS.CONTINUE_INVESTIGATION,
   EXECUTION_INTENTS.APPROVE_PRIORITIZATION,
-  EXECUTION_INTENTS.APPROVE_EXECUTION,
   EXECUTION_INTENTS.OPERATOR_APPROVED,
+  // APPROVE_EXECUTION is deliberately absent: the execution gate already has a
+  // stricter binding (the reviewed prepared-package revision, enforced inside
+  // the TME stage) with its own refusal. Binding it twice would only change
+  // which refusal the operator sees.
 ]);
 
 const VOLATILE_KEY = /(?:At|Timestamp|evaluated|expires|computed|refreshed)$/i;
