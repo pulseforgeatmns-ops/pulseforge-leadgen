@@ -123,7 +123,7 @@ No database objects are added by PRs 3–5. PR 2's shadow table has its own roll
 4. **Mission answers use deterministic templates**, not `OperationalMissionReasoning`. That composer works on the session's `operationalEvidence` shape. Unifying the two is a follow-up.
 5. **The presentation guard is pattern-based.** It catches agentive and passive completion claims and ungrounded ids or dates. The deterministic text remains the default, and any presenter must pass the guard.
 6. **Inherited from PR 4:** Scout acquisition state is not consulted (its store runs DDL on read). The Anchor outbound gate is a fixture in the PG tests.
-7. **Legacy-path defects** recorded in the architecture doc are unchanged in production: §1.6 (hedged approvals resolve as approvals) and #1094 (exit vs cancel). This path answers scenario F with a clarification, but it is not active.
+7. **Legacy-path defects:** §1.6 (hedged approvals) and #1094 (exit vs cancel) were already fixed on `main` by #1096; an earlier draft of this note said otherwise. Still open on the legacy path: R-1 (unmarked retraction idioms such as "Go ahead. Scratch that."), recorded in `docs/P0-MAX-REASONING-001-INTEGRATION-READINESS.md`. This path answers scenario F with a clarification, but it is not active.
 8. **Pre-existing failures on `main`**, unchanged: `test/aoAdminImpersonation.test.js` (composer actor source assertion) and the stale `implementedInDeployedCode` assertion in `test/maxOperationalReadiness.test.js`.
 
 ## Integration and production-acceptance checklist
