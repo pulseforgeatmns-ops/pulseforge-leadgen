@@ -48,6 +48,13 @@ test('PostgreSQL: decision-maker correction supersedes the stale contact and bin
   const bindings = records.filter((r) => r.semanticType === SEMANTIC_TYPE.REFERENCE_BINDING && r.payload?.bindingKey === 'dm:dave');
   assert.equal(bindings.length, 1, 'repeated corrections do not accumulate dm: bindings');
 
+  // Two different people who share a first name are never merged by a correction.
+  await turn(1, 'two-daves', 'Dave is the decision maker at Exeter Phillips.');
+  await turn(1, 'two-daves', 'Dave is the decision maker at ABC Manufacturing.');
+  await turn(1, 'two-daves', "Actually Dave isn't the decision maker.");
+  const daveAccounts = (await active(1, 'two-daves')).filter((r) => r.semanticType === SEMANTIC_TYPE.ACTIVE_CONTACT && r.payload?.contact?.name === 'Dave').map((r) => r.payload.contact.accountName);
+  assert.ok(daveAccounts.includes('Exeter Phillips') && daveAccounts.includes('ABC Manufacturing'), JSON.stringify(daveAccounts));
+
   for (const [tenantId, conversationId] of [[1, 'other-conv'], [2, 'm3-conv']]) {
     const untouched = (await active(tenantId, conversationId)).filter((r) => r.semanticType === SEMANTIC_TYPE.ACTIVE_CONTACT && r.payload?.contact?.name === 'Dave');
     assert.equal(untouched.length, 1);

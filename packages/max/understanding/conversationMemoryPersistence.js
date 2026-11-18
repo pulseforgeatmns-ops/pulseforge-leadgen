@@ -247,11 +247,31 @@ async function persistConversationMemoryTurn({
   // The corrected contact's earlier ACTIVE_CONTACT record carries the old
   // role. Its key includes the account, which a correcting sentence often
   // omits, so it would otherwise stay active beside the corrected record.
-  // Supersede it only when this turn writes a replacement for that contact,
-  // so a correction never silently forgets who the contact is.
-  const replacementPrefixes = [...correctedContacts]
+  // Supersede it only when (a) this turn writes a replacement for that
+  // contact, so a correction never forgets who the contact is, and (b) every
+  // active and replacement record of that name involves at most ONE account,
+  // so two different people who share a first name ("Dave at Exeter" and
+  // "Dave at ABC") are never merged. Ambiguous, or unable to check: keep all.
+  const candidates = [...correctedContacts]
     .filter(name => records.some(r => r.semanticType === SEMANTIC_TYPE.ACTIVE_CONTACT
-      && String(r.payload?.contact?.name || '').toLowerCase() === name))
+      && String(r.payload?.contact?.name || '').toLowerCase() === name));
+  let activeContacts = null;
+  if (candidates.length) {
+    try {
+      const loaded = await repository.loadActive({ tenantId, conversationId, actorId, now });
+      activeContacts = (loaded.records || []).filter(r => r.semanticType === SEMANTIC_TYPE.ACTIVE_CONTACT);
+    } catch (_) {
+      activeContacts = null;
+    }
+  }
+  const accountKey = r => String(r.payload?.contact?.accountName || '').trim().toLowerCase();
+  const replacementPrefixes = activeContacts === null ? [] : candidates
+    .filter(name => {
+      const sameName = r => String(r.payload?.contact?.name || '').toLowerCase() === name;
+      const accounts = new Set([...activeContacts.filter(sameName), ...records.filter(r => r.semanticType === SEMANTIC_TYPE.ACTIVE_CONTACT && sameName(r))]
+        .map(accountKey).filter(Boolean));
+      return accounts.size <= 1;
+    })
     .map(name => `contact:${name}:`);
   if (replacementPrefixes.length) {
     superseded += await repository.supersedeActive({
