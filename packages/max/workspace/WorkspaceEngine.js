@@ -277,7 +277,10 @@ class WorkspaceEngine {
   constructor(options = {}) {
     this._sessions = options.sessions || new SessionStore();
     const { ConversationContinuity } = require('../context/ConversationContinuity');
+    const { ConversationLedgerRecorder } = require('../context/ConversationLedgerRecorder');
     this._conversationContinuity = options.conversationContinuity || new ConversationContinuity({audit:row=>console.info('[MAX_CONVERSATION_CONTEXT]',JSON.stringify(row))});
+    // P0-MAX-REASONING-001 PR 3 — default-off; nothing in routing reads it.
+    this._conversationLedger = options.conversationLedger || new ConversationLedgerRecorder();
     this._conversationReferenceLoader = options.conversationReferenceLoader || null;
     this._conversationRecoveryPending = new Map();
     this._decisionService = options.decisionService || new DecisionService();
@@ -555,6 +558,17 @@ class WorkspaceEngine {
     return this._conversationContinuity.resume(String(tenantId), sessionId);
   }
 
+  /**
+   * Remembered conversational context for an authenticated tenant/session:
+   * focus, corrections, constraints, decisions (authority 'none'), evidence
+   * references with freshness. Null when disabled, expired or out of scope.
+   */
+  getConversationLedger({ tenantId, sessionId }) {
+    const session = this._sessions.get(sessionId);
+    if (!session || String(session.context?.tenantId) !== String(tenantId)) return null;
+    return this._conversationLedger.context(session);
+  }
+
   async recoverConversationSession({ tenantId, sessionId }) {
     const tenant = String(tenantId);
     const existing = this._sessions.get(sessionId);
@@ -566,8 +580,15 @@ class WorkspaceEngine {
     const recovery = (async () => {
       const durable = await this.resumeConversationContext({ tenantId: tenant, sessionId });
       if (!durable?.context?.requiresEvidenceRefresh) return { recovered: false, reason: 'context_unavailable' };
+      const ledgerRecovery = this._conversationLedger.enabled && durable.context.ledger ? durable.context.ledger : null;
+      const missionCandidates = [...(durable.context.candidates || [])];
+      if (ledgerRecovery) {
+        for (const r of ledgerRecovery.referents || []) {
+          if ((r.kind === 'mission' || r.kind === 'pending_decision') && r.missionId && !missionCandidates.includes(r.missionId) && missionCandidates.length < 32) missionCandidates.push(r.missionId);
+        }
+      }
       const valid = [];
-      for (const missionId of durable.context.candidates || []) {
+      for (const missionId of missionCandidates) {
         let found;
         try {
           found = this._conversationReferenceLoader
@@ -579,14 +600,22 @@ class WorkspaceEngine {
         } catch (_) { found = null; }
         if (found?.found && String(found.mission?.id) === String(missionId)) valid.push(String(missionId));
       }
-      if (valid.length === 0) {
+      // Recovered ledger: same tenant/session only, unexpired, missions re-confirmed
+      // above, every other referent a hint to revalidate, decisions history only.
+      const recoveredLedger = ledgerRecovery
+        ? require('../context/ConversationLedger').recoverLedger(ledgerRecovery, { tenantId: tenant, sessionId: String(sessionId), validMissionIds: valid })
+        : null;
+      const ledgerHasReferents = Boolean(recoveredLedger && recoveredLedger.referents.length);
+      if (valid.length === 0 && !ledgerHasReferents) {
         return {
           recovered: false,
           reason: 'no_valid_references',
           evidenceRefreshRequired: true,
         };
       }
-      const focusId = valid.includes(durable.context.focusId) ? durable.context.focusId : valid[0] || null;
+      const v1Valid = valid.filter(id => (durable.context.candidates || []).includes(id));
+      const focusPool = v1Valid.length ? v1Valid : valid;
+      const focusId = focusPool.includes(durable.context.focusId) ? durable.context.focusId : focusPool[0] || null;
       const context = normalizeContext({
         tenantId: tenant, page: 'command-deck',
         ...(focusId ? { missionId: focusId } : {}),
@@ -602,8 +631,12 @@ class WorkspaceEngine {
       }));
       context.requiresEvidenceRefresh = true;
       const session = this._sessions.restore(sessionId, context);
-      session.operationalFocus = { tenantId: tenant, missionIds: valid, at: new Date().toISOString() };
-      return { recovered: true, sessionId: session.id, candidates: valid, evidenceRefreshRequired: true };
+      if (focusPool.length) session.operationalFocus = { tenantId: tenant, missionIds: focusPool, at: new Date().toISOString() };
+      if (recoveredLedger) session.conversationLedger = recoveredLedger;
+      return {
+        recovered: true, sessionId: session.id, candidates: focusPool, evidenceRefreshRequired: true,
+        ...(recoveredLedger ? { ledger: { recovered: true, referents: recoveredLedger.referents.length, requiresRevalidation: true, droppedReferents: recoveredLedger.recovered.droppedReferents } } : {}),
+      };
     })().finally(() => this._conversationRecoveryPending.delete(key));
     this._conversationRecoveryPending.set(key, recovery);
     return recovery;
@@ -639,6 +672,8 @@ class WorkspaceEngine {
         result && result.sessionId ? this._sessions.get(result.sessionId) : null,
         result
       );
+      // Ledger first, so durable continuity snapshots the updated ledger.
+      this._conversationLedger.observe({ session: this._sessions.get(result.sessionId), text: String(input.question || ''), result });
       this._conversationContinuity.remember(this._sessions.get(result.sessionId));
       completeShadow(shadow, result);
       this._interpretationShadow.observe({ context: interpretationContext, text: String(input.question || ''), result });
