@@ -46,6 +46,7 @@ const {
   maybeHandleAcquisitionOwnershipTurn,
 } = require('./AcquisitionOwnership');
 const acquisitionMissionExecution = require('./AcquisitionMissionExecution');
+const gateBoundApproval = require('./GateBoundApproval');
 const { maybeHandleOperatorStatusQuery } = require('./OperatorStatusQueryRouter');
 const { maybeHandleOperationalInspectionTurn } = require('./OperationalInspection');
 const {
@@ -669,6 +670,11 @@ class WorkspaceEngine {
       const result = await this._askProduction(input, productionShadow);
       // P0 — remember which execution-approval package this session was shown.
       acquisitionMissionExecution.recordPresentedExecutionDecision(
+        result && result.sessionId ? this._sessions.get(result.sessionId) : null,
+        result
+      );
+      // P0 — remember which pending decision this session was shown (gate-bound approvals).
+      gateBoundApproval.recordPresentedDecision(
         result && result.sessionId ? this._sessions.get(result.sessionId) : null,
         result
       );
