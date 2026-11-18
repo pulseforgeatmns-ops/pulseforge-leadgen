@@ -3,8 +3,16 @@ on:
   pull_request:
     paths:
       - 'packages/max/frameReasoning/**'
-      - 'packages/max/interpretation/TurnFrame.js'
+      - 'packages/max/interpretation/**'
+      - 'packages/max/context/**'
+      - 'packages/max/evidence/**'
+      - 'packages/max/understanding/**'
+      - 'packages/max/workspace/WorkspaceEngine.js'
       - 'packages/max/workspace/WorkspaceTypes.js'
+      - 'packages/max/workspace/OperationalInspection.js'
+      - 'packages/max/workspace/ProspectRecordIntelligence.js'
+      - 'test/helpers/disposablePostgres.js'
+      - 'migrations/*max-conversation-context*'
       - '.github/workflows/max-frame-reasoning.yml'
 jobs:
   offline:
@@ -16,13 +24,17 @@ jobs:
           node-version: '22'
       - run: npm ci --ignore-scripts
       - run: node --require ./test/helpers/denyWebsiteEvidenceNetwork.cjs --test packages/max/frameReasoning/tests/*.test.js
-  # Enable once P0-MAX-REASONING-001 PRs 3 and 4 are merged (the suite fails, never skips, without them):
-  # cross-pr:
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-node@v4
-  #       with: { node-version: '22' }
-  #     - uses: ./.github/actions/setup-postgres-environment
-  #     - run: npm ci --ignore-scripts
-  #     - run: node --test packages/max/frameReasoning/integration/combinedArchitecture.integration.cjs
+  cross-pr:
+    # P0-MAX-REASONING-001 acceptance: TurnFrame → ConversationLedger →
+    # EvidenceRegistry → evidence-grounded answer, scenarios A–G on disposable
+    # PostgreSQL. Fails (never skips) if any component is missing.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: ./.github/actions/setup-postgres-environment
+      - run: npm ci --ignore-scripts
+      - name: Cross-PR acceptance suite (no skips)
+        run: node --test packages/max/frameReasoning/integration/combinedArchitecture.integration.cjs
