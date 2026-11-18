@@ -66,7 +66,8 @@ class MemoryConversationMemoryRepository {
         && r.recordFingerprint === rec.recordFingerprint
       );
       if (idx >= 0) {
-        this.records[idx] = { ...this.records[idx], ...rec, id: this.records[idx].id };
+        // Same as Postgres ON CONFLICT: re-asserting a record revives it.
+        this.records[idx] = { ...this.records[idx], ...rec, id: this.records[idx].id, supersededAt: null };
       } else {
         this.records.push({ id: crypto.randomUUID(), ...rec });
         written += 1;
@@ -75,16 +76,16 @@ class MemoryConversationMemoryRepository {
     return { written, duplicates: records.length - written };
   }
 
-  async supersedeActive({ tenantId, conversationId, actorId = null, semanticTypes = [], bindingKeys = [] }) {
+  async supersedeActive({ tenantId, conversationId, actorId = null, semanticTypes = [], bindingKeys = [], bindingKeyPrefixes = [] }) {
     const nowIso = new Date().toISOString();
     let count = 0;
     for (const rec of this.records) {
       if (rec.tenantId !== tenantId || rec.conversationId !== conversationId || rec.supersededAt) continue;
       if (actorId != null && rec.actorId != null && String(rec.actorId) !== String(actorId)) continue;
       if (semanticTypes.length && !semanticTypes.includes(rec.semanticType)) continue;
-      if (bindingKeys.length) {
+      if (bindingKeys.length || bindingKeyPrefixes.length) {
         const key = rec.payload?.bindingKey;
-        if (!key || !bindingKeys.includes(key)) continue;
+        if (!key || !(bindingKeys.includes(key) || bindingKeyPrefixes.some(p => key.startsWith(p)))) continue;
       }
       rec.supersededAt = nowIso;
       count += 1;
@@ -179,7 +180,7 @@ class PostgresConversationMemoryRepository {
     return { written, duplicates: records.length - written };
   }
 
-  async supersedeActive({ tenantId, conversationId, actorId = null, semanticTypes = [], bindingKeys = [] }, { dbClient = null } = {}) {
+  async supersedeActive({ tenantId, conversationId, actorId = null, semanticTypes = [], bindingKeys = [], bindingKeyPrefixes = [] }, { dbClient = null } = {}) {
     const q = dbClient || this.db;
     const params = [tenantId, conversationId, new Date().toISOString()];
     let actorClause = '';
@@ -193,9 +194,13 @@ class PostgresConversationMemoryRepository {
       typeClause = ` AND semantic_type = ANY($${params.length}::text[])`;
     }
     let bindingClause = '';
-    if (bindingKeys.length) {
+    if (bindingKeys.length || bindingKeyPrefixes.length) {
       params.push(bindingKeys);
-      bindingClause = ` AND payload->>'bindingKey' = ANY($${params.length}::text[])`;
+      const exact = `payload->>'bindingKey' = ANY($${params.length}::text[])`;
+      params.push(bindingKeyPrefixes);
+      // starts_with: no LIKE wildcard escaping of contact names needed.
+      const prefix = `EXISTS (SELECT 1 FROM unnest($${params.length}::text[]) AS p WHERE starts_with(payload->>'bindingKey', p))`;
+      bindingClause = ` AND (${exact} OR ${prefix})`;
     }
     const { rowCount } = await q.query(
       `UPDATE max_conversation_memory

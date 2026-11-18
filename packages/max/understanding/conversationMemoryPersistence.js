@@ -207,10 +207,29 @@ async function persistConversationMemoryTurn({
     return { written: 0, superseded: 0, records: [] };
   }
 
+  // Records are built first so a correction can supersede exactly the prior
+  // records it replaces (and nothing it does not replace).
+  const records = buildMemoryRecordsFromTurn({
+    tenantId,
+    conversationId,
+    actorId,
+    actorRole,
+    situationModel,
+    validation,
+    sourceInputId,
+    now,
+  });
+
+  // A decision-maker correction names a contact. Its REFERENCE_BINDING is
+  // written under `dm:<contact>`, so that is the key a later correction must
+  // supersede (previously `dm:<priorValue>`, which never matched).
   const supersededBindingKeys = [];
+  const correctedContacts = new Set();
   for (const corr of situationModel?.corrections || []) {
     if (corr.kind === 'decision_maker_role' && corr.contactName) {
-      supersededBindingKeys.push(`dm:${String(corr.priorValue || 'decision_maker').toLowerCase()}`);
+      const name = String(corr.contactName).toLowerCase();
+      supersededBindingKeys.push(`dm:${name}`);
+      correctedContacts.add(name);
     }
   }
 
@@ -225,6 +244,25 @@ async function persistConversationMemoryTurn({
     });
   }
 
+  // The corrected contact's earlier ACTIVE_CONTACT record carries the old
+  // role. Its key includes the account, which a correcting sentence often
+  // omits, so it would otherwise stay active beside the corrected record.
+  // Supersede it only when this turn writes a replacement for that contact,
+  // so a correction never silently forgets who the contact is.
+  const replacementPrefixes = [...correctedContacts]
+    .filter(name => records.some(r => r.semanticType === SEMANTIC_TYPE.ACTIVE_CONTACT
+      && String(r.payload?.contact?.name || '').toLowerCase() === name))
+    .map(name => `contact:${name}:`);
+  if (replacementPrefixes.length) {
+    superseded += await repository.supersedeActive({
+      tenantId,
+      conversationId,
+      actorId,
+      semanticTypes: [SEMANTIC_TYPE.ACTIVE_CONTACT],
+      bindingKeyPrefixes: replacementPrefixes,
+    });
+  }
+
   const resolvedAccount = (situationModel?.threads || []).map(t => t.accountName).find(Boolean);
   if (resolvedAccount && validation?.validated) {
     superseded += await repository.supersedeActive({
@@ -234,17 +272,6 @@ async function persistConversationMemoryTurn({
       semanticTypes: [SEMANTIC_TYPE.OPEN_QUESTION],
     });
   }
-
-  const records = buildMemoryRecordsFromTurn({
-    tenantId,
-    conversationId,
-    actorId,
-    actorRole,
-    situationModel,
-    validation,
-    sourceInputId,
-    now,
-  });
 
   const upsert = await repository.upsertRecords(records);
   return { ...upsert, superseded, records };
