@@ -3,79 +3,46 @@
 
 /**
  * Held-out TurnFrame interpretation evaluation (P0 Unified Reasoning
- * Architecture, Phase A prototype). Offline only: never touches the database,
- * never routes, never dispatches.
+ * Architecture; P0-MAX-REASONING-001 Workstream A). Offline only: never
+ * touches the database, never routes, never dispatches.
  *
- *   node scripts/maxInterpretationEval.js                 # lexical baseline (free, deterministic)
- *   node scripts/maxInterpretationEval.js --model         # + model producer (needs ANTHROPIC_API_KEY; paid)
- *   node scripts/maxInterpretationEval.js --model --model-id claude-sonnet-5-5 --repeats 3
- *   node scripts/maxInterpretationEval.js --json          # machine-readable output
+ *   node scripts/maxInterpretationEval.js                  # lexical baseline (free, deterministic)
+ *   node scripts/maxInterpretationEval.js --extended       # + extended corpus
+ *   node scripts/maxInterpretationEval.js --json           # machine-readable output
+ *   node scripts/maxInterpretationEval.js --model --model-id M --repeats 3 --plan
+ *        # prices the model run (no network, no key needed)
+ *   node scripts/maxInterpretationEval.js --model --model-id M --repeats 3 --max-usd 2 --extended --json
+ *        # PAID: needs ANTHROPIC_API_KEY, an approved model and an approved cap
  *
- * The model run reports measured latency (p50/p95), token usage, cache reads,
- * degraded-call rate and per-dimension scores, which is the data the
- * architecture document's cost/latency estimates must be replaced with.
+ * The model run needs an explicit --model-id and --max-usd. Spend is reserved
+ * per attempt against an in-process cap using utils/apiPricing (no shared DB
+ * ledger: the evaluation must stay offline from production databases). The run
+ * stops at the cap and is reported incomplete; it never scores a refused call.
+ * A model absent from utils/apiPricing is refused, because it cannot be capped.
+ *
+ * Exit codes: 0 ok · 2 refused configuration · 3 run stopped before completion.
  */
+
+// Offline guarantee. The lexical producer reuses production helpers whose
+// import graph constructs the shared pg pool (db.js). Pin it to an unroutable
+// address before anything loads, so no query from this process can reach a
+// real database whatever the shell's DATABASE_URL is (same convention as CI).
+// dotenv never overrides an existing variable. Quiet keeps --json parseable.
+process.env.DATABASE_URL = 'postgresql://localhost:1/max_interpretation_eval_offline';
+process.env.DOTENV_CONFIG_QUIET = 'true';
 
 const { CASES: ORIGINAL_CASES } = require('../packages/max/interpretation/eval/heldoutInterpretation');
 const { CASES: EXTENDED_CASES } = require('../packages/max/interpretation/eval/extendedInterpretation');
-const CASES = process.argv.includes('--extended') ? [...ORIGINAL_CASES, ...EXTENDED_CASES] : ORIGINAL_CASES;
-const { scoreProducer } = require('../packages/max/interpretation/eval/scoreInterpretation');
-const { produceLexicalFrame } = require('../packages/max/interpretation/producers/LexicalFrameProducer');
+const { evaluationMetadata, runLexical, planModelRun, runModelEval } = require('../packages/max/interpretation/eval/runInterpretationEval');
 
+const has = (name) => process.argv.includes(name);
 function arg(name, fallback = null) {
   const i = process.argv.indexOf(name);
   return i >= 0 && process.argv[i + 1] && !process.argv[i + 1].startsWith('--') ? process.argv[i + 1] : fallback;
 }
-const has = (name) => process.argv.includes(name);
 
-function pct(xs, p) {
-  if (!xs.length) return null;
-  const s = [...xs].sort((a, b) => a - b);
-  return s[Math.min(s.length - 1, Math.floor((p / 100) * s.length))];
-}
-
-async function runModel() {
-  const { forAgent } = require('../utils/meteredAnthropic');
-  const { ModelFrameProducer } = require('../packages/max/interpretation/producers/ModelFrameProducer');
-  const { resolveInterpreterModel } = require('../packages/max/interpretation/interpreterModel');
-  if (!arg('--model-id') && !resolveInterpreterModel(process.env).configured) {
-    console.error('--model needs --model-id or MAX_INTERPRETATION_MODEL (no default model).');
-    process.exit(2);
-  }
-  const Metered = forAgent('max_interpreter_eval');
-  const client = new Metered({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const producer = new ModelFrameProducer({
-    client,
-    // Same explicit-model rule as the observer: --model-id or MAX_INTERPRETATION_MODEL, no default.
-    model: arg('--model-id', resolveInterpreterModel(process.env).model),
-    timeoutMs: Number(arg('--timeout-ms', 0)) || undefined,
-  });
-  const repeats = Math.max(1, Number(arg('--repeats', 1)) || 1);
-  const runs = [];
-  const telemetry = [];
-  for (let r = 0; r < repeats; r += 1) {
-    runs.push(await scoreProducer(CASES, async (c) => {
-      const { frame, telemetry: t } = await producer.produce({ text: c.text, context: c.context, transcript: c.transcript || [] });
-      telemetry.push(t);
-      return frame;
-    }));
-  }
-  const lat = telemetry.map((t) => t.latencyMs);
-  const sum = (k) => telemetry.reduce((a, t) => a + ((t.usage && t.usage[k]) || 0), 0);
-  return {
-    model: producer.model,
-    repeats,
-    summaries: runs.map((x) => x.summary),
-    grades: runs[runs.length - 1].grades,
-    latencyMs: { p50: pct(lat, 50), p95: pct(lat, 95), max: Math.max(...lat) },
-    tokens: {
-      input: sum('input_tokens'), output: sum('output_tokens'),
-      cacheRead: sum('cache_read_input_tokens'), cacheWrite: sum('cache_creation_input_tokens'),
-      calls: telemetry.length,
-    },
-    degraded: telemetry.filter((t) => t.degradedReason).map((t) => t.degradedReason),
-  };
-}
+const extended = has('--extended');
+const CASES = extended ? [...ORIGINAL_CASES, ...EXTENDED_CASES] : ORIGINAL_CASES;
 
 function printSummary(label, s) {
   console.log(`\n${label}: ${s.pass}% pass (n=${s.n})  safety violations: ${s.safetyViolations.length ? s.safetyViolations.join(', ') : 'none'}`);
@@ -83,25 +50,70 @@ function printSummary(label, s) {
   console.log('  by category:', Object.entries(s.byCategory).map(([k, v]) => `${k} ${v.pass}%`).join(' · '));
 }
 
+function printGates(gates) {
+  console.log('  promotion gates (§10; promotionAuthorized is always false):');
+  for (const g of gates.gates) console.log(`    ${g.status.padEnd(28)} ${g.id}${g.observed === null ? '' : ` = ${g.observed}`} (${g.threshold})`);
+}
+
+function refuse(code, detail) {
+  console.error(`refused: ${code}${detail ? ` — ${detail}` : ''}`);
+  process.exit(2);
+}
+
 (async () => {
-  const lexical = await scoreProducer(CASES, (c) => produceLexicalFrame({ text: c.text, context: c.context }));
-  const out = { lexical: { summary: lexical.summary, grades: lexical.grades } };
+  const out = {
+    metadata: evaluationMetadata({ cases: CASES, corpus: extended ? 'heldout+extended' : 'heldout' }),
+    lexical: await runLexical(CASES),
+  };
+
   if (has('--model')) {
-    if (!process.env.ANTHROPIC_API_KEY) {
-      console.error('--model needs ANTHROPIC_API_KEY (calls are paid and metered).');
-      process.exit(2);
+    const model = arg('--model-id');
+    const repeats = Math.max(1, Number(arg('--repeats', 1)) || 1);
+    if (!model) refuse('eval_model_id_required', 'pass --model-id with the approved model; there is no default');
+    const plan = planModelRun({ cases: CASES, model, repeats });
+    if (has('--plan')) {
+      out.modelPlan = plan;
+    } else {
+      if (!plan.priced) refuse('eval_unpriced_model', `${model} is not in utils/apiPricing; the cap cannot bound it`);
+      const maxUsd = Number(arg('--max-usd'));
+      if (!Number.isFinite(maxUsd) || maxUsd <= 0) refuse('eval_cost_cap_required', 'pass --max-usd with the approved cap');
+      if (!process.env.ANTHROPIC_API_KEY) refuse('eval_credentials_missing', 'ANTHROPIC_API_KEY is required for the paid run');
+      // A plain SDK client, metered by the runner against the in-process cap.
+      const SDK = require('@anthropic-ai/sdk');
+      const Anthropic = SDK.Anthropic || SDK;
+      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 0 });
+      out.model = await runModelEval({
+        cases: CASES, client, model, repeats, maxUsd,
+        timeoutMs: Number(arg('--timeout-ms', 0)) || undefined,
+      });
+      if (out.model.refused) refuse(out.model.refused);
+      // Where the calls went (ANTHROPIC_BASE_URL can redirect the SDK).
+      out.model.apiHost = new URL(client.baseURL).host;
     }
-    out.model = await runModel();
   }
+
   if (has('--json')) {
     console.log(JSON.stringify(out, null, 2));
-    return;
+  } else {
+    const m = out.metadata;
+    console.log(`commit ${m.commit || 'unknown'} · node ${m.node} · corpus ${m.corpus} (${m.caseCount} cases, sha256 ${m.corpusSha256.slice(0, 12)})`);
+    printSummary('lexical (today\'s signals)', out.lexical.summary);
+    if (has('--verbose')) for (const g of out.lexical.grades.filter((x) => !x.pass)) console.log('   x', g.id, JSON.stringify(g.dims), JSON.stringify(g.frame));
+    printGates(out.lexical.gates);
+    if (out.modelPlan) console.log('\nmodel plan (no calls made):', out.modelPlan);
+    if (out.model) {
+      out.model.summaries.forEach((s, i) => printSummary(`model ${out.model.model} run ${i + 1}`, s));
+      printSummary(`model ${out.model.model} pooled`, out.model.pooled);
+      console.log('  api host:', out.model.apiHost, '· served models (provider-reported):', out.model.servedModels, '· model interpretations:', out.model.modelInterpretations);
+      console.log(`  latency p50 ${out.model.latencyMs.p50} ms · p95 ${out.model.latencyMs.p95} ms · tokens`, out.model.tokens,
+        '· degraded', out.model.degraded, '· cost', out.model.cost);
+      console.log(`  unstable cases: ${out.model.stability.unstable.map((u) => u.id).join(', ') || 'none'}`);
+      printGates(out.model.gates);
+    }
   }
-  printSummary('lexical (today\'s signals)', lexical.summary);
-  if (has('--verbose')) for (const g of lexical.grades.filter((x) => !x.pass)) console.log('   x', g.id, JSON.stringify(g.dims), JSON.stringify(g.frame));
-  if (out.model) {
-    out.model.summaries.forEach((s, i) => printSummary(`model ${out.model.model} run ${i + 1}`, s));
-    console.log(`  latency p50 ${out.model.latencyMs.p50} ms · p95 ${out.model.latencyMs.p95} ms · tokens`, out.model.tokens, '· degraded', out.model.degraded.length);
+  if (out.model && !out.model.complete) {
+    console.error(`run stopped before completion: ${out.model.abortedReason}`);
+    process.exit(3);
   }
 })().catch((err) => {
   console.error(err);

@@ -316,7 +316,7 @@ Retiring lexical stages (Phase E+) happens one stage per PR, each with a suite d
 |---|---|---|
 | `npm run test:max:semantic` / `max:semantic-eval` (#1092) | End-to-end behaviour on 50 turns × 8 dimensions, with ratchet and controls | Exists. 24/26/98 on `main`. |
 | `npm run test:max:interpretation` / `max:interpretation-eval` (this PR) | **Interpretation only**, on a held-out set of 44 turns. Dimensions: intent, referent, action/polarity, clarification, foreign tenant, safety | New |
-| `max:interpretation-eval -- --model [--model-id …] [--repeats N]` | Same, plus measured p50/p95 latency, tokens, cache reads, degraded rate, run-to-run variance | New; needs `ANTHROPIC_API_KEY` |
+| `max:interpretation-eval -- --model --model-id … --max-usd … [--repeats N] [--plan]` | Same, plus measured p50/p95 latency, tokens, cache reads, degraded rate, run-to-run variance | New; needs `ANTHROPIC_API_KEY` |
 | Engine probes (§1.6 cases) | Authority outcomes through the real engine | To be added to the semantic suite as a G-family in PR 0 |
 | Production shadow (`max_interpretation_shadow`) | Frame vs. legacy owner, JEV vs. frame, latency, degraded reasons | Phase A |
 
@@ -479,8 +479,8 @@ Promotion between PRs 3 → 9 → F is gated by the numbers in §4, not by the c
 npm run test:max:interpretation                  # 34 tests: contract, producers, isolation, baseline
 npm run max:interpretation-eval                  # lexical baseline on the held-out set (free)
 node scripts/maxInterpretationEval.js --verbose  # + per-case failures
-ANTHROPIC_API_KEY=… node scripts/maxInterpretationEval.js --model --repeats 3
-ANTHROPIC_API_KEY=… node scripts/maxInterpretationEval.js --model --model-id claude-sonnet-5-5
+node scripts/maxInterpretationEval.js --model --model-id claude-sonnet-5-5 --repeats 3 --plan   # price only
+ANTHROPIC_API_KEY=… node scripts/maxInterpretationEval.js --model --model-id claude-sonnet-5-5 --repeats 3 --max-usd 2
 npm run test:max:semantic                        # existing ratchet (unchanged, green)
 ```
 
