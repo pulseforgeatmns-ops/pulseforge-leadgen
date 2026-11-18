@@ -24,6 +24,13 @@ const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
 
 const A = require('../AmoOperatorApproval');
+// Isolate the Scout provider boundary before the workspace modules load (as
+// p0NegatedAuthorization does): a chat discovery approval in this file must run
+// the real approval transaction without reaching a provider or the network.
+const { liveScoutStub: scoutProviderStub } = require('./amoTestRuntime');
+const originalAdvanceDiscovery = A.advanceDiscoveryAfterApproval;
+A.advanceDiscoveryAfterApproval = (input = {}) =>
+  originalAdvanceDiscovery({ ...input, runScout: input.runScout || scoutProviderStub });
 const amo = require('../../../acquisition-mission');
 const { OPERATOR_DECISION_KINDS: K } = require('../../../acquisition-mission/types');
 const { resolvePendingOperatorDecision } = require('../PendingDecisionResolver');
