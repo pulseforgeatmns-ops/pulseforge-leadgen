@@ -56,7 +56,7 @@ The `decisionKey` is already computed here, so that is an additive follow-up. Th
 - cancellation is unaffected;
 - the documented duplicate-message limit.
 
-Mutation check: with the binding disabled, 7 of the 19 fail.
+Mutation check: with the binding disabled, 8 of the 19 fail.
 
 ## Rollout recommendation
 
