@@ -1,0 +1,28 @@
+name: Max frame-directed reasoning
+on:
+  pull_request:
+    paths:
+      - 'packages/max/frameReasoning/**'
+      - 'packages/max/interpretation/TurnFrame.js'
+      - 'packages/max/workspace/WorkspaceTypes.js'
+      - '.github/workflows/max-frame-reasoning.yml'
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts
+      - run: node --require ./test/helpers/denyWebsiteEvidenceNetwork.cjs --test packages/max/frameReasoning/tests/*.test.js
+  # Enable once P0-MAX-REASONING-001 PRs 3 and 4 are merged (the suite fails, never skips, without them):
+  # cross-pr:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-node@v4
+  #       with: { node-version: '22' }
+  #     - uses: ./.github/actions/setup-postgres-environment
+  #     - run: npm ci --ignore-scripts
+  #     - run: node --test packages/max/frameReasoning/integration/combinedArchitecture.integration.cjs
