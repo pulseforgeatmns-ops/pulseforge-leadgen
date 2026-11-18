@@ -227,7 +227,7 @@ describe('evaluation CLI', () => {
   });
 
   it('prices a model run with --plan without credentials or calls', () => {
-    const r = cli(['--model', '--model-id', PRICED_MODEL, '--repeats', '3', '--plan', '--json']);
+    const r = cli(['--model', '--provider', 'anthropic', '--model-id', PRICED_MODEL, '--repeats', '3', '--plan', '--json']);
     assert.equal(r.status, 0, r.stderr);
     const plan = JSON.parse(r.stdout).modelPlan;
     assert.equal(plan.calls, HELDOUT.length * 3);
@@ -235,11 +235,20 @@ describe('evaluation CLI', () => {
     assert.ok(plan.reservationUpperBoundUsd > 0);
   });
 
+  it('refuses a model run without an explicit, known provider (there is no default)', () => {
+    const none = cli(['--model', '--model-id', PRICED_MODEL, '--max-usd', '1']);
+    assert.equal(none.status, 2);
+    assert.match(none.stderr, /eval_provider_required/);
+    const unknown = cli(['--model', '--provider', 'openai', '--model-id', PRICED_MODEL, '--max-usd', '1']);
+    assert.equal(unknown.status, 2);
+    assert.match(unknown.stderr, /eval_provider_unknown/);
+  });
+
   it('refuses a paid run without a model id, a cap, a priced model, or credentials', () => {
     assert.match(cli(['--model']).stderr, /eval_model_id_required/);
-    assert.match(cli(['--model', '--model-id', PRICED_MODEL]).stderr, /eval_cost_cap_required/);
-    assert.match(cli(['--model', '--model-id', 'claude-unpriced-test', '--max-usd', '1']).stderr, /eval_unpriced_model/);
-    const noKey = cli(['--model', '--model-id', PRICED_MODEL, '--max-usd', '1']);
+    assert.match(cli(['--model', '--provider', 'anthropic', '--model-id', PRICED_MODEL]).stderr, /eval_cost_cap_required/);
+    assert.match(cli(['--model', '--provider', 'anthropic', '--model-id', 'claude-unpriced-test', '--max-usd', '1']).stderr, /eval_unpriced_model/);
+    const noKey = cli(['--model', '--provider', 'anthropic', '--model-id', PRICED_MODEL, '--max-usd', '1']);
     assert.equal(noKey.status, 2);
     assert.match(noKey.stderr, /eval_credentials_missing/);
   });
@@ -360,7 +369,7 @@ describe('final review: paid CLI path end to end against a local fake API', () =
       NO_PROXY: '127.0.0.1', no_proxy: '127.0.0.1',
     };
     const preload = path.join(__dirname, 'fixtures', 'recordPgConnect.cjs');
-    const child = spawn(process.execPath, ['-r', preload, 'scripts/maxInterpretationEval.js', '--model', '--model-id', PRICED_MODEL, '--max-usd', '5', '--json'], { cwd: ROOT, env });
+    const child = spawn(process.execPath, ['-r', preload, 'scripts/maxInterpretationEval.js', '--model', '--provider', 'anthropic', '--model-id', PRICED_MODEL, '--max-usd', '5', '--json'], { cwd: ROOT, env });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d) => { stdout += d; });

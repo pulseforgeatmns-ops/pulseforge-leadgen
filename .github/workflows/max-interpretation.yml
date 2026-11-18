@@ -7,6 +7,9 @@ on:
       - 'scripts/maxInterpretationEval.js'
       - 'scripts/maxInterpretationShadow*.js'
       - 'services/maxOperationalReadiness.js'
+      - 'utils/meteredGemini.js'
+      - 'utils/meteredAnthropic.js'
+      - 'utils/apiPricing.js'
       - 'migrations/*max-interpretation-shadow*'
       - '.github/workflows/max-interpretation.yml'
 jobs:

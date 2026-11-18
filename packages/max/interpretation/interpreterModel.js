@@ -28,12 +28,38 @@ function resolveInterpreterModel(env = process.env) {
   return { configured: true, model: raw, source: ENV_KEY };
 }
 
-/** The provider may report a dated snapshot of the requested alias; nothing else is the same model. */
-function servedModelMatches(requested, served) {
-  if (typeof requested !== 'string' || typeof served !== 'string') return false;
-  if (served === requested) return true;
-  const escaped = requested.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`^${escaped}-\\d{8}$`).test(served);
+const PROVIDER_ENV_KEY = 'MAX_INTERPRETATION_PROVIDER';
+const PROVIDERS = Object.freeze(['anthropic', 'gemini']);
+
+/**
+ * The interpreter provider. Explicit when set (anthropic | gemini). Unset keeps
+ * the historical transport (anthropic) so existing configurations behave
+ * exactly as before; switching provider is a configuration decision that
+ * needs its own approval, and an unknown value is reported, never guessed.
+ * @returns {{ configured: true, provider: string, source: string, explicit: boolean } | { configured: false, provider: null, reason: string }}
+ */
+function resolveInterpreterProvider(env = process.env) {
+  const raw = env && typeof env[PROVIDER_ENV_KEY] === 'string' ? env[PROVIDER_ENV_KEY].trim().toLowerCase() : '';
+  if (!raw) return { configured: true, provider: 'anthropic', source: 'default_historical', explicit: false };
+  if (!PROVIDERS.includes(raw)) return { configured: false, provider: null, reason: 'interpreter_provider_invalid' };
+  return { configured: true, provider: raw, source: PROVIDER_ENV_KEY, explicit: true };
 }
 
-module.exports = { ENV_KEY, resolveInterpreterModel, servedModelMatches };
+const escapeRe = (v) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Is the provider-reported model the requested one?
+ * - anthropic: the alias itself or a dated snapshot of it (`<id>-YYYYMMDD`);
+ * - gemini: `modelVersion` equal to the id, optionally `models/`-prefixed, or a
+ *   numbered stable version of it (`<id>-NNN`).
+ * Anything else (another family, a preview, a different size) is a substitution.
+ */
+function servedModelMatches(requested, served, provider = 'anthropic') {
+  if (typeof requested !== 'string' || typeof served !== 'string') return false;
+  if (served === requested) return true;
+  const id = escapeRe(requested);
+  if (provider === 'gemini') return new RegExp(`^(?:models/)?${id}(?:-\\d{3})?$`).test(served);
+  return new RegExp(`^${id}-\\d{8}$`).test(served);
+}
+
+module.exports = { ENV_KEY, PROVIDER_ENV_KEY, PROVIDERS, resolveInterpreterModel, resolveInterpreterProvider, servedModelMatches };

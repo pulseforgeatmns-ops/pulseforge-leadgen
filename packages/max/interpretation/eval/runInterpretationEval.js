@@ -5,9 +5,12 @@
  * Workstream A). Never imported by production code.
  *
  * Offline means: no database, no routing, no missions, no dispatch. The model
- * run uses an injected Anthropic-compatible client wrapped by the existing
- * meterClient with an in-process spend cap (evalSpendCap) instead of the
- * shared DB ledger. The CLI is scripts/maxInterpretationEval.js.
+ * run uses one provider (providers/*), metered against an in-process spend cap
+ * (evalSpendCap) instead of the shared DB ledger:
+ *   - anthropic: an injected plain SDK client, wrapped by meterClient;
+ *   - gemini: a client built by the caller from utils/meteredGemini with the
+ *     cap's reserve/settle injected (createClient(meter)).
+ * The CLI is scripts/maxInterpretationEval.js.
  */
 
 const crypto = require('node:crypto');
@@ -17,9 +20,12 @@ const { evaluatePromotionGates } = require('./promotionGates');
 const { createEvalSpendCap } = require('./evalSpendCap');
 const { produceLexicalFrame } = require('../producers/LexicalFrameProducer');
 const { ModelFrameProducer, SYSTEM_PROMPT, buildRequestParams } = require('../producers/ModelFrameProducer');
+const { createAnthropicProvider, createGeminiProvider, PROVIDERS } = require('../providers');
+const { buildRequest: buildGeminiRequest } = require('../providers/GeminiProvider');
+const { servedModelMatches: servedModelMatchesFor } = require('../interpreterModel');
 const { TURN_FRAME_OUTPUT_SCHEMA } = require('../TurnFrame');
 const { meterClient } = require('../../../../utils/meteredAnthropic');
-const { estimateClaudeReservation } = require('../../../../utils/apiPricing');
+const { estimateClaudeReservation, estimateGeminiReservation } = require('../../../../utils/apiPricing');
 
 const sha256 = (value) => crypto.createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 
@@ -60,11 +66,21 @@ async function runLexical(cases) {
  * Price the run without calling anything: the exact request bodies produce()
  * would send, through the same reservation estimator the meter uses.
  */
-function planModelRun({ cases, model, repeats = 1 }) {
-  const perCase = cases.map((c) => estimateClaudeReservation(buildRequestParams({ model, text: c.text, context: c.context, transcript: c.transcript || [] })));
+function reservationFor(provider, model, c) {
+  const input = { model, text: c.text, context: c.context, transcript: c.transcript || [] };
+  if (provider === 'gemini') return estimateGeminiReservation(buildGeminiRequest(input));
+  return estimateClaudeReservation(buildRequestParams(input));
+}
+
+function planModelRun({ cases, model, repeats = 1, provider = 'anthropic' }) {
+  if (!PROVIDERS.includes(provider)) {
+    return { provider, model, repeats, calls: cases.length * repeats, priced: false, unpricedReason: 'eval_provider_unknown', reservationUpperBoundUsd: null, maxPerCallReservationUsd: null };
+  }
+  const perCase = cases.map((c) => reservationFor(provider, model, c));
   const priced = perCase.every((x) => x !== null);
   const sum = priced ? perCase.reduce((a, b) => a + b, 0) : null;
   return {
+    provider,
     model,
     repeats,
     calls: cases.length * repeats,
@@ -112,9 +128,9 @@ function disagreementsForReview(runs, cases) {
   return [...seen.values()].map((e) => ({ ...e, failedDimensions: [...e.failedDimensions] }));
 }
 
-/** The provider may report a dated snapshot of the requested alias; nothing else is the same model. */
-function servedModelMatches(requested, served) {
-  return served === requested || new RegExp(`^${requested.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-\\d{8}$`).test(served);
+/** Provider-aware identity check (interpreterModel.servedModelMatches); anthropic by default. */
+function servedModelMatches(requested, served, provider = 'anthropic') {
+  return servedModelMatchesFor(requested, served, provider);
 }
 
 /**
@@ -131,13 +147,16 @@ function gradeModelCall(testCase, frame, telemetry) {
 
 /**
  * @param {{
- *   cases: Array, client: { messages: { create: Function } }, model: string,
- *   repeats?: number, maxUsd: number, timeoutMs?: number,
- * }} options  client must be a plain (un-metered) SDK client; it is metered here.
+ *   cases: Array, model: string, repeats?: number, maxUsd: number, timeoutMs?: number,
+ *   provider?: 'anthropic'|'gemini',
+ *   client?: { messages: { create: Function } },   // anthropic: plain (un-metered) SDK client, metered here
+ *   createClient?: (meter: { reserve: Function, settle: Function }) => { generateContent: Function }, // gemini
+ * }} options
  */
-async function runModelEval({ cases, client, model, repeats = 1, maxUsd, timeoutMs }) {
+async function runModelEval({ cases, client, createClient, provider = 'anthropic', model, repeats = 1, maxUsd, timeoutMs }) {
   if (!model || typeof model !== 'string') return { refused: 'eval_model_id_required' };
-  const plan = planModelRun({ cases, model, repeats });
+  if (!PROVIDERS.includes(provider)) return { refused: 'eval_provider_unknown' };
+  const plan = planModelRun({ cases, model, repeats, provider });
   if (!plan.priced) return { refused: 'eval_unpriced_model', plan };
   let cap;
   try {
@@ -145,21 +164,32 @@ async function runModelEval({ cases, client, model, repeats = 1, maxUsd, timeout
   } catch (error) {
     return { refused: error.code || 'eval_cost_cap_required', plan };
   }
-  meterClient(client, { agentName: 'max_interpreter_eval', reserve: cap.reserve, settle: cap.settle });
   // Track every metered attempt. A timed-out produce() returns before its
   // request has settled; waiting here keeps the post-call cap check current
   // before the next reservation and before the cost is reported.
   const inflight = new Set();
-  const metered = client.messages.create;
-  client.messages.create = (...a) => {
-    const p = metered(...a);
-    const settled = p.then(() => {}, () => {});
+  const track = (fn) => (...a) => {
+    const p = fn(...a);
+    const settled = Promise.resolve(p).then(() => {}, () => {});
     inflight.add(settled);
     settled.finally(() => inflight.delete(settled));
     return p;
   };
+  let transport;
+  if (provider === 'gemini') {
+    if (typeof createClient !== 'function') return { refused: 'eval_client_required', plan };
+    const gemini = createClient({ reserve: cap.reserve, settle: cap.settle });
+    if (!gemini || typeof gemini.generateContent !== 'function') return { refused: 'eval_client_required', plan };
+    gemini.generateContent = track(gemini.generateContent.bind(gemini));
+    transport = createGeminiProvider({ client: gemini });
+  } else {
+    if (!client || !client.messages || typeof client.messages.create !== 'function') return { refused: 'eval_client_required', plan };
+    meterClient(client, { agentName: 'max_interpreter_eval', reserve: cap.reserve, settle: cap.settle });
+    client.messages.create = track(client.messages.create);
+    transport = createAnthropicProvider({ client });
+  }
   const settleInflight = () => Promise.all([...inflight]);
-  const producer = new ModelFrameProducer({ client, model, timeoutMs });
+  const producer = new ModelFrameProducer({ provider: transport, model, timeoutMs });
 
   const runs = [];
   const telemetry = [];
@@ -182,8 +212,13 @@ async function runModelEval({ cases, client, model, repeats = 1, maxUsd, timeout
       // Stop conditions after a call that did reach the provider. The call is
       // counted above; nothing further is sent.
       if (snap.refused) { abortedReason = snap.refused; break; }
-      if (t.servedModel && !servedModelMatches(model, t.servedModel)) { abortedReason = 'model_identity_mismatch'; break; }
+      if (t.servedModel && !servedModelMatches(model, t.servedModel, provider)) { abortedReason = 'model_identity_mismatch'; break; }
       if (t.degradedReason === 'stop_reason_max_tokens') { abortedReason = 'model_response_truncated'; break; }
+      // A rejected request (bad schema/field, unknown model, auth, quota) would
+      // fail every remaining call identically: stop after the first one.
+      if (/^http_4\d\d$/.test(t.degradedReason || '')) { abortedReason = 'provider_request_rejected'; break; }
+      // A model that never reports what it served cannot pass the identity check.
+      if (provider === 'gemini' && !t.servedModel && !t.degradedReason) { abortedReason = 'model_identity_unreported'; break; }
     }
     if (grades.length) runs.push({ grades, summary: summarize(grades), complete: grades.length === cases.length });
   }
@@ -203,6 +238,7 @@ async function runModelEval({ cases, client, model, repeats = 1, maxUsd, timeout
   const latencyMs = { p50: percentile(latencies, 50), p95: percentile(latencies, 95), max: latencies.length ? Math.max(...latencies) : null };
   const scored = pooled.length;
   return {
+    provider,
     model,
     servedModels,
     repeats,
