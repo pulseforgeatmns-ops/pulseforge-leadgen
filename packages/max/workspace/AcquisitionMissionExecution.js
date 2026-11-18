@@ -89,6 +89,7 @@ const { formatMissionUnderstandingProse, isResearchPlanningDeferred } = require(
 const { RESEARCH_PLANNING_REQUIRED } = require('../../acquisition-mission/ResearchPlanning');
 const { isMissionPlanningTurn } = require('./MissionPlanningTurn');
 const askPathTrace = require('./audit/AskPathTrace');
+const gateBoundApproval = require('./GateBoundApproval');
 const {
   hasExplicitMissionApprovalLanguage,
   isOperationalStatusQuery,
@@ -501,6 +502,52 @@ function buildExecutionReviewRefusal({ err, mission, snapshot }) {
     blocker: err.code,
   });
   return { structured, prose, executionReviewRefusal: err.code };
+}
+
+/**
+ * P0 gate-bound approval refusal: nothing dispatched; the current decision is
+ * shown (and therefore recorded as presented) so the operator can answer it.
+ */
+function buildGateBindingRefusal({ binding, snapshot, mission }) {
+  const current = (snapshot && snapshot.mission) || mission || {};
+  const pending = current.pendingOperatorDecision || {};
+  const why = binding.reason === 'not_presented'
+    ? 'the decision you are approving has not been shown in this conversation yet.'
+    : 'the pending decision changed after it was shown in this conversation.';
+  const review = pending.kind === 'execution_approval' ? ensureReadyExecutionReview(snapshot, current) : null;
+  const prose = [
+    `Not executed: ${why} Nothing was approved, sent, or cancelled.`,
+    pending.missionUnderstanding || null,
+    review ? formatExecutionPackageBlock(review) : null,
+    `Currently pending: ${pending.prompt || pending.kind || 'decision'}`,
+    'Review it, then answer this decision explicitly.',
+  ].filter(Boolean).join('\n\n');
+  const structured = buildStructuredResponse({
+    answer: prose,
+    reasoning: [],
+    supportingEvidence: [],
+    contradictingEvidence: [],
+    confidence: 1,
+    nextInvestigations: [],
+    recommendedActions: [],
+    confidenceContributors: ['p0_gate_bound_approval'],
+    timelineReferences: [],
+    relatedEntities: [{ id: current.id, type: 'acquisition_mission', name: current.objective || current.id }],
+    metadata: { acquisitionMission: true, strictOutputShape: true },
+  });
+  Object.assign(structured.metadata, {
+    executionState: 'blocked',
+    executionVerified: false,
+    blocker: `gate_bound_approval_${binding.reason}`,
+  });
+  return {
+    reason: 'acquisition_mission_gate_bound_approval',
+    structured,
+    prose,
+    mission: current,
+    action: 'gate_bound_approval_held',
+    gateBindingRefusal: binding.reason,
+  };
 }
 
 function buildReadyExecutionPresentation({ mission, snapshot }) {
@@ -1574,6 +1621,13 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
   const intent = intentFromAction(action);
 
   if (intent) {
+    // P0 gate-bound approval (default-off): the approval must answer the
+    // decision this conversation last presented, or nothing is dispatched.
+    const binding = gateBoundApproval.checkGateBinding({ session: input.session, mission: snapshot.mission, intent });
+    if (!binding.bound) {
+      askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'gate_bound_approval_held');
+      return buildGateBindingRefusal({ binding, snapshot, mission });
+    }
     let routed;
     try {
       routed = await submitChatExecutionRequest(input, {
