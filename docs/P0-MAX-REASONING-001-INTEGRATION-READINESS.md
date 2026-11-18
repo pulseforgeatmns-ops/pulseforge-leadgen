@@ -14,6 +14,48 @@ Integration branch: `claude/p0-max-reasoning-001-integration`, which is `origin/
 
 Recommended merge order: #1137 and #1138 (independent of each other and of PRs 1–5), then #1131 → #1135, then #1139 (flag off). Merge only with owner approval.
 
+## M. Merge plan (Nov 18, merge-readiness review)
+
+All heads were verified against current `main` (`ee88320`). Every PR is green on its own head, with no blockers. Do not merge without owner approval.
+
+| # | PR | Head | Own CI | Merge into `main` (in this order) |
+|---|---|---|---|---|
+| 1 | #1137 field-note correction | `24cdfff` | green, incl. the new `field-note-memory` job | clean |
+| 2 | #1138 R-1 retraction fix | `ba009eb` | green | clean |
+| 3 | #1131 PR 1 eval harness | `81e8ae7` | green | clean |
+| 4 | #1132 PR 2 shadow readiness | `afaaed3` | green | **conflict after #1131** (see below) |
+| 5 | #1133 PR 3 ConversationLedger | `39c2d7d`* | green after the CI-split fix | clean |
+| 6 | #1134 PR 4 EvidenceRegistry | `3611c7e` | green | clean |
+| 7 | #1135 PR 5 frame-directed reasoning | `9b47b35` | green | clean; enable the cross-PR job after merge (below) |
+| 8 | #1139 gate-bound approvals (flag off) | `a377c82` | green | **conflict after #1133** (see below) |
+| 9 | #1140 Gemini adapter (draft) | `59ba866` | pending | after #1131 + #1132; the diff narrows to one commit |
+| 10 | follow-up (to open after 1–8) | — | — | integration-only items (below) |
+
+\* The #1133 head after today's CI-split fix.
+
+**Defect found and fixed in this review.** When the field-note commits were split out of #1133, its `max-context.yml` still ran `maxConversationMemory` and the deleted Postgres correction test, so #1133's `context` job was red.
+- #1133 no longer runs them.
+- #1137 now carries its own `max-field-note-memory.yml`, a separate file so the two PRs cannot conflict.
+- Both reran green.
+
+**Conflict resolutions.** Resolve each by merging `main` into the PR branch *after* the earlier PR lands, so CI runs on the resolved tree before the merge:
+- **#1132 after #1131:**
+  - `scripts/maxInterpretationEval.js`: keep `main`'s version (PR 1's, stricter `--model-id`).
+  - `CLAUDE.md`: **one** combined "Unified reasoning architecture" line, exactly as in integration commit `1267aeff`. A naive keep-both duplicates the line (caught while building #1140).
+- **#1139 after #1133:** `WorkspaceEngine.js`, keep both post-turn hooks in this order: `recordPresentedExecutionDecision`, then `gateBoundApproval.recordPresentedDecision`, then the ledger `observe`, then continuity `remember`.
+
+**Equivalence.** A sequential trial merge of 1–8 onto `main` with those resolutions differs from the combined branch (#1136, 20/20 green) only by integration-only files. Those go in the follow-up PR:
+- `.github/workflows/max-frame-reasoning.yml`: enables the cross-PR job, which needs PRs 3–5 on `main`.
+- Doc corrections: the stale §1.6/#1094 notes in `CLAUDE.md`, the architecture doc and the PR 5 doc.
+- This report and `docs/P0-MAX-INTERPRETATION-EVAL-PROVIDER.md`.
+- `packages/max/workspace/tests/p0AuthorizationReadiness.test.js` (needs #1133 and #1138).
+
+After the follow-up merges, close #1136 unmerged.
+
+**Not blockers, but needed before enabling anything:**
+- #1139's flag needs its 33 contract-change tests adapted.
+- #1140's paid run needs a dedicated dev Gemini key and network access to `generativelanguage.googleapis.com`.
+
 ## 0. Verdict
 
 | | |
