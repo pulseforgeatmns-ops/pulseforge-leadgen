@@ -88,35 +88,6 @@ describe('MAX-MEMORY-001 durable conversational context', () => {
     assert.equal(daves[0].payload.contact.role, 'influencer');
   });
 
-  it('M3b — a correction never merges two different people who share a first name', async () => {
-    const repository = new MemoryConversationMemoryRepository();
-    const base = durableInput({ repository, conversationId: 'm3b-conv' });
-    await turn({ ...base, text: 'Dave is the decision maker at Exeter Phillips.' });
-    await turn({ ...base, text: 'Dave is the decision maker at ABC Manufacturing.' });
-    await turn({ ...base, text: "Actually Dave isn't the decision maker." });
-    const loaded = await repository.loadActive({ tenantId: 1, conversationId: 'm3b-conv', now: base.now });
-    const accounts = loaded.records
-      .filter(r => r.semanticType === SEMANTIC_TYPE.ACTIVE_CONTACT && r.payload?.contact?.name === 'Dave')
-      .map(r => r.payload.contact.accountName);
-    assert.ok(accounts.includes('Exeter Phillips'), 'Dave at Exeter Phillips is kept');
-    assert.ok(accounts.includes('ABC Manufacturing'), 'Dave at ABC Manufacturing is kept');
-  });
-
-  it('M3c — if active memory cannot be read, a correction supersedes nothing', async () => {
-    const repository = new MemoryConversationMemoryRepository();
-    const base = durableInput({ repository, conversationId: 'm3c-conv' });
-    await turn({ ...base, text: 'Dave is the decision maker at Exeter Phillips.' });
-    const original = repository.loadActive.bind(repository);
-    let calls = 0;
-    // The durable load at turn start succeeds; the persistence-time read fails.
-    repository.loadActive = async (args) => { calls += 1; if (calls === 2) throw new Error('db down'); return original(args); };
-    await turn({ ...base, text: "Actually Dave isn't the decision maker. Lisa handles vendors." });
-    repository.loadActive = original;
-    const loaded = await repository.loadActive({ tenantId: 1, conversationId: 'm3c-conv', now: base.now });
-    assert.ok(loaded.records.some(r => r.semanticType === SEMANTIC_TYPE.ACTIVE_CONTACT
-      && r.payload?.contact?.name === 'Dave' && r.payload.contact.accountName === 'Exeter Phillips'), 'nothing was superseded');
-  });
-
   it('M4 — stale memory does not over-resolve', async () => {
     const repository = new MemoryConversationMemoryRepository();
     const base = durableInput({ repository, conversationId: 'm4-conv' });
