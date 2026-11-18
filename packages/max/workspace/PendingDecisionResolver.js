@@ -27,6 +27,7 @@ const {
   stripNegatedDirectives,
   isConstraintQualifiedRequest,
   classifyAuthorizationPolarity,
+  AUTHORIZATION_VERB,
 } = require('./NegatedDirective');
 
 /**
@@ -495,6 +496,50 @@ function guardedUnresolved(mission, pending, outcome, captureIntent, options = {
  * @param {string} q
  * @param {string|null} kind
  */
+/**
+ * R-1 — a retraction or dismissal of what was just said. Without it, "Go ahead.
+ * Scratch that." resolved the approval and "Approve it. Cancel that." resolved
+ * a mission cancellation. Only meaningful next to an affirmative decision in
+ * the same message; on its own it carries no authority to hold.
+ */
+const RETRACTION_RE = new RegExp([
+  '\\b(?:scratch|strike|forget|disregard|undo|retract|withdraw|revoke|rescind|belay|nix|reverse)\\s+' +
+    '(?:that|it|this|(?:the|my|that)\\s+(?:last\\s+)?(?:approval|answer|message|decision|reply)|what\\s+i\\s+(?:just\\s+)?said)\\b',
+  '\\bcancel\\s+that\\b',
+  '\\bnever\\s*mind\\b',
+  '\\b(?:i\\s+)?take\\s+(?:that|it)\\s+back\\b',
+].join('|'), 'i');
+
+/** Authorization vocabulary other than a bare "yes" (which may introduce a cancel: "Yes, cancel it."). */
+const NON_YES_AUTHORIZATION = new RegExp(
+  AUTHORIZATION_VERB.source.replace(/\|yes\)\\b$/, ')\\b'),
+  'i'
+);
+if (NON_YES_AUTHORIZATION.source === AUTHORIZATION_VERB.source) {
+  throw new Error('PendingDecisionResolver: AUTHORIZATION_VERB no longer ends with "yes"; update NON_YES_AUTHORIZATION');
+}
+
+/**
+ * R-1 — an approval and a cancellation in separate sentences of one message
+ * ("Approved. Cancel the mission.", "Go ahead. Actually, cancel it.") contradict
+ * each other; neither may dispatch. One sentence that approves the
+ * cancellation ("Yes, cancel it.", "Go ahead and cancel it.") is a
+ * cancellation, and a negated first sentence ("Don't send it. Cancel the
+ * mission.") is not an approval.
+ */
+function approvalContradictedByCancel(q) {
+  const sentences = String(q || '').split(/(?<=[.!?;\n])\s*/).map((x) => x.trim()).filter(Boolean);
+  if (sentences.length < 2) return false;
+  const facts = sentences.map((s) => {
+    const p = classifyAuthorizationPolarity(s);
+    return {
+      approves: NON_YES_AUTHORIZATION.test(p.affirmative) && !p.affirmativeCancel,
+      cancels: p.affirmativeCancel,
+    };
+  });
+  return facts.some((f) => f.approves) && facts.some((f) => f.cancels);
+}
+
 function authorizationPolarityVerdict(q, kind = null) {
   const polarity = classifyAuthorizationPolarity(q);
   const nomination = classifyByKind(kind, polarity.affirmative);
@@ -507,6 +552,10 @@ function authorizationPolarityVerdict(q, kind = null) {
   // future-stage restrictions must be clarified rather than silently lost.
   if (kind === OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL && isRevisionRequest(q) &&
       !/\b(?:maybe|perhaps|possibly|if|unless)\b/i.test(q)) return { verdict: 'revision', polarity };
+  // R-1 — retracted or self-contradicted decisions are never resolved (fail closed).
+  if (affirmativeDecision && (RETRACTION_RE.test(q) || approvalContradictedByCancel(q))) {
+    return { verdict: 'mixed', polarity, qualification: true, retraction: true };
+  }
   const uncertain = /\b(?:maybe|perhaps|possibly|probably|tentatively|potentially|might|could|would|should|unsure|uncertain|not\s+(?:sure|certain|ready|convinced)|i\s+(?:think|guess|suppose)|on\s+second\s+thought|undecided)\b/i.test(q);
   const qualified = /\b(?:if|unless|until|after|once|when|provided|providing|assuming|pending|subject\s+to|only|as\s+long\s+as|hold|wait|defer|delay|postpone|later|tomorrow|next\s+week|but|however|except)\b/i.test(q);
   if (affirmativeDecision &&
@@ -534,7 +583,7 @@ function authorizationPolarityVerdict(q, kind = null) {
  * Otherwise null (normal classification continues).
  */
 function heldByAuthorizationPolarity(mission, pending, q, { onlyBareProhibition = false } = {}) {
-  const { verdict, polarity, qualification } = authorizationPolarityVerdict(q, pending.kind);
+  const { verdict, polarity, qualification, retraction } = authorizationPolarityVerdict(q, pending.kind);
   if (verdict !== 'held' && verdict !== 'mixed') return null;
   if (onlyBareProhibition && polarity.affirmative.replace(/[^a-z]/gi, '').length > 0) return null;
   const mixed = verdict === 'mixed';
@@ -546,6 +595,7 @@ function heldByAuthorizationPolarity(mission, pending, q, { onlyBareProhibition 
     negatedCancelOnly: polarity.negatedCancel && !polarity.negatedAuthorization,
     mixedPolarity: mixed,
     qualifiedAuthorization: Boolean(qualification),
+    retractedAuthorization: Boolean(retraction),
     executionIntent: null,
     executionAction: null,
     resolvedFromPendingDecision: false,
