@@ -1,0 +1,22 @@
+name: Max field-note correction memory
+on:
+  pull_request:
+    paths:
+      - 'packages/max/understanding/**'
+      - 'test/maxConversationMemory*.test.js'
+      - 'test/helpers/disposablePostgres.js'
+      - '.github/workflows/max-field-note-memory.yml'
+jobs:
+  field-note-memory:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: ./.github/actions/setup-postgres-environment
+      - run: npm ci --ignore-scripts
+      - name: Field-note correction memory (hermetic, offline network guard)
+        run: node --require ./test/helpers/denyWebsiteEvidenceNetwork.cjs --test test/maxConversationMemory.test.js
+      - name: Field-note correction memory (disposable PostgreSQL, no skips)
+        run: node --test test/maxConversationMemoryCorrectionPostgres.test.js

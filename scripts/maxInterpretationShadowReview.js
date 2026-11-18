@@ -7,7 +7,11 @@ async function review(db,tenantId) {
     observation->'frame'->>'subjectKind' AS subject,
     count(*)::integer AS turns,
     count(*) FILTER (WHERE observation->>'disagreement'='true')::integer AS disagreements,
+    count(*) FILTER (WHERE observation->>'disagreement' IS NULL)::integer AS incomparable,
     count(*) FILTER (WHERE observation->>'failure' IS NOT NULL)::integer AS degraded,
+    count(*) FILTER (WHERE observation->>'truncated'='true')::integer AS truncated,
+    count(*) FILTER (WHERE observation->>'modelMismatch'='true')::integer AS model_mismatch,
+    count(*) FILTER (WHERE observation->>'pendingDecisionBound'='true')::integer AS pending_decision_bound,
     percentile_cont(0.95) WITHIN GROUP (ORDER BY (observation->>'latencyMs')::numeric) AS p95_ms
     FROM max_interpretation_shadow WHERE tenant_id=$1 AND observed_at >= now()-interval '90 days'
     GROUP BY 1,2,3 ORDER BY turns DESC LIMIT 100`,[tenantId]);

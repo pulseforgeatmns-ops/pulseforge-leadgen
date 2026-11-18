@@ -24,11 +24,12 @@ const { redactText } = require('../../../decision-service/privacy');
 const { TURN_FRAME_OUTPUT_SCHEMA, validateTurnFrame } = require('../TurnFrame');
 const { produceLexicalFrame } = require('./LexicalFrameProducer');
 
-// The audit (§7) recommends starting with Haiku 5.5 and comparing Sonnet 5.5
-// on the suite; the model is configuration, not code.
-const DEFAULT_MODEL = 'claude-haiku-5-5';
+// The model is explicit configuration (interpreterModel.js,
+// MAX_INTERPRETATION_MODEL), never an implicit default here.
+const DEFAULT_MODEL = null;
 const DEFAULT_TIMEOUT_MS = 1500;
 const MAX_TRANSCRIPT_LINES = 6;
+const MAX_TOKENS = 600;
 
 const SYSTEM_PROMPT = `You interpret one operator message sent to Max, the operating manager of a B2B lead-generation business. You do not answer it and you cannot take actions. You return a JSON object describing what the message means.
 
@@ -70,6 +71,20 @@ function buildUserContent({ text, context, transcript }) {
   });
 }
 
+/**
+ * The exact request body produce() sends. Exported so offline tooling (the
+ * evaluation's --plan cost bound) prices the same request, not a copy.
+ */
+function buildRequestParams({ model, text, context, transcript = [] }) {
+  return {
+    model,
+    max_tokens: MAX_TOKENS,
+    system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
+    messages: [{ role: 'user', content: buildUserContent({ text, context, transcript }) }],
+    output_config: { effort: 'low', format: { type: 'json_schema', schema: TURN_FRAME_OUTPUT_SCHEMA } },
+  };
+}
+
 function withTimeout(promise, ms, controller) {
   let timer;
   const timeout = new Promise((_, reject) => {
@@ -83,11 +98,14 @@ function withTimeout(promise, ms, controller) {
 
 class ModelFrameProducer {
   /**
-   * @param {{ client: { messages: { create: Function } }, model?: string, timeoutMs?: number }} options
+   * @param {{ client: { messages: { create: Function } }, model: string, timeoutMs?: number }} options
    */
   constructor({ client, model = DEFAULT_MODEL, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     if (!client || !client.messages || typeof client.messages.create !== 'function') {
       throw new Error('ModelFrameProducer requires an injected Anthropic-compatible client');
+    }
+    if (typeof model !== 'string' || !model.trim()) {
+      throw new Error('ModelFrameProducer requires an explicit model (MAX_INTERPRETATION_MODEL)');
     }
     this._client = client;
     this.model = model;
@@ -100,17 +118,11 @@ class ModelFrameProducer {
   async produce({ text, context, transcript = [] }) {
     const started = performance.now();
     const controller = new AbortController();
-    const telemetry = { model: this.model, latencyMs: 0, usage: null, degradedReason: null, stopReason: null };
+    const telemetry = { model: this.model, servedModel: null, latencyMs: 0, usage: null, degradedReason: null, stopReason: null };
     try {
       const response = await withTimeout(
         this._client.messages.create(
-          {
-            model: this.model,
-            max_tokens: 600,
-            system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
-            messages: [{ role: 'user', content: buildUserContent({ text, context, transcript }) }],
-            output_config: { effort: 'low', format: { type: 'json_schema', schema: TURN_FRAME_OUTPUT_SCHEMA } },
-          },
+          buildRequestParams({ model: this.model, text, context, transcript }),
           { signal: controller.signal, timeout: this.timeoutMs, maxRetries: 0 }
         ),
         this.timeoutMs,
@@ -118,6 +130,8 @@ class ModelFrameProducer {
       );
       telemetry.latencyMs = Math.round(performance.now() - started);
       telemetry.stopReason = response && response.stop_reason ? response.stop_reason : null;
+      // The model the provider reports having served (may differ from the request).
+      telemetry.servedModel = response && typeof response.model === 'string' ? response.model : null;
       telemetry.usage = response && response.usage ? {
         input_tokens: response.usage.input_tokens ?? null,
         output_tokens: response.usage.output_tokens ?? null,
@@ -160,4 +174,4 @@ class ModelFrameProducer {
   }
 }
 
-module.exports = { ModelFrameProducer, SYSTEM_PROMPT, DEFAULT_MODEL, DEFAULT_TIMEOUT_MS, buildUserContent };
+module.exports = { ModelFrameProducer, SYSTEM_PROMPT, DEFAULT_MODEL, DEFAULT_TIMEOUT_MS, MAX_TOKENS, buildUserContent, buildRequestParams };
