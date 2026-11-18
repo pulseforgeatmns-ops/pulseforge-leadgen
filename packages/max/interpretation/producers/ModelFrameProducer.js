@@ -68,7 +68,14 @@ function repairUnsafeAuthorization(raw, { text, context }) {
   const verdict = authorizationPolarityVerdict(text, 'execution_approval');
   const q = String(text || '').trim();
   const held = verdict.verdict === 'held';
-  const ambiguous = verdict.verdict === 'mixed' || BARE_NEGATIVE_RE.test(q) || DELEGATED_ASSENT_RE.test(q);
+  const action = raw.requestedAction && typeof raw.requestedAction === 'object'
+    ? raw.requestedAction
+    : { verb: 'none', targetCandidateId: null, polarity: 'none' };
+  const executionLike =
+    (raw.intent === 'instruction' || raw.intent === 'authorization') &&
+    action.verb !== 'none' &&
+    action.polarity === 'affirmative';
+  const ambiguous = (verdict.verdict === 'mixed' && executionLike) || BARE_NEGATIVE_RE.test(q) || DELEGATED_ASSENT_RE.test(q);
   if (!held && !ambiguous) return raw;
 
   const pendingId = String(context.pendingDecisionId);
@@ -76,10 +83,6 @@ function repairUnsafeAuthorization(raw, { text, context }) {
   const ambiguities = existing.some((a) => a && a.kind === 'action')
     ? existing.map((a) => ({ ...a, candidateIds: Array.isArray(a.candidateIds) ? [...a.candidateIds] : [] }))
     : [...existing, { kind: 'action', candidateIds: [pendingId] }];
-  const action = raw.requestedAction && typeof raw.requestedAction === 'object'
-    ? raw.requestedAction
-    : { verb: 'none', targetCandidateId: null, polarity: 'none' };
-
   return {
     ...raw,
     intent: held ? 'prohibition' : 'ambiguous',
