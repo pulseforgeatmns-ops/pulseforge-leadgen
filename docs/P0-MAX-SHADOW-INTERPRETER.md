@@ -24,12 +24,12 @@ Enablement (requires separate production approval):
 
 1. Review/apply `migrations/2026-11-09-max-interpretation-shadow.sql` through the
    governed migration workflow. Verify JEV schema readiness separately.
-2. Configure `MAX_INTERPRETATION_SHADOW=true`. Select an approved
-   `MAX_INTERPRETATION_MODEL` (fallback `MAX_WORKSPACE_MODEL`, then the existing
-   presentation default `claude-sonnet-4-6`). The managed service must already
-   provide `ANTHROPIC_API_KEY`, `DATABASE_URL`, and its normal API spend controls.
-   No new provider credentials or model service is introduced.
-3. Schedule governed deletion of rows older than 90 days before rollout.
+2. Configure `MAX_INTERPRETATION_MODEL` (required; there is no fallback model —
+   unset means no calls) and then `MAX_INTERPRETATION_SHADOW=true`. The managed
+   service must already provide `ANTHROPIC_API_KEY`, `DATABASE_URL`, and its
+   normal API spend controls. No new provider credentials or model service is
+   introduced. Full checklist: `docs/P0-MAX-SEMANTIC-SHADOW-READINESS.md`.
+3. Schedule `scripts/maxInterpretationShadowPurge.js --apply` (90-day retention) before rollout.
 4. Review metadata with `node scripts/maxInterpretationShadowReview.js TENANT`.
    Correct operational inspection comparison depends on the JEV PR. The route
    comparison is deliberately coarse: it is a triage signal, not a semantic judge.

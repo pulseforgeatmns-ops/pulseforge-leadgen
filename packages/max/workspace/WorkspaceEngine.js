@@ -619,8 +619,21 @@ class WorkspaceEngine {
       this._decisionService, input,
       input?.sessionId ? this._sessions.get(input.sessionId) : null,
     );
+    // Default-off: with no interpretation context the JEV shadow is passed
+    // unchanged. When the semantic observer is enabled, the one production
+    // hook that hands it a resolved mission (captureMission) also gives the
+    // observer that mission's pending-decision KIND, after JEV has taken its
+    // own snapshot. Neither observer can affect the turn.
+    const productionShadow = interpretationContext
+      ? {
+        captureMission: (mission) => {
+          try { shadow?.captureMission(mission); } catch (_) { /* shadow only */ }
+          this._interpretationShadow.captureMission(interpretationContext, mission);
+        },
+      }
+      : shadow;
     try {
-      const result = await this._askProduction(input, shadow);
+      const result = await this._askProduction(input, productionShadow);
       // P0 — remember which execution-approval package this session was shown.
       acquisitionMissionExecution.recordPresentedExecutionDecision(
         result && result.sessionId ? this._sessions.get(result.sessionId) : null,
