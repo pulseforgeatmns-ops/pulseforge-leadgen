@@ -1,7 +1,18 @@
 # P0-MAX-REASONING-001 — Integration readiness and acceptance report
 
-Status: **reviewable. Nothing merged, deployed, migrated or enabled.** Date: 2026-11-18.
+Status: **reviewable. Nothing merged, deployed, migrated or enabled.** Date: 2026-11-18 (remediation phase added the same day; see §R).
 Integration branch: `claude/p0-max-reasoning-001-integration`, which is `origin/main` (`ee88320`) plus PRs #1131–#1135 merged in order, CI promotion, and this report. The branch is for verification only. Do not merge it; merge the five PRs themselves.
+
+## R. Remediation phase (Nov 18)
+
+| Item | PR | State |
+|---|---|---|
+| Field-note correction extracted from #1133 | **#1137** | Open. The two field-note commits are reverted on #1133 (`f5e7efe3`, `b8b300a8`) and its docs now point to #1137. #1133 does not depend on it. Until #1137 merges, `maxConversationMemory` M3 keeps failing on `main` exactly as before. |
+| R-1 retraction / contradiction fix | **#1138** | Open. Fail-closed. 279 tests at all six decision kinds and all four reachable gates; 133 fail without the fix. |
+| Gate-bound approval semantics | **#1139** | Open. Default-off `MAX_GATE_BOUND_APPROVAL`, narrowing only. See `docs/P0-MAX-GATE-BOUND-APPROVAL.md`. |
+| Verification-only integration PR | **#1136** (draft) | Do not merge. CI runs on the combined set: PRs 1–5 + #1137 + #1138 + #1139. |
+
+Recommended merge order: #1137 and #1138 (independent of each other and of PRs 1–5), then #1131 → #1135, then #1139 (flag off). Merge only with owner approval.
 
 ## 0. Verdict
 
@@ -9,8 +20,8 @@ Integration branch: `claude/p0-max-reasoning-001-integration`, which is `origin/
 |---|---|
 | Code merge readiness (PRs 1–5) | **Ready for human review, in order 1 → 5.** All five merge cleanly onto current `main` once PR 1/PR 2 is resolved as documented (§1.2). No production behavior changes while the flags are off (§1.3). |
 | Activation readiness (shadow, ledger, frame reasoning) | **Not ready.** The model evaluation has not run (§4), so no §10 promotion gate is measured. Frame reasoning and the evidence registry are not wired into routing by design. |
-| Authorization safety | **No new authority path.** Two pre-existing defects listed as open were already fixed on `main` (#1096). **One new legacy-path defect class (R-1) was found** and is recorded, not fixed (§3). |
-| Blockers before any rollout | The model evaluation (needs the dev key in the environment); a separate fix PR for R-1; a decision on splitting out the field-note fix (§1.4). |
+| Authorization safety | **No new authority path.** Two pre-existing defects listed as open were already fixed on `main` (#1096). The new legacy-path class R-1 is **fixed in #1138** (§3). Gate-bound approvals are available default-off (#1139). |
+| Blockers before any rollout | The model evaluation (needs the dev key as an environment variable, §4); review of #1137/#1138/#1139; CI on #1136. |
 
 ## 1. Phase 1 — integration review
 
@@ -49,7 +60,7 @@ The default-off parity test (`conversationLedgerRecovery.test.js`) shows identic
 PR 3 includes a change to `packages/max/understanding/conversationMemoryPersistence.js`: a contact correction now supersedes that contact's previous `ACTIVE_CONTACT` records. This **changes existing state ingestion**, and it is live code, not behind the ledger flag.
 
 - **Regression found and fixed during this review (`efe0b5d`).** The first version collapsed two different people with the same name at different accounts into one account-less record, which lost data. The fix supersedes only when every active and replacement record of that name involves at most one account. If the check is ambiguous, or the memory load fails, it supersedes nothing. Covered by M3b (two Daves kept), M3c (unreadable memory supersedes nothing) and a Postgres case.
-- **Recommendation:** move this change into its own small PR ahead of PR 3, so it gets a reviewer who owns field-note memory and its own rollback. PR 3's ledger does not depend on it.
+- **Done:** extracted into **#1137** and reverted on #1133.
 
 ### 1.5 PR 3 redundant-correction fix
 
@@ -101,7 +112,7 @@ This file drives the real `WorkspaceEngine.ask()` at the plan, discovery, priori
 | Withdrawn, next turn | "Approved." then "Wait, I take that back." | Holds: neither approves the next gate nor cancels. Nothing undoes the first approval; that is by design, since reversal is an explicit cancel. |
 | Stale approval across restart | Package shown → restart → recover → "Approved." | **Safe, but defended late.** Chat still submits `APPROVE_EXECUTION`, with no reviewed revision, because the presentation binding is intentionally not restored. The TME stage rolls it back as unreviewed: nothing committed, mission unchanged, reply "Not executed … Nothing was approved or sent." |
 | Pending decision across recovery | Approve the plan → restart → "Same as before." / "Do what I approved earlier." / "Continue with what we decided." | Hold. Recovered decisions carry `authority: none`, `consumableApprovals` is empty, and the pending decision comes from the mission store. |
-| Replayed bare approval | "Approved." sent twice at the plan gate | Approves plan, **then discovery**. Pinned as characterization. Not a defect by current design, but a **product decision**: chat approvals are not bound to the gate card they answer, and there is no message idempotency key. Discovery approval can spend provider budget. |
+| Replayed bare approval | "Approved." sent twice at the plan gate | Approves plan, **then discovery**. Pinned as characterization. #1139 binds approvals to the presented decision, which closes drift, revision, other-surface and never-shown cases. A double send is **not** closed, because the first answer presents the next gate. That needs a client message id or a `decisionKey` echoed by the UI (follow-up). |
 
 **Defect R-1: unmarked retraction idioms.** A retraction with no negation or uncertainty marker is ignored, so the earlier clause resolves:
 - "Go ahead. Scratch that." / "Forget it." / "Strike that." dispatch the gate's approval at every gate. After the package is shown, that includes `APPROVE_EXECUTION`, which consumes the approval.
@@ -109,10 +120,10 @@ This file drives the real `WorkspaceEngine.ask()` at the plan, discovery, priori
 
 Exposure today is limited, because outbound is in maintenance with `recovery_kill_switch` active. But plan, discovery and prioritization approvals advance mission state, and a cancellation is a durable state change.
 
-Recommended fix, as a separate reviewable PR in the style of #1096, with no new phrase list:
+**Fixed in #1138.** The approach as originally recommended:
 - In `PendingDecisionResolver`, a clause that follows an authorization and refers back to it ("that", "it") with a retraction or dismissal verb makes the turn AMBIGUOUS, which means a confirmation request.
 - Anaphoric "cancel that" after an approval must not resolve to `CANCEL_PLAN`.
-- Remove the `todo` markers in the new suite as the acceptance test.
+- Remove the `todo` markers in the new suite as the acceptance test (done on this branch; the suite passes 116/116 with #1138 merged in).
 
 A durable fix is the two-key gate (architecture doc §3.4, Phase F).
 
@@ -133,7 +144,9 @@ R-1 is a defect of the **legacy** deterministic resolver, not of the new path. O
 - **$0 spent on evaluation.** The session's own agent usage was about $0.43; that is not evaluation spend.
 - Nothing was substituted, and no production credential was used.
 - No accuracy, category, safety, degradation, latency, cost or instability figures exist. **The 85% promotion gate is unmeasured.** Do not treat the lexical 53.2% as a stand-in.
-- To unblock: add the dedicated development key to the environment (environment settings, or the secure credential form; never chat). Then re-send the evaluation request (`claude-sonnet-5-5`, 62 × 3, `--max-usd 7`; dry-run plan first) to session `session_01WVeSoRYsjBdwba1Xi82Pj2`, or start a new one.
+- Re-checked in the remediation phase: the environment still has **no environment variables and no network secrets**.
+- Network secrets cannot hold a Claude API key: they are never added to requests to `api.anthropic.com`. The key can only go in an **environment variable**, where everyone who uses the environment, and commands in its sessions, can read it.
+- To unblock: in the environment settings, add `ANTHROPIC_API_KEY` = the dedicated development key, then start a new session; an existing session does not pick it up. Then re-send the evaluation request (`claude-sonnet-5-5`, 62 × 3, `--max-usd 7`; dry-run plan first).
 
 ## 5. Evidence quality and blind spots (PR 4/5)
 
@@ -181,17 +194,17 @@ The ledger's `resolveFocus()` returns `memberIds`, while stored referents use `m
 ## 9. Explicit blockers
 
 1. No model-backed evaluation: the key is missing from the environment, and $0 has been spent on it.
-2. R-1 retraction defect (legacy path) is open. A fix PR is needed before relying on chat approvals more broadly.
-3. Field-note ingestion change is bundled in PR 3. Recommend splitting it out.
+2. R-1 is fixed in #1138, pending review. Structured plan clarifications capture uncertain free text ("Not sure.") as the field value. That is input quality, not authority (plan approval is still required), and it is not yet addressed.
+3. Field-note ingestion change: split out into #1137, pending review.
 4. Pre-existing failing tests on `main`: `maxOperationalReadiness` (stale assertion) and `aoAdminImpersonation`. They are unrelated, but they keep the full suite from being green.
 5. GitHub CI has not yet run on the integrated set.
 6. JEV production shadow persistence is still failing (pre-existing; blocks the Phase F corpus).
-7. Product decision pending: whether chat approvals should be bound to the gate card they answer (the replayed "Approved." case).
+7. Gate-bound approvals (#1139) are default-off. Enabling them is a chat contract change: existing tests that approve without presenting the decision need a presenting turn first (counted in #1139). Duplicate-message protection needs a client-side id.
 
 ## 10. Recommended next actions
 
 1. Review and merge PRs #1131 → #1135 in order, after splitting out the field-note change. Keep all flags off.
-2. Open the R-1 fix PR, using the new suite as acceptance.
+2. Review #1137 and #1138 (R-1), then #1139 (gate binding, flag off).
 3. Add the dev key to the environment and run the authorized evaluation. Then decide on the staging shadow.
 4. Close #1094 with a reference to #1096. Fix or update the two stale tests on `main`.
 5. Align the ledger `members`/`memberIds` naming before any production consumer.

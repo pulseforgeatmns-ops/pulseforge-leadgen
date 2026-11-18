@@ -15,8 +15,8 @@
  *   - pending decisions across session recovery: the decision stays where the
  *     mission store puts it and recovered memory never authorizes anything.
  *
- * It changes no authorization behaviour. A case that does not hold is recorded
- * with `todo` naming the defect so it stays visible without failing the lane.
+ * It changes no authorization behaviour. R-1 (found here) is fixed in #1138;
+ * gate-bound approvals are #1139 (`MAX_GATE_BOUND_APPROVAL`, default-off).
  */
 
 const { describe, it, beforeEach } = require('node:test');
@@ -52,23 +52,8 @@ const AMBIGUOUS = [
   'Not sure.',
 ];
 
-// Defect R-1 (found by this suite, not fixed here — authorization behaviour
-// changes need their own reviewed fix): a retraction idiom that carries no
-// negation or uncertainty marker is ignored, so the preceding approval
-// resolves. At every gate "Go ahead. Scratch that." dispatches the approval
-// (APPROVE_EXECUTION after the package is shown, consuming it), and
-// "Approve it. Cancel that." dispatches CANCEL_PLAN (the anaphoric "that"
-// meant the approval, not the mission). Held today: "Never mind", "On second
-// thought, don't", "no, wait", "Disregard that".
-const RETRACTION_DEFECT = 'R-1: unmarked retraction idiom resolves the preceding approval (or cancels)';
-const KNOWN_R1 = new Set([
-  'Go ahead. Scratch that.',
-  'Go ahead. Forget it.',
-  'Approved. Strike that.',
-  'Approve it. Cancel that.',
-]);
-const todoFor = (q) => (KNOWN_R1.has(q) ? { todo: RETRACTION_DEFECT } : {});
-
+// Defect R-1 (unmarked retraction idioms), found by this suite, is fixed in
+// #1138 (p0AuthorizationRetraction.test.js); these cases now hold.
 const WITHDRAWN_SAME_TURN = [
   'Approved. Actually, wait — hold on.',
   'Yes, go ahead. Never mind.',
@@ -152,7 +137,7 @@ describe('authorization readiness — ambiguous and withdrawn approvals (resolve
   for (const kind of GATES) {
     const mission = { id: 'm_r', stage: 'x', pendingOperatorDecision: { kind, prompt: 'Decide.' } };
     for (const q of [...AMBIGUOUS, ...WITHDRAWN_SAME_TURN]) {
-      it(`${kind}: "${q}" resolves no authority`, todoFor(q), () => {
+      it(`${kind}: "${q}" resolves no authority`, () => {
         const r = resolvePendingOperatorDecision(q, mission);
         assert.notEqual(r.resolvedFromPendingDecision, true, q);
         assert.equal(r.executionIntent || null, null, q);
@@ -176,7 +161,7 @@ describe('authorization readiness — end to end', { concurrency: false }, () =>
 
   for (const kind of GATES) {
     for (const q of [...AMBIGUOUS, ...WITHDRAWN_SAME_TURN]) {
-      it(`${kind}: "${q}" dispatches nothing and leaves the decision pending`, todoFor(q), async () => {
+      it(`${kind}: "${q}" dispatches nothing and leaves the decision pending`, async () => {
         const c = await missionAt(kind);
         amo.clearExecutionRouterAudit();
         const before = c.fingerprint();
@@ -227,6 +212,7 @@ describe('authorization readiness — pending decisions across session recovery'
     assert.equal(recovered.recovered, true);
     const s = second._sessions.get(c.sessionId);
     assert.equal(s.context.presentedExecutionDecision, undefined, 'the reviewed-package binding is not memory');
+    assert.equal(s.context.presentedDecision, undefined, 'the gate-bound presentation is not memory either');
     amo.clearExecutionRouterAudit();
     const before = c.fingerprint();
     const r = await second.ask({ sessionId: c.sessionId, question: 'Approved.' });
