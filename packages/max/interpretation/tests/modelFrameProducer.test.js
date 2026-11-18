@@ -102,6 +102,22 @@ describe('ModelFrameProducer (prototype, injected client)', () => {
     assert.equal(frame.executionCandidate, false);
   });
 
+  it('does not turn an approval-status question into an ambiguous decision', async () => {
+    const client = fakeClient(ok(FRAME));
+    const { frame } = await new ModelFrameProducer({ client, model: TEST_MODEL }).produce({ text: 'Has counsel approved the plan yet?', context: CONTEXT });
+    assert.equal(frame.intent, 'question');
+    assert.equal(frame.clarificationRequired, false);
+  });
+
+  it('preserves a model prohibition when hold language is already interpreted safely', async () => {
+    const client = fakeClient(ok({ ...FRAME, intent: 'prohibition', requestedOutcome: 'action', requestedAction: { verb: 'send', targetCandidateId: 'pd_plan', polarity: 'negated' } }));
+    const { frame } = await new ModelFrameProducer({ client, model: TEST_MODEL }).produce({ text: 'Hold sending until further notice.', context: CONTEXT });
+    assert.equal(frame.intent, 'prohibition');
+    assert.equal(frame.requestedAction.verb, 'send');
+    assert.equal(frame.requestedAction.polarity, 'negated');
+    assert.equal(frame.clarificationRequired, false);
+  });
+
   it('degrades to the lexical producer on timeout and never nominates execution', async () => {
     const client = fakeClient(() => new Promise(() => {}));
     const { frame, telemetry } = await new ModelFrameProducer({ client, model: TEST_MODEL, timeoutMs: 20 }).produce({ text: 'Approve the plan.', context: CONTEXT });
