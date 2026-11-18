@@ -56,12 +56,12 @@ The ledger tracks what an operator conversation is **still about**, **what chang
 
 ## Field-note memory (M3) — root cause and interaction
 
-`test/maxConversationMemory.test.js` M3 failed on `main` because the test read with the wall clock while writing with a fixed fixture clock, so its 7-day records expired once real time passed the fixture date. Fixing the clock exposed two real defects in `packages/max/understanding`. Both are fixed in a separate commit so they can be split out:
+`test/maxConversationMemory.test.js` M3 failed on `main` because the test read with the wall clock while writing with a fixed fixture clock, so its 7-day records expired once real time passed the fixture date. Fixing the clock exposed two real defects in `packages/max/understanding`. They are fixed in **#1137**, a separate PR (it changes live field-note ingestion, so it is reviewed on its own). This PR does not depend on it; until #1137 merges, M3 keeps failing on `main` exactly as before:
 
 - the wrong supersede key (`dm:<priorValue>` instead of `dm:<contact>`);
 - a stale same-name contact record left active beside the corrected one.
 
-The fix also aligns the in-memory repository with Postgres when a record is re-asserted.
+#1137 also aligns the in-memory repository with Postgres when a record is re-asserted, and never merges two same-name contacts at different accounts.
 
 **Interaction:** field-note memory owns facts about contacts and accounts and their corrections. The ledger owns what the conversation refers to. The ledger never stores contact facts, so there is one correction mechanism per kind of thing.
 
