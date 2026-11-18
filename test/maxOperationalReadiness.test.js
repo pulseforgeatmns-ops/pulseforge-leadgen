@@ -113,3 +113,12 @@ test('readiness route is authenticated, role restricted, no-store and fail close
   assert.equal(failed.status, 503);
   assert.deepEqual(failed.body, { error: 'max_operational_readiness_unavailable', readOnly: true });
 });
+
+test('readiness reports the explicit interpreter model and never a fallback (P0-MAX-REASONING-001 PR 2)', async () => {
+  const base = { MAX_INTERPRETATION_SHADOW: 'true', MAX_WORKSPACE_MODEL: 'claude-opus-5-5' };
+  const unset = await getMaxOperationalReadiness({ db: database(), env: base });
+  assert.deepEqual(unset.semanticShadow.model, { configured: false, id: null, reason: 'interpreter_model_not_configured' });
+  assert.equal(unset.semanticShadow.activeRouting, false);
+  const set = await getMaxOperationalReadiness({ db: database(), env: { ...base, MAX_INTERPRETATION_MODEL: 'claude-sonnet-5-5' } });
+  assert.deepEqual(set.semanticShadow.model, { configured: true, id: 'claude-sonnet-5-5' });
+});

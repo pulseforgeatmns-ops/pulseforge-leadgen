@@ -13,7 +13,7 @@ test('PostgreSQL: shadow migration replay, validated frame persistence, tenant-s
  t.after(async()=>{await db.end();await instance.stop();});
  const sql=fs.readFileSync('migrations/2026-11-09-max-interpretation-shadow.sql','utf8');
  await db.query(sql);await db.query(sql);
- const observer=new ShadowInterpreter({env:{MAX_INTERPRETATION_SHADOW:'true',DATABASE_URL:instance.connectionString,DATABASE_SSL:'false'},producer:new ModelFrameProducer({client:{messages:{create:async()=>{throw Error('offline');}}}})});
+ const observer=new ShadowInterpreter({env:{MAX_INTERPRETATION_SHADOW:'true',DATABASE_URL:instance.connectionString,DATABASE_SSL:'false'},producer:new ModelFrameProducer({model:'claude-test-model',client:{messages:{create:async()=>{throw Error('offline');}}}})});
  t.after(()=>observer.close());
  observer.observe({context:{tenantId:'t1',candidates:[],focusIds:[],pendingDecisionId:null},text:'An unfamiliar inspection request',result:{route:'inspection'}});
  await observer.drain();

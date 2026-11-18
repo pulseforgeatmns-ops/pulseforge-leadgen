@@ -24,9 +24,9 @@ const { redactText } = require('../../../decision-service/privacy');
 const { TURN_FRAME_OUTPUT_SCHEMA, validateTurnFrame } = require('../TurnFrame');
 const { produceLexicalFrame } = require('./LexicalFrameProducer');
 
-// The audit (§7) recommends starting with Haiku 5.5 and comparing Sonnet 5.5
-// on the suite; the model is configuration, not code.
-const DEFAULT_MODEL = 'claude-haiku-5-5';
+// The model is explicit configuration (interpreterModel.js,
+// MAX_INTERPRETATION_MODEL), never an implicit default here.
+const DEFAULT_MODEL = null;
 const DEFAULT_TIMEOUT_MS = 1500;
 const MAX_TRANSCRIPT_LINES = 6;
 const MAX_TOKENS = 600;
@@ -98,11 +98,14 @@ function withTimeout(promise, ms, controller) {
 
 class ModelFrameProducer {
   /**
-   * @param {{ client: { messages: { create: Function } }, model?: string, timeoutMs?: number }} options
+   * @param {{ client: { messages: { create: Function } }, model: string, timeoutMs?: number }} options
    */
   constructor({ client, model = DEFAULT_MODEL, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     if (!client || !client.messages || typeof client.messages.create !== 'function') {
       throw new Error('ModelFrameProducer requires an injected Anthropic-compatible client');
+    }
+    if (typeof model !== 'string' || !model.trim()) {
+      throw new Error('ModelFrameProducer requires an explicit model (MAX_INTERPRETATION_MODEL)');
     }
     this._client = client;
     this.model = model;
