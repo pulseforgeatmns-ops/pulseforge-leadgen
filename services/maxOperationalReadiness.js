@@ -3,7 +3,7 @@
 const { inspectShadowSchema } = require('../packages/decision-service/shadowSchema');
 const { observerHealthSnapshot } = require('../packages/max/observability/ObserverHealth');
 const { loadRecoveryState } = require('./anchorEmailRecovery');
-const { resolveInterpreterModel } = require('../packages/max/interpretation/interpreterModel');
+const { resolveInterpreterModel, resolveInterpreterProvider } = require('../packages/max/interpretation/interpreterModel');
 
 async function tableCatalog(db) {
   const { rows } = await db.query(`SELECT
@@ -33,6 +33,13 @@ function semanticModel(env) {
   return resolved.configured
     ? { configured: true, id: resolved.model }
     : { configured: false, id: null, reason: resolved.reason };
+}
+
+function semanticProvider(env) {
+  const resolved = resolveInterpreterProvider(env);
+  if (!resolved.configured) return { configured: false, id: null, reason: resolved.reason };
+  const credentialPresent = resolved.provider === 'gemini' ? Boolean(env.GEMINI_API_KEY) : Boolean(env.ANTHROPIC_API_KEY);
+  return { configured: true, id: resolved.provider, explicit: resolved.explicit, credentialPresent };
 }
 
 function authenticatedRecoveryCapability() {
@@ -99,6 +106,8 @@ async function getMaxOperationalReadiness({ db, env = process.env } = {}) {
       configured: enabled(env, 'MAX_INTERPRETATION_SHADOW'),
       // Explicit model only (no fallback); enabled without a model = no calls.
       model: semanticModel(env),
+      // Explicit provider when set; unset keeps the historical transport. Booleans only, never a credential.
+      provider: semanticProvider(env),
       activeRouting: false,
       schemaReady: Boolean(catalog.max_interpretation_shadow),
       persistence: semantic,

@@ -1,9 +1,22 @@
 'use strict';
 const { randomUUID } = require('node:crypto');
 const { ModelFrameProducer } = require('./producers/ModelFrameProducer');
-const { resolveInterpreterModel, servedModelMatches } = require('./interpreterModel');
+const { resolveInterpreterModel, resolveInterpreterProvider, servedModelMatches } = require('./interpreterModel');
+const { createGeminiProvider } = require('./providers');
 const { observedRoute } = require('../../decision-service/observedRoute');
-const { estimateClaudeUsage } = require('../../../utils/apiPricing');
+const { estimateClaudeUsage, GEMINI_RATES } = require('../../../utils/apiPricing');
+
+/** Cost of one observed call, priced by its provider from the served model (null when unpriced). */
+function estimateObservationUsd(provider, model, usage) {
+  if (!usage) return null;
+  if (provider === 'gemini') {
+    const rates = GEMINI_RATES[model];
+    if (!rates || usage.input_tokens == null) return null;
+    const output = (usage.output_tokens || 0) + (usage.thinking_tokens || 0);
+    return (usage.input_tokens * rates[0] + output * rates[1]) / 1e6;
+  }
+  return estimateClaudeUsage(model, usage);
+}
 const { recordObserverHealth } = require('../observability/ObserverHealth');
 const { OPERATOR_DECISION_KINDS } = require('../../acquisition-mission/types');
 
@@ -105,10 +118,30 @@ class ShadowInterpreter {
         this.emit({ event: 'MAX_INTERPRETATION_FAILURE', reason: resolved.reason });
         return;
       }
-      const Client = require('../../../utils/meteredAnthropic').forAgent('max-interpretation-shadow');
-      // Bind spend accounting to each observation's tenant, never a shared mutable tenant.
-      const client = new Client({ maxRetries: 0 }, { tenantId: context.tenantId });
-      producer = new ModelFrameProducer({ client, model: resolved.model });
+      const transport = resolveInterpreterProvider(this.env);
+      if (!transport.configured) {
+        this.counts.notConfigured++;
+        recordObserverHealth('semantic_shadow', 'failure', {reason:transport.reason});
+        this.emit({ event: 'MAX_INTERPRETATION_FAILURE', reason: transport.reason });
+        return;
+      }
+      if (transport.provider === 'gemini') {
+        // Shared spend ledger (default reserve/settle), bound to this observation's tenant.
+        const { createGeminiClient } = require('../../../utils/meteredGemini');
+        const client = createGeminiClient({ apiKey: this.env.GEMINI_API_KEY, agentName: 'max-interpretation-shadow', tenantId: context.tenantId });
+        if (!client) {
+          this.counts.notConfigured++;
+          recordObserverHealth('semantic_shadow', 'failure', {reason:'interpreter_credentials_missing'});
+          this.emit({ event: 'MAX_INTERPRETATION_FAILURE', reason: 'interpreter_credentials_missing' });
+          return;
+        }
+        producer = new ModelFrameProducer({ provider: createGeminiProvider({ client, tenantId: context.tenantId }), model: resolved.model });
+      } else {
+        const Client = require('../../../utils/meteredAnthropic').forAgent('max-interpretation-shadow');
+        // Bind spend accounting to each observation's tenant, never a shared mutable tenant.
+        const client = new Client({ maxRetries: 0 }, { tenantId: context.tenantId });
+        producer = new ModelFrameProducer({ client, model: resolved.model });
+      }
     }
     const task = new Promise(resolve => setImmediate(resolve))
       .then(() => this.run(producer, context, text, legacy))
@@ -132,11 +165,15 @@ class ShadowInterpreter {
       pendingDecisionBound: Boolean(context.pendingDecisionId),
       pendingDecisionKind: context.pendingDecisionKind || null,
       latencyMs: telemetry.latencyMs, usage: telemetry.usage,
+      provider: telemetry.provider || 'anthropic',
       model: telemetry.model, servedModel,
-      modelMismatch: servedModel ? !servedModelMatches(telemetry.model, servedModel) : null,
+      modelMismatch: servedModel ? !servedModelMatches(telemetry.model, servedModel, telemetry.provider || 'anthropic') : null,
       stopReason: telemetry.stopReason || null,
       truncated: degradedReason === 'stop_reason_max_tokens',
-      estimatedUsd: telemetry.usage ? estimateClaudeUsage(servedModel || telemetry.model, telemetry.usage) : null,
+      estimatedUsd: estimateObservationUsd(telemetry.provider || 'anthropic',
+        // A served version that matches the requested id is priced at the requested model's rate.
+        servedModel && !servedModelMatches(telemetry.model, servedModel, telemetry.provider || 'anthropic') ? servedModel : (servedModel && (telemetry.provider || 'anthropic') === 'anthropic' ? servedModel : telemetry.model),
+        telemetry.usage),
       ambiguityCount: frame.ambiguities.length, failure: degradedReason,
       // Informational classification only; never an authority token.
       shadowOnly: true };
