@@ -119,6 +119,18 @@ describe('corrections', () => {
     assert.equal(s.conversationLedger.corrections.length, 1);
   });
 
+  it('a correction to the scope the subject already has is a confirmation, not an open question', () => {
+    const rec = recorder(); const s = session(LEVI);
+    turn(rec, s, "Show me Levi's five strongest existing prospects.", prospects(LEVI, FIVE));
+    const before = focus(s, rec).referent;
+    turn(rec, s, 'No, I meant the existing prospects, not new leads.', owner('reasoning'));
+    const l = s.conversationLedger;
+    assert.equal(focus(s, rec).referent.id, before.id, 'nothing rebound');
+    assert.equal(l.corrections.length, 0);
+    assert.ok(!l.openQuestions.some((q) => q.kind === 'unresolved_correction'));
+    assert.ok(l.constraints.some((c) => c.kind === 'preference' && c.value === 'record_scope:existing'));
+  });
+
   it('a correction that does not say what to change opens a question instead of guessing', () => {
     const rec = recorder(); const s = session(LEVI);
     turn(rec, s, 'Show me the strongest prospects.', prospects(LEVI, FIVE));

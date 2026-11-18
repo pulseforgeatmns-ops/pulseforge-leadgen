@@ -249,6 +249,11 @@ function applyTurn(ledger, turn = {}, now = Date.now()) {
       l.corrections.push({ turn: l.turn, at: nowIso, kind: 'referent', fromId: target ? target.id : null, toId: frameTarget.candidateId, before: null, after: null });
       pushFocus(l, frameTarget.candidateId);
       if (target) l.focus = l.focus.filter((id) => id !== target.id);
+    } else if (target && discourse.scope && SCOPES.includes(discourse.scope) && (target.scope || null) === discourse.scope) {
+      // "No, I meant the existing ones" when the subject already is the
+      // existing ones: a confirmation, not an unresolved correction. Record
+      // the stated preference; rebind nothing.
+      addConstraint(l, { kind: 'preference', action: null, value: `record_scope:${discourse.scope}`, scope: target.id, turn: l.turn, at: nowIso });
     } else if (relation === 'correction') {
       // Known to be a correction, but not of what: ask, never guess.
       addOpenQuestion(l, 'unresolved_correction', target ? target.id : null);
