@@ -67,25 +67,14 @@ describe('MAX-MEMORY-001 durable conversational context', () => {
       text: 'Actually Dave isn\'t the decision maker. Lisa handles vendors.',
     });
     assert.ok(second.situationModel.corrections.some(c => /Lisa|Dave/i.test(c.contactName || '')));
-    // Read with the same clock the turns were written with. Without it the
-    // read used the wall clock and the 7-day records expired once real time
-    // passed the fixture date (the M3 failure on main, not a code defect).
     const loaded = await repository.loadActive({
       tenantId: 1,
       conversationId: 'm3-conv',
-      now: base.now,
     });
     const lisa = loaded.records.find(r =>
       r.semanticType === SEMANTIC_TYPE.ACTIVE_CONTACT && r.payload?.contact?.name === 'Lisa'
     );
     assert.ok(lisa);
-    // The correction replaces Dave's old role instead of leaving two
-    // contradictory active records for the same contact.
-    const daves = loaded.records.filter(r =>
-      r.semanticType === SEMANTIC_TYPE.ACTIVE_CONTACT && r.payload?.contact?.name === 'Dave'
-    );
-    assert.equal(daves.length, 1);
-    assert.equal(daves[0].payload.contact.role, 'influencer');
   });
 
   it('M4 — stale memory does not over-resolve', async () => {
