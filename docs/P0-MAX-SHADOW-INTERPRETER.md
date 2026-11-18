@@ -52,10 +52,13 @@ not evidence of model understanding or a promotion score.
 Later measured evaluation, in the configured managed environment:
 
 ```
-node scripts/maxInterpretationEval.js --model --extended --model-id APPROVED_MODEL --repeats 3 --json
+node scripts/maxInterpretationEval.js --model --extended --model-id APPROVED_MODEL --repeats 3 --plan      # price it, no calls
+node scripts/maxInterpretationEval.js --model --extended --model-id APPROVED_MODEL --repeats 3 --max-usd APPROVED_CAP --json
 ```
 
-Capture the model ID/version, fixture revision, p50/p95 latency, degraded rate,
+`--model-id` and `--max-usd` are required (no default model; an unpriced model is refused).
+Spend is capped in-process, not through the shared DB ledger. See
+`docs/P0-MAX-REASONING-001-BASELINE.md`. Capture the model ID/version, fixture revision, p50/p95 latency, degraded rate,
 tokens/cache usage and ledger cost. The original architecture's numeric promotion
 gates still apply; no readiness is inferred from the lexical baseline. An
 independently authored holdout remains required before active routing promotion.
