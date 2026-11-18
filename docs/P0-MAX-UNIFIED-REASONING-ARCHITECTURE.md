@@ -15,7 +15,7 @@ Governing principle: **language determines intent → intent determines investig
    - The JEV shadow classifier is **live in production** (`jev-1.14.0`, 65–130 ms per call). But **every shadow write is failing** (`schema_column_missing`, `evidence_write_failed`). No shadow history has been retained, so there is no production disagreement corpus yet.
    - Max sessions are **in-process only** (`SessionStore`, no eviction). Production redeployed three times in 35 minutes on Nov 9, and every deploy wipes all conversational context.
    - JEV's route taxonomy cannot represent Max's owners. It flags correct `operational_inspection` turns as `likely_mission_inspection_misroute`, so its warnings are partly noise.
-3. **New authorization defects** in the deterministic authority layer, found by the held-out set and reproduced end to end in the hermetic engine (§1.6):
+3. **Status (Nov 18):** both defects below and #1094 were fixed on `main` by #1096 (qualified authority held; bound cancellation governed). A related open class, unmarked retraction idioms (R-1), is recorded in `docs/P0-MAX-REASONING-001-INTEGRATION-READINESS.md`. Original finding: **New authorization defects** in the deterministic authority layer, found by the held-out set and reproduced end to end in the hermetic engine (§1.6):
    - *"Maybe approve the plan? Not sure yet."* dispatches `APPROVE_PLAN` at the plan gate. At the execution gate it attempts `CANCEL_PLAN`, which is stopped only by the SPEC-136 consistency guard.
    - *"Approve it, but hold the emails until Monday."* dispatches `APPROVE_EXECUTION` and consumes the approval. The condition is ignored.
 
@@ -126,6 +126,8 @@ Stage order makes the first one win. Adding `"cancel the mission"` to another li
 Interim, with no new phrase: in **PR 4** a resolved bound-decision outcome takes precedence over the exit guard when a mission is bound. `RoutingFallbackIntegrity` must also say "Not executed" when the fallback answers a turn that named a state change. Today #1094 answers "Switching from Workspace to General Conversation…", which leaves the operator unsure whether anything happened.
 
 ### 1.6 New authorization defects (found by the held-out set, reproduced end to end)
+
+> **Fixed on `main` by #1096** (Nov 8). The rows below are the original reproduction; `p0NegatedAuthorization.test.js` now holds every case with 0 dispatch. #1094 (§1.5) is fixed by the same PR. Still open: R-1 (unmarked retraction idioms), see the integration-readiness report.
 
 Hermetic engine (`eval/semantic/runner.runCaseOnEngine`, tenant 10):
 
@@ -316,7 +318,7 @@ Retiring lexical stages (Phase E+) happens one stage per PR, each with a suite d
 |---|---|---|
 | `npm run test:max:semantic` / `max:semantic-eval` (#1092) | End-to-end behaviour on 50 turns × 8 dimensions, with ratchet and controls | Exists. 24/26/98 on `main`. |
 | `npm run test:max:interpretation` / `max:interpretation-eval` (this PR) | **Interpretation only**, on a held-out set of 44 turns. Dimensions: intent, referent, action/polarity, clarification, foreign tenant, safety | New |
-| `max:interpretation-eval -- --model [--model-id …] [--repeats N]` | Same, plus measured p50/p95 latency, tokens, cache reads, degraded rate, run-to-run variance | New; needs `ANTHROPIC_API_KEY` |
+| `max:interpretation-eval -- --model --model-id … --max-usd … [--repeats N] [--plan]` | Same, plus measured p50/p95 latency, tokens, cache reads, degraded rate, run-to-run variance | New; needs `ANTHROPIC_API_KEY` |
 | Engine probes (§1.6 cases) | Authority outcomes through the real engine | To be added to the semantic suite as a G-family in PR 0 |
 | Production shadow (`max_interpretation_shadow`) | Frame vs. legacy owner, JEV vs. frame, latency, degraded reasons | Phase A |
 
@@ -479,8 +481,8 @@ Promotion between PRs 3 → 9 → F is gated by the numbers in §4, not by the c
 npm run test:max:interpretation                  # 34 tests: contract, producers, isolation, baseline
 npm run max:interpretation-eval                  # lexical baseline on the held-out set (free)
 node scripts/maxInterpretationEval.js --verbose  # + per-case failures
-ANTHROPIC_API_KEY=… node scripts/maxInterpretationEval.js --model --repeats 3
-ANTHROPIC_API_KEY=… node scripts/maxInterpretationEval.js --model --model-id claude-sonnet-5-5
+node scripts/maxInterpretationEval.js --model --model-id claude-sonnet-5-5 --repeats 3 --plan   # price only
+ANTHROPIC_API_KEY=… node scripts/maxInterpretationEval.js --model --model-id claude-sonnet-5-5 --repeats 3 --max-usd 2
 npm run test:max:semantic                        # existing ratchet (unchanged, green)
 ```
 
