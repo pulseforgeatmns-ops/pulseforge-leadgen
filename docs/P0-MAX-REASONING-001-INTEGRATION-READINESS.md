@@ -21,7 +21,7 @@ Recommended merge order: #1137 and #1138 (independent of each other and of PRs 1
 | Code merge readiness (PRs 1–5) | **Ready for human review, in order 1 → 5.** All five merge cleanly onto current `main` once PR 1/PR 2 is resolved as documented (§1.2). No production behavior changes while the flags are off (§1.3). |
 | Activation readiness (shadow, ledger, frame reasoning) | **Not ready.** The model evaluation has not run (§4), so no §10 promotion gate is measured. Frame reasoning and the evidence registry are not wired into routing by design. |
 | Authorization safety | **No new authority path.** Two pre-existing defects listed as open were already fixed on `main` (#1096). The new legacy-path class R-1 is **fixed in #1138** (§3). Gate-bound approvals are available default-off (#1139). |
-| Blockers before any rollout | The model evaluation (needs the dev key as an environment variable, §4); review of #1137/#1138/#1139; CI on #1136. |
+| Blockers before any rollout | No model-backed evaluation yet. The Gemini path (§4) needs a small provider-port PR, a dedicated dev key and approval. Review of #1137/#1138/#1139. |
 
 ## 1. Phase 1 — integration review
 
@@ -138,15 +138,12 @@ By construction and by test:
 
 R-1 is a defect of the **legacy** deterministic resolver, not of the new path. On the new path, an R-1 phrasing yields a frame that is at most a nomination, and the reasoner cannot act on it.
 
-## 4. Phase 3 — model evaluation: blocked
+## 4. Phase 3 — model evaluation: not run (provider direction changed)
 
-- A fresh session in the `pulseforge-leadgen` environment (checkout `ccr-9960efae-b7t0gi` @ `81e8ae7`) reported `ANTHROPIC_API_KEY` **not set**. It stopped before `npm ci`, the availability check, the dry-run plan and the paid run.
-- **$0 spent on evaluation.** The session's own agent usage was about $0.43; that is not evaluation spend.
-- Nothing was substituted, and no production credential was used.
-- No accuracy, category, safety, degradation, latency, cost or instability figures exist. **The 85% promotion gate is unmeasured.** Do not treat the lexical 53.2% as a stand-in.
-- Re-checked in the remediation phase: the environment still has **no environment variables and no network secrets**.
-- Network secrets cannot hold a Claude API key: they are never added to requests to `api.anthropic.com`. The key can only go in an **environment variable**, where everyone who uses the environment, and commands in its sessions, can read it.
-- To unblock: in the environment settings, add `ANTHROPIC_API_KEY` = the dedicated development key, then start a new session; an existing session does not pick it up. Then re-send the evaluation request (`claude-sonnet-5-5`, 62 × 3, `--max-usd 7`; dry-run plan first).
+- **Nov 18 direction:** Pulseforge is moving away from Anthropic API dependencies. The Anthropic key and the Sonnet 5.5 evaluation are **not pursued**.
+- Earlier attempt: a fresh session found no key and stopped before any call. **$0 was spent on evaluation.** No credential was requested or stored, and nothing was substituted.
+- **The 85% promotion gate remains unmeasured.** The lexical 53.2% is not a stand-in.
+- **Next path:** run the same evaluation, with the same gates, on Gemini (`gemini-3.1-flash-lite`), the only non-Anthropic text-generation provider already priced and metered in the repo. Recommendation, code changes, cost bound (≤ $0.87 for 62 × 3) and the approvals needed are in `docs/P0-MAX-INTERPRETATION-EVAL-PROVIDER.md`. No provider, credential or configuration has been changed.
 
 ## 5. Evidence quality and blind spots (PR 4/5)
 
@@ -193,7 +190,7 @@ The ledger's `resolveFocus()` returns `memberIds`, while stored referents use `m
 
 ## 9. Explicit blockers
 
-1. No model-backed evaluation: the key is missing from the environment, and $0 has been spent on it.
+1. No model-backed evaluation. Anthropic is no longer pursued; the Gemini path is in `docs/P0-MAX-INTERPRETATION-EVAL-PROVIDER.md`. It needs a provider-port PR, a dedicated dev Gemini key (network secret preferred) and approval of the cap.
 2. R-1 is fixed in #1138, pending review. Structured plan clarifications capture uncertain free text ("Not sure.") as the field value. That is input quality, not authority (plan approval is still required), and it is not yet addressed.
 3. Field-note ingestion change: split out into #1137, pending review.
 4. Pre-existing failing tests on `main`: `maxOperationalReadiness` (stale assertion) and `aoAdminImpersonation`. They are unrelated, but they keep the full suite from being green.
@@ -205,6 +202,6 @@ The ledger's `resolveFocus()` returns `memberIds`, while stored referents use `m
 
 1. Review and merge PRs #1131 → #1135 in order, after splitting out the field-note change. Keep all flags off.
 2. Review #1137 and #1138 (R-1), then #1139 (gate binding, flag off).
-3. Add the dev key to the environment and run the authorized evaluation. Then decide on the staging shadow.
+3. Approve the Gemini evaluation path (provider-port PR, dedicated dev key, $2 cap), run it against the unchanged gates, then decide on the staging shadow. The shadow observer itself is still Anthropic-bound and needs the same port before it can be enabled.
 4. Close #1094 with a reference to #1096. Fix or update the two stale tests on `main`.
 5. Align the ledger `members`/`memberIds` naming before any production consumer.
