@@ -37,11 +37,17 @@ function pct(xs, p) {
 async function runModel() {
   const { forAgent } = require('../utils/meteredAnthropic');
   const { ModelFrameProducer } = require('../packages/max/interpretation/producers/ModelFrameProducer');
+  const { resolveInterpreterModel } = require('../packages/max/interpretation/interpreterModel');
+  if (!arg('--model-id') && !resolveInterpreterModel(process.env).configured) {
+    console.error('--model needs --model-id or MAX_INTERPRETATION_MODEL (no default model).');
+    process.exit(2);
+  }
   const Metered = forAgent('max_interpreter_eval');
   const client = new Metered({ apiKey: process.env.ANTHROPIC_API_KEY });
   const producer = new ModelFrameProducer({
     client,
-    model: arg('--model-id', process.env.MAX_INTERPRETATION_MODEL || process.env.MAX_WORKSPACE_MODEL || 'claude-sonnet-4-6'),
+    // Same explicit-model rule as the observer: --model-id or MAX_INTERPRETATION_MODEL, no default.
+    model: arg('--model-id', resolveInterpreterModel(process.env).model),
     timeoutMs: Number(arg('--timeout-ms', 0)) || undefined,
   });
   const repeats = Math.max(1, Number(arg('--repeats', 1)) || 1);

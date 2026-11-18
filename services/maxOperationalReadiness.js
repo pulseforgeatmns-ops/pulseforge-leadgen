@@ -3,6 +3,7 @@
 const { inspectShadowSchema } = require('../packages/decision-service/shadowSchema');
 const { observerHealthSnapshot } = require('../packages/max/observability/ObserverHealth');
 const { loadRecoveryState } = require('./anchorEmailRecovery');
+const { resolveInterpreterModel } = require('../packages/max/interpretation/interpreterModel');
 
 async function tableCatalog(db) {
   const { rows } = await db.query(`SELECT
@@ -26,6 +27,13 @@ async function metric(db, present, sql) {
 }
 
 function enabled(env, key) { return env[key] === 'true'; }
+
+function semanticModel(env) {
+  const resolved = resolveInterpreterModel(env);
+  return resolved.configured
+    ? { configured: true, id: resolved.model }
+    : { configured: false, id: null, reason: resolved.reason };
+}
 
 function authenticatedRecoveryCapability() {
   const { WorkspaceEngine } = require('../packages/max/workspace/WorkspaceEngine');
@@ -89,6 +97,8 @@ async function getMaxOperationalReadiness({ db, env = process.env } = {}) {
     },
     semanticShadow: {
       configured: enabled(env, 'MAX_INTERPRETATION_SHADOW'),
+      // Explicit model only (no fallback); enabled without a model = no calls.
+      model: semanticModel(env),
       activeRouting: false,
       schemaReady: Boolean(catalog.max_interpretation_shadow),
       persistence: semantic,
