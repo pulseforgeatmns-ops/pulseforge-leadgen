@@ -10,7 +10,9 @@ function scope(tenantId, sessionId) {
 }
 // Explicit projection: never serialize a live SessionStore object. No transcript,
 // customer records, execution policy, package presentation, or approvals survive.
-function project(session, tenantId) {
+// With includeLedger (MAX_CONVERSATION_LEDGER), version 2 adds the bounded
+// ConversationLedger projection; its decisions are history with authority 'none'.
+function project(session, tenantId, { includeLedger = false } = {}) {
   if (session?.context?.tenantId == null || String(session.context.tenantId) !== tenantId) throw new Error('Conversation tenant mismatch');
   const currentFocus = require('../workspace/OperationalQuestionFrame').currentFocus(session,tenantId);
   const focus = identifier(currentFocus?.missionIds?.[0]);
@@ -19,17 +21,36 @@ function project(session, tenantId) {
   const evidence = session.operationalEvidence;
   const evidenceRefs = evidence && String(evidence.tenantId) === tenantId
     ? [{ kind: 'operational_inspection', observedAt: evidence.recordedAt || evidence.asOf || null }].filter(r => Number.isFinite(Date.parse(r.observedAt))) : [];
-  return { version: 1, candidates, focusId: focus, evidenceRefs, requiresEvidenceRefresh: true };
+  const base = { version: 1, candidates, focusId: focus, evidenceRefs, requiresEvidenceRefresh: true };
+  const ledger = includeLedger ? session.conversationLedger : null;
+  if (!ledger || ledger.tenantId !== tenantId || ledger.sessionId !== String(session.id)) return base;
+  const { projectLedger } = require('./ConversationLedger');
+  return { ...base, version: 2, ledger: projectLedger(ledger) };
 }
-function validate(value) {
+const V1_KEYS = ['version','candidates','focusId','evidenceRefs','requiresEvidenceRefresh'];
+function validate(value, scopeIds = null) {
+  if (value && value.version === 2) return validateV2(value, scopeIds);
   if (!value || value.version !== 1 || !Array.isArray(value.candidates) || value.candidates.length > 16 ||
       value.candidates.some(x => !identifier(x)) || (value.focusId != null && !identifier(value.focusId)) ||
       (value.focusId && !value.candidates.includes(value.focusId)) ||
       !Array.isArray(value.evidenceRefs) || value.evidenceRefs.length > 16 ||
       value.evidenceRefs.some(r => r.kind !== 'operational_inspection' || typeof r.observedAt !== 'string' || !Number.isFinite(Date.parse(r.observedAt)) || Object.keys(r).some(k => !['kind','observedAt'].includes(k))) ||
       value.requiresEvidenceRefresh !== true || Buffer.byteLength(JSON.stringify(value)) > MAX_BYTES ||
-      Object.keys(value).some(k => !['version','candidates','focusId','evidenceRefs','requiresEvidenceRefresh'].includes(k))) throw new Error('Invalid conversation context');
+      Object.keys(value).some(k => !V1_KEYS.includes(k))) throw new Error('Invalid conversation context');
   return JSON.parse(JSON.stringify(value));
+}
+// Version 2: the unchanged version-1 checks plus a strictly validated ledger
+// that must belong to the row's own tenant and session.
+function validateV2(value, scopeIds) {
+  const { ledger, ...rest } = value;
+  const base = validate({ ...rest, version: 1 });
+  let checked;
+  try { checked = require('./ConversationLedger').validateLedger(ledger); }
+  catch (_) { throw new Error('Invalid conversation context'); }
+  if (!scopeIds || checked.tenantId !== scopeIds.tenantId || checked.sessionId !== scopeIds.sessionId) throw new Error('Invalid conversation context');
+  const out = { ...base, version: 2, ledger: checked };
+  if (Buffer.byteLength(JSON.stringify(out)) > MAX_BYTES) throw new Error('Invalid conversation context');
+  return out;
 }
 class ConversationContextStore {
   constructor({db, now = Date.now} = {}) {
@@ -42,11 +63,11 @@ class ConversationContextStore {
     const {rows} = await this.db.query(`SELECT revision, context FROM max_conversation_context
       WHERE tenant_id=$1 AND session_id=$2 AND expires_at > $3`, [tenantId,sessionId,new Date(this.now())]);
     if (!rows.length) return null;
-    return {revision:rows[0].revision,context:validate(rows[0].context)};
+    return {revision:rows[0].revision,context:validate(rows[0].context,{tenantId,sessionId})};
   }
   async save(tenantId, sessionId, context, expectedRevision = null) {
     scope(tenantId, sessionId);
-    const projected = validate(context);
+    const projected = validate(context,{tenantId,sessionId});
     if (expectedRevision !== null && !identifier(expectedRevision)) throw new Error('Invalid conversation revision');
     const revision = randomUUID();
     const values = [tenantId,sessionId,revision,JSON.stringify(projected),new Date(this.now()+TTL_MS),expectedRevision,new Date(this.now())];

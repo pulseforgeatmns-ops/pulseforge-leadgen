@@ -4,6 +4,9 @@ const {recordObserverHealth}=require('../observability/ObserverHealth');
 class ConversationContinuity {
   constructor({env=process.env,store,audit=()=>{}}={}) {
     this.enabled=env.MAX_CONVERSATION_CONTEXT==='true';
+    // Ledger durability needs both flags; without MAX_CONVERSATION_LEDGER the
+    // projection stays the unchanged version 1.
+    this.ledgerEnabled=env.MAX_CONVERSATION_LEDGER==='true';
     this.env=env;this.store=store;this.audit=audit;this.pending=new Set();this.queues=new Map();
   }
   repository() {
@@ -26,7 +29,7 @@ class ConversationContinuity {
     if (!this.enabled) return;
     if (this.pending.size>=16) {recordObserverHealth('conversation_context','dropped',{pending:this.pending.size});this.emit('capacity_limit');return;}
     let tenantId,sessionId,context;
-    try {tenantId=String(session.context.tenantId);sessionId=session.id;context=project(session,tenantId);}
+    try {tenantId=String(session.context.tenantId);sessionId=session.id;context=project(session,tenantId,{includeLedger:this.ledgerEnabled});}
     catch (_) {recordObserverHealth('conversation_context','failure',{reason:'invalid_context'});this.emit('invalid_context');return;}
     const key=JSON.stringify([tenantId,sessionId]);
     const previous=this.queues.get(key);
