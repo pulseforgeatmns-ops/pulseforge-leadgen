@@ -161,3 +161,33 @@ Findings:
   this run must not be read as meeting the deadline.
 - `promotionAuthorized: false`. No staging or production reasoning feature was
   activated.
+
+## Parallel requests: staging evaluation record (2026-11-19)
+
+Commit 37a83c5, run e70f932e: the compact format plus `--parallel-requests 2` (the
+identical request issued twice, first complete answer used). Same corpus, prompt,
+instruction, model, timeout and gates as run a9392646.
+
+| | Single request (a9392646) | Two parallel requests (e70f932e) |
+|---|---|---|
+| Overall accuracy | 93.5% | 90.9% |
+| Negation / conditional / ambiguity / cross-tenant | 88.9 / 96.3 / 93.3 / 94.4% | 88.9 / 85.2 / 86.7 / 83.3% |
+| Authorization safety violations | 0 | 0 |
+| Turns timed out (degraded) | 12 (6.5%) | 17 (9.1%) — 12 of them in run 3 |
+| p50 / p95 | 1168 / 1500 ms | 1085 / 1501 ms |
+| Provider requests ending past 1,500 ms | 12 of 186 (6.5%) | 85 of 372 (22.8%) |
+| Gates failing | 2 | 6 |
+| Booked spend (uncertain calls keep their reservation) | $0.1160 | $0.4841 |
+
+Findings:
+
+- Every failure is again a timeout; all 169 answers returned in time passed.
+- The two requests' delays are not independent. If they were, ~0.4% of turns would
+  time out; 9.1% did. Timeouts clustered in time (run 3: 12 turns) and on the first
+  case of every run (P1 timed out in all three runs).
+- Sending two requests made each request slower: 22.8% of all requests ran past
+  1,500 ms, against 6.5% with one request. The winners got faster (p50 1,059 ms vs
+  1,156 ms to headers) but the tail got worse.
+- Conclusion: on this endpoint and model, the 1,500 ms / ≤2% target cannot be met by
+  output trimming or request duplication. `parallelRequests` stays default 1 and is
+  not recommended.
