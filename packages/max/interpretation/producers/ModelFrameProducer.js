@@ -29,6 +29,7 @@ const { produceLexicalFrame } = require('./LexicalFrameProducer');
 const { SYSTEM_PROMPT, MAX_TOKENS, buildUserContent } = require('./interpretationPrompt');
 const { createAnthropicProvider, buildRequestParams } = require('../providers/AnthropicProvider');
 const { isProvider } = require('../providers');
+const { authorizationPolarityVerdict } = require('../../workspace/PendingDecisionResolver');
 
 // The model is explicit configuration (interpreterModel.js,
 // MAX_INTERPRETATION_MODEL), never an implicit default here.
@@ -51,6 +52,46 @@ function withTimeout(promise, ms, controller) {
     }, ms);
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+const BARE_NEGATIVE_RE = /^(?:no|nope|nah|negative)[.!]?$/i;
+const DELEGATED_ASSENT_RE = /\b(?:whatever\s+(?:you|works)|up\s+to\s+you|you\s+(?:think|recommend|prefer|decide))\b/i;
+
+/**
+ * The model may describe authority, but it cannot relax the deterministic
+ * pending-decision rules. Repair conditional, hedged, negated, or delegated
+ * assent toward clarification before TurnFrame execution candidacy is
+ * computed. This reuses the same polarity guard as the live mission gates.
+ */
+function repairUnsafeAuthorization(raw, { text, context }) {
+  if (!raw || !context || !context.pendingDecisionId) return raw;
+  const verdict = authorizationPolarityVerdict(text, 'execution_approval');
+  const q = String(text || '').trim();
+  const held = verdict.verdict === 'held';
+  const action = raw.requestedAction && typeof raw.requestedAction === 'object'
+    ? raw.requestedAction
+    : { verb: 'none', targetCandidateId: null, polarity: 'none' };
+  const executionLike =
+    (raw.intent === 'instruction' || raw.intent === 'authorization') &&
+    action.verb !== 'none' &&
+    action.polarity === 'affirmative';
+  const ambiguous = (verdict.verdict === 'mixed' && executionLike) || BARE_NEGATIVE_RE.test(q) || DELEGATED_ASSENT_RE.test(q);
+  if (!held && !ambiguous) return raw;
+
+  const pendingId = String(context.pendingDecisionId);
+  const existing = Array.isArray(raw.ambiguities) ? raw.ambiguities : [];
+  const ambiguities = existing.some((a) => a && a.kind === 'action')
+    ? existing.map((a) => ({ ...a, candidateIds: Array.isArray(a.candidateIds) ? [...a.candidateIds] : [] }))
+    : [...existing, { kind: 'action', candidateIds: [pendingId] }];
+  return {
+    ...raw,
+    intent: held ? 'prohibition' : 'ambiguous',
+    requestedAction: held
+      ? { ...action, polarity: action.verb === 'none' ? 'none' : 'negated' }
+      : { verb: 'none', targetCandidateId: null, polarity: 'none' },
+    ambiguities,
+    confidence: Math.min(Number.isFinite(raw.confidence) ? raw.confidence : 0, 0.5),
+  };
 }
 
 class ModelFrameProducer {
@@ -99,7 +140,8 @@ class ModelFrameProducer {
       } catch (_) {
         return this._degrade({ text, context }, telemetry, 'invalid_json');
       }
-      const frame = validateTurnFrame(raw, { ...context, producer: 'model' });
+      const repaired = repairUnsafeAuthorization(raw, { text, context });
+      const frame = validateTurnFrame(repaired, { ...context, producer: 'model' });
       return { frame, telemetry };
     } catch (error) {
       telemetry.latencyMs = Math.round(performance.now() - started);
@@ -124,4 +166,4 @@ class ModelFrameProducer {
   }
 }
 
-module.exports = { ModelFrameProducer, SYSTEM_PROMPT, DEFAULT_MODEL, DEFAULT_TIMEOUT_MS, MAX_TOKENS, buildUserContent, buildRequestParams, stopDegradation };
+module.exports = { ModelFrameProducer, SYSTEM_PROMPT, DEFAULT_MODEL, DEFAULT_TIMEOUT_MS, MAX_TOKENS, buildUserContent, buildRequestParams, stopDegradation, repairUnsafeAuthorization };
