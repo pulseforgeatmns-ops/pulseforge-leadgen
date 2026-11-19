@@ -102,6 +102,7 @@ function createGeminiProvider({ client, tenantId = null } = {}) {
         text: textOf(body),
         servedModel: body && typeof body.modelVersion === 'string' ? body.modelVersion : null,
         usage: usageOf(body && body.usageMetadata),
+        timing: body && body.__geminiTiming ? { ...body.__geminiTiming } : null,
       };
     },
   };
