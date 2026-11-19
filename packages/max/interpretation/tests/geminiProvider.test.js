@@ -96,7 +96,7 @@ describe('Gemini adapter: request shape', () => {
     assert.equal(model, MODEL);
     assert.deepEqual(body.systemInstruction, { parts: [{ text: SYSTEM_PROMPT }] });
     assert.deepEqual(body.contents, [{ role: 'user', parts: [{ text: buildUserContent(ctx(c)) }] }]);
-    assert.equal(body.generationConfig.maxOutputTokens, 256);
+    assert.equal(body.generationConfig.maxOutputTokens, 288);
     assert.equal(body.generationConfig.temperature, 0);
     assert.equal(body.generationConfig.responseMimeType, 'application/json');
     assert.deepEqual(body.generationConfig.responseJsonSchema, TURN_FRAME_OUTPUT_SCHEMA);
