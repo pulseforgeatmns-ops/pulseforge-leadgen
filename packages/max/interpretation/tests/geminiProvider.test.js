@@ -17,6 +17,7 @@ const { createGeminiProvider, buildRequest } = require('../providers/GeminiProvi
 const { buildRequestParams } = require('../providers/AnthropicProvider');
 const { ModelFrameProducer, SYSTEM_PROMPT, buildUserContent, buildRequestParams: producerBuildRequestParams } = require('../producers/ModelFrameProducer');
 const { TURN_FRAME_OUTPUT_SCHEMA } = require('../TurnFrame');
+const { COMPACT_TURN_FRAME_OUTPUT_SCHEMA, COMPACT_OUTPUT_LEGEND, compactTurnFrame } = require('../CompactTurnFrame');
 const { runModelEval, planModelRun, evaluationMetadata } = require('../eval/runInterpretationEval');
 const { resolveInterpreterProvider, servedModelMatches } = require('../interpreterModel');
 const { ShadowInterpreter } = require('../ShadowInterpreter');
@@ -35,8 +36,20 @@ const QUESTION_FRAME = {
   scope: 'focused', foreignTenantReference: false, ambiguities: [], confidence: 0.9,
 };
 
+/**
+ * Gemini answers in the compact wire format. Canonical fixtures are encoded;
+ * any non-canonical keys a test adds (e.g. claimed authority) are kept
+ * verbatim so the strict expansion sees them.
+ */
+function toWire(frame) {
+  const extras = Object.fromEntries(Object.entries(frame).filter(([k]) => !TURN_FRAME_OUTPUT_SCHEMA.required.includes(k)));
+  const wire = compactTurnFrame(frame);
+  for (const k of Object.keys(wire)) if (wire[k] === undefined) delete wire[k];
+  return { ...wire, ...extras };
+}
+
 const okBody = (frame = QUESTION_FRAME, extra = {}) => ({
-  candidates: [{ content: { role: 'model', parts: [{ text: JSON.stringify(frame) }] }, finishReason: 'STOP' }],
+  candidates: [{ content: { role: 'model', parts: [{ text: JSON.stringify(toWire(frame)) }] }, finishReason: 'STOP' }],
   usageMetadata: { promptTokenCount: 1800, candidatesTokenCount: 140, totalTokenCount: 1940 },
   modelVersion: MODEL,
   ...extra,
@@ -90,16 +103,17 @@ describe('provider port: the Anthropic path is unchanged', () => {
 });
 
 describe('Gemini adapter: request shape', () => {
-  it('sends the same instruction and data payload as every provider, constrained to the TurnFrame schema', () => {
+  it('sends the unchanged instruction (plus only the compact key legend) and data payload, constrained to the compact schema', () => {
     const c = CASES[1];
     const { model, body } = buildRequest({ model: MODEL, ...ctx(c) });
     assert.equal(model, MODEL);
-    assert.deepEqual(body.systemInstruction, { parts: [{ text: SYSTEM_PROMPT }] });
+    assert.deepEqual(body.systemInstruction, { parts: [{ text: `${SYSTEM_PROMPT}\n\n${COMPACT_OUTPUT_LEGEND}` }] });
+    assert.ok(body.systemInstruction.parts[0].text.startsWith(SYSTEM_PROMPT), 'the substantive prompt is a verbatim prefix');
     assert.deepEqual(body.contents, [{ role: 'user', parts: [{ text: buildUserContent(ctx(c)) }] }]);
     assert.equal(body.generationConfig.maxOutputTokens, 256);
     assert.equal(body.generationConfig.temperature, 0);
     assert.equal(body.generationConfig.responseMimeType, 'application/json');
-    assert.deepEqual(body.generationConfig.responseJsonSchema, TURN_FRAME_OUTPUT_SCHEMA);
+    assert.deepEqual(body.generationConfig.responseJsonSchema, COMPACT_TURN_FRAME_OUTPUT_SCHEMA);
     assert.deepEqual(body.generationConfig.thinkingConfig, { thinkingBudget: 0 });
   });
 
@@ -126,7 +140,7 @@ describe('Gemini adapter: request shape', () => {
   });
 
   it('ignores thought parts when reading the answer', async () => {
-    const f = fakeFetch(() => ({ ...okBody(), candidates: [{ finishReason: 'STOP', content: { parts: [{ thought: true, text: 'thinking…' }, { text: JSON.stringify(QUESTION_FRAME) }] } }] }));
+    const f = fakeFetch(() => ({ ...okBody(), candidates: [{ finishReason: 'STOP', content: { parts: [{ thought: true, text: 'thinking…' }, { text: JSON.stringify(toWire(QUESTION_FRAME)) }] } }] }));
     const producer = new ModelFrameProducer({ provider: createGeminiProvider({ client: meteredGemini(f.fetchImpl, { reserve: async () => 'r', settle: async () => {} }) }), model: MODEL });
     const { frame, telemetry } = await producer.produce(ctx(CASES[0]));
     assert.equal(telemetry.degradedReason, null);

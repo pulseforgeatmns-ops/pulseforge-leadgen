@@ -21,7 +21,8 @@ const { createEvalSpendCap } = require('./evalSpendCap');
 const { produceLexicalFrame } = require('../producers/LexicalFrameProducer');
 const { ModelFrameProducer, SYSTEM_PROMPT, buildRequestParams } = require('../producers/ModelFrameProducer');
 const { createAnthropicProvider, createGeminiProvider, PROVIDERS } = require('../providers');
-const { buildRequest: buildGeminiRequest } = require('../providers/GeminiProvider');
+const { buildRequest: buildGeminiRequest, SYSTEM_INSTRUCTION: GEMINI_SYSTEM_INSTRUCTION, OUTPUT_FORMAT: GEMINI_OUTPUT_FORMAT } = require('../providers/GeminiProvider');
+const { COMPACT_TURN_FRAME_OUTPUT_SCHEMA } = require('../CompactTurnFrame');
 const { servedModelMatches: servedModelMatchesFor } = require('../interpreterModel');
 const { TURN_FRAME_OUTPUT_SCHEMA } = require('../TurnFrame');
 const { meterClient } = require('../../../../utils/meteredAnthropic');
@@ -54,6 +55,12 @@ function evaluationMetadata({ cases, corpus, cwd = process.cwd(), now = new Date
     corpusSha256: sha256(cases.map((c) => ({ id: c.id, category: c.category, text: c.text, context: c.context, transcript: c.transcript || [], expect: c.expect }))),
     producerPromptSha256: sha256(SYSTEM_PROMPT),
     frameSchemaSha256: sha256(TURN_FRAME_OUTPUT_SCHEMA),
+    // Gemini wire format: unchanged prompt + appended key legend, compact schema.
+    gemini: {
+      outputFormat: GEMINI_OUTPUT_FORMAT,
+      systemInstructionSha256: sha256(GEMINI_SYSTEM_INSTRUCTION),
+      outputSchemaSha256: sha256(COMPACT_TURN_FRAME_OUTPUT_SCHEMA),
+    },
   };
 }
 

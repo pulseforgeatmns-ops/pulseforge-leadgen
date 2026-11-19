@@ -25,6 +25,7 @@
 
 const { performance } = require('node:perf_hooks');
 const { validateTurnFrame } = require('../TurnFrame');
+const { COMPACT_FORMAT, expandCompactTurnFrame } = require('../CompactTurnFrame');
 const { produceLexicalFrame } = require('./LexicalFrameProducer');
 const { SYSTEM_PROMPT, MAX_TOKENS, buildUserContent } = require('./interpretationPrompt');
 const { createAnthropicProvider, buildRequestParams } = require('../providers/AnthropicProvider');
@@ -140,6 +141,14 @@ class ModelFrameProducer {
         raw = JSON.parse(response.text);
       } catch (_) {
         return this._degrade({ text, context }, telemetry, 'invalid_json');
+      }
+      // A provider that asked for the compact wire format gets strict,
+      // structural expansion to the canonical shape first; a malformed compact
+      // object throws invalid_turn_frame and degrades below. Every safety
+      // repair and validation that follows is identical for both formats.
+      if (response.outputFormat === COMPACT_FORMAT) raw = expandCompactTurnFrame(raw);
+      else if (response.outputFormat !== undefined && response.outputFormat !== null) {
+        return this._degrade({ text, context }, telemetry, 'unknown_output_format');
       }
       const repaired = repairUnsafeAuthorization(raw, { text, context });
       const frame = validateTurnFrame(repaired, { ...context, producer: 'model' });
