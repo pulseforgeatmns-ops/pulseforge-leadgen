@@ -121,6 +121,15 @@ describe('Gemini adapter: request shape', () => {
     assert.equal(telemetry.servedModel, MODEL);
     assert.equal(telemetry.stopReason, 'STOP');
     assert.deepEqual(telemetry.usage, { input_tokens: 1800, output_tokens: 140, thinking_tokens: null, cache_read_input_tokens: null, total_tokens: 1940 });
+    assert.ok(telemetry.timing);
+    assert.ok(Number.isFinite(telemetry.timing.fetchToHeadersMs));
+  });
+
+  it('keeps the latency-sensitive instruction prompt compact without dropping safety rules', () => {
+    assert.ok(Buffer.byteLength(SYSTEM_PROMPT) <= 1600);
+    for (const phrase of ['explicit, unconditional', 'future conditions', 'negated polarity', 'referent ambiguity', 'foreignTenantReference']) {
+      assert.match(SYSTEM_PROMPT, new RegExp(phrase));
+    }
   });
 
   it('ignores thought parts when reading the answer', async () => {

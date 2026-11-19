@@ -206,7 +206,7 @@ async function runModelEval({ cases, client, createClient, provider = 'anthropic
       // Refused at reservation: the call never reached the provider, and the
       // degraded frame it produced is not model output. Not scored, not counted.
       if (snap.refused && snap.refusedPhase === 'reserve') { abortedReason = snap.refused; break; }
-      telemetry.push(t);
+      telemetry.push({ ...t, caseId: c.id, run: r + 1 });
       if (t.servedModel) servedModels[t.servedModel] = (servedModels[t.servedModel] || 0) + 1;
       grades.push(gradeModelCall(c, frame, t));
       // Stop conditions after a call that did reach the provider. The call is
@@ -236,6 +236,21 @@ async function runModelEval({ cases, client, createClient, provider = 'anthropic
     calls: telemetry.length,
   };
   const latencyMs = { p50: percentile(latencies, 50), p95: percentile(latencies, 95), max: latencies.length ? Math.max(...latencies) : null };
+  const timed = telemetry.filter((t) => t.timing && Number.isFinite(t.timing.totalMs));
+  const timingMetric = (key) => {
+    const values = timed.map((t) => t.timing[key]).filter(Number.isFinite);
+    return { p50: percentile(values, 50), p95: percentile(values, 95), max: values.length ? Math.max(...values) : null };
+  };
+  const harnessValues = timed.map((t) => Math.max(0, t.latencyMs - t.timing.totalMs));
+  const timingProfile = {
+    measuredCalls: timed.length,
+    reserveMs: timingMetric('reserveMs'),
+    fetchToHeadersMs: timingMetric('fetchToHeadersMs'),
+    bodyReadMs: timingMetric('bodyReadMs'),
+    settleMs: timingMetric('settleMs'),
+    harnessAfterClientMs: { p50: percentile(harnessValues, 50), p95: percentile(harnessValues, 95), max: harnessValues.length ? Math.max(...harnessValues) : null },
+    timeouts: telemetry.filter((t) => t.degradedReason === 'timeout').map((t) => ({ caseId: t.caseId, run: t.run, latencyMs: t.latencyMs, timing: t.timing })),
+  };
   const scored = pooled.length;
   return {
     provider,
@@ -252,6 +267,7 @@ async function runModelEval({ cases, client, createClient, provider = 'anthropic
     stability: stability(runs),
     disagreements: disagreementsForReview(runs, cases),
     latencyMs,
+    timingProfile,
     tokens,
     degraded: { calls: degraded.length, byReason: degradedByReason },
     cost,

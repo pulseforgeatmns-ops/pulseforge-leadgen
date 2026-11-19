@@ -119,7 +119,7 @@ class ModelFrameProducer {
   async produce({ text, context, transcript = [] }) {
     const started = performance.now();
     const controller = new AbortController();
-    const telemetry = { provider: this.provider, model: this.model, servedModel: null, latencyMs: 0, usage: null, degradedReason: null, stopReason: null };
+    const telemetry = { provider: this.provider, model: this.model, servedModel: null, latencyMs: 0, usage: null, degradedReason: null, stopReason: null, timing: null };
     try {
       const response = await withTimeout(
         this._provider.complete({ model: this.model, text, context, transcript, timeoutMs: this.timeoutMs, signal: controller.signal }),
@@ -130,6 +130,7 @@ class ModelFrameProducer {
       telemetry.stopReason = response && response.rawStopReason ? response.rawStopReason : null;
       telemetry.servedModel = response && typeof response.servedModel === 'string' ? response.servedModel : null;
       telemetry.usage = response && response.usage ? response.usage : null;
+      telemetry.timing = response && response.timing ? response.timing : null;
       if (!response || response.finish !== 'complete') {
         return this._degrade({ text, context }, telemetry, stopDegradation(response && response.finish, telemetry.stopReason));
       }
@@ -145,6 +146,7 @@ class ModelFrameProducer {
       return { frame, telemetry };
     } catch (error) {
       telemetry.latencyMs = Math.round(performance.now() - started);
+      telemetry.timing = error && error.geminiTiming ? { ...error.geminiTiming } : null;
       const reason = error && error.code === 'invalid_turn_frame' ? 'invalid_frame'
         : error && error.code === 'timeout' ? 'timeout'
           : Number.isInteger(error && error.status) ? `http_${error.status}` : 'provider_error';
