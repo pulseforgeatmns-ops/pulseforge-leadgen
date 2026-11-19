@@ -159,3 +159,69 @@ test('platform classification and arguments never need Railway', () => {
   assert.deepEqual(parseArgs(['--expect-database=pulseforge_production_migration']), { expectDatabase: 'pulseforge_production_migration' });
   assert.throws(() => parseArgs(['--write']), { code: 'audit_argument_invalid' });
 });
+
+test('review-only evidence fields: stored structurally, protections unchanged, audit reports freshness', { timeout: 180000 }, async () => {
+  const postgres = await startDisposablePostgres('levi-import-evidence-');
+  allowedPort = Number(postgres.port);
+  const db = new Pool({ connectionString: postgres.connectionString });
+  try {
+    await schema(db);
+    const first = await importReviewOnlyContacts([
+      contact(1, { evidenceDate: '2026-11-10', sourceType: 'public_financing_request' }),
+      contact(2, { sourceType: 'property_record_signal' }),
+      contact(3),
+    ], { clientId: 21, db, actorId: null });
+    assert.equal(first.inserted.length, 3);
+    const rows = (await db.query(`SELECT email, notes, acquisition_metadata AS m, setter_visible, do_not_contact,
+      ao_outreach_review_required, source FROM prospects WHERE client_id=21 ORDER BY email`)).rows;
+    const byEmail = Object.fromEntries(rows.map(r => [r.email, r]));
+    assert.equal(byEmail['person1@example.invalid'].m.evidenceDate, '2026-11-10');
+    assert.equal(byEmail['person1@example.invalid'].m.sourceType, 'public_financing_request');
+    assert.ok(byEmail['person1@example.invalid'].m.importedAt, 'import time kept separately');
+    assert.notEqual(byEmail['person1@example.invalid'].m.importedAt.slice(0, 10), '2026-11-10');
+    assert.equal(byEmail['person3@example.invalid'].m.evidenceDate, null);
+    for (const r of rows) {
+      assert.equal(r.source, 'review_only_import');
+      assert.equal(r.setter_visible, false);
+      assert.equal(r.do_not_contact, false);
+      assert.equal(r.ao_outreach_review_required, true);
+      assert.equal(r.m.outreachAuthorized, false);
+      assert.doesNotMatch(r.notes, /evidence date|source type/i, 'notes text unchanged');
+    }
+
+    // Dedup and tenant isolation still hold with the new fields present.
+    const again = await importReviewOnlyContacts([contact(1, { evidenceDate: '2026-11-15', sourceType: 'referral' })],
+      { clientId: 21, db, actorId: null });
+    assert.equal(again.inserted.length, 0);
+    assert.equal(again.skipped[0].reason, 'already_exists');
+    assert.equal((await db.query(`SELECT acquisition_metadata->>'evidenceDate' AS d FROM prospects WHERE email='person1@example.invalid'`)).rows[0].d,
+      '2026-11-10', 'a duplicate never overwrites provenance');
+    const foreign = await importReviewOnlyContacts([contact(1, { evidenceDate: '2026-11-11', sourceType: 'referral' })],
+      { clientId: 22, db, actorId: null });
+    assert.equal(foreign.inserted.length, 1, 'another tenant is not deduplicated against tenant 21');
+
+    // Invalid fields reject the whole import before any write.
+    const before = await tableSnapshot(db);
+    await assert.rejects(importReviewOnlyContacts([contact(7), contact(8, { evidenceDate: '2026-02-30' })], { clientId: 21, db, actorId: null }),
+      { code: 'evidence_date_invalid' });
+    await assert.rejects(importReviewOnlyContacts([contact(7, { sourceType: 'scraped' })], { clientId: 21, db, actorId: null }),
+      { code: 'source_type_invalid' });
+    assert.equal(await tableSnapshot(db), before);
+
+    // Suppression is untouched by provenance and still counted.
+    await db.query(`UPDATE prospects SET do_not_contact=true WHERE client_id=21 AND email='person1@example.invalid'`);
+    const report = await collect(db, { databaseUrl: postgres.connectionString });
+    const all = report.production.allTime;
+    assert.equal(all.records, 3);
+    assert.deepEqual(all.bySourceType, { public_financing_request: 1, property_record_signal: 1, unrecorded: 1 });
+    assert.equal(all.evidenceDateUnpublished, 2);
+    assert.equal(all.suppressed, 1);
+    assert.equal(all.blockers.borrower_intent_unverified, 1);
+    assert.equal(all.contractQualified, 0);
+    assert.ok(!JSON.stringify(report).includes('example.invalid'));
+    assert.deepEqual(blocked, []);
+  } finally {
+    await db.end();
+    await postgres.stop();
+  }
+});

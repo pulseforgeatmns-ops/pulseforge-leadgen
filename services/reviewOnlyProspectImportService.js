@@ -1,6 +1,13 @@
 'use strict';
 
 const REVIEW_STATES = new Set(['contact_now', 'qualify_first', 'hold', 'reject']);
+// Where the evidence came from. `property_record_signal` is ownership or
+// investment evidence only and never establishes borrower intent.
+const SOURCE_TYPES = new Set([
+  'public_financing_request', 'public_deal_post', 'inbound_request', 'referral',
+  'operator_research', 'property_record_signal', 'other',
+]);
+const DAY_MS = 86400000;
 
 function text(value) {
   return value == null ? '' : String(value).trim();
@@ -54,6 +61,31 @@ function normalizedState(value) {
   return REVIEW_STATES.has(compact) ? compact : 'qualify_first';
 }
 
+// evidenceDate is when the evidence was published or observed at its source,
+// distinct from importedAt (when it entered the CRM). Optional; when present
+// it must be a real calendar date that is not in the future.
+function normalizeEvidenceDate(value, index, now = Date.now()) {
+  const raw = text(value);
+  if (!raw) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?:[T ][0-9:.]+(?:Z|[+-]\d{2}:?\d{2})?)?$/.exec(raw);
+  const date = match ? new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))) : null;
+  if (!date || date.getUTCFullYear() !== Number(match[1]) || date.getUTCMonth() !== Number(match[2]) - 1
+    || date.getUTCDate() !== Number(match[3]) || date.getTime() > now + DAY_MS || Number(match[1]) < 2000) {
+    throw Object.assign(new Error(`Contact ${index + 1} has an invalid evidence date (use YYYY-MM-DD, not in the future).`),
+      { code: 'evidence_date_invalid' });
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+function normalizeSourceType(value, index) {
+  const raw = text(value).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+  if (!raw) return null;
+  if (!SOURCE_TYPES.has(raw)) {
+    throw Object.assign(new Error(`Contact ${index + 1} has an unknown source type.`), { code: 'source_type_invalid' });
+  }
+  return raw;
+}
+
 function normalizeContact(input, index) {
   const name = text(input.name || input.contact || input.prospect);
   if (!name) throw Object.assign(new Error(`Contact ${index + 1} needs a name.`), { code: 'contact_name_required' });
@@ -75,6 +107,8 @@ function normalizeContact(input, index) {
   const nextAction = text(input.nextAction || input.next_action);
   const category = text(input.category) || 'borrower';
   const score = { contact_now: 80, qualify_first: 65, hold: 40, reject: 10 }[state];
+  const evidenceDate = normalizeEvidenceDate(input.evidenceDate || input.evidence_date, index);
+  const sourceType = normalizeSourceType(input.sourceType || input.source_type, index);
 
   return {
     name,
@@ -91,6 +125,8 @@ function normalizeContact(input, index) {
     risks,
     nextAction,
     category,
+    evidenceDate,
+    sourceType,
     reviewState: state,
     status: state === 'reject' ? 'disqualified' : 'cold',
     icpScore: score,
@@ -184,6 +220,10 @@ async function importReviewOnlyContacts(inputs, { clientId, db, actorId }) {
         category: contact.category,
         profileUrl: contact.profileUrl,
         sourceUrls: contact.sourceUrls,
+        // Structured provenance; notes text is unchanged so deal-claim
+        // extraction sees exactly what it saw before.
+        evidenceDate: contact.evidenceDate,
+        sourceType: contact.sourceType,
         importedBy: actorId || null,
         importedAt: new Date().toISOString(),
       };
@@ -231,6 +271,9 @@ async function importReviewOnlyContacts(inputs, { clientId, db, actorId }) {
 }
 
 module.exports = {
+  SOURCE_TYPES,
+  normalizeEvidenceDate,
+  normalizeSourceType,
   normalizeContact,
   previewReviewOnlyContacts,
   importReviewOnlyContacts,
