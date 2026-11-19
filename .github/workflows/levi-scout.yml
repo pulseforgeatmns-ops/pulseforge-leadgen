@@ -1,0 +1,23 @@
+name: Levi Scout (tenant 21) contract and audit
+on:
+  pull_request:
+    paths:
+      - 'services/leviScoutProductionContract.js'
+      - 'services/leviScoutResearchOnlyExecution.js'
+      - 'scripts/leviScoutProductionAudit.js'
+      - 'services/reviewOnlyProspectImportService.js'
+      - 'packages/max/workspace/ProspectDealClaims.js'
+      - 'test/leviScout*.test.js'
+      - '.github/workflows/levi-scout.yml'
+jobs:
+  levi-scout:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: ./.github/actions/setup-postgres-environment
+      - run: npm ci --ignore-scripts
+      - name: Contract, research-only gates and read-only audit on disposable PostgreSQL (no skips)
+        run: npm run test:scout:levi
