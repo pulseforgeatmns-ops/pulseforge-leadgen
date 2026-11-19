@@ -8,9 +8,14 @@ const { TENANT_ID, evaluateProspect, weeklyProduction } = require('../services/l
 
 const QUERIES = {
   tenant: `SELECT id,name,slug,vertical,active,enabled_agents,notes FROM clients WHERE id=$1`,
-  workspace: `SELECT id,status,blueprint_id,blueprint_version,interview_state->'laEndeavorsWorkspaceCorrection' AS correction,
+  // cie_interview_sessions has no blueprint columns (migrations/2026-08-06-client-intelligence-engine.sql);
+  // Blueprint status comes from cie_business_blueprints. Only status/ids are emitted, never content.
+  workspace: `SELECT id,status,current_stage,updated_at,
+    (interview_state ? 'laEndeavorsWorkspaceCorrection') AS has_workspace_correction,
     interview_state->'growthInfrastructureReadinessReport'->>'overallStatus' AS readiness
     FROM cie_interview_sessions WHERE client_id=$1 ORDER BY updated_at DESC LIMIT 5`,
+  blueprints: `SELECT id,version,status,generated_by,created_at,updated_at
+    FROM cie_business_blueprints WHERE client_id=$1 ORDER BY updated_at DESC LIMIT 5`,
   runs: `SELECT agent_name,action,status,COALESCE(payload->>'reason',error_msg) AS reason,count(*)::int AS runs,
     max(ran_at) AS last_ran_at FROM agent_log WHERE client_id=$1 AND ran_at>=NOW()-INTERVAL '30 days'
     AND agent_name IN ('scout','scout_unenriched_enrichment','setter_handoff','handoff_utility','max_outbound_control')
@@ -18,13 +23,13 @@ const QUERIES = {
   prospects: `SELECT p.id,p.created_at,p.source,p.status,p.job_title,p.email,p.phone,p.linkedin_url,p.notes,
     p.service_area_match,p.do_not_contact,p.acquisition_metadata,c.location AS company_location,
     EXISTS (SELECT 1 FROM prospects prior WHERE prior.client_id=p.client_id AND prior.id<>p.id
-      AND prior.created_at<=p.created_at AND (
+      AND (
         (p.email IS NOT NULL AND lower(prior.email)=lower(p.email)) OR
         (p.phone IS NOT NULL AND regexp_replace(prior.phone,'\\D','','g')=regexp_replace(p.phone,'\\D','','g')) OR
         (p.linkedin_url IS NOT NULL AND prior.linkedin_url=p.linkedin_url)
-      )) AS duplicate_of
+      ) AND (prior.created_at<p.created_at OR (prior.created_at=p.created_at AND prior.id::text<p.id::text))) AS duplicate_of
     FROM prospects p LEFT JOIN companies c ON c.id=p.company_id AND c.client_id=p.client_id
-    WHERE p.client_id=$1 AND p.created_at>=NOW()-INTERVAL '30 days' ORDER BY p.created_at DESC`,
+    WHERE p.client_id=$1 ORDER BY p.created_at DESC`,
   inventory: `SELECT source,status,COALESCE(acquisition_metadata->>'reviewState','unclassified') AS review_state,
     count(*)::int AS records,max(created_at) AS newest FROM prospects WHERE client_id=$1 GROUP BY 1,2,3 ORDER BY 4 DESC`,
 };
@@ -45,24 +50,36 @@ async function collect(pool, { now = new Date() } = {}) {
         report.sections[name] = { unavailable: error.code || error.message };
       }
     }
-    const rows = Array.isArray(report.sections.prospects) ? report.sections.prospects : [];
+    const all = Array.isArray(report.sections.prospects) ? report.sections.prospects : [];
+    const since = now.getTime() - 30 * 86400000;
+    const rows = all.filter(row => new Date(row.created_at).getTime() >= since);
     // The requested $5k-$20k range is intentionally not applied until the
     // canonical approved Blueprint supplies a machine-verifiable range.
-    const evaluated = rows.map(row => evaluateProspect(row));
-    report.production = {
-      contractStatus: 'proposed_range_requires_approved_blueprint_verification',
-      observedProductionQualifiedNew: null,
-      weekly: weeklyProduction(rows, now),
-      last30Days: {
-        discovered: rows.length,
-        contractQualifiedCandidates: evaluated.filter(item => item.qualified).length,
+    const summarize = list => {
+      const evaluated = list.map(row => evaluateProspect(row));
+      return {
+        records: list.length,
+        contractQualified: evaluated.filter(item => item.qualified).length,
         classifications: {
           contactNow: evaluated.filter(item => item.classification === 'Contact Now').length,
           qualifyFirst: evaluated.filter(item => item.classification === 'Qualify First').length,
           hold: evaluated.filter(item => item.classification === 'Hold').length,
         },
+        duplicates: list.filter(row => row.duplicate_of).length,
+        suppressed: list.filter(row => row.do_not_contact === true).length,
+        bySource: list.reduce((out, row) => ({ ...out, [row.source || 'unknown']: (out[row.source || 'unknown'] || 0) + 1 }), {}),
         blockers: evaluated.flatMap(item => item.blockers).reduce((out, value) => ({ ...out, [value]: (out[value] || 0) + 1 }), {}),
-      },
+      };
+    };
+    const reviewOnlyContactNow = all.filter(row => row.source === 'review_only_import'
+      && String((row.acquisition_metadata && row.acquisition_metadata.reviewState) || '').toLowerCase() === 'contact_now');
+    report.production = {
+      contractStatus: 'proposed_range_requires_approved_blueprint_verification',
+      observedProductionQualifiedNew: null,
+      weekly: weeklyProduction(rows, now),
+      last30Days: { discovered: rows.length, contractQualifiedCandidates: summarize(rows).contractQualified, ...summarize(rows) },
+      allTime: summarize(all),
+      reviewOnlyContactNow: summarize(reviewOnlyContactNow),
     };
     // Never emit borrower rows or contact/source values.
     delete report.sections.prospects;
