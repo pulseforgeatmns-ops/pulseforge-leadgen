@@ -18,6 +18,11 @@ const { TURN_FRAME_OUTPUT_SCHEMA } = require('../TurnFrame');
 const { servedModelMatches } = require('../interpreterModel');
 const { runModelEval, planModelRun } = require('../eval/runInterpretationEval');
 const { anthropicPreflight } = require('../eval/anthropicPreflight');
+const {
+  ANTHROPIC_MESSAGES_API_VERSION,
+  captureAnthropicMessagesWire,
+  inspectTurnFrameSchemaForStructuredOutputs,
+} = require('../eval/anthropicMessagesWire');
 const { CASES: HELDOUT } = require('../eval/heldoutInterpretation');
 const { CASES: EXTENDED } = require('../eval/extendedInterpretation');
 
@@ -92,6 +97,9 @@ describe('pricing (platform.claude.com, verified 2026-11-19)', () => {
     assert.equal(plan.calls, 186);
     assert.equal(plan.thinking, 'disabled');
     assert.ok(plan.reservationUpperBoundUsd > 0 && plan.reservationUpperBoundUsd < 0.5, String(plan.reservationUpperBoundUsd));
+    const one = planModelRun({ cases: CORPUS, model: HAIKU, repeats: 3, provider: 'anthropic', thinking: 'disabled', maxCalls: 1 });
+    assert.equal(one.calls, 1);
+    assert.ok(one.reservationUpperBoundUsd > 0 && one.reservationUpperBoundUsd < plan.reservationUpperBoundUsd);
   });
 });
 
@@ -208,6 +216,18 @@ describe('evaluation run with the benchmark configuration', () => {
     assert.equal(result.gates.gates.find((g) => g.id === 'authorization_safety_violations').observed, 0);
   });
 
+  it('stops after maxCalls 1 without treating it as a provider rejection', async () => {
+    const client = fakeClient(() => reply());
+    const result = await runModelEval({
+      cases: CORPUS.slice(0, 4), provider: 'anthropic', client, model: HAIKU, repeats: 2, maxUsd: 2, thinking: 'disabled', maxCalls: 1,
+    });
+    assert.equal(client.calls.length, 1);
+    assert.equal(result.complete, true);
+    assert.equal(result.abortedReason, 'max_calls_reached');
+    assert.equal(result.providerRejection, null);
+    assert.equal(result.plan.calls, 1);
+  });
+
   it('refuses an unknown thinking value, or thinking on a provider that does not take it', async () => {
     assert.equal((await runModelEval({ cases: CORPUS.slice(0, 1), provider: 'anthropic', client: fakeClient(() => reply()), model: HAIKU, maxUsd: 1, thinking: 'adaptive' })).refused, 'eval_thinking_invalid');
     assert.equal((await runModelEval({ cases: CORPUS.slice(0, 1), provider: 'gemini', createClient: () => null, model: 'gemini-3.1-flash-lite', maxUsd: 1, thinking: 'disabled' })).refused, 'eval_thinking_unsupported');
@@ -245,6 +265,65 @@ describe('free preflight (Models API lookup, no tokens)', () => {
   });
 });
 
+describe('Messages wire vs Models preflight (no Anthropic network)', () => {
+  it('the TurnFrame json_schema stays inside documented structured-output limits', () => {
+    const r = inspectTurnFrameSchemaForStructuredOutputs();
+    assert.equal(r.ok, true, r.issues.join(','));
+  });
+
+  it('SDK 0.90.0 without the eval header still sends anthropic-version 2023-06-01', async () => {
+    const Anthropic = require('@anthropic-ai/sdk');
+    const { inspection } = await captureAnthropicMessagesWire({
+      Anthropic,
+      input: input(CORPUS[0]),
+      thinking: 'disabled',
+      clientOptions: { defaultHeaders: {} },
+    });
+    assert.equal(inspection.ok, false);
+    assert.ok(inspection.issues.some((i) => i.startsWith('anthropic-version:2023-06-01')), inspection.issues.join(','));
+    assert.equal(inspection.thinking && inspection.thinking.type, 'disabled');
+    assert.equal(inspection.output_config.effort, 'low');
+    assert.equal(inspection.output_config.formatType, 'json_schema');
+    assert.equal(inspection.sampling.temperature, false);
+    assert.equal(inspection.beta, null);
+  });
+
+  it('the eval client pins anthropic-version 2026-10-21 and keeps the benchmark body', async () => {
+    const Anthropic = require('@anthropic-ai/sdk');
+    const { inspection } = await captureAnthropicMessagesWire({
+      Anthropic,
+      input: input(CORPUS[0]),
+      thinking: 'disabled',
+    });
+    assert.equal(inspection.ok, true, inspection.issues.join(','));
+    assert.equal(inspection.anthropicVersion, ANTHROPIC_MESSAGES_API_VERSION);
+    assert.equal(inspection.thinking.type, 'disabled');
+    assert.equal(inspection.output_config.effort, 'low');
+    assert.equal(inspection.sampling.temperature, false);
+    assert.equal(inspection.sampling.top_p, false);
+    assert.equal(inspection.sampling.top_k, false);
+  });
+
+  it('a 400 on the first call is recorded as provider_request_rejected with the API message', async () => {
+    const client = fakeClient(() => {
+      throw Object.assign(new Error('400'), {
+        status: 400,
+        error: { type: 'error', error: { type: 'invalid_request_error', message: 'schema is too complex for compilation' } },
+      });
+    });
+    const result = await runModelEval({
+      cases: CORPUS.slice(0, 3), provider: 'anthropic', client, model: HAIKU, repeats: 1, maxUsd: 2, thinking: 'disabled',
+    });
+    assert.equal(result.complete, false);
+    assert.equal(result.abortedReason, 'provider_request_rejected');
+    assert.equal(result.degraded.byReason.http_400, 1);
+    assert.equal(result.providerRejection.degradedReason, 'http_400');
+    assert.equal(result.providerRejection.providerError.message, 'schema is too complex for compilation');
+    assert.equal(client.calls.length, 1);
+    assert.equal(result.gates.gates.find((g) => g.id === 'authorization_safety_violations').observed, 0);
+  });
+});
+
 describe('CLI guards (no network)', () => {
   function cli(args, env = {}) {
     const childEnv = { ...process.env, ...env };
@@ -260,6 +339,23 @@ describe('CLI guards (no network)', () => {
     assert.equal(plan.priced, true);
     assert.equal(plan.calls, 186);
     assert.equal(plan.thinking, 'disabled');
+  });
+
+  it('prices one isolated Messages call with --max-calls 1', () => {
+    const r = cli(['--model', '--provider', 'anthropic', '--model-id', HAIKU, '--repeats', '3', '--extended', '--thinking', 'disabled', '--max-calls', '1', '--plan', '--json']);
+    assert.equal(r.status, 0, r.stderr);
+    const plan = JSON.parse(r.stdout).modelPlan;
+    assert.equal(plan.calls, 1);
+    assert.equal(plan.maxCalls, 1);
+  });
+
+  it('probes the SDK Messages wire without a credential or network', () => {
+    const r = cli(['--model', '--provider', 'anthropic', '--model-id', HAIKU, '--thinking', 'disabled', '--probe-wire', '--json']);
+    assert.equal(r.status, 0, r.stderr);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.messagesWire.ok, true, JSON.stringify(out.messagesWire));
+    assert.equal(out.messagesWire.anthropicVersion, ANTHROPIC_MESSAGES_API_VERSION);
+    assert.equal(out.model, undefined);
   });
 
   it('never uses the production ANTHROPIC_API_KEY: the dedicated eval key is required', () => {

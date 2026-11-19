@@ -15,6 +15,10 @@
  *        # free: confirms the model exists and supports generateContent (one models.get, no tokens)
  *   node scripts/maxInterpretationEval.js --model --provider P --model-id M --repeats 3 --max-usd 2 --extended --json
  *        # PAID: needs the provider's eval credential, an approved model and an approved cap
+ *   node scripts/maxInterpretationEval.js --model --provider anthropic --model-id claude-haiku-5-5 --thinking disabled --probe-wire --json
+ *        # free: intercepts the SDK Messages request (no Anthropic network). Required before another paid run.
+ *   node scripts/maxInterpretationEval.js --model --provider anthropic --model-id claude-haiku-5-5 --thinking disabled --max-calls 1 --max-usd 0.05 --extended --json
+ *        # PAID isolated probe: one Messages call, then stop. Read model.providerRejection.
  *
  * Providers (explicit, no default): anthropic (MAX_EVAL_ANTHROPIC_API_KEY) or gemini
  * (MAX_EVAL_GEMINI_API_KEY — a dedicated development key; the production
@@ -46,6 +50,10 @@ const { PROVIDERS } = require('../packages/max/interpretation/providers');
 const { MAX_TOKENS } = require('../packages/max/interpretation/producers/interpretationPrompt');
 const { createGeminiClient, API_ORIGIN: GEMINI_API_ORIGIN } = require('../utils/meteredGemini');
 const { anthropicPreflight } = require('../packages/max/interpretation/eval/anthropicPreflight');
+const {
+  captureAnthropicMessagesWire,
+  evalAnthropicClientOptions,
+} = require('../packages/max/interpretation/eval/anthropicMessagesWire');
 
 const has = (name) => process.argv.includes(name);
 function arg(name, fallback = null) {
@@ -70,15 +78,18 @@ function printGates(gates) {
 const GEMINI_EVAL_KEY = 'MAX_EVAL_GEMINI_API_KEY';
 const ANTHROPIC_EVAL_KEY = 'MAX_EVAL_ANTHROPIC_API_KEY';
 
+function anthropicSdk() {
+  const SDK = require('@anthropic-ai/sdk');
+  return SDK.Anthropic || SDK;
+}
+
 /** A plain (un-metered) SDK client on the dedicated eval key; the runner meters it. */
 function anthropicClient() {
   const apiKey = process.env[ANTHROPIC_EVAL_KEY];
   if (!apiKey) {
     refuse('eval_credentials_missing', `${ANTHROPIC_EVAL_KEY} (a dedicated evaluation key) is required; the production ANTHROPIC_API_KEY is never used`);
   }
-  const SDK = require('@anthropic-ai/sdk');
-  const Anthropic = SDK.Anthropic || SDK;
-  return new Anthropic({ apiKey, maxRetries: 0 });
+  return new (anthropicSdk())(evalAnthropicClientOptions({ apiKey }));
 }
 
 /** Gemini transport for the evaluation: dedicated eval key, optional loopback-only base URL. */
@@ -156,7 +167,20 @@ function refuse(code, detail) {
     const thinking = arg('--thinking', null);
     if (thinking !== null && thinking !== 'disabled') refuse('eval_thinking_invalid', 'pass --thinking disabled, or omit it');
     if (thinking !== null && provider !== 'anthropic') refuse('eval_thinking_unsupported', '--thinking is implemented for anthropic');
-    const plan = planModelRun({ cases: CASES, model, repeats, provider, parallelRequests, thinking });
+    const maxCallsRaw = arg('--max-calls');
+    const maxCalls = maxCallsRaw == null ? null : Number(maxCallsRaw);
+    if (maxCallsRaw != null && (!Number.isInteger(maxCalls) || maxCalls < 1)) refuse('eval_max_calls_invalid', 'pass --max-calls with a positive integer');
+    const plan = planModelRun({ cases: CASES, model, repeats, provider, parallelRequests, thinking, maxCalls });
+    if (has('--probe-wire')) {
+      if (provider !== 'anthropic') refuse('eval_probe_wire_unsupported', '--probe-wire is implemented for anthropic');
+      const { inspection } = await captureAnthropicMessagesWire({
+        Anthropic: anthropicSdk(),
+        input: { text: CASES[0].text, context: CASES[0].context, transcript: CASES[0].transcript || [] },
+        thinking,
+      });
+      out.messagesWire = inspection;
+      if (!inspection.ok) refuse('eval_messages_wire_invalid', inspection.issues.join(','));
+    }
     if (has('--plan')) {
       out.modelPlan = plan;
     } else if (has('--preflight')) {
@@ -164,10 +188,10 @@ function refuse(code, detail) {
         ? await geminiPreflight(geminiTransport(), model)
         : await anthropicPreflight(anthropicClient(), model, { thinking });
       if (!out.preflight.available) {
-        console.log(JSON.stringify({ preflight: out.preflight }, null, 2));
+        console.log(JSON.stringify({ preflight: out.preflight, messagesWire: out.messagesWire }, null, 2));
         refuse('eval_model_unavailable', out.preflight.reason);
       }
-    } else {
+    } else if (!has('--probe-wire')) {
       if (!plan.priced) refuse('eval_unpriced_model', `${model} is not in utils/apiPricing; the cap cannot bound it`);
       const maxUsd = Number(arg('--max-usd'));
       if (!Number.isFinite(maxUsd) || maxUsd <= 0) refuse('eval_cost_cap_required', 'pass --max-usd with the approved cap');
@@ -177,19 +201,27 @@ function refuse(code, detail) {
         out.preflight = await geminiPreflight(gemini, model);
         if (!out.preflight.available) refuse('eval_model_unavailable', out.preflight.reason);
         out.model = await runModelEval({
-          cases: CASES, provider, model, repeats, maxUsd, timeoutMs, parallelRequests,
+          cases: CASES, provider, model, repeats, maxUsd, timeoutMs, parallelRequests, maxCalls,
           createClient: (meter) => createGeminiClient({ apiKey: gemini.apiKey, fetchImpl: gemini.fetchImpl,
             agentName: 'max_interpreter_eval', reserve: meter.reserve, settle: meter.settle }),
         });
         if (out.model.refused) refuse(out.model.refused);
         out.model.apiHost = gemini.host;
       } else {
+        // Free SDK wire check (no network) before Models preflight and the first paid call.
+        const { inspection } = await captureAnthropicMessagesWire({
+          Anthropic: anthropicSdk(),
+          input: { text: CASES[0].text, context: CASES[0].context, transcript: CASES[0].transcript || [] },
+          thinking,
+        });
+        out.messagesWire = inspection;
+        if (!inspection.ok) refuse('eval_messages_wire_invalid', inspection.issues.join(','));
         // A plain SDK client, metered by the runner against the in-process cap.
         const client = anthropicClient();
         // Free compatibility check before the first paid call.
         out.preflight = await anthropicPreflight(client, model, { thinking });
         if (!out.preflight.available) refuse('eval_model_unavailable', out.preflight.reason);
-        out.model = await runModelEval({ cases: CASES, provider, client, model, repeats, maxUsd, timeoutMs, thinking });
+        out.model = await runModelEval({ cases: CASES, provider, client, model, repeats, maxUsd, timeoutMs, thinking, maxCalls });
         if (out.model.refused) refuse(out.model.refused);
         // Where the calls went (ANTHROPIC_BASE_URL can redirect the SDK).
         out.model.apiHost = new URL(client.baseURL).host;
@@ -206,6 +238,7 @@ function refuse(code, detail) {
     if (has('--verbose')) for (const g of out.lexical.grades.filter((x) => !x.pass)) console.log('   x', g.id, JSON.stringify(g.dims), JSON.stringify(g.frame));
     printGates(out.lexical.gates);
     if (out.modelPlan) console.log('\nmodel plan (no calls made):', out.modelPlan);
+    if (out.messagesWire) console.log('\nmessages wire (SDK intercept, no tokens):', out.messagesWire);
     if (out.preflight) console.log('\nprovider preflight (no tokens):', out.preflight);
     if (out.model) {
       out.model.summaries.forEach((s, i) => printSummary(`model ${out.model.model} run ${i + 1}`, s));
@@ -214,6 +247,7 @@ function refuse(code, detail) {
       console.log(`  latency p50 ${out.model.latencyMs.p50} ms · p95 ${out.model.latencyMs.p95} ms · tokens`, out.model.tokens,
         '· degraded', out.model.degraded, '· cost', out.model.cost);
       console.log(`  unstable cases: ${out.model.stability.unstable.map((u) => u.id).join(', ') || 'none'}`);
+      if (out.model.providerRejection) console.log('  provider rejection:', out.model.providerRejection);
       printGates(out.model.gates);
     }
   }

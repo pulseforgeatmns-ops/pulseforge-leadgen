@@ -79,28 +79,42 @@ function reservationFor(provider, model, c, thinking = null) {
   return estimateClaudeReservation(buildRequestParams(input));
 }
 
-function planModelRun({ cases, model, repeats = 1, provider = 'anthropic', parallelRequests = 1, thinking = null }) {
+function plannedCallReservations(perCase, repeats, maxCalls) {
+  const out = [];
+  for (let r = 0; r < repeats; r += 1) {
+    for (let i = 0; i < perCase.length; i += 1) {
+      if (maxCalls != null && out.length >= maxCalls) return out;
+      out.push(perCase[i]);
+    }
+  }
+  return out;
+}
+
+function planModelRun({ cases, model, repeats = 1, provider = 'anthropic', parallelRequests = 1, thinking = null, maxCalls = null }) {
   if (!PROVIDERS.includes(provider)) {
-    return { provider, model, repeats, parallelRequests, calls: cases.length * repeats, priced: false, unpricedReason: 'eval_provider_unknown', reservationUpperBoundUsd: null, maxPerCallReservationUsd: null };
+    return { provider, model, repeats, parallelRequests, maxCalls, calls: cases.length * repeats, priced: false, unpricedReason: 'eval_provider_unknown', reservationUpperBoundUsd: null, maxPerCallReservationUsd: null };
   }
   // Every parallel request is reserved on its own: the bound scales with them.
   const fanout = provider === 'gemini' ? parallelRequests : 1;
   const perCase = cases.map((c) => reservationFor(provider, model, c, provider === 'anthropic' ? thinking : null));
   const priced = perCase.every((x) => x !== null);
-  const sum = priced ? perCase.reduce((a, b) => a + b, 0) : null;
+  const callReservations = priced ? plannedCallReservations(perCase, repeats, maxCalls) : [];
+  const calls = callReservations.length;
+  const sum = priced ? callReservations.reduce((a, b) => a + b, 0) : null;
   return {
     provider,
     model,
     repeats,
+    maxCalls,
     parallelRequests: fanout,
     thinking: provider === 'anthropic' ? thinking : null,
-    calls: cases.length * repeats,
-    providerRequests: cases.length * repeats * fanout,
+    calls,
+    providerRequests: calls * fanout,
     priced,
     unpricedReason: priced ? null : 'model_not_in_utils_apiPricing',
     // Conservative: reservation estimates double-count input bytes and assume
     // max_tokens of output. Real spend is normally far lower.
-    reservationUpperBoundUsd: priced ? Math.round(sum * repeats * fanout * 1e6) / 1e6 : null,
+    reservationUpperBoundUsd: priced ? Math.round(sum * fanout * 1e6) / 1e6 : null,
     maxPerCallReservationUsd: priced ? Math.round(Math.max(...perCase) * 1e6) / 1e6 : null,
   };
 }
@@ -165,14 +179,15 @@ function gradeModelCall(testCase, frame, telemetry) {
  *   createClient?: (meter: { reserve: Function, settle: Function }) => { generateContent: Function }, // gemini
  * }} options
  */
-async function runModelEval({ cases, client, createClient, provider = 'anthropic', model, repeats = 1, maxUsd, timeoutMs, parallelRequests = 1, thinking = null }) {
+async function runModelEval({ cases, client, createClient, provider = 'anthropic', model, repeats = 1, maxUsd, timeoutMs, parallelRequests = 1, thinking = null, maxCalls = null }) {
   if (!model || typeof model !== 'string') return { refused: 'eval_model_id_required' };
   if (!PROVIDERS.includes(provider)) return { refused: 'eval_provider_unknown' };
   if (!Number.isInteger(parallelRequests) || parallelRequests < 1 || parallelRequests > 2) return { refused: 'eval_parallel_requests_invalid' };
   if (parallelRequests !== 1 && provider !== 'gemini') return { refused: 'eval_parallel_requests_unsupported' };
   if (thinking !== null && thinking !== 'disabled') return { refused: 'eval_thinking_invalid' };
   if (thinking !== null && provider !== 'anthropic') return { refused: 'eval_thinking_unsupported' };
-  const plan = planModelRun({ cases, model, repeats, provider, parallelRequests, thinking });
+  if (maxCalls != null && (!Number.isInteger(maxCalls) || maxCalls < 1)) return { refused: 'eval_max_calls_invalid' };
+  const plan = planModelRun({ cases, model, repeats, provider, parallelRequests, thinking, maxCalls });
   if (!plan.priced) return { refused: 'eval_unpriced_model', plan };
   let cap;
   try {
@@ -243,6 +258,10 @@ async function runModelEval({ cases, client, createClient, provider = 'anthropic
       // A rejected request (bad schema/field, unknown model, auth, quota) would
       // fail every remaining call identically: stop after the first one.
       if (/^http_4\d\d$/.test(t.degradedReason || '')) { abortedReason = 'provider_request_rejected'; break; }
+      if (maxCalls != null && telemetry.length >= maxCalls) {
+        if (telemetry.length < cases.length * repeats) abortedReason = 'max_calls_reached';
+        break;
+      }
       // A model that never reports what it served cannot pass the identity check.
       if (provider === 'gemini' && !t.servedModel && !t.degradedReason) { abortedReason = 'model_identity_unreported'; break; }
     }
@@ -299,7 +318,9 @@ async function runModelEval({ cases, client, createClient, provider = 'anthropic
     servedModels,
     repeats,
     plan,
-    complete: !abortedReason && runs.length === repeats && runs.every((r) => r.complete),
+    complete: abortedReason === 'max_calls_reached'
+      ? telemetry.length === plan.calls
+      : !abortedReason && runs.length === repeats && runs.every((r) => r.complete),
     abortedReason,
     summaries: runs.map((r) => r.summary),
     pooled: summarize(pooled),
@@ -311,6 +332,10 @@ async function runModelEval({ cases, client, createClient, provider = 'anthropic
     timingProfile,
     tokens,
     degraded: { calls: degraded.length, byReason: degradedByReason },
+    providerRejection: (() => {
+      const hit = telemetry.find((t) => /^http_4\d\d$/.test(t.degradedReason || ''));
+      return hit ? { caseId: hit.caseId, run: hit.run, degradedReason: hit.degradedReason, providerError: hit.providerError || null } : null;
+    })(),
     cost,
     gates: evaluatePromotionGates({ grades: pooled, latencyMs, calls: telemetry.length, degradedCalls: degraded.length, tokens, estimatedUsd: cost.settledUsd }),
   };

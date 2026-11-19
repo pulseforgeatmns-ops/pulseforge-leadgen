@@ -132,6 +132,7 @@ describe('ModelFrameProducer (prototype, injected client)', () => {
     ['refusal', ok(FRAME, { stop_reason: 'refusal' }), 'stop_reason_refusal'],
     ['truncation', ok(FRAME, { stop_reason: 'max_tokens' }), 'stop_reason_max_tokens'],
     ['HTTP 529', () => { throw Object.assign(new Error('overloaded'), { status: 529 }); }, 'http_529'],
+    ['HTTP 400', () => { throw Object.assign(new Error('400'), { status: 400, type: 'invalid_request_error', error: { type: 'error', error: { type: 'invalid_request_error', message: 'output_config.format schema rejected' } } }); }, 'http_400'],
   ]) {
     it(`degrades safely on ${label}`, async () => {
       const { frame, telemetry } = await new ModelFrameProducer({ client: fakeClient(respond), model: TEST_MODEL }).produce({ text: 'Go ahead.', context: CONTEXT });
@@ -145,6 +146,24 @@ describe('ModelFrameProducer (prototype, injected client)', () => {
     const { frame } = await new ModelFrameProducer({ client, model: TEST_MODEL }).produce({ text: 'Why is it stale?', context: CONTEXT });
     assert.deepEqual(frame.referents, []);
     assert.equal(frame.clarificationRequired, true);
+  });
+
+  it('records the Anthropic 400 body on telemetry without weakening degradation', async () => {
+    const err = Object.assign(new Error('400'), {
+      status: 400,
+      type: 'invalid_request_error',
+      error: { type: 'error', error: { type: 'invalid_request_error', message: 'sk-ant-secret should not leak' } },
+    });
+    const { frame, telemetry } = await new ModelFrameProducer({
+      client: fakeClient(() => { throw err; }),
+      model: TEST_MODEL,
+    }).produce({ text: 'Go ahead.', context: CONTEXT });
+    assert.equal(telemetry.degradedReason, 'http_400');
+    assert.equal(telemetry.providerError.status, 400);
+    assert.equal(telemetry.providerError.type, 'invalid_request_error');
+    assert.equal(telemetry.providerError.message, '[redacted] should not leak');
+    assert.equal(frame.executionCandidate, false);
+    assert.equal(frame.producer, 'model_degraded_to_lexical');
   });
 
   it('requires an injected client', () => {

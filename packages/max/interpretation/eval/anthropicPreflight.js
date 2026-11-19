@@ -10,6 +10,11 @@
  * and, when the run turns thinking off, accept `thinking: {type: "disabled"}`.
  * The response is read defensively: a missing capability is reported as
  * unknown, and only an explicit `supported: false` fails the check.
+ *
+ * This is not a Messages dry-run. It never POSTs /v1/messages, never compiles
+ * json_schema, and never checks anthropic-version / thinking+effort together.
+ * A passing preflight can still 400 on the first paid call; see
+ * eval/anthropicMessagesWire.js.
  */
 
 const { MAX_TOKENS } = require('../producers/interpretationPrompt');

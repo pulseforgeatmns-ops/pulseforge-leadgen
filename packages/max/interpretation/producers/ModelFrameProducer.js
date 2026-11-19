@@ -30,6 +30,7 @@ const { produceLexicalFrame } = require('./LexicalFrameProducer');
 const { SYSTEM_PROMPT, MAX_TOKENS, buildUserContent } = require('./interpretationPrompt');
 const { createAnthropicProvider, buildRequestParams } = require('../providers/AnthropicProvider');
 const { isProvider } = require('../providers');
+const { providerHttpError } = require('../providers/anthropicHttpError');
 const { authorizationPolarityVerdict } = require('../../workspace/PendingDecisionResolver');
 
 // The model is explicit configuration (interpreterModel.js,
@@ -120,7 +121,7 @@ class ModelFrameProducer {
   async produce({ text, context, transcript = [] }) {
     const started = performance.now();
     const controller = new AbortController();
-    const telemetry = { provider: this.provider, model: this.model, servedModel: null, latencyMs: 0, usage: null, degradedReason: null, stopReason: null, timing: null, parallel: null };
+    const telemetry = { provider: this.provider, model: this.model, servedModel: null, latencyMs: 0, usage: null, degradedReason: null, providerError: null, stopReason: null, timing: null, parallel: null };
     try {
       const response = await withTimeout(
         this._provider.complete({ model: this.model, text, context, transcript, timeoutMs: this.timeoutMs, signal: controller.signal }),
@@ -160,6 +161,7 @@ class ModelFrameProducer {
       const reason = error && error.code === 'invalid_turn_frame' ? 'invalid_frame'
         : error && error.code === 'timeout' ? 'timeout'
           : Number.isInteger(error && error.status) ? `http_${error.status}` : 'provider_error';
+      if (Number.isInteger(error && error.status)) telemetry.providerError = providerHttpError(error);
       return this._degrade({ text, context }, telemetry, reason);
     }
   }
