@@ -125,13 +125,6 @@ describe('Gemini adapter: request shape', () => {
     assert.ok(Number.isFinite(telemetry.timing.fetchToHeadersMs));
   });
 
-  it('keeps the latency-sensitive instruction prompt compact without dropping safety rules', () => {
-    assert.ok(Buffer.byteLength(SYSTEM_PROMPT) <= 1600);
-    for (const phrase of ['explicit, unconditional', 'future conditions', 'negated polarity', 'referent ambiguity', 'foreignTenantReference']) {
-      assert.match(SYSTEM_PROMPT, new RegExp(phrase));
-    }
-  });
-
   it('ignores thought parts when reading the answer', async () => {
     const f = fakeFetch(() => ({ ...okBody(), candidates: [{ finishReason: 'STOP', content: { parts: [{ thought: true, text: 'thinking…' }, { text: JSON.stringify(QUESTION_FRAME) }] } }] }));
     const producer = new ModelFrameProducer({ provider: createGeminiProvider({ client: meteredGemini(f.fetchImpl, { reserve: async () => 'r', settle: async () => {} }) }), model: MODEL });

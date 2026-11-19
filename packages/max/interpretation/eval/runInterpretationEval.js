@@ -249,6 +249,10 @@ async function runModelEval({ cases, client, createClient, provider = 'anthropic
     bodyReadMs: timingMetric('bodyReadMs'),
     settleMs: timingMetric('settleMs'),
     harnessAfterClientMs: { p50: percentile(harnessValues, 50), p95: percentile(harnessValues, 95), max: harnessValues.length ? Math.max(...harnessValues) : null },
+    slowestCompleted: timed
+      .map((t) => ({ caseId: t.caseId, run: t.run, latencyMs: t.latencyMs, timing: t.timing, inputTokens: t.usage && t.usage.input_tokens, outputTokens: t.usage && t.usage.output_tokens }))
+      .sort((a, b) => b.latencyMs - a.latencyMs)
+      .slice(0, 20),
     timeouts: telemetry.filter((t) => t.degradedReason === 'timeout').map((t) => ({ caseId: t.caseId, run: t.run, latencyMs: t.latencyMs, timing: t.timing })),
   };
   const scored = pooled.length;
