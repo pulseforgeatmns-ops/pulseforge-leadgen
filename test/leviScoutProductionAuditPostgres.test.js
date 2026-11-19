@@ -26,7 +26,7 @@ const assert = require('node:assert/strict');
 const { Pool } = require('pg');
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
 const { importReviewOnlyContacts } = require('../services/reviewOnlyProspectImportService');
-const { collect, platformOf, parseArgs } = require('../scripts/leviScoutProductionAudit');
+const { collect, platformOf, parseArgs, roleOf, ROLES, MIGRATION_SNAPSHOT_DATABASE } = require('../scripts/leviScoutProductionAudit');
 
 const SECRET = 'AUDIT_PII_MARKER';
 const contact = (i, extra = {}) => ({
@@ -102,15 +102,43 @@ test('Levi production audit: every section reads, tenant-scoped, redacted, read-
     const report = await collect(recording, { now: new Date(Date.now() + 120000),
       expectDatabase: 'postgres', databaseUrl: postgres.connectionString });
     assert.equal(await tableSnapshot(db), before, 'audit changed data');
-    assert.deepEqual(Object.keys(report.target).sort(), ['database', 'platform', 'serverVersionNum']);
+    assert.deepEqual(Object.keys(report.target).sort(), ['database', 'platform', 'role', 'serverVersionNum']);
     assert.equal(report.target.database, 'postgres');
     assert.equal(report.target.platform, 'local');
+    assert.equal(report.target.role, ROLES.UNCLASSIFIED);
+    assert.equal(report.identityOnly, false);
     assert.ok(report.target.serverVersionNum >= 160000);
     for (const detail of ['postgresql://', '127.0.0.1']) assert.ok(!JSON.stringify(report).includes(detail), 'report must not carry connection details');
 
     // Wrong target fails closed: no report, transaction rolled back, nothing written.
     await assert.rejects(collect(db, { expectDatabase: 'pulseforge_production_migration', databaseUrl: postgres.connectionString }),
       { code: 'audit_target_database_mismatch' });
+    await assert.rejects(collect(db, { expectPlatform: 'railway', databaseUrl: postgres.connectionString }),
+      { code: 'audit_target_platform_mismatch' });
+    await assert.rejects(collect(db, { expectRole: ROLES.RAILWAY_LIVE_UNTIL_CUTOVER, databaseUrl: postgres.connectionString }),
+      { code: 'audit_target_role_mismatch' });
+    assert.equal(await tableSnapshot(db), before);
+
+    const identityStatements = [];
+    const identityPool = { connect: async () => {
+      const client = await db.connect();
+      return { query: (sql, params) => { identityStatements.push(String(sql)); return client.query(sql, params); }, release: () => client.release() };
+    } };
+    const identity = await collect(identityPool, {
+      identityOnly: true,
+      expectDatabase: 'postgres',
+      expectPlatform: 'local',
+      expectRole: ROLES.UNCLASSIFIED,
+      databaseUrl: postgres.connectionString,
+    });
+    assert.equal(identity.identityOnly, true);
+    assert.equal(identity.production, undefined);
+    assert.deepEqual(identity.sections, {});
+    assert.equal(identity.target.role, ROLES.UNCLASSIFIED);
+    assert.ok(!identityStatements.some(sql => /\bFROM\s+(prospects|clients|agent_log|cie_)/i.test(sql)),
+      'identity-only must not read tenant or prospect tables');
+    assert.equal(identityStatements[0], 'BEGIN TRANSACTION READ ONLY');
+    assert.equal(identityStatements.at(-1), 'ROLLBACK');
     assert.equal(await tableSnapshot(db), before);
 
     for (const name of ['tenant', 'workspace', 'blueprints', 'runs', 'inventory']) {
@@ -155,7 +183,24 @@ test('platform classification and arguments never need Railway', () => {
   assert.equal(platformOf('postgresql://u:p@postgres.railway.internal:5432/railway'), 'railway');
   assert.equal(platformOf('postgresql://u:p@127.0.0.1:5432/x'), 'local');
   assert.equal(platformOf(undefined), 'unknown');
-  assert.deepEqual(parseArgs([]), {});
-  assert.deepEqual(parseArgs(['--expect-database=pulseforge_production_migration']), { expectDatabase: 'pulseforge_production_migration' });
+  assert.equal(roleOf({ database: MIGRATION_SNAPSHOT_DATABASE, platform: 'render' }), ROLES.RENDER_MIGRATION_SNAPSHOT);
+  assert.equal(roleOf({ database: 'railway', platform: 'railway' }), ROLES.RAILWAY_LIVE_UNTIL_CUTOVER);
+  assert.equal(roleOf({ database: 'postgres', platform: 'local' }), ROLES.UNCLASSIFIED);
+  assert.deepEqual(parseArgs([]), { identityOnly: false });
+  assert.deepEqual(parseArgs(['--expect-database=pulseforge_production_migration']), {
+    identityOnly: false, expectDatabase: 'pulseforge_production_migration',
+  });
+  assert.deepEqual(parseArgs([
+    '--identity-only',
+    '--expect-database=pulseforge_production_migration',
+    '--expect-platform=render',
+    '--expect-role=render_migration_snapshot_not_production',
+  ]), {
+    identityOnly: true,
+    expectDatabase: 'pulseforge_production_migration',
+    expectPlatform: 'render',
+    expectRole: 'render_migration_snapshot_not_production',
+  });
   assert.throws(() => parseArgs(['--write']), { code: 'audit_argument_invalid' });
+  assert.throws(() => parseArgs(['--expect-platform=heroku']), { code: 'audit_argument_invalid' });
 });

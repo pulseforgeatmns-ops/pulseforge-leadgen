@@ -1,6 +1,6 @@
 # P0-SCOUT-LEVI-001 — Tenant 21 (LA Endeavors) research-only Scout: readiness record
 
-Checkpoint date: 2026-11-19. Baseline: `main` @ `f065ce6` (PR #1143).
+Checkpoint date: 2026-11-19. Baseline: `main` @ `f2b5bef` (PR #1144). Prior checkpoint `f065ce6` (#1143) is superseded.
 
 ## Verified production status (from Railway metadata and logs, no database read)
 
@@ -21,11 +21,30 @@ npm run scout:levi:production-audit -- --expect-database=<database name>
 ```
 
 - `--expect-database` makes the run fail closed (exit 2, no report) when the URL points at a different database. On Nov 17 the Render staging service was found pointing at the wrong database.
-- Every report carries `target: { database, serverVersionNum, platform }`, where platform is `render`, `railway`, `local`, `other` or `unknown`. The URL, host and credentials are never printed.
+- `--expect-platform=railway|render|local|other|unknown` fails closed on host-class mismatch.
+- `--expect-role` fails closed on the classified role. `pulseforge_production_migration` is always `render_migration_snapshot_not_production`. A Railway host that is not that database is `railway_live_until_cutover`. Anything else is `unclassified`.
+- `--identity-only` verifies database identity inside `BEGIN TRANSACTION READ ONLY` and rolls back without reading tenant, Blueprint, run, or prospect tables. Use this first on Render.
+- Every full report carries `target: { database, serverVersionNum, platform, role }`. The URL, host and credentials are never printed. Prospect rows are deleted before output.
 
 Where to run it:
-- **Railway (current live source, until cutover):** `railway run --service pulseforge-leadgen --environment production npm run scout:levi:production-audit`. This is read-only verification only.
-- **Render (destination):** from a shell on a Render service built from a commit that contains this audit, connected over the internal URL: `npm run scout:levi:production-audit -- --expect-database=pulseforge_production_migration`. Until cutover, the Render database is the 2026-11-17 snapshot, so the report describes that snapshot and not live data.
+- **Railway (current live source, until cutover):** identity first, then the full redacted audit. Both are read-only verification only.
+
+```sh
+railway run --service pulseforge-leadgen --environment production \
+  npm run scout:levi:production-audit -- --identity-only --expect-platform=railway --expect-role=railway_live_until_cutover --expect-database=<pathname>
+railway run --service pulseforge-leadgen --environment production \
+  npm run scout:levi:production-audit -- --expect-platform=railway --expect-role=railway_live_until_cutover --expect-database=<pathname>
+```
+
+- **Render (destination snapshot, not live production):** the live Render service `pulseforge-api-migration` is still `migration/render-isolated-staging` @ `1fe69d6` and **does not contain this audit**. Identity can be confirmed from that image via `GET /healthz` (200) plus probe logs showing `database: pulseforge_production_migration`. A Levi JSON audit on Render requires a later image that includes this script, then:
+
+```sh
+npm run scout:levi:production-audit -- --identity-only \
+  --expect-database=pulseforge_production_migration --expect-platform=render \
+  --expect-role=render_migration_snapshot_not_production
+```
+
+Treat any Render report as the 2026-11-17 snapshot. Do not treat it as live tenant-21 inventory.
 
 **Not executed from this session.**
 - No Railway CLI and no database credential are available here.
@@ -33,12 +52,7 @@ Where to run it:
 - The Render database has an empty IP allowlist, so it refuses external connections, including the Render MCP's read-only query.
 - A Railway environment fork was rejected: it copies production variables, so the fork's services could reach real provider and sender credentials.
 
-**Defect found in the merged audit (fixed on this branch).** The `workspace` query selected `blueprint_id` and `blueprint_version` from `cie_interview_sessions`, but no migration creates those columns. Run against the real schema, the section comes back as `{"unavailable":"42703"}`, and the Blueprint state is never reported. The fix:
-- reads session status from existing columns;
-- reads Blueprint status (id, version, status) from `cie_business_blueprints`;
-- reduces the workspace correction to a boolean, so no correction content is emitted;
-- reports `allTime` and `reviewOnlyContactNow` inventory as well as the 30-day weekly window. Records imported before the window were invisible before;
-- breaks duplicate ties by id. Before, two copies of one identity created in the same transaction were both counted as duplicates.
+**#1143 schema defect is fixed on current `main` (#1144).** The original workspace query selected `blueprint_id` and `blueprint_version` from `cie_interview_sessions` (SQLSTATE `42703`). Current `main` reads session status from existing columns and Blueprint status from `cie_business_blueprints`. `test/leviScoutProductionAuditPostgres.test.js` now passes against this audit.
 
 
 ## Blueprint qualification criteria
@@ -63,21 +77,26 @@ The corrected audit reports per-blocker counts for this cohort (`production.revi
    - `runResearchOnlyCycle` needs five injected dependencies. None has a production implementation: `claimRun` (replay table), `discover`, `existingIdentityKeys`, `persistReviewOnly` and `recordDiagnostic`.
    - It has no entry point (route, CLI or cron) and no schema migration.
    - A source must be chosen and approved first. Candidates are public deal posts, county deed or recorder transfers to investor LLCs, and operator research. Each has its own cost, terms-of-service and provenance profile.
-3. **Production audit not yet run** (see above).
+3. **Live production audit not yet run.** This session still has no Railway CLI, no production `DATABASE_URL`, and no Render shell on an image that contains the audit. External connections to the Render database remain blocked. Identity-only and fail-closed platform/role flags are in the CLI; they have been proven only on disposable PostgreSQL.
 4. **Weekly output metric.** The audit separates imports (`review_only_import`) from other sources, duplicates, suppressed records and contract-qualified records. `observedProductionQualifiedNew` stays `null` until a Scout source produces records with research provenance.
+5. **Open follow-on PRs (do not merge during the freeze without review).**
+   - #1145: structured `evidenceDate` / `sourceType` on review-only imports. Needed for the two-week operator experiment; not required to keep Scout default-off.
+   - #1146: draft Render migration on current `main`. DO NOT MERGE. Live Render remains `1fe69d6`.
 
 ## Gates validated offline
 
-- Qualification, duplicate, suppression and provenance blockers, and the authority and permission shape: `test/leviScoutProductionContract.test.js` and `test/leviScoutResearchOnlyExecution.test.js` (12/12).
+- Qualification, duplicate, suppression and provenance blockers, and the authority and permission shape: `test/leviScoutProductionContract.test.js` and `test/leviScoutResearchOnlyExecution.test.js`.
 - The audit end to end on disposable PostgreSQL with production column names: `test/leviScoutProductionAuditPostgres.test.js`. It checks:
   - every section is readable;
   - only tenant 21 is read;
   - every statement is a SELECT inside a READ ONLY transaction that ends in ROLLBACK;
   - all six tables are byte-identical before and after;
   - no names, emails or sources appear in the output;
-  - duplicates and suppression are counted, and nothing is qualified without a range.
+  - duplicates and suppression are counted, and nothing is qualified without a range;
+  - `--identity-only` runs only the identity SELECT and never reads tenant, Blueprint, run or prospect tables;
+  - `--expect-platform` and `--expect-role` fail closed, including `pulseforge_production_migration` classified as `render_migration_snapshot_not_production`.
 
-  This test fails against the merged audit (`42703`).
+  `npm run test:scout:levi` is 14/14 on this branch. The #1143 audit is what failed with `42703`.
 - The narrative extraction, review-only import and investigation suites pass (186 + 3), as does `test/maxInvestigationAcceptancePostgres.test.js` (3/3).
 
 ## Render migration compatibility (Render is the production destination)
@@ -90,10 +109,10 @@ Verified on 2026-11-19 through the Render API, read-only.
 | Web service | `pulseforge-api-migration` (Docker, manual deploy, branch `migration/render-isolated-staging`, Ohio). The live deploy is `1fe69d6` (2026-11-17). With `PF_MIGRATION_STAGING=1` it runs only `migrationStagingServer.js`, a read-only health probe. No application routes, agents, crons or outbound. |
 | Database | `pulseforge-production-migration`: PostgreSQL 18, 10 GB, available, external access blocked. Holds the restored 2026-11-17 Pulseforge snapshot: 274 tables, 1,627,867 rows, row counts reconciled against the archive. Signal tables are present as empty schema. |
 | Cron jobs | None |
-| PR #1129 | Open draft, `mergeable_state: dirty` (conflicts with `main`), marked DO NOT MERGE during the P0 freeze. Its branch predates #1143, so the Render service image does not contain the Levi audit or contract. |
+| PR #1129 | Open draft, dirty vs `main`, DO NOT MERGE. Predates Levi. Superseded for CI by #1146 (`migration/render-current-main` @ `8fe8d22`), which already includes #1143/#1144. Live Render is still #1129's `1fe69d6`. |
 
 **What the Levi workflow needs on Render.** None of it is Railway-specific code.
-1. A Render service image built from a commit that contains the Levi audit, contract and research-only modules. That means #1129 has to be rebased onto current `main`, or the staging Dockerfile gate has to be carried forward.
+1. A Render service image built from a commit that contains the Levi audit, contract and research-only modules. #1146 already carries that tree as a draft; do not merge or deploy it during the freeze. The live `1fe69d6` probe cannot run the Levi audit.
 2. **TLS.** `db.js` keeps TLS on (`rejectUnauthorized:false`) unless `DATABASE_SSL=false`. The staging probe uses the same setting and confirmed the Render database identity over the internal URL on Nov 17, so no change is needed.
 3. **Live data.** The Render database is a snapshot. Levi's live inventory stays on Railway until a separately authorized cutover with delta reconciliation.
 4. **Research-only cycle on Render (future, unbuilt).** A Render Cron Job or one-off job that invokes a CLI wrapper of `runResearchOnlyCycle`. The flags would be Render environment variables (`SCOUT_LEVI_RESEARCH_ONLY_ENABLED`, `SCOUT_LEVI_PAID_PROVIDERS_APPROVED`), and the run-claim table would be added by an operator migration applied to the Render database. Nothing should be added to Railway.

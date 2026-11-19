@@ -6,6 +6,14 @@
 
 const { TENANT_ID, evaluateProspect, weeklyProduction } = require('../services/leviScoutProductionContract');
 
+const PLATFORMS = Object.freeze(['render', 'railway', 'local', 'other', 'unknown']);
+const MIGRATION_SNAPSHOT_DATABASE = 'pulseforge_production_migration';
+const ROLES = Object.freeze({
+  RENDER_MIGRATION_SNAPSHOT: 'render_migration_snapshot_not_production',
+  RAILWAY_LIVE_UNTIL_CUTOVER: 'railway_live_until_cutover',
+  UNCLASSIFIED: 'unclassified',
+});
+
 const QUERIES = {
   tenant: `SELECT id,name,slug,vertical,active,enabled_agents,notes FROM clients WHERE id=$1`,
   // cie_interview_sessions has no blueprint columns (migrations/2026-08-06-client-intelligence-engine.sql);
@@ -47,28 +55,69 @@ function platformOf(url) {
   return 'other';
 }
 
+function roleOf({ database, platform }) {
+  if (database === MIGRATION_SNAPSHOT_DATABASE) return ROLES.RENDER_MIGRATION_SNAPSHOT;
+  if (platform === 'railway') return ROLES.RAILWAY_LIVE_UNTIL_CUTOVER;
+  return ROLES.UNCLASSIFIED;
+}
+
 function parseArgs(argv = []) {
-  const out = {};
+  const out = { identityOnly: false };
   for (const arg of argv) {
-    const match = /^--expect-database=(.+)$/.exec(arg);
-    if (match) out.expectDatabase = match[1];
-    else throw Object.assign(new Error(`unknown argument: ${arg}`), { code: 'audit_argument_invalid' });
+    if (arg === '--identity-only') { out.identityOnly = true; continue; }
+    const database = /^--expect-database=(.+)$/.exec(arg);
+    if (database) { out.expectDatabase = database[1]; continue; }
+    const platform = /^--expect-platform=(.+)$/.exec(arg);
+    if (platform) {
+      if (!PLATFORMS.includes(platform[1])) {
+        throw Object.assign(new Error(`unknown argument: ${arg}`), { code: 'audit_argument_invalid' });
+      }
+      out.expectPlatform = platform[1];
+      continue;
+    }
+    const role = /^--expect-role=(.+)$/.exec(arg);
+    if (role) { out.expectRole = role[1]; continue; }
+    throw Object.assign(new Error(`unknown argument: ${arg}`), { code: 'audit_argument_invalid' });
   }
   return out;
 }
 
-async function collect(pool, { now = new Date(), expectDatabase = null, databaseUrl = process.env.DATABASE_URL } = {}) {
+function assertTarget(target, { expectDatabase = null, expectPlatform = null, expectRole = null } = {}) {
+  if (expectDatabase && target.database !== expectDatabase) {
+    throw Object.assign(new Error('audit_target_database_mismatch'), { code: 'audit_target_database_mismatch' });
+  }
+  if (expectPlatform && target.platform !== expectPlatform) {
+    throw Object.assign(new Error('audit_target_platform_mismatch'), { code: 'audit_target_platform_mismatch' });
+  }
+  if (expectRole && target.role !== expectRole) {
+    throw Object.assign(new Error('audit_target_role_mismatch'), { code: 'audit_target_role_mismatch' });
+  }
+}
+
+async function collect(pool, {
+  now = new Date(),
+  expectDatabase = null,
+  expectPlatform = null,
+  expectRole = null,
+  identityOnly = false,
+  databaseUrl = process.env.DATABASE_URL,
+} = {}) {
   const client = await pool.connect();
-  const report = { tenantId: TENANT_ID, generatedAt: now.toISOString(), readOnly: true, sections: {} };
+  const report = { tenantId: TENANT_ID, generatedAt: now.toISOString(), readOnly: true, identityOnly: Boolean(identityOnly), sections: {} };
   try {
     await client.query('BEGIN TRANSACTION READ ONLY');
     await client.query("SET LOCAL statement_timeout='15s'");
     const identity = (await client.query(
       "SELECT current_database() AS database, current_setting('server_version_num')::int AS server_version_num")).rows[0];
-    report.target = { database: identity.database, serverVersionNum: identity.server_version_num, platform: platformOf(databaseUrl) };
-    if (expectDatabase && identity.database !== expectDatabase) {
-      throw Object.assign(new Error('audit_target_database_mismatch'), { code: 'audit_target_database_mismatch' });
-    }
+    const platform = platformOf(databaseUrl);
+    report.target = {
+      database: identity.database,
+      serverVersionNum: identity.server_version_num,
+      platform,
+      role: roleOf({ database: identity.database, platform }),
+    };
+    assertTarget(report.target, { expectDatabase, expectPlatform, expectRole });
+    if (identityOnly) return report;
     for (const [name, sql] of Object.entries(QUERIES)) {
       await client.query(`SAVEPOINT audit_${name}`);
       try {
@@ -119,7 +168,10 @@ async function collect(pool, { now = new Date(), expectDatabase = null, database
   }
 }
 
-module.exports = { QUERIES, collect, platformOf, parseArgs };
+module.exports = {
+  QUERIES, collect, platformOf, parseArgs, roleOf, assertTarget,
+  PLATFORMS, MIGRATION_SNAPSHOT_DATABASE, ROLES,
+};
 
 if (require.main === module) {
   Promise.resolve().then(() => collect(require('../db'), parseArgs(process.argv.slice(2))))

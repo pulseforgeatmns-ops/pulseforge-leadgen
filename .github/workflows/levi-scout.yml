@@ -1,5 +1,15 @@
 name: Levi Scout (tenant 21) contract and audit
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'services/leviScoutProductionContract.js'
+      - 'services/leviScoutResearchOnlyExecution.js'
+      - 'scripts/leviScoutProductionAudit.js'
+      - 'services/reviewOnlyProspectImportService.js'
+      - 'packages/max/workspace/ProspectDealClaims.js'
+      - 'test/leviScout*.test.js'
+      - '.github/workflows/levi-scout.yml'
   pull_request:
     paths:
       - 'services/leviScoutProductionContract.js'
