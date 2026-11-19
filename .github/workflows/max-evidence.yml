@@ -1,0 +1,31 @@
+name: Max evidence registry
+on:
+  pull_request:
+    paths:
+      - 'packages/max/evidence/**'
+      - 'packages/max/workspace/OperationalInspection.js'
+      - 'packages/max/workspace/ProspectRecordIntelligence.js'
+      - 'packages/max/interpretation/TurnFrame.js'
+      - 'test/maxEvidenceRegistryPostgres.test.js'
+      - '.github/workflows/max-evidence.yml'
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts
+      - run: node --require ./test/helpers/denyWebsiteEvidenceNetwork.cjs --test packages/max/evidence/tests/*.test.js
+  postgres:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: ./.github/actions/setup-postgres-environment
+      - run: npm ci --ignore-scripts
+      - name: Disposable PostgreSQL scenarios (no skips)
+        run: node --test test/maxEvidenceRegistryPostgres.test.js

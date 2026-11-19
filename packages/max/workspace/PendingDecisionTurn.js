@@ -106,6 +106,9 @@ function buildClarifyProse(question, resolution, snapshot) {
     prefix =
       'Understood — not approved. Nothing was approved, sent, or cancelled; this decision stays pending.\n' +
       'To cancel the mission instead, say "cancel it".\n\n';
+  } else if (resolution.held && resolution.retractedAuthorization) {
+    prefix = 'Not executed: your message gives a decision and then withdraws or contradicts it. Nothing was approved, sent, or cancelled; this decision stays pending.\n' +
+      'Say "approved" to approve it, or "cancel it" to cancel the mission.\n\n';
   } else if (resolution.held && resolution.qualifiedAuthorization) {
     prefix = 'Not executed: your decision includes uncertainty or a condition I cannot durably enforce. Nothing was approved, sent, or cancelled. Please clarify the authorized scope and timing.\n\n';
   } else if (resolution.held && resolution.mixedPolarity) {

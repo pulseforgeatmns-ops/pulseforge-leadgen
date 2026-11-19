@@ -5,6 +5,12 @@ on:
       - 'packages/max/interpretation/**'
       - 'packages/max/workspace/WorkspaceEngine.js'
       - 'scripts/maxInterpretationEval.js'
+      - 'scripts/maxInterpretationShadow*.js'
+      - 'services/maxOperationalReadiness.js'
+      - 'utils/meteredGemini.js'
+      - 'utils/meteredAnthropic.js'
+      - 'utils/apiPricing.js'
+      - 'migrations/*max-interpretation-shadow*'
       - '.github/workflows/max-interpretation.yml'
 jobs:
   offline:
@@ -33,4 +39,4 @@ jobs:
           node-version: '22'
       - uses: ./.github/actions/setup-postgres-environment
       - run: npm ci --ignore-scripts
-      - run: node --test packages/max/interpretation/tests/shadowPostgres.postgres.cjs
+      - run: node --test packages/max/interpretation/tests/shadowPostgres.postgres.cjs packages/max/interpretation/tests/shadowReadinessPostgres.postgres.cjs

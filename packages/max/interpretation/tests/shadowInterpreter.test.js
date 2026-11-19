@@ -17,7 +17,7 @@ test('flag off performs no capture, call or persistence', async () => {
 test('injected model runs after the response task and persists bounded metadata without text', async () => {
   const rows = [];
   let called = false;
-  const producer = new ModelFrameProducer({client:{messages:{create:async () => {
+  const producer = new ModelFrameProducer({model:'claude-test-model',client:{messages:{create:async () => {
     called = true;
     return {stop_reason:'end_turn', content:[{type:'text',text:JSON.stringify(raw)}], usage:{input_tokens:50,output_tokens:30}};
   }}}});
