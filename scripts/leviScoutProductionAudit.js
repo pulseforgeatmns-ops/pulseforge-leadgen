@@ -48,10 +48,12 @@ async function collect(pool, { now = new Date() } = {}) {
     const rows = Array.isArray(report.sections.prospects) ? report.sections.prospects : [];
     const evaluated = rows.map(evaluateProspect);
     report.production = {
+      contractStatus: 'proposed_range_requires_approved_blueprint_verification',
+      observedProductionQualifiedNew: null,
       weekly: weeklyProduction(rows, now),
       last30Days: {
         discovered: rows.length,
-        qualifiedNew: evaluated.filter(item => item.qualified).length,
+        contractQualifiedCandidates: evaluated.filter(item => item.qualified).length,
         classifications: {
           contactNow: evaluated.filter(item => item.classification === 'Contact Now').length,
           qualifyFirst: evaluated.filter(item => item.classification === 'Qualify First').length,

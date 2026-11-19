@@ -45,7 +45,7 @@ test('out-of-range, duplicate and suppressed records fail closed', () => {
 test('weekly production distinguishes discovered rows from qualified new output', () => {
   const rows = [complete(), complete({ email: null }), complete({ created_at: '2026-11-10T12:00:00Z' })];
   const weeks = weeklyProduction(rows, new Date('2026-11-19T00:00:00Z'));
-  assert.deepEqual(weeks.map(row => [row.weekOf, row.discovered, row.qualifiedNew]), [
+  assert.deepEqual(weeks.map(row => [row.weekOf, row.discovered, row.contractQualifiedCandidates]), [
     ['2026-11-16', 2, 1], ['2026-11-09', 1, 1],
   ]);
 });

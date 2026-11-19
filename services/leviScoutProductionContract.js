@@ -102,9 +102,9 @@ function weeklyProduction(rows = [], now = new Date()) {
     day.setUTCDate(day.getUTCDate() - offset);
     const key = day.toISOString().slice(0, 10);
     const evaluation = evaluateProspect(row);
-    const bucket = weeks.get(key) || { weekOf: key, discovered: 0, qualifiedNew: 0, contactNow: 0, qualifyFirst: 0, hold: 0 };
+    const bucket = weeks.get(key) || { weekOf: key, discovered: 0, contractQualifiedCandidates: 0, contactNow: 0, qualifyFirst: 0, hold: 0 };
     bucket.discovered += 1;
-    if (evaluation.qualified) bucket.qualifiedNew += 1;
+    if (evaluation.qualified) bucket.contractQualifiedCandidates += 1;
     if (evaluation.classification === 'Contact Now') bucket.contactNow += 1;
     else if (evaluation.classification === 'Qualify First') bucket.qualifyFirst += 1;
     else bucket.hold += 1;
