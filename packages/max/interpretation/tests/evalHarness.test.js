@@ -213,6 +213,7 @@ describe('evaluation CLI', () => {
   function cli(args, env = {}) {
     const childEnv = { ...process.env, DATABASE_URL: 'postgresql://must-not-be-used.invalid:5432/prod', ...env };
     delete childEnv.ANTHROPIC_API_KEY;
+    delete childEnv.MAX_EVAL_ANTHROPIC_API_KEY;
     return spawnSync(process.execPath, ['-r', preload, 'scripts/maxInterpretationEval.js', ...args], { cwd: ROOT, env: childEnv, encoding: 'utf8' });
   }
 
@@ -346,10 +347,18 @@ describe('final review: paid CLI path end to end against a local fake API', () =
 
   it('sends only the requested model, reports served model, host and cost, and never connects to a database', async (t) => {
     const seen = [];
+    const lookups = [];
     const server = http.createServer((req, res) => {
       let body = '';
       req.on('data', (d) => { body += d; });
       req.on('end', () => {
+        // The free preflight: one Models API lookup before any paid call.
+        if (req.method === 'GET' && req.url.startsWith('/v1/models/')) {
+          lookups.push({ url: req.url, beforeFirstMessage: seen.length === 0 });
+          res.writeHead(200, { 'content-type': 'application/json' });
+          return res.end(JSON.stringify({ type: 'model', id: decodeURIComponent(req.url.split('/').pop()), display_name: 'Fixture', max_input_tokens: 1000000, max_tokens: 128000,
+            capabilities: { structured_outputs: { supported: true }, thinking: { supported: true, types: { adaptive: { supported: true }, disabled: { supported: true } } } } }));
+        }
         const params = JSON.parse(body);
         seen.push({ path: req.url, model: params.model, maxTokens: params.max_tokens });
         res.writeHead(200, { 'content-type': 'application/json' });
@@ -363,7 +372,7 @@ describe('final review: paid CLI path end to end against a local fake API', () =
     const { port } = server.address();
     const env = {
       ...process.env,
-      ANTHROPIC_API_KEY: 'test-key-not-real',
+      MAX_EVAL_ANTHROPIC_API_KEY: 'test-key-not-real',
       ANTHROPIC_BASE_URL: `http://127.0.0.1:${port}`,
       DATABASE_URL: 'postgresql://must-not-be-used.invalid:5432/prod',
       NO_PROXY: '127.0.0.1', no_proxy: '127.0.0.1',
@@ -379,6 +388,8 @@ describe('final review: paid CLI path end to end against a local fake API', () =
     const out = JSON.parse(stdout).model;
     assert.equal(seen.length, HELDOUT.length);
     assert.ok(seen.every((s) => s.model === PRICED_MODEL && s.path === '/v1/messages'));
+    assert.deepEqual(lookups, [{ url: `/v1/models/${PRICED_MODEL}`, beforeFirstMessage: true }]);
+    assert.equal(JSON.parse(stdout).preflight.available, true);
     assert.equal(out.complete, true);
     assert.deepEqual(out.servedModels, { [PRICED_MODEL]: HELDOUT.length });
     assert.equal(out.apiHost, `127.0.0.1:${port}`);

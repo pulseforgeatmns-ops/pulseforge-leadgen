@@ -73,19 +73,19 @@ async function runLexical(cases) {
  * Price the run without calling anything: the exact request bodies produce()
  * would send, through the same reservation estimator the meter uses.
  */
-function reservationFor(provider, model, c) {
-  const input = { model, text: c.text, context: c.context, transcript: c.transcript || [] };
+function reservationFor(provider, model, c, thinking = null) {
+  const input = { model, text: c.text, context: c.context, transcript: c.transcript || [], thinking };
   if (provider === 'gemini') return estimateGeminiReservation(buildGeminiRequest(input));
   return estimateClaudeReservation(buildRequestParams(input));
 }
 
-function planModelRun({ cases, model, repeats = 1, provider = 'anthropic', parallelRequests = 1 }) {
+function planModelRun({ cases, model, repeats = 1, provider = 'anthropic', parallelRequests = 1, thinking = null }) {
   if (!PROVIDERS.includes(provider)) {
     return { provider, model, repeats, parallelRequests, calls: cases.length * repeats, priced: false, unpricedReason: 'eval_provider_unknown', reservationUpperBoundUsd: null, maxPerCallReservationUsd: null };
   }
   // Every parallel request is reserved on its own: the bound scales with them.
   const fanout = provider === 'gemini' ? parallelRequests : 1;
-  const perCase = cases.map((c) => reservationFor(provider, model, c));
+  const perCase = cases.map((c) => reservationFor(provider, model, c, provider === 'anthropic' ? thinking : null));
   const priced = perCase.every((x) => x !== null);
   const sum = priced ? perCase.reduce((a, b) => a + b, 0) : null;
   return {
@@ -93,6 +93,7 @@ function planModelRun({ cases, model, repeats = 1, provider = 'anthropic', paral
     model,
     repeats,
     parallelRequests: fanout,
+    thinking: provider === 'anthropic' ? thinking : null,
     calls: cases.length * repeats,
     providerRequests: cases.length * repeats * fanout,
     priced,
@@ -164,12 +165,14 @@ function gradeModelCall(testCase, frame, telemetry) {
  *   createClient?: (meter: { reserve: Function, settle: Function }) => { generateContent: Function }, // gemini
  * }} options
  */
-async function runModelEval({ cases, client, createClient, provider = 'anthropic', model, repeats = 1, maxUsd, timeoutMs, parallelRequests = 1 }) {
+async function runModelEval({ cases, client, createClient, provider = 'anthropic', model, repeats = 1, maxUsd, timeoutMs, parallelRequests = 1, thinking = null }) {
   if (!model || typeof model !== 'string') return { refused: 'eval_model_id_required' };
   if (!PROVIDERS.includes(provider)) return { refused: 'eval_provider_unknown' };
   if (!Number.isInteger(parallelRequests) || parallelRequests < 1 || parallelRequests > 2) return { refused: 'eval_parallel_requests_invalid' };
   if (parallelRequests !== 1 && provider !== 'gemini') return { refused: 'eval_parallel_requests_unsupported' };
-  const plan = planModelRun({ cases, model, repeats, provider, parallelRequests });
+  if (thinking !== null && thinking !== 'disabled') return { refused: 'eval_thinking_invalid' };
+  if (thinking !== null && provider !== 'anthropic') return { refused: 'eval_thinking_unsupported' };
+  const plan = planModelRun({ cases, model, repeats, provider, parallelRequests, thinking });
   if (!plan.priced) return { refused: 'eval_unpriced_model', plan };
   let cap;
   try {
@@ -209,7 +212,7 @@ async function runModelEval({ cases, client, createClient, provider = 'anthropic
     if (!client || !client.messages || typeof client.messages.create !== 'function') return { refused: 'eval_client_required', plan };
     meterClient(client, { agentName: 'max_interpreter_eval', reserve: cap.reserve, settle: cap.settle });
     client.messages.create = track(client.messages.create);
-    transport = createAnthropicProvider({ client });
+    transport = createAnthropicProvider({ client, thinking });
   }
   const settleInflight = () => Promise.all([...inflight]);
   const producer = new ModelFrameProducer({ provider: transport, model, timeoutMs });
@@ -290,6 +293,8 @@ async function runModelEval({ cases, client, createClient, provider = 'anthropic
   return {
     provider,
     model,
+    // The request configuration that differs from the provider default.
+    requestConfig: { thinking: provider === 'anthropic' ? thinking : null, parallelRequests },
     parallel,
     servedModels,
     repeats,

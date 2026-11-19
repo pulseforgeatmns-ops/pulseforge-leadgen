@@ -9,6 +9,11 @@ const PLACES_UPPER_BOUND = Object.freeze({
   autocomplete: 0.00283, geocode: 0.005,
 });
 const CLAUDE_RATES = Object.freeze({
+  // Claude Haiku 5.5: verified 2026-11-19 against platform.claude.com pricing
+  // ($0.10 input / $0.50 output per MTok; cache reads $0.01 = 0.1x) for
+  // prompts up to 100,000 tokens. Longer prompts are priced higher and are left
+  // unpriced here (CLAUDE_STANDARD_PROMPT_LIMIT), never under-reported.
+  'claude-haiku-5-5': [0.10, 0.50],
   'claude-opus-5-5': [4, 20, 0.05],
   'claude-sonnet-5-5': [2, 10, 0.05],
   'claude-sonnet-4-6': [3, 15],
@@ -51,6 +56,15 @@ function sanitizedUsage(usage = {}) {
   }
   return result;
 }
+/** Models whose standard rates apply only up to a prompt length (input incl. cache tokens). */
+const CLAUDE_STANDARD_PROMPT_LIMIT = Object.freeze({ 'claude-haiku-5-5': 100000 });
+
+function standardPromptLimit(model) {
+  const name = String(model || '');
+  const key = Object.keys(CLAUDE_STANDARD_PROMPT_LIMIT).find(k => name === k || new RegExp(`^${k}-\\d{8}$`).test(name));
+  return key ? CLAUDE_STANDARD_PROMPT_LIMIT[key] : null;
+}
+
 function estimateClaudeUsage(model, rawUsage, params = {}) {
   const rates = modelRates(model);
   const usage = sanitizedUsage(rawUsage);
@@ -58,7 +72,10 @@ function estimateClaudeUsage(model, rawUsage, params = {}) {
   // Server tools, fast mode and batch pricing are not silently treated as standard.
   if (params.inference_geo === 'us' || params.speed === 'fast' || (params.tools || []).some(t => t.type && t.type !== 'custom')) return null;
   const [input, output, cacheRead = 0.1] = rates;
-  if (usage.input_tokens + (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0) > 200000) return null;
+  const promptTokens = usage.input_tokens + (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0);
+  if (promptTokens > 200000) return null;
+  const limit = standardPromptLimit(model);
+  if (limit !== null && promptTokens > limit) return null;
   const creation = usage.cache_creation || {};
   const five = creation.ephemeral_5m_input_tokens || 0;
   const hour = creation.ephemeral_1h_input_tokens || 0;
@@ -107,5 +124,5 @@ function estimateGeminiReservation(params = {}) {
   return (bytes * rates[0] * 2 + max * rates[1]) / 1e6;
 }
 
-module.exports = { PLACES_UPPER_BOUND, CLAUDE_RATES, GEMINI_RATES, modelRates, sanitizedUsage,
+module.exports = { PLACES_UPPER_BOUND, CLAUDE_RATES, CLAUDE_STANDARD_PROMPT_LIMIT, GEMINI_RATES, modelRates, sanitizedUsage,
   estimateClaudeUsage, estimateClaudeReservation, sanitizedGeminiUsage, estimateGeminiUsage, estimateGeminiReservation };

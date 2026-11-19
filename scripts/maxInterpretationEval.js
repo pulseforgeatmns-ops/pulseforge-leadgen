@@ -16,7 +16,7 @@
  *   node scripts/maxInterpretationEval.js --model --provider P --model-id M --repeats 3 --max-usd 2 --extended --json
  *        # PAID: needs the provider's eval credential, an approved model and an approved cap
  *
- * Providers (explicit, no default): anthropic (ANTHROPIC_API_KEY) or gemini
+ * Providers (explicit, no default): anthropic (MAX_EVAL_ANTHROPIC_API_KEY) or gemini
  * (MAX_EVAL_GEMINI_API_KEY — a dedicated development key; the production
  * GEMINI_API_KEY is never read). A paid Gemini run always runs the preflight
  * first and refuses if the model is unavailable. MAX_EVAL_GEMINI_BASE_URL may
@@ -45,6 +45,7 @@ const { evaluationMetadata, runLexical, planModelRun, runModelEval } = require('
 const { PROVIDERS } = require('../packages/max/interpretation/providers');
 const { MAX_TOKENS } = require('../packages/max/interpretation/producers/interpretationPrompt');
 const { createGeminiClient, API_ORIGIN: GEMINI_API_ORIGIN } = require('../utils/meteredGemini');
+const { anthropicPreflight } = require('../packages/max/interpretation/eval/anthropicPreflight');
 
 const has = (name) => process.argv.includes(name);
 function arg(name, fallback = null) {
@@ -67,6 +68,18 @@ function printGates(gates) {
 }
 
 const GEMINI_EVAL_KEY = 'MAX_EVAL_GEMINI_API_KEY';
+const ANTHROPIC_EVAL_KEY = 'MAX_EVAL_ANTHROPIC_API_KEY';
+
+/** A plain (un-metered) SDK client on the dedicated eval key; the runner meters it. */
+function anthropicClient() {
+  const apiKey = process.env[ANTHROPIC_EVAL_KEY];
+  if (!apiKey) {
+    refuse('eval_credentials_missing', `${ANTHROPIC_EVAL_KEY} (a dedicated evaluation key) is required; the production ANTHROPIC_API_KEY is never used`);
+  }
+  const SDK = require('@anthropic-ai/sdk');
+  const Anthropic = SDK.Anthropic || SDK;
+  return new Anthropic({ apiKey, maxRetries: 0 });
+}
 
 /** Gemini transport for the evaluation: dedicated eval key, optional loopback-only base URL. */
 function geminiTransport() {
@@ -140,12 +153,16 @@ function refuse(code, detail) {
     const parallelRequests = Number(arg('--parallel-requests', 1));
     if (!Number.isInteger(parallelRequests) || parallelRequests < 1 || parallelRequests > 2) refuse('eval_parallel_requests_invalid', 'pass --parallel-requests 1 or 2');
     if (parallelRequests !== 1 && provider !== 'gemini') refuse('eval_parallel_requests_unsupported', 'parallel requests are implemented for gemini');
-    const plan = planModelRun({ cases: CASES, model, repeats, provider, parallelRequests });
+    const thinking = arg('--thinking', null);
+    if (thinking !== null && thinking !== 'disabled') refuse('eval_thinking_invalid', 'pass --thinking disabled, or omit it');
+    if (thinking !== null && provider !== 'anthropic') refuse('eval_thinking_unsupported', '--thinking is implemented for anthropic');
+    const plan = planModelRun({ cases: CASES, model, repeats, provider, parallelRequests, thinking });
     if (has('--plan')) {
       out.modelPlan = plan;
     } else if (has('--preflight')) {
-      if (provider !== 'gemini') refuse('eval_preflight_unsupported', 'the preflight is implemented for gemini');
-      out.preflight = await geminiPreflight(geminiTransport(), model);
+      out.preflight = provider === 'gemini'
+        ? await geminiPreflight(geminiTransport(), model)
+        : await anthropicPreflight(anthropicClient(), model, { thinking });
       if (!out.preflight.available) {
         console.log(JSON.stringify({ preflight: out.preflight }, null, 2));
         refuse('eval_model_unavailable', out.preflight.reason);
@@ -167,12 +184,12 @@ function refuse(code, detail) {
         if (out.model.refused) refuse(out.model.refused);
         out.model.apiHost = gemini.host;
       } else {
-        if (!process.env.ANTHROPIC_API_KEY) refuse('eval_credentials_missing', 'ANTHROPIC_API_KEY is required for the paid run');
         // A plain SDK client, metered by the runner against the in-process cap.
-        const SDK = require('@anthropic-ai/sdk');
-        const Anthropic = SDK.Anthropic || SDK;
-        const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, maxRetries: 0 });
-        out.model = await runModelEval({ cases: CASES, provider, client, model, repeats, maxUsd, timeoutMs });
+        const client = anthropicClient();
+        // Free compatibility check before the first paid call.
+        out.preflight = await anthropicPreflight(client, model, { thinking });
+        if (!out.preflight.available) refuse('eval_model_unavailable', out.preflight.reason);
+        out.model = await runModelEval({ cases: CASES, provider, client, model, repeats, maxUsd, timeoutMs, thinking });
         if (out.model.refused) refuse(out.model.refused);
         // Where the calls went (ANTHROPIC_BASE_URL can redirect the SDK).
         out.model.apiHost = new URL(client.baseURL).host;

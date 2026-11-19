@@ -51,7 +51,7 @@ The "unsafe nominations" are offline frame nominations, not executions. Two repr
 
 ```
 node scripts/maxInterpretationEval.js --model --extended --model-id APPROVED_MODEL --repeats 3 --plan
-ANTHROPIC_API_KEY=… node scripts/maxInterpretationEval.js --model --extended \
+MAX_EVAL_ANTHROPIC_API_KEY=… node scripts/maxInterpretationEval.js --model --extended \
   --model-id APPROVED_MODEL --repeats 3 --max-usd APPROVED_CAP --json > eval.json
 ```
 
