@@ -11,7 +11,7 @@
 const { redactText } = require('../../../decision-service/privacy');
 
 const MAX_TRANSCRIPT_LINES = 6;
-const MAX_TOKENS = 600;
+const MAX_TOKENS = 256;
 
 const SYSTEM_PROMPT = `Interpret one operator message to Max, the operating manager of a B2B lead-generation business. Do not answer or act. Return only the JSON interpretation.
 
