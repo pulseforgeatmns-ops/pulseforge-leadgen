@@ -25,9 +25,16 @@
  */
 
 const { TURN_FRAME_OUTPUT_SCHEMA } = require('../TurnFrame');
-const { SYSTEM_PROMPT, MAX_TOKENS, buildUserContent } = require('../producers/interpretationPrompt');
+const { SYSTEM_PROMPT, buildUserContent } = require('../producers/interpretationPrompt');
 
 const NAME = 'gemini';
+// Gemini needs a little more headroom than Anthropic to serialize the same
+// schema. A live pending-decision frame required 245 output tokens and was
+// reported as MAX_TOKENS at the shared 256-token ceiling. Keep the increase
+// provider-local so the historical Anthropic request remains byte-for-byte
+// unchanged, and keep it tight enough to preserve the interpretation lane's
+// latency budget.
+const GEMINI_MAX_OUTPUT_TOKENS = 288;
 
 // Finish reasons that mean the provider withheld or blocked the answer.
 const REFUSAL_FINISH = new Set(['SAFETY', 'RECITATION', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII', 'IMAGE_SAFETY', 'LANGUAGE']);
@@ -40,7 +47,7 @@ function buildRequest({ model, text, context, transcript = [] }) {
       systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
       contents: [{ role: 'user', parts: [{ text: buildUserContent({ text, context, transcript }) }] }],
       generationConfig: {
-        maxOutputTokens: MAX_TOKENS,
+        maxOutputTokens: GEMINI_MAX_OUTPUT_TOKENS,
         temperature: 0,
         responseMimeType: 'application/json',
         responseJsonSchema: TURN_FRAME_OUTPUT_SCHEMA,
