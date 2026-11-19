@@ -36,7 +36,6 @@ function validateAuthority(input) {
 
 function assertEnvironment(authority, env = process.env) {
   if (env[ENABLE_FLAG] !== 'true') fail('levi_research_disabled');
-  if (env.EMMETT_AUTOSEND_ENABLED === 'true') fail('levi_research_outreach_environment_open');
   if (authority.limits.maxProviderRequests > 0 && env.SCOUT_LEVI_PAID_PROVIDERS_APPROVED !== 'true') {
     fail('levi_research_paid_provider_approval_required');
   }

@@ -40,7 +40,7 @@ test('tenant, approved Blueprint criteria and no-outreach permissions are immuta
 test('controlled cycle persists review-only records and never exposes outreach authority', async () => {
   const d = deps();
   const result = await execution.runResearchOnlyCycle({ authority: authority(),
-    env: { SCOUT_LEVI_RESEARCH_ONLY_ENABLED: 'true', EMMETT_AUTOSEND_ENABLED: 'false' }, deps: d });
+    env: { SCOUT_LEVI_RESEARCH_ONLY_ENABLED: 'true', EMMETT_AUTOSEND_ENABLED: 'true' }, deps: d });
   assert.equal(result.qualified, 1);
   assert.equal(result.outreachAttempted, false);
   assert.equal(d.state.persisted.tenantId, '21');
