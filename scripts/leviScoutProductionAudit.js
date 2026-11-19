@@ -46,7 +46,9 @@ async function collect(pool, { now = new Date() } = {}) {
       }
     }
     const rows = Array.isArray(report.sections.prospects) ? report.sections.prospects : [];
-    const evaluated = rows.map(evaluateProspect);
+    // The requested $5k-$20k range is intentionally not applied until the
+    // canonical approved Blueprint supplies a machine-verifiable range.
+    const evaluated = rows.map(row => evaluateProspect(row));
     report.production = {
       contractStatus: 'proposed_range_requires_approved_blueprint_verification',
       observedProductionQualifiedNew: null,

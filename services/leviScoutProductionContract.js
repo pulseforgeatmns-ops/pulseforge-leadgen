@@ -3,8 +3,8 @@
 const { extractDealClaims } = require('../packages/max/workspace/ProspectDealClaims');
 
 const TENANT_ID = 21;
-const MIN_AMOUNT = 5000;
-const MAX_AMOUNT = 20000;
+const PROPOSED_MIN_AMOUNT = 5000;
+const PROPOSED_MAX_AMOUNT = 20000;
 
 function metadataOf(row) {
   const value = row && row.acquisition_metadata;
@@ -34,16 +34,24 @@ function evidenceTimestamp(row, metadata) {
     || metadata.importedAt || row.evidence_timestamp || row.created_at || null;
 }
 
-function amountInRange(claim) {
-  if (!claim) return false;
-  if (Number.isFinite(claim.amount)) return claim.amount >= MIN_AMOUNT && claim.amount <= MAX_AMOUNT;
-  if (claim.range) return claim.range.min >= MIN_AMOUNT && claim.range.max <= MAX_AMOUNT;
+function approvedCriteria(input) {
+  if (!input || input.approved !== true || input.source !== 'approved_blueprint'
+    || !Number.isSafeInteger(input.minAmount) || !Number.isSafeInteger(input.maxAmount)
+    || input.minAmount < 1 || input.maxAmount < input.minAmount) return null;
+  return { minAmount: input.minAmount, maxAmount: input.maxAmount };
+}
+
+function amountInRange(claim, criteria) {
+  if (!claim || !criteria) return false;
+  if (Number.isFinite(claim.amount)) return claim.amount >= criteria.minAmount && claim.amount <= criteria.maxAmount;
+  if (claim.range) return claim.range.min >= criteria.minAmount && claim.range.max <= criteria.maxAmount;
   return false;
 }
 
-function evaluateProspect(row = {}) {
+function evaluateProspect(row = {}, options = {}) {
   const metadata = metadataOf(row);
   const claims = extractDealClaims(row.notes || '');
+  const criteria = approvedCriteria(options.criteria);
   const review = reviewState(row, metadata);
   const sources = sourceReferences(row, metadata);
   const blockers = [];
@@ -56,7 +64,8 @@ function evaluateProspect(row = {}) {
   if (!/(borrower|operator|real[- ]estate investor)/.test(category)) blockers.push('borrower_identity_unverified');
   if (!contactPath) blockers.push('contact_path_missing');
   if (!claims.claims.stage) blockers.push('current_project_evidence_missing');
-  if (!amountInRange(claims.claims.amount)) blockers.push(claims.claims.amount ? 'financing_amount_outside_blueprint' : 'financing_amount_missing');
+  if (!criteria) blockers.push('financing_criteria_unverified');
+  else if (!amountInRange(claims.claims.amount, criteria)) blockers.push(claims.claims.amount ? 'financing_amount_outside_blueprint' : 'financing_amount_missing');
   if (!location) blockers.push('project_location_missing');
   if (!sources.length) blockers.push('source_reference_missing');
   if (!evidenceTimestamp(row, metadata)) blockers.push('evidence_timestamp_missing');
@@ -77,7 +86,7 @@ function evaluateProspect(row = {}) {
     evidence: {
       contactPath,
       currentProject: Boolean(claims.claims.stage),
-      amountInRange: amountInRange(claims.claims.amount),
+      amountInRange: amountInRange(claims.claims.amount, criteria),
       location,
       sourceReferenceCount: sources.length,
       evidenceTimestamp: evidenceTimestamp(row, metadata),
@@ -89,7 +98,7 @@ function evaluateProspect(row = {}) {
   };
 }
 
-function weeklyProduction(rows = [], now = new Date()) {
+function weeklyProduction(rows = [], now = new Date(), options = {}) {
   const end = new Date(now);
   const start = new Date(end);
   start.setUTCDate(start.getUTCDate() - 29);
@@ -101,7 +110,7 @@ function weeklyProduction(rows = [], now = new Date()) {
     const offset = (day.getUTCDay() + 6) % 7;
     day.setUTCDate(day.getUTCDate() - offset);
     const key = day.toISOString().slice(0, 10);
-    const evaluation = evaluateProspect(row);
+    const evaluation = evaluateProspect(row, options);
     const bucket = weeks.get(key) || { weekOf: key, discovered: 0, contractQualifiedCandidates: 0, contactNow: 0, qualifyFirst: 0, hold: 0 };
     bucket.discovered += 1;
     if (evaluation.qualified) bucket.contractQualifiedCandidates += 1;
@@ -113,4 +122,4 @@ function weeklyProduction(rows = [], now = new Date()) {
   return [...weeks.values()].sort((a, b) => b.weekOf.localeCompare(a.weekOf));
 }
 
-module.exports = { TENANT_ID, MIN_AMOUNT, MAX_AMOUNT, evaluateProspect, weeklyProduction };
+module.exports = { TENANT_ID, PROPOSED_MIN_AMOUNT, PROPOSED_MAX_AMOUNT, approvedCriteria, evaluateProspect, weeklyProduction };
