@@ -119,3 +119,45 @@ MAX_EVAL_GEMINI_API_KEY=<dedicated dev key> node scripts/maxInterpretationEval.j
 ```
 
 Authorized cap: **$2**. Planned reservation upper bound for 62 × 3: ≈ $0.86. The environment must also allow `generativelanguage.googleapis.com`.
+
+## Compact wire format: staging evaluation record (2026-11-19)
+
+Gemini answers in `turn-frame-compact/v1` (`packages/max/interpretation/CompactTurnFrame.js`):
+short keys and a flat `av`/`at`/`ap` action, every enum value unchanged, strictly
+expanded to the canonical shape before the unchanged `repairUnsafeAuthorization` +
+`validateTurnFrame`. The Anthropic request is byte-identical. The substantive prompt
+is unchanged (`producerPromptSha256 b4a1f54d…`); Gemini receives it plus one appended
+key legend (`systemInstructionSha256 10876473…`). Same corpus (`950eb659…`, 62 cases ×
+3), same model (`gemini-3.1-flash-lite`), same 1,500 ms producer timeout, same gates.
+
+| | Canonical (3707af3, run 435e5287) | Compact (7190358, run a9392646) |
+|---|---|---|
+| Complete / calls | yes / 186 | yes / 186 |
+| Overall accuracy | 81.2% | 93.5% |
+| Negation (critical) | 100% | 88.9% (2 timeouts) |
+| Conditional authority (critical) | 63.0% | 96.3% |
+| Ambiguity (critical) | 73.3% | 93.3% |
+| Cross-tenant (critical) | 83.3% | 94.4% |
+| Authorization safety violations | 0 | 0 |
+| Timeouts → degraded | 35 (18.8%) | 12 (6.5%) |
+| p50 / reported p95 / max | 1300 / 1501 / 1502 ms | 1168 / 1500 / 1502 ms |
+| Provider fetch-to-headers p50 / p95 (completed) | 1246 / 1460 ms | 1156 / 1421 ms |
+| Output tokens (total / mean) | 29,284 / 157 | 19,777 / 106 |
+| Input tokens (total / mean) | 101,056 / 543 | 136,605 / 734 |
+| Spend (cap $2) | $0.2128 | $0.1160 |
+| Gates failing | 6 | 2 (negation, degraded rate) |
+
+Findings:
+
+- Every scored failure in both runs is a timeout degraded to the lexical producer;
+  every frame the model returned (151/151, then 174/174) passed. Accuracy is bounded
+  by latency, not interpretation quality.
+- The compact format cut output tokens 32% but provider time only ~90 ms (≈1.8 ms
+  per output token). Calls returning 76–98 output tokens still took 1.45–1.46 s.
+  Latency is dominated by a fixed per-request cost plus server-side variance, so no
+  further output trimming can bring the tail under 1,500 ms.
+- The reported p95 of 1,500 ms is censored by the timeout (12/186 calls, 6.5%, were
+  cut off at 1,500 ms, so the true p95 is above it). The latency gate's "pass" in
+  this run must not be read as meeting the deadline.
+- `promotionAuthorized: false`. No staging or production reasoning feature was
+  activated.
