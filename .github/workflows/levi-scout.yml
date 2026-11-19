@@ -6,6 +6,8 @@ on:
       - 'services/leviScoutResearchOnlyExecution.js'
       - 'scripts/leviScoutProductionAudit.js'
       - 'services/reviewOnlyProspectImportService.js'
+      - 'routes/reviewOnlyProspectImport.js'
+      - 'test/reviewOnlyProspectImportService.test.js'
       - 'packages/max/workspace/ProspectDealClaims.js'
       - 'test/leviScout*.test.js'
       - '.github/workflows/levi-scout.yml'

@@ -62,3 +62,28 @@ test('an unverified financing range can never produce a qualified candidate', ()
   assert.equal(result.qualified, false);
   assert.ok(result.blockers.includes('financing_criteria_unverified'));
 });
+
+test('evidence dates: published date preferred; property signals never establish intent', () => {
+  const { evaluateProspect: evaluate } = require('../services/leviScoutProductionContract');
+  const row = { created_at: '2026-11-19T10:00:00Z', email: 'a@example.invalid', job_title: 'Real-estate operator',
+    notes: 'Review state: contact now.\nFit evidence: Executed purchase contract on the current flip.\nSources: https://example.invalid/p',
+    service_area_match: 'Example County',
+    acquisition_metadata: { reviewState: 'contact_now', category: 'borrower', importedAt: '2026-11-19T10:00:00Z',
+      evidenceDate: '2026-11-08', sourceType: 'public_financing_request' } };
+  const published = evaluate(row);
+  assert.equal(published.evidence.evidenceTimestamp, '2026-11-08');
+  assert.equal(published.evidence.evidencePublishedAt, '2026-11-08');
+  assert.equal(published.evidence.evidenceImportedAt, '2026-11-19T10:00:00Z');
+  assert.ok(!published.blockers.includes('borrower_intent_unverified'));
+  assert.ok(published.blockers.includes('financing_criteria_unverified'));
+  assert.equal(published.qualified, false);
+
+  const signal = evaluate({ ...row, acquisition_metadata: { ...row.acquisition_metadata, sourceType: 'property_record_signal' } });
+  assert.ok(signal.blockers.includes('borrower_intent_unverified'));
+  const criteria = { approved: true, source: 'approved_blueprint', minAmount: 1, maxAmount: 10_000_000 };
+  assert.equal(evaluate({ ...row, acquisition_metadata: { ...row.acquisition_metadata, sourceType: 'property_record_signal' } }, { criteria }).qualified, false);
+
+  const legacy = evaluate({ ...row, acquisition_metadata: { reviewState: 'contact_now', category: 'borrower', importedAt: '2026-11-19T10:00:00Z' } });
+  assert.equal(legacy.evidence.evidencePublishedAt, null);
+  assert.equal(legacy.evidence.evidenceTimestamp, '2026-11-19T10:00:00Z');
+});
