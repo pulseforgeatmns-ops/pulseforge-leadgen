@@ -137,7 +137,10 @@ function refuse(code, detail) {
     const provider = arg('--provider');
     if (!provider) refuse('eval_provider_required', `pass --provider (${PROVIDERS.join(' | ')}); there is no default`);
     if (!PROVIDERS.includes(provider)) refuse('eval_provider_unknown', provider);
-    const plan = planModelRun({ cases: CASES, model, repeats, provider });
+    const parallelRequests = Number(arg('--parallel-requests', 1));
+    if (!Number.isInteger(parallelRequests) || parallelRequests < 1 || parallelRequests > 2) refuse('eval_parallel_requests_invalid', 'pass --parallel-requests 1 or 2');
+    if (parallelRequests !== 1 && provider !== 'gemini') refuse('eval_parallel_requests_unsupported', 'parallel requests are implemented for gemini');
+    const plan = planModelRun({ cases: CASES, model, repeats, provider, parallelRequests });
     if (has('--plan')) {
       out.modelPlan = plan;
     } else if (has('--preflight')) {
@@ -157,7 +160,7 @@ function refuse(code, detail) {
         out.preflight = await geminiPreflight(gemini, model);
         if (!out.preflight.available) refuse('eval_model_unavailable', out.preflight.reason);
         out.model = await runModelEval({
-          cases: CASES, provider, model, repeats, maxUsd, timeoutMs,
+          cases: CASES, provider, model, repeats, maxUsd, timeoutMs, parallelRequests,
           createClient: (meter) => createGeminiClient({ apiKey: gemini.apiKey, fetchImpl: gemini.fetchImpl,
             agentName: 'max_interpreter_eval', reserve: meter.reserve, settle: meter.settle }),
         });

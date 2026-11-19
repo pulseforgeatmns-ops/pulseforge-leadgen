@@ -87,32 +87,92 @@ function usageOf(meta) {
   };
 }
 
-function createGeminiProvider({ client, tenantId = null } = {}) {
+/** Shape one Gemini body into the provider-port response. */
+function responseOf(body) {
+  const { finish, rawStopReason } = finishFor(body);
+  return {
+    finish,
+    rawStopReason,
+    text: textOf(body),
+    outputFormat: COMPACT_FORMAT,
+    servedModel: body && typeof body.modelVersion === 'string' ? body.modelVersion : null,
+    usage: usageOf(body && body.usageMetadata),
+    timing: body && body.__geminiTiming ? { ...body.__geminiTiming } : null,
+  };
+}
+
+const MAX_PARALLEL_REQUESTS = 2;
+
+/**
+ * Resolve with the first attempt that returned a complete answer with text.
+ * If none does: a provider rejection (HTTP 4xx) wins, so configuration errors
+ * stay visible to the stop rules; otherwise the first non-complete response
+ * (e.g. truncation, refusal) is returned; otherwise the first error is thrown.
+ * Every attempt keeps running to its own end and settles its own reservation.
+ */
+function firstUsable(attempts) {
+  return new Promise((resolve, reject) => {
+    const results = new Array(attempts.length);
+    let pending = attempts.length;
+    let done = false;
+    attempts.forEach((attempt, index) => {
+      attempt
+        .then(
+          (response) => {
+            results[index] = { ok: true, response };
+            if (!done && response.finish === 'complete' && typeof response.text === 'string') {
+              done = true;
+              resolve({ response, winner: index });
+            }
+          },
+          (error) => { results[index] = { ok: false, error }; },
+        )
+        .finally(() => {
+          pending -= 1;
+          if (pending > 0 || done) return;
+          done = true;
+          const rejected = results.find((x) => !x.ok && x.error && Number.isInteger(x.error.status) && x.error.status >= 400 && x.error.status < 500);
+          if (rejected) return reject(rejected.error);
+          const answered = results.findIndex((x) => x.ok);
+          if (answered >= 0) return resolve({ response: results[answered].response, winner: answered });
+          return reject(results[0].error);
+        });
+    });
+  });
+}
+
+/**
+ * @param {{ client: object, tenantId?: string|number|null, parallelRequests?: 1|2 }} options
+ *   parallelRequests: identical requests issued at once per turn; the first
+ *   complete answer is used (tail-latency mitigation). Default 1 = the
+ *   historical single request. Each request is reserved and settled by the
+ *   metered client on its own, so spend accounting covers every attempt.
+ */
+function createGeminiProvider({ client, tenantId = null, parallelRequests = 1 } = {}) {
   if (!client || typeof client.generateContent !== 'function') {
     throw new Error('Gemini provider requires an injected metered Gemini client');
   }
+  if (!Number.isInteger(parallelRequests) || parallelRequests < 1 || parallelRequests > MAX_PARALLEL_REQUESTS) {
+    throw new Error(`Gemini provider parallelRequests must be an integer from 1 to ${MAX_PARALLEL_REQUESTS}`);
+  }
   return {
     name: NAME,
+    parallelRequests,
     buildRequest,
     async complete({ model, text, context, transcript = [], timeoutMs }) {
       // The client owns its abort timer; give it the producer's budget so a
       // timed-out request is cancelled, not left running past the deadline.
-      const body = await client.generateContent(buildRequest({ model, text, context, transcript }), {
+      const request = buildRequest({ model, text, context, transcript });
+      const options = {
         timeout: timeoutMs,
         apiUsageContext: { tenantId: tenantId ?? (context && context.tenantId) ?? null },
-      });
-      const { finish, rawStopReason } = finishFor(body);
-      return {
-        finish,
-        rawStopReason,
-        text: textOf(body),
-        outputFormat: COMPACT_FORMAT,
-        servedModel: body && typeof body.modelVersion === 'string' ? body.modelVersion : null,
-        usage: usageOf(body && body.usageMetadata),
-        timing: body && body.__geminiTiming ? { ...body.__geminiTiming } : null,
       };
+      if (parallelRequests === 1) return responseOf(await client.generateContent(request, options));
+      const attempts = Array.from({ length: parallelRequests }, () => client.generateContent(request, options).then(responseOf));
+      const { response, winner } = await firstUsable(attempts);
+      return { ...response, parallel: { issued: parallelRequests, winner } };
     },
   };
 }
 
-module.exports = { NAME, OUTPUT_FORMAT: COMPACT_FORMAT, SYSTEM_INSTRUCTION, createGeminiProvider, buildRequest, finishFor, textOf, usageOf, REFUSAL_FINISH };
+module.exports = { NAME, OUTPUT_FORMAT: COMPACT_FORMAT, MAX_PARALLEL_REQUESTS, firstUsable, SYSTEM_INSTRUCTION, createGeminiProvider, buildRequest, finishFor, textOf, usageOf, REFUSAL_FINISH };

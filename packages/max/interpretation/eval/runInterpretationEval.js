@@ -79,10 +79,12 @@ function reservationFor(provider, model, c) {
   return estimateClaudeReservation(buildRequestParams(input));
 }
 
-function planModelRun({ cases, model, repeats = 1, provider = 'anthropic' }) {
+function planModelRun({ cases, model, repeats = 1, provider = 'anthropic', parallelRequests = 1 }) {
   if (!PROVIDERS.includes(provider)) {
-    return { provider, model, repeats, calls: cases.length * repeats, priced: false, unpricedReason: 'eval_provider_unknown', reservationUpperBoundUsd: null, maxPerCallReservationUsd: null };
+    return { provider, model, repeats, parallelRequests, calls: cases.length * repeats, priced: false, unpricedReason: 'eval_provider_unknown', reservationUpperBoundUsd: null, maxPerCallReservationUsd: null };
   }
+  // Every parallel request is reserved on its own: the bound scales with them.
+  const fanout = provider === 'gemini' ? parallelRequests : 1;
   const perCase = cases.map((c) => reservationFor(provider, model, c));
   const priced = perCase.every((x) => x !== null);
   const sum = priced ? perCase.reduce((a, b) => a + b, 0) : null;
@@ -90,12 +92,14 @@ function planModelRun({ cases, model, repeats = 1, provider = 'anthropic' }) {
     provider,
     model,
     repeats,
+    parallelRequests: fanout,
     calls: cases.length * repeats,
+    providerRequests: cases.length * repeats * fanout,
     priced,
     unpricedReason: priced ? null : 'model_not_in_utils_apiPricing',
     // Conservative: reservation estimates double-count input bytes and assume
     // max_tokens of output. Real spend is normally far lower.
-    reservationUpperBoundUsd: priced ? Math.round(sum * repeats * 1e6) / 1e6 : null,
+    reservationUpperBoundUsd: priced ? Math.round(sum * repeats * fanout * 1e6) / 1e6 : null,
     maxPerCallReservationUsd: priced ? Math.round(Math.max(...perCase) * 1e6) / 1e6 : null,
   };
 }
@@ -160,10 +164,12 @@ function gradeModelCall(testCase, frame, telemetry) {
  *   createClient?: (meter: { reserve: Function, settle: Function }) => { generateContent: Function }, // gemini
  * }} options
  */
-async function runModelEval({ cases, client, createClient, provider = 'anthropic', model, repeats = 1, maxUsd, timeoutMs }) {
+async function runModelEval({ cases, client, createClient, provider = 'anthropic', model, repeats = 1, maxUsd, timeoutMs, parallelRequests = 1 }) {
   if (!model || typeof model !== 'string') return { refused: 'eval_model_id_required' };
   if (!PROVIDERS.includes(provider)) return { refused: 'eval_provider_unknown' };
-  const plan = planModelRun({ cases, model, repeats, provider });
+  if (!Number.isInteger(parallelRequests) || parallelRequests < 1 || parallelRequests > 2) return { refused: 'eval_parallel_requests_invalid' };
+  if (parallelRequests !== 1 && provider !== 'gemini') return { refused: 'eval_parallel_requests_unsupported' };
+  const plan = planModelRun({ cases, model, repeats, provider, parallelRequests });
   if (!plan.priced) return { refused: 'eval_unpriced_model', plan };
   let cap;
   try {
@@ -182,13 +188,23 @@ async function runModelEval({ cases, client, createClient, provider = 'anthropic
     settled.finally(() => inflight.delete(settled));
     return p;
   };
+  const allRequestTokens = { requests: 0, input: 0, output: 0 };
   let transport;
   if (provider === 'gemini') {
     if (typeof createClient !== 'function') return { refused: 'eval_client_required', plan };
-    const gemini = createClient({ reserve: cap.reserve, settle: cap.settle });
+    // Tokens of every provider request (parallel losers included), as settled.
+    const settleWithUsage = async (id, outcome = {}) => {
+      if (outcome && outcome.usage) {
+        allRequestTokens.requests += 1;
+        allRequestTokens.input += outcome.usage.input_tokens || 0;
+        allRequestTokens.output += outcome.usage.output_tokens || 0;
+      }
+      return cap.settle(id, outcome);
+    };
+    const gemini = createClient({ reserve: cap.reserve, settle: settleWithUsage });
     if (!gemini || typeof gemini.generateContent !== 'function') return { refused: 'eval_client_required', plan };
     gemini.generateContent = track(gemini.generateContent.bind(gemini));
-    transport = createGeminiProvider({ client: gemini });
+    transport = createGeminiProvider({ client: gemini, parallelRequests });
   } else {
     if (!client || !client.messages || typeof client.messages.create !== 'function') return { refused: 'eval_client_required', plan };
     meterClient(client, { agentName: 'max_interpreter_eval', reserve: cap.reserve, settle: cap.settle });
@@ -263,9 +279,18 @@ async function runModelEval({ cases, client, createClient, provider = 'anthropic
     timeouts: telemetry.filter((t) => t.degradedReason === 'timeout').map((t) => ({ caseId: t.caseId, run: t.run, latencyMs: t.latencyMs, timing: t.timing })),
   };
   const scored = pooled.length;
+  const hedged = telemetry.filter((t) => t.parallel);
+  const parallel = {
+    requestsPerTurn: parallelRequests,
+    turns: hedged.length,
+    winnerIndex: hedged.reduce((acc, t) => ({ ...acc, [t.parallel.winner]: (acc[t.parallel.winner] || 0) + 1 }), {}),
+    // Every settled provider request with reported usage (winners and losers).
+    allRequestTokens: provider === 'gemini' ? allRequestTokens : null,
+  };
   return {
     provider,
     model,
+    parallel,
     servedModels,
     repeats,
     plan,

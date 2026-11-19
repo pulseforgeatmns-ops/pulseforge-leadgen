@@ -120,7 +120,7 @@ class ModelFrameProducer {
   async produce({ text, context, transcript = [] }) {
     const started = performance.now();
     const controller = new AbortController();
-    const telemetry = { provider: this.provider, model: this.model, servedModel: null, latencyMs: 0, usage: null, degradedReason: null, stopReason: null, timing: null };
+    const telemetry = { provider: this.provider, model: this.model, servedModel: null, latencyMs: 0, usage: null, degradedReason: null, stopReason: null, timing: null, parallel: null };
     try {
       const response = await withTimeout(
         this._provider.complete({ model: this.model, text, context, transcript, timeoutMs: this.timeoutMs, signal: controller.signal }),
@@ -132,6 +132,7 @@ class ModelFrameProducer {
       telemetry.servedModel = response && typeof response.servedModel === 'string' ? response.servedModel : null;
       telemetry.usage = response && response.usage ? response.usage : null;
       telemetry.timing = response && response.timing ? response.timing : null;
+      telemetry.parallel = response && response.parallel ? { ...response.parallel } : null;
       if (!response || response.finish !== 'complete') {
         return this._degrade({ text, context }, telemetry, stopDegradation(response && response.finish, telemetry.stopReason));
       }
