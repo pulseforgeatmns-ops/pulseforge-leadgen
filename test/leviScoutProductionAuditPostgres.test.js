@@ -26,7 +26,7 @@ const assert = require('node:assert/strict');
 const { Pool } = require('pg');
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
 const { importReviewOnlyContacts } = require('../services/reviewOnlyProspectImportService');
-const { collect } = require('../scripts/leviScoutProductionAudit');
+const { collect, platformOf, parseArgs } = require('../scripts/leviScoutProductionAudit');
 
 const SECRET = 'AUDIT_PII_MARKER';
 const contact = (i, extra = {}) => ({
@@ -99,8 +99,19 @@ test('Levi production audit: every section reads, tenant-scoped, redacted, read-
       const client = await db.connect();
       return { query: (sql, params) => { statements.push(String(sql)); return client.query(sql, params); }, release: () => client.release() };
     } };
-    const report = await collect(recording, { now: new Date(Date.now() + 120000) });
+    const report = await collect(recording, { now: new Date(Date.now() + 120000),
+      expectDatabase: 'postgres', databaseUrl: postgres.connectionString });
     assert.equal(await tableSnapshot(db), before, 'audit changed data');
+    assert.deepEqual(Object.keys(report.target).sort(), ['database', 'platform', 'serverVersionNum']);
+    assert.equal(report.target.database, 'postgres');
+    assert.equal(report.target.platform, 'local');
+    assert.ok(report.target.serverVersionNum >= 160000);
+    for (const detail of ['postgresql://', '127.0.0.1']) assert.ok(!JSON.stringify(report).includes(detail), 'report must not carry connection details');
+
+    // Wrong target fails closed: no report, transaction rolled back, nothing written.
+    await assert.rejects(collect(db, { expectDatabase: 'pulseforge_production_migration', databaseUrl: postgres.connectionString }),
+      { code: 'audit_target_database_mismatch' });
+    assert.equal(await tableSnapshot(db), before);
 
     for (const name of ['tenant', 'workspace', 'blueprints', 'runs', 'inventory']) {
       assert.ok(Array.isArray(report.sections[name]), `${name} unavailable: ${JSON.stringify(report.sections[name])}`);
@@ -136,4 +147,15 @@ test('Levi production audit: every section reads, tenant-scoped, redacted, read-
     await db.end();
     await postgres.stop();
   }
+});
+
+test('platform classification and arguments never need Railway', () => {
+  assert.equal(platformOf('postgresql://u:p@dpg-abc123-a/pulseforge_production_migration'), 'render');
+  assert.equal(platformOf('postgresql://u:p@dpg-abc123-a.ohio-postgres.render.com/db'), 'render');
+  assert.equal(platformOf('postgresql://u:p@postgres.railway.internal:5432/railway'), 'railway');
+  assert.equal(platformOf('postgresql://u:p@127.0.0.1:5432/x'), 'local');
+  assert.equal(platformOf(undefined), 'unknown');
+  assert.deepEqual(parseArgs([]), {});
+  assert.deepEqual(parseArgs(['--expect-database=pulseforge_production_migration']), { expectDatabase: 'pulseforge_production_migration' });
+  assert.throws(() => parseArgs(['--write']), { code: 'audit_argument_invalid' });
 });

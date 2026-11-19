@@ -34,12 +34,41 @@ const QUERIES = {
     count(*)::int AS records,max(created_at) AS newest FROM prospects WHERE client_id=$1 GROUP BY 1,2,3 ORDER BY 4 DESC`,
 };
 
-async function collect(pool, { now = new Date() } = {}) {
+// Platform-neutral target identity: the report states which database was
+// read (name, server version, host class) without emitting the URL, host or
+// credentials. Railway and Render are both recognised; neither is required.
+function platformOf(url) {
+  let host = '';
+  try { host = new URL(String(url || '')).hostname.toLowerCase(); } catch (_) { return 'unknown'; }
+  if (!host) return 'unknown';
+  if (/(^|\.)(railway\.internal|rlwy\.net|railway\.app)$/.test(host)) return 'railway';
+  if (/^dpg-[a-z0-9-]+$/.test(host) || /(^|\.)render\.com$/.test(host)) return 'render';
+  if (['localhost', '127.0.0.1', '::1'].includes(host)) return 'local';
+  return 'other';
+}
+
+function parseArgs(argv = []) {
+  const out = {};
+  for (const arg of argv) {
+    const match = /^--expect-database=(.+)$/.exec(arg);
+    if (match) out.expectDatabase = match[1];
+    else throw Object.assign(new Error(`unknown argument: ${arg}`), { code: 'audit_argument_invalid' });
+  }
+  return out;
+}
+
+async function collect(pool, { now = new Date(), expectDatabase = null, databaseUrl = process.env.DATABASE_URL } = {}) {
   const client = await pool.connect();
   const report = { tenantId: TENANT_ID, generatedAt: now.toISOString(), readOnly: true, sections: {} };
   try {
     await client.query('BEGIN TRANSACTION READ ONLY');
     await client.query("SET LOCAL statement_timeout='15s'");
+    const identity = (await client.query(
+      "SELECT current_database() AS database, current_setting('server_version_num')::int AS server_version_num")).rows[0];
+    report.target = { database: identity.database, serverVersionNum: identity.server_version_num, platform: platformOf(databaseUrl) };
+    if (expectDatabase && identity.database !== expectDatabase) {
+      throw Object.assign(new Error('audit_target_database_mismatch'), { code: 'audit_target_database_mismatch' });
+    }
     for (const [name, sql] of Object.entries(QUERIES)) {
       await client.query(`SAVEPOINT audit_${name}`);
       try {
@@ -90,10 +119,10 @@ async function collect(pool, { now = new Date() } = {}) {
   }
 }
 
-module.exports = { QUERIES, collect };
+module.exports = { QUERIES, collect, platformOf, parseArgs };
 
 if (require.main === module) {
-  collect(require('../db'))
+  Promise.resolve().then(() => collect(require('../db'), parseArgs(process.argv.slice(2))))
     .then(report => { console.log(JSON.stringify(report, null, 2)); process.exit(0); })
     .catch(error => { console.error(`[levi-scout-production-audit] ${error.message}`); process.exit(2); });
 }
