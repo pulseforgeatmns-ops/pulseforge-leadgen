@@ -174,13 +174,13 @@ def main() -> int:
         conn.set_session(isolation_level="REPEATABLE READ", readonly=True)
         cur = conn.cursor()
         cur.execute("SET LOCAL statement_timeout = 0")
-        cur.execute("SET LOCAL work_mem = '64MB'")
         cur.execute("""SELECT pg_export_snapshot(), now(), current_database(),
                        current_setting('server_version_num')::int, current_setting('transaction_read_only'),
                        pg_database_size(current_database()), txid_current_snapshot()::text""")
         snapshot, captured, dbname, server_num, ro, db_bytes, txsnap = cur.fetchone()
         if ro != "on":
             fail("transaction_not_read_only")
+        fp.session_guards(cur)  # after the export: no savepoint may precede it
         log("SNAPSHOT_EXPORTED", {"capturedAt": captured.isoformat(), "serverVersionNum": server_num,
                                   "databaseBytes": int(db_bytes)})
         # Start the dump first so pg_dump imports the snapshot while this

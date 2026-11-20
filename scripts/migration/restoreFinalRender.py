@@ -166,7 +166,7 @@ def destination_report(db: str, manifest: dict) -> dict:
     conn.set_session(isolation_level="REPEATABLE READ", readonly=True)
     try:
         cur = conn.cursor()
-        cur.execute("SET LOCAL work_mem = '64MB'")
+        fp.session_guards(cur)
         tables = fp.list_tables(cur)
         core = [t for t in tables if not fp.is_signal(t)]
         signal = [t for t in tables if fp.is_signal(t)]
