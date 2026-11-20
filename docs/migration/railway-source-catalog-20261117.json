@@ -1,0 +1,5286 @@
+{
+  "_warning": "METADATA ONLY. Provisional owner groupings require application/implicit dependency review. Current catalog is not identical to prior backup snapshot and no row-count or restore verification was done.",
+  "capturedAt": "2026-11-17T16:50:55.872883+00:00",
+  "sourceVersion": "18.6 (Debian 18.6-1.pgdg13+2)",
+  "sourceDb": "railway",
+  "databaseBytes": 9218275007,
+  "extensions": [
+    "pgcrypto",
+    "plpgsql",
+    "uuid-ossp"
+  ],
+  "counts": {
+    "physicalTables": 319,
+    "signalCandidateTables": 45,
+    "pulseforgeCandidateTables": 274,
+    "foreignKeys": 361,
+    "viewDependencies": 7,
+    "triggers": 80
+  },
+  "candidateCrossProductFKs": [],
+  "objects": [
+    {
+      "estimated_rows": 1569564,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_opportunity_decisions",
+      "total_bytes": 7656611840
+    },
+    {
+      "estimated_rows": 1191455,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "places_api_requests",
+      "total_bytes": 670425088
+    },
+    {
+      "estimated_rows": 314600,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_dashboard_records",
+      "total_bytes": 500391936
+    },
+    {
+      "estimated_rows": 30294,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_outbound_events",
+      "total_bytes": 101621760
+    },
+    {
+      "estimated_rows": 90110,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "agent_log",
+      "total_bytes": 47702016
+    },
+    {
+      "estimated_rows": 4803,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "emmett_tenant_mailbox_capacity_envelopes",
+      "total_bytes": 33095680
+    },
+    {
+      "estimated_rows": 3920,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "prospects",
+      "total_bytes": 22634496
+    },
+    {
+      "estimated_rows": 35035,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "verifier_call_log",
+      "total_bytes": 21667840
+    },
+    {
+      "estimated_rows": 26022,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_skip_log",
+      "total_bytes": 13369344
+    },
+    {
+      "estimated_rows": 5409,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "email_events",
+      "total_bytes": 11149312
+    },
+    {
+      "estimated_rows": 32,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "missions",
+      "total_bytes": 10108928
+    },
+    {
+      "estimated_rows": 392,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_mission_contributions",
+      "total_bytes": 8200192
+    },
+    {
+      "estimated_rows": 525,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "website_opportunity_assessments",
+      "total_bytes": 7806976
+    },
+    {
+      "estimated_rows": 21547,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "agent_run_health",
+      "total_bytes": 6561792
+    },
+    {
+      "estimated_rows": 29013,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "icp_score_snapshots",
+      "total_bytes": 6111232
+    },
+    {
+      "estimated_rows": 116,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "market_emails",
+      "total_bytes": 5103616
+    },
+    {
+      "estimated_rows": 9408,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "website_opportunity_events",
+      "total_bytes": 4063232
+    },
+    {
+      "estimated_rows": 1714,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "knowledge_outbox",
+      "total_bytes": 3776512
+    },
+    {
+      "estimated_rows": 8414,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "api_usage_events",
+      "total_bytes": 3104768
+    },
+    {
+      "estimated_rows": 2893,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "knowledge_evidence",
+      "total_bytes": 3088384
+    },
+    {
+      "estimated_rows": 25343,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_distribution_request_attempts",
+      "total_bytes": 2785280
+    },
+    {
+      "estimated_rows": 1019,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_decisions",
+      "total_bytes": 2768896
+    },
+    {
+      "estimated_rows": 7515,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "warm_signal_state",
+      "total_bytes": 2473984
+    },
+    {
+      "estimated_rows": 5853,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_orchestration_metrics",
+      "total_bytes": 2146304
+    },
+    {
+      "estimated_rows": 2155,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "knowledge_flight_stages",
+      "total_bytes": 1908736
+    },
+    {
+      "estimated_rows": 59,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "cie_interview_sessions",
+      "total_bytes": 1884160
+    },
+    {
+      "estimated_rows": 1580,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "knowledge_nodes",
+      "total_bytes": 1859584
+    },
+    {
+      "estimated_rows": 3651,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "companies",
+      "total_bytes": 1646592
+    },
+    {
+      "estimated_rows": 1585,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_market_observations",
+      "total_bytes": 1556480
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_voice_recordings",
+      "total_bytes": 1409024
+    },
+    {
+      "estimated_rows": 1223,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "prospect_signal_events",
+      "total_bytes": 1327104
+    },
+    {
+      "estimated_rows": 120,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_knowledge_revisions",
+      "total_bytes": 1228800
+    },
+    {
+      "estimated_rows": 120,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_knowledge_objects",
+      "total_bytes": 1187840
+    },
+    {
+      "estimated_rows": 2465,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "touchpoints",
+      "total_bytes": 1114112
+    },
+    {
+      "estimated_rows": 1649,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "knowledge_sync_ledger",
+      "total_bytes": 1114112
+    },
+    {
+      "estimated_rows": 1324,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "knowledge_edges",
+      "total_bytes": 1048576
+    },
+    {
+      "estimated_rows": 612,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "pending_comments",
+      "total_bytes": 1015808
+    },
+    {
+      "estimated_rows": 2977,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "icp_score_history",
+      "total_bytes": 884736
+    },
+    {
+      "estimated_rows": 1604,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_unenriched",
+      "total_bytes": 860160
+    },
+    {
+      "estimated_rows": 1325,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "market_observations",
+      "total_bytes": 786432
+    },
+    {
+      "estimated_rows": 291,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_candidate_memberships",
+      "total_bytes": 786432
+    },
+    {
+      "estimated_rows": 764,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "cie_interview_turns",
+      "total_bytes": 712704
+    },
+    {
+      "estimated_rows": 478,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "cie_evidence",
+      "total_bytes": 704512
+    },
+    {
+      "estimated_rows": 870,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_mission_events",
+      "total_bytes": 663552
+    },
+    {
+      "estimated_rows": 54,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_missions",
+      "total_bytes": 655360
+    },
+    {
+      "estimated_rows": 235,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_candidate_work",
+      "total_bytes": 647168
+    },
+    {
+      "estimated_rows": 686,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "mission_audit_events",
+      "total_bytes": 638976
+    },
+    {
+      "estimated_rows": 51,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_dashboard_zone_events",
+      "total_bytes": 565248
+    },
+    {
+      "estimated_rows": 59,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "cie_business_blueprints",
+      "total_bytes": 499712
+    },
+    {
+      "estimated_rows": 12,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_outbound_replies",
+      "total_bytes": 434176
+    },
+    {
+      "estimated_rows": 103,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_outbound_items",
+      "total_bytes": 425984
+    },
+    {
+      "estimated_rows": 465,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_decay_run_events",
+      "total_bytes": 425984
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_spreadsheet_proposals",
+      "total_bytes": 401408
+    },
+    {
+      "estimated_rows": 87,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "ao_max_sessions",
+      "total_bytes": 385024
+    },
+    {
+      "estimated_rows": 96,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_query_checkpoints",
+      "total_bytes": 385024
+    },
+    {
+      "estimated_rows": 86,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "paige_social_content_artifacts",
+      "total_bytes": 385024
+    },
+    {
+      "estimated_rows": 238,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_mission_execution_audit",
+      "total_bytes": 385024
+    },
+    {
+      "estimated_rows": 143,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "post_analytics",
+      "total_bytes": 376832
+    },
+    {
+      "estimated_rows": 1174,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_yield",
+      "total_bytes": 344064
+    },
+    {
+      "estimated_rows": 61,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "ao_prospect_tasks",
+      "total_bytes": 344064
+    },
+    {
+      "estimated_rows": 437,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "agent_actions",
+      "total_bytes": 344064
+    },
+    {
+      "estimated_rows": 12,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "clients",
+      "total_bytes": 335872
+    },
+    {
+      "estimated_rows": 581,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "excluded_prospect_log",
+      "total_bytes": 319488
+    },
+    {
+      "estimated_rows": 664,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_queue",
+      "total_bytes": 311296
+    },
+    {
+      "estimated_rows": 104,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "warm_trigger_fires",
+      "total_bytes": 270336
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_prospect_projections",
+      "total_bytes": 262144
+    },
+    {
+      "estimated_rows": 138,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_tenant_place_observations",
+      "total_bytes": 262144
+    },
+    {
+      "estimated_rows": 111,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_actions",
+      "total_bytes": 253952
+    },
+    {
+      "estimated_rows": 341,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "email_performance",
+      "total_bytes": 253952
+    },
+    {
+      "estimated_rows": 213,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "capture_inbox",
+      "total_bytes": 245760
+    },
+    {
+      "estimated_rows": 81,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "ao_leads",
+      "total_bytes": 237568
+    },
+    {
+      "estimated_rows": 5,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "operator_contexts",
+      "total_bytes": 229376
+    },
+    {
+      "estimated_rows": 25,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_outbound_envelopes",
+      "total_bytes": 229376
+    },
+    {
+      "estimated_rows": 51,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_mission_observe_reactions",
+      "total_bytes": 229376
+    },
+    {
+      "estimated_rows": 49,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "daily_health_log",
+      "total_bytes": 221184
+    },
+    {
+      "estimated_rows": 394,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "content_performance_summary",
+      "total_bytes": 221184
+    },
+    {
+      "estimated_rows": 73,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "enrichment_manual_queue",
+      "total_bytes": 221184
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_research_only_cycles",
+      "total_bytes": 212992
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "client_playbooks",
+      "total_bytes": 212992
+    },
+    {
+      "estimated_rows": 368,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_expansion_queue",
+      "total_bytes": 196608
+    },
+    {
+      "estimated_rows": 46,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_mission_outbound_executions",
+      "total_bytes": 188416
+    },
+    {
+      "estimated_rows": 14,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_query_pages",
+      "total_bytes": 188416
+    },
+    {
+      "estimated_rows": 55,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "decision_shadow_events",
+      "total_bytes": 188416
+    },
+    {
+      "estimated_rows": 63,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_research_candidates",
+      "total_bytes": 180224
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "tenant_outreach_scheduled_sends",
+      "total_bytes": 172032
+    },
+    {
+      "estimated_rows": 309,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "agent_alert_dispatches",
+      "total_bytes": 172032
+    },
+    {
+      "estimated_rows": 12,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "ao_max_conversation_reports",
+      "total_bytes": 172032
+    },
+    {
+      "estimated_rows": 64,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "call_dispositions",
+      "total_bytes": 172032
+    },
+    {
+      "estimated_rows": 62,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "market_company_profiles",
+      "total_bytes": 155648
+    },
+    {
+      "estimated_rows": 113,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "warm_signal_events",
+      "total_bytes": 155648
+    },
+    {
+      "estimated_rows": 2,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "session",
+      "total_bytes": 147456
+    },
+    {
+      "estimated_rows": 62,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "ao_follow_up_tasks",
+      "total_bytes": 139264
+    },
+    {
+      "estimated_rows": 53,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_mission_provider_events",
+      "total_bytes": 139264
+    },
+    {
+      "estimated_rows": 159,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "canonical_batch_evidence_inputs",
+      "total_bytes": 139264
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_research_only_grants",
+      "total_bytes": 139264
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_spreadsheet_effects",
+      "total_bytes": 139264
+    },
+    {
+      "estimated_rows": 64,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_targets",
+      "total_bytes": 139264
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "intelligence_seed_libraries",
+      "total_bytes": 131072
+    },
+    {
+      "estimated_rows": 51,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_raw_caller_evidence",
+      "total_bytes": 131072
+    },
+    {
+      "estimated_rows": 53,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_mission_observations",
+      "total_bytes": 131072
+    },
+    {
+      "estimated_rows": 82,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "prospect_state_transitions",
+      "total_bytes": 122880
+    },
+    {
+      "estimated_rows": 154,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_research_google_spend",
+      "total_bytes": 122880
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "ao_account_flags",
+      "total_bytes": 114688
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "discovery_profiles",
+      "total_bytes": 114688
+    },
+    {
+      "estimated_rows": 51,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "ao_prospect_activity",
+      "total_bytes": 114688
+    },
+    {
+      "estimated_rows": 21,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_bounded_acquisition_attempts",
+      "total_bytes": 114688
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "tenant_outreach_messages",
+      "total_bytes": 114688
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "canonical_business_snapshots",
+      "total_bytes": 114688
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "anchor_email_quarantines",
+      "total_bytes": 114688
+    },
+    {
+      "estimated_rows": 162,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "cal_queue",
+      "total_bytes": 106496
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_source_registry",
+      "total_bytes": 106496
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "prospect_lifecycle_events",
+      "total_bytes": 106496
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_research_cycle_releases",
+      "total_bytes": 98304
+    },
+    {
+      "estimated_rows": 5,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_sources",
+      "total_bytes": 98304
+    },
+    {
+      "estimated_rows": 118,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "mira_warm_capture_log",
+      "total_bytes": 98304
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "content_publications",
+      "total_bytes": 98304
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "relationship_interactions",
+      "total_bytes": 98304
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "content_learnings",
+      "total_bytes": 98304
+    },
+    {
+      "estimated_rows": 19,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_mission_candidate_observe_state",
+      "total_bytes": 90112
+    },
+    {
+      "estimated_rows": 6,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_outbound_programs",
+      "total_bytes": 90112
+    },
+    {
+      "estimated_rows": 56,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "operator_context_rebuild_events",
+      "total_bytes": 90112
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_operator_alert_outbox",
+      "total_bytes": 90112
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "canonical_business_facts",
+      "total_bytes": 90112
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "tenant_mailbox_integrations",
+      "total_bytes": 81920
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_backlog_recovery_grants",
+      "total_bytes": 81920
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "ao_followup_drafts",
+      "total_bytes": 81920
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "prospect_notes",
+      "total_bytes": 81920
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_research_missions",
+      "total_bytes": 81920
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "ao_route_stops",
+      "total_bytes": 81920
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_events",
+      "total_bytes": 81920
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "emmett_send_plans",
+      "total_bytes": 81920
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_recommendation_reviews",
+      "total_bytes": 81920
+    },
+    {
+      "estimated_rows": 112,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "anchor_portal_visit_items",
+      "total_bytes": 81920
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_bounded_acquisition_runs",
+      "total_bytes": 81920
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "canonical_fact_evidence_refs",
+      "total_bytes": 81920
+    },
+    {
+      "estimated_rows": 2,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_dashboard_session",
+      "total_bytes": 81920
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "studio_substral_assessment_opportunities",
+      "total_bytes": 81920
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_research_observations",
+      "total_bytes": 81920
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "operator_objectives",
+      "total_bytes": 73728
+    },
+    {
+      "estimated_rows": 84,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_outbound_lifecycle",
+      "total_bytes": 73728
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_research_observation_outcomes",
+      "total_bytes": 65536
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "client_notes",
+      "total_bytes": 65536
+    },
+    {
+      "estimated_rows": 36,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "api_usage",
+      "total_bytes": 65536
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_lock",
+      "total_bytes": 65536
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "excluded_domains",
+      "total_bytes": 65536
+    },
+    {
+      "estimated_rows": 4,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "agent_lessons",
+      "total_bytes": 65536
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "stripe_invoices",
+      "total_bytes": 65536
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "setter_callbacks",
+      "total_bytes": 65536
+    },
+    {
+      "estimated_rows": 53,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "market_companies",
+      "total_bytes": 65536
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "content_performance_snapshots",
+      "total_bytes": 65536
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "content_business_outcomes",
+      "total_bytes": 65536
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "content_qualitative_signals",
+      "total_bytes": 65536
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "canonical_registry_artifacts",
+      "total_bytes": 65536
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "canonical_business_entities",
+      "total_bytes": 65536
+    },
+    {
+      "estimated_rows": 2,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "tenant_mailbox_poll_state",
+      "total_bytes": 65536
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_mission_prepared_cadence_annotations",
+      "total_bytes": 65536
+    },
+    {
+      "estimated_rows": 2,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_outbound_inbox_health",
+      "total_bytes": 65536
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "ao_prospect_updates",
+      "total_bytes": 65536
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "ao_communication_identities",
+      "total_bytes": 65536
+    },
+    {
+      "estimated_rows": 17,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "users",
+      "total_bytes": 65536
+    },
+    {
+      "estimated_rows": 4,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_dashboard_provider_budget",
+      "total_bytes": 65536
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_bounded_research_grants",
+      "total_bytes": 65536
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_backlog_recovery_runs",
+      "total_bytes": 65536
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "decision_shadow_evidence",
+      "total_bytes": 65536
+    },
+    {
+      "estimated_rows": 9,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "anchor_portal_visits",
+      "total_bytes": 57344
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "anchor_portal_issues",
+      "total_bytes": 57344
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_query_coverage_grants",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "anchor_scoped_resume_grants",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_query_coverage_allocations",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "anchor_email_recovery_control",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "tenant_sending_identities",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "tenant_outreach_threads",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "relationship_interaction_insights",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "tenant_outreach_events",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "tenant_workspaces",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "monitor_state",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "canonical_interpretation_batches",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_opportunity_notifications",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "canonical_entity_label_assertions",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_research_cohort_members",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "anchor_scoped_resume_consumption",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "ao_escalations",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "proposal_versions",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "walkthrough_notification_claims",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_operational_ingestions",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_token_research_episodes",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_prospective_research_jobs",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": 2,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "daily_anchors",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "substral_assessment_notification_claims",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "emmett_tenant_mailbox_capacity_reservations",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "ao_routes",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_source_performance",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_conversation_context",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "stripe_events",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "canonical_conflict_sets",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "anchor_portal_locations",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "knowledge_claims",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_attention_scheduler_runs",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "campaigns",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "excluded_email_patterns",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_query_coverage_grant_roots",
+      "total_bytes": 49152
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "ao_advisory_debriefs",
+      "total_bytes": 40960
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_distribution_monitors",
+      "total_bytes": 40960
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "revenue_outcomes",
+      "total_bytes": 40960
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_distribution_deliveries",
+      "total_bytes": 40960
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_attention_items",
+      "total_bytes": 40960
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_research_candidates",
+      "total_bytes": 40960
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "sequences",
+      "total_bytes": 40960
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_operational_decisions",
+      "total_bytes": 40960
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "revenue_events",
+      "total_bytes": 40960
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_attention_heartbeats",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "anchor_portal_scope_sections",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "anchor_portal_scope_items",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_operational_action_intents",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_open_expectations",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_ingestion_claims",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_wallet_performance",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_source_cluster_members",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_source_clusters",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_research_cohorts",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": 5,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_tokens",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "excluded_tlds",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_feature_snapshots",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "market_intel_sync_state",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "mira_corrections",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_spreadsheet_commit_requests",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_dashboard_auth_attempts",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "setter_follow_up_drafts",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_rollout_readiness_config",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "anchor_phone_setter_v1_targeting_backup",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_query_allocation_activations",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "ao_contacts",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "command_deck_domain_priority",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "stripe_checkout_sessions",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "opportunities",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_query_coverage_grant_pages",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "customers",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "ad_accounts",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "revenue_jobs",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "revenue_payments",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_tenant_query_owners",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "revenue_feature_flags",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "revenue_projection_rebuilds",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "revenue_reconciliation_runs",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "revenue_operator_audit",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "warm_routing_control",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "ideas",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "emmett_schema_migrations",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_backlog_recovery_items",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": 45,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_outbound_preparation",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "content_seeds",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_distribution_transitions",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "linkedin_post_stats",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "api_spend_policies",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "api_spend_policy_changes",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "aic_workspaces",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_operator_events",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "refs",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_mission_predictions",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_prospective_internal_alerts",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_meeting_outcome_events",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "messages",
+      "total_bytes": 32768
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_ingestion_mutations",
+      "total_bytes": 24576
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "canonical_fact_relations",
+      "total_bytes": 24576
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "manual_lifecycle_overrides",
+      "total_bytes": 24576
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "tenant_outreach_suppressions",
+      "total_bytes": 24576
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "stripe_credit_notes",
+      "total_bytes": 24576
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "stripe_subscriptions",
+      "total_bytes": 24576
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "revenue_follow_up_recommendations",
+      "total_bytes": 24576
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "emmett_warmup_config",
+      "total_bytes": 24576
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "ao_routing_issue_flags",
+      "total_bytes": 24576
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "anchor_portal_user_locations",
+      "total_bytes": 24576
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_decisions",
+      "total_bytes": 24576
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_market_outcomes",
+      "total_bytes": 24576
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "ao_flag_notifications",
+      "total_bytes": 24576
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_evidence_artifacts",
+      "total_bytes": 24576
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_ingestion_evidence_links",
+      "total_bytes": 24576
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_ao_follow_up_tasks",
+      "total_bytes": 24576
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_distribution_request_budget",
+      "total_bytes": 24576
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_distribution_observations",
+      "total_bytes": 24576
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_distribution_activations",
+      "total_bytes": 24576
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_query_coverage_epoch_receipts",
+      "total_bytes": 24576
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_query_coverage_epochs",
+      "total_bytes": 24576
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "anchor_email_recovery_reservations",
+      "total_bytes": 24576
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "account_verification_tokens",
+      "total_bytes": 24576
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "blockers",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "emmett_governor_acks",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_collector_cursors",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "anchor_portal_evidence",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_applied_claims",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "activity_log",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_market_ingestion_stats",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "emmett_outbound_outcomes",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "emmett_inbox_snapshots",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_paper_positions",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "reminders",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_distribution_admissions",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "emmett_outbound_learning",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_knowledge_decisions",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "commissions",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "canonical_entity_merge_events",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_mission_outcomes",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_mission_outcome_learnings",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_ingestion_conflicts",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_intelligence_state",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_operator_receipts",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_spreadsheet_contacts",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_spreadsheet_suppressions",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "max_spreadsheet_relationships",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_alerts",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "aim_models",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "operator_scorecard_learning",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_mission_outcome_evaluations",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "operator_scorecards",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "scout_candidate_commercial_qualifications",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_paper_transactions",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "signal_replay_runs",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "acquisition_mission_learning",
+      "total_bytes": 16384
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "clients_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "ideas_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "client_notes_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "max_orchestration_metrics_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "monitor_state_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "proposal_versions_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "cal_queue_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "acquisition_knowledge_revisions_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "scout_yield_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "commissions_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "call_dispositions_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "scout_expansion_queue_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "email_performance_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "scout_queue_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "users_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "knowledge_flight_stages_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "places_api_requests_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "icp_score_history_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "excluded_prospect_log_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "studio_substral_assessment_opportunities_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "ao_followup_drafts_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "mira_corrections_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "verifier_call_log_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "mira_warm_capture_log_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "anchor_portal_evidence_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "anchor_portal_issues_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "warm_trigger_fires_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "reminders_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "anchor_portal_visit_items_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "anchor_portal_visits_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "anchor_portal_scope_items_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "anchor_portal_locations_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "icp_score_snapshots_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "anchor_portal_scope_sections_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "scout_skip_log_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "refs_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "api_spend_policy_changes_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "agent_run_health_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "blockers_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "agent_alert_dispatches_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "signal_distribution_request_attempts_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "enrichment_manual_queue_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "scout_research_candidates_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "linkedin_post_stats_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "content_seeds_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "warm_signal_events_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "capture_inbox_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "account_verification_tokens_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "agent_lessons_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "r",
+      "schema_name": "public",
+      "table_name": "revenue_operational_metrics",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "prospect_state_transitions_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "website_opportunity_events_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "daily_anchors_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "website_opportunity_assessments_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "excluded_domains_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "email_events_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": 1,
+      "parent_table": "",
+      "relkind": "S",
+      "schema_name": "public",
+      "table_name": "excluded_email_patterns_id_seq",
+      "total_bytes": 8192
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "v",
+      "schema_name": "public",
+      "table_name": "scout_skip_summary_7d",
+      "total_bytes": 0
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "v",
+      "schema_name": "public",
+      "table_name": "prospect_summary",
+      "total_bytes": 0
+    },
+    {
+      "estimated_rows": -1,
+      "parent_table": "",
+      "relkind": "v",
+      "schema_name": "public",
+      "table_name": "acquisition_outbound_learning_facts",
+      "total_bytes": 0
+    }
+  ],
+  "foreignKeys": [
+    {
+      "constraint_name": "prospects_company_id_fkey",
+      "source_table": "public.prospects",
+      "target_table": "public.companies"
+    },
+    {
+      "constraint_name": "touchpoints_prospect_id_fkey",
+      "source_table": "public.touchpoints",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "sequences_prospect_id_fkey",
+      "source_table": "public.sequences",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "messages_sequence_id_fkey",
+      "source_table": "public.messages",
+      "target_table": "public.sequences"
+    },
+    {
+      "constraint_name": "messages_prospect_id_fkey",
+      "source_table": "public.messages",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "agent_log_prospect_id_fkey",
+      "source_table": "public.agent_log",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "post_analytics_pending_id_fkey",
+      "source_table": "public.post_analytics",
+      "target_table": "public.pending_comments"
+    },
+    {
+      "constraint_name": "post_analytics_company_id_fkey",
+      "source_table": "public.post_analytics",
+      "target_table": "public.companies"
+    },
+    {
+      "constraint_name": "content_performance_summary_company_id_fkey",
+      "source_table": "public.content_performance_summary",
+      "target_table": "public.companies"
+    },
+    {
+      "constraint_name": "activity_log_lead_id_fkey",
+      "source_table": "public.activity_log",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "prospects_client_id_fkey",
+      "source_table": "public.prospects",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "companies_client_id_fkey",
+      "source_table": "public.companies",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "touchpoints_client_id_fkey",
+      "source_table": "public.touchpoints",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "agent_log_client_id_fkey",
+      "source_table": "public.agent_log",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "agent_actions_client_id_fkey",
+      "source_table": "public.agent_actions",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "pending_comments_client_id_fkey",
+      "source_table": "public.pending_comments",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "post_analytics_client_id_fkey",
+      "source_table": "public.post_analytics",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "activity_log_client_id_fkey",
+      "source_table": "public.activity_log",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "prospects_closer_id_fkey",
+      "source_table": "public.prospects",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "commissions_closer_id_fkey",
+      "source_table": "public.commissions",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "commissions_prospect_id_fkey",
+      "source_table": "public.commissions",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "commissions_client_id_fkey",
+      "source_table": "public.commissions",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "verifier_call_log_prospect_id_fkey",
+      "source_table": "public.verifier_call_log",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "prospect_signal_events_prospect_id_fkey",
+      "source_table": "public.prospect_signal_events",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "prospect_signal_events_company_id_fkey",
+      "source_table": "public.prospect_signal_events",
+      "target_table": "public.companies"
+    },
+    {
+      "constraint_name": "max_decisions_prospect_id_fkey",
+      "source_table": "public.max_decisions",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "max_decisions_company_id_fkey",
+      "source_table": "public.max_decisions",
+      "target_table": "public.companies"
+    },
+    {
+      "constraint_name": "prospect_state_transitions_prospect_id_fkey",
+      "source_table": "public.prospect_state_transitions",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "prospect_state_transitions_decision_id_fkey",
+      "source_table": "public.prospect_state_transitions",
+      "target_table": "public.max_decisions"
+    },
+    {
+      "constraint_name": "max_actions_prospect_id_fkey",
+      "source_table": "public.max_actions",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "max_actions_decision_id_fkey",
+      "source_table": "public.max_actions",
+      "target_table": "public.max_decisions"
+    },
+    {
+      "constraint_name": "linkedin_post_stats_client_id_fkey",
+      "source_table": "public.linkedin_post_stats",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "manual_lifecycle_overrides_prospect_id_fkey",
+      "source_table": "public.manual_lifecycle_overrides",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "manual_lifecycle_overrides_signal_event_id_fkey",
+      "source_table": "public.manual_lifecycle_overrides",
+      "target_table": "public.prospect_signal_events"
+    },
+    {
+      "constraint_name": "manual_lifecycle_overrides_operator_user_id_fkey",
+      "source_table": "public.manual_lifecycle_overrides",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "max_orchestration_metrics_prospect_id_fkey",
+      "source_table": "public.max_orchestration_metrics",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "acquisition_mission_provider_events_execution_record_id_fkey",
+      "source_table": "public.acquisition_mission_provider_events",
+      "target_table": "public.acquisition_mission_outbound_executions"
+    },
+    {
+      "constraint_name": "prospect_signal_events_client_fk",
+      "source_table": "public.prospect_signal_events",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "max_decisions_client_fk",
+      "source_table": "public.max_decisions",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "prospect_state_transitions_client_fk",
+      "source_table": "public.prospect_state_transitions",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "max_actions_client_fk",
+      "source_table": "public.max_actions",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "manual_lifecycle_overrides_client_fk",
+      "source_table": "public.manual_lifecycle_overrides",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "max_orchestration_metrics_client_fk",
+      "source_table": "public.max_orchestration_metrics",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "max_recommendation_reviews_client_id_fkey",
+      "source_table": "public.max_recommendation_reviews",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "max_recommendation_reviews_decision_id_fkey",
+      "source_table": "public.max_recommendation_reviews",
+      "target_table": "public.max_decisions"
+    },
+    {
+      "constraint_name": "max_recommendation_reviews_prospect_id_fkey",
+      "source_table": "public.max_recommendation_reviews",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "max_rollout_readiness_config_client_id_fkey",
+      "source_table": "public.max_rollout_readiness_config",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "warm_signal_state_prospect_id_fkey",
+      "source_table": "public.warm_signal_state",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "warm_signal_events_prospect_id_fkey",
+      "source_table": "public.warm_signal_events",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "warm_signal_events_routed_fire_id_fkey",
+      "source_table": "public.warm_signal_events",
+      "target_table": "public.warm_trigger_fires"
+    },
+    {
+      "constraint_name": "icp_score_history_prospect_id_fkey",
+      "source_table": "public.icp_score_history",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "client_notes_capture_id_fkey",
+      "source_table": "public.client_notes",
+      "target_table": "public.capture_inbox"
+    },
+    {
+      "constraint_name": "ideas_capture_id_fkey",
+      "source_table": "public.ideas",
+      "target_table": "public.capture_inbox"
+    },
+    {
+      "constraint_name": "content_seeds_capture_id_fkey",
+      "source_table": "public.content_seeds",
+      "target_table": "public.capture_inbox"
+    },
+    {
+      "constraint_name": "blockers_capture_id_fkey",
+      "source_table": "public.blockers",
+      "target_table": "public.capture_inbox"
+    },
+    {
+      "constraint_name": "refs_capture_id_fkey",
+      "source_table": "public.refs",
+      "target_table": "public.capture_inbox"
+    },
+    {
+      "constraint_name": "reminders_capture_id_fkey",
+      "source_table": "public.reminders",
+      "target_table": "public.capture_inbox"
+    },
+    {
+      "constraint_name": "mira_corrections_capture_id_fkey",
+      "source_table": "public.mira_corrections",
+      "target_table": "public.capture_inbox"
+    },
+    {
+      "constraint_name": "scout_queue_client_id_fkey",
+      "source_table": "public.scout_queue",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "max_decay_run_events_client_scope_fkey",
+      "source_table": "public.max_decay_run_events",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "tenant_outreach_messages_thread_id_fkey",
+      "source_table": "public.tenant_outreach_messages",
+      "target_table": "public.tenant_outreach_threads"
+    },
+    {
+      "constraint_name": "stripe_invoices_client_id_fkey",
+      "source_table": "public.stripe_invoices",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "stripe_subscriptions_client_id_fkey",
+      "source_table": "public.stripe_subscriptions",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "stripe_checkout_sessions_client_id_fkey",
+      "source_table": "public.stripe_checkout_sessions",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "capture_inbox_linked_capture_id_fkey",
+      "source_table": "public.capture_inbox",
+      "target_table": "public.capture_inbox"
+    },
+    {
+      "constraint_name": "stripe_credit_notes_client_id_fkey",
+      "source_table": "public.stripe_credit_notes",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "prospects_assigned_setter_id_fkey",
+      "source_table": "public.prospects",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "email_events_prospect_id_fkey",
+      "source_table": "public.email_events",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "email_events_client_id_fkey",
+      "source_table": "public.email_events",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "warm_trigger_fires_prospect_id_fkey",
+      "source_table": "public.warm_trigger_fires",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "icp_score_snapshots_prospect_id_fkey",
+      "source_table": "public.icp_score_snapshots",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "max_meeting_outcome_events_client_id_fkey",
+      "source_table": "public.max_meeting_outcome_events",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "max_meeting_outcome_events_prospect_id_fkey",
+      "source_table": "public.max_meeting_outcome_events",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "max_meeting_outcome_events_company_id_fkey",
+      "source_table": "public.max_meeting_outcome_events",
+      "target_table": "public.companies"
+    },
+    {
+      "constraint_name": "max_meeting_outcome_events_correction_of_event_id_fkey",
+      "source_table": "public.max_meeting_outcome_events",
+      "target_table": "public.max_meeting_outcome_events"
+    },
+    {
+      "constraint_name": "tenant_mailbox_poll_state_integration_id_fkey",
+      "source_table": "public.tenant_mailbox_poll_state",
+      "target_table": "public.tenant_mailbox_integrations"
+    },
+    {
+      "constraint_name": "scout_yield_client_id_fkey",
+      "source_table": "public.scout_yield",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "scout_expansion_queue_client_id_fkey",
+      "source_table": "public.scout_expansion_queue",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "call_dispositions_prospect_id_fkey",
+      "source_table": "public.call_dispositions",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "daily_anchors_source_capture_id_fkey",
+      "source_table": "public.daily_anchors",
+      "target_table": "public.capture_inbox"
+    },
+    {
+      "constraint_name": "acquisition_outbound_programs_source_mission_id_fkey",
+      "source_table": "public.acquisition_outbound_programs",
+      "target_table": "public.acquisition_missions"
+    },
+    {
+      "constraint_name": "setter_callbacks_client_id_fkey",
+      "source_table": "public.setter_callbacks",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "setter_callbacks_prospect_id_fkey",
+      "source_table": "public.setter_callbacks",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "setter_callbacks_source_disposition_id_fkey",
+      "source_table": "public.setter_callbacks",
+      "target_table": "public.call_dispositions"
+    },
+    {
+      "constraint_name": "setter_callbacks_completed_by_disposition_id_fkey",
+      "source_table": "public.setter_callbacks",
+      "target_table": "public.call_dispositions"
+    },
+    {
+      "constraint_name": "acquisition_outbound_envelopes_program_id_fkey",
+      "source_table": "public.acquisition_outbound_envelopes",
+      "target_table": "public.acquisition_outbound_programs"
+    },
+    {
+      "constraint_name": "acquisition_outbound_envelopes_mission_id_fkey",
+      "source_table": "public.acquisition_outbound_envelopes",
+      "target_table": "public.acquisition_missions"
+    },
+    {
+      "constraint_name": "acquisition_outbound_items_envelope_id_fkey",
+      "source_table": "public.acquisition_outbound_items",
+      "target_table": "public.acquisition_outbound_envelopes"
+    },
+    {
+      "constraint_name": "acquisition_outbound_preparation_program_id_fkey",
+      "source_table": "public.acquisition_outbound_preparation",
+      "target_table": "public.acquisition_outbound_programs"
+    },
+    {
+      "constraint_name": "signal_distribution_deliverie_transition_id_tenant_id_name_fkey",
+      "source_table": "public.signal_distribution_deliveries",
+      "target_table": "public.signal_distribution_transitions"
+    },
+    {
+      "constraint_name": "tenant_workspaces_client_id_fkey",
+      "source_table": "public.tenant_workspaces",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "max_operational_ingestions_client_id_fkey",
+      "source_table": "public.max_operational_ingestions",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "prospect_lifecycle_events_prospect_id_fkey",
+      "source_table": "public.prospect_lifecycle_events",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "max_evidence_artifacts_ingestion_id_fkey",
+      "source_table": "public.max_evidence_artifacts",
+      "target_table": "public.max_operational_ingestions"
+    },
+    {
+      "constraint_name": "max_ingestion_claims_ingestion_id_fkey",
+      "source_table": "public.max_ingestion_claims",
+      "target_table": "public.max_operational_ingestions"
+    },
+    {
+      "constraint_name": "prospect_notes_prospect_id_fkey",
+      "source_table": "public.prospect_notes",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "max_applied_claims_ingestion_id_fkey",
+      "source_table": "public.max_applied_claims",
+      "target_table": "public.max_operational_ingestions"
+    },
+    {
+      "constraint_name": "max_applied_claims_claim_id_fkey",
+      "source_table": "public.max_applied_claims",
+      "target_table": "public.max_ingestion_claims"
+    },
+    {
+      "constraint_name": "market_emails_company_id_fkey",
+      "source_table": "public.market_emails",
+      "target_table": "public.market_companies"
+    },
+    {
+      "constraint_name": "customers_client_id_fkey",
+      "source_table": "public.customers",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "customers_client_id_company_id_fkey",
+      "source_table": "public.customers",
+      "target_table": "public.companies"
+    },
+    {
+      "constraint_name": "customers_client_id_source_prospect_id_fkey",
+      "source_table": "public.customers",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "users_manager_id_fkey",
+      "source_table": "public.users",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "relationship_interaction_insights_interaction_id_fkey",
+      "source_table": "public.relationship_interaction_insights",
+      "target_table": "public.relationship_interactions"
+    },
+    {
+      "constraint_name": "acquisition_knowledge_revisions_knowledge_id_fkey",
+      "source_table": "public.acquisition_knowledge_revisions",
+      "target_table": "public.acquisition_knowledge_objects"
+    },
+    {
+      "constraint_name": "ao_leads_client_id_fkey",
+      "source_table": "public.ao_leads",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "ao_leads_ao_owner_id_fkey",
+      "source_table": "public.ao_leads",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "ao_leads_next_follow_up_owner_id_fkey",
+      "source_table": "public.ao_leads",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "ao_contacts_lead_id_fkey",
+      "source_table": "public.ao_contacts",
+      "target_table": "public.ao_leads"
+    },
+    {
+      "constraint_name": "ao_follow_up_tasks_lead_id_fkey",
+      "source_table": "public.ao_follow_up_tasks",
+      "target_table": "public.ao_leads"
+    },
+    {
+      "constraint_name": "ao_follow_up_tasks_contact_id_fkey",
+      "source_table": "public.ao_follow_up_tasks",
+      "target_table": "public.ao_contacts"
+    },
+    {
+      "constraint_name": "ao_follow_up_tasks_ao_owner_id_fkey",
+      "source_table": "public.ao_follow_up_tasks",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "ao_escalations_lead_id_fkey",
+      "source_table": "public.ao_escalations",
+      "target_table": "public.ao_leads"
+    },
+    {
+      "constraint_name": "ao_escalations_contact_id_fkey",
+      "source_table": "public.ao_escalations",
+      "target_table": "public.ao_contacts"
+    },
+    {
+      "constraint_name": "ao_escalations_ao_owner_id_fkey",
+      "source_table": "public.ao_escalations",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "ao_max_sessions_ao_owner_id_fkey",
+      "source_table": "public.ao_max_sessions",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "ao_max_sessions_client_id_fkey",
+      "source_table": "public.ao_max_sessions",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "opportunities_client_id_fkey",
+      "source_table": "public.opportunities",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "opportunities_client_id_customer_id_fkey",
+      "source_table": "public.opportunities",
+      "target_table": "public.customers"
+    },
+    {
+      "constraint_name": "opportunities_client_id_prospect_id_fkey",
+      "source_table": "public.opportunities",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "opportunities_client_id_company_id_fkey",
+      "source_table": "public.opportunities",
+      "target_table": "public.companies"
+    },
+    {
+      "constraint_name": "ao_max_conversation_reports_client_id_fkey",
+      "source_table": "public.ao_max_conversation_reports",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "ao_max_conversation_reports_ao_owner_id_fkey",
+      "source_table": "public.ao_max_conversation_reports",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "ao_max_conversation_reports_session_id_fkey",
+      "source_table": "public.ao_max_conversation_reports",
+      "target_table": "public.ao_max_sessions"
+    },
+    {
+      "constraint_name": "acquisition_mission_observe_reactions_mission_id_fkey",
+      "source_table": "public.acquisition_mission_observe_reactions",
+      "target_table": "public.acquisition_missions"
+    },
+    {
+      "constraint_name": "acquisition_mission_candidate_observe_state_mission_id_fkey",
+      "source_table": "public.acquisition_mission_candidate_observe_state",
+      "target_table": "public.acquisition_missions"
+    },
+    {
+      "constraint_name": "revenue_jobs_client_id_fkey",
+      "source_table": "public.revenue_jobs",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "revenue_jobs_client_id_opportunity_id_fkey",
+      "source_table": "public.revenue_jobs",
+      "target_table": "public.opportunities"
+    },
+    {
+      "constraint_name": "revenue_jobs_client_id_customer_id_fkey",
+      "source_table": "public.revenue_jobs",
+      "target_table": "public.customers"
+    },
+    {
+      "constraint_name": "canonical_interpretation_batches_registry_artifact_id_fkey",
+      "source_table": "public.canonical_interpretation_batches",
+      "target_table": "public.canonical_registry_artifacts"
+    },
+    {
+      "constraint_name": "canonical_business_entities_domain_client_id_fkey",
+      "source_table": "public.canonical_business_entities",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "canonical_business_entities_tenant_id_created_by_batch_id_fkey",
+      "source_table": "public.canonical_business_entities",
+      "target_table": "public.canonical_interpretation_batches"
+    },
+    {
+      "constraint_name": "canonical_entity_label_assertions_tenant_id_entity_id_fkey",
+      "source_table": "public.canonical_entity_label_assertions",
+      "target_table": "public.canonical_business_entities"
+    },
+    {
+      "constraint_name": "canonical_entity_label_assert_tenant_id_created_by_batch_i_fkey",
+      "source_table": "public.canonical_entity_label_assertions",
+      "target_table": "public.canonical_interpretation_batches"
+    },
+    {
+      "constraint_name": "canonical_entity_merge_events_tenant_id_source_entity_id_fkey",
+      "source_table": "public.canonical_entity_merge_events",
+      "target_table": "public.canonical_business_entities"
+    },
+    {
+      "constraint_name": "canonical_entity_merge_events_tenant_id_target_entity_id_fkey",
+      "source_table": "public.canonical_entity_merge_events",
+      "target_table": "public.canonical_business_entities"
+    },
+    {
+      "constraint_name": "canonical_entity_merge_events_tenant_id_created_by_batch_i_fkey",
+      "source_table": "public.canonical_entity_merge_events",
+      "target_table": "public.canonical_interpretation_batches"
+    },
+    {
+      "constraint_name": "content_performance_snapshots_publication_id_fkey",
+      "source_table": "public.content_performance_snapshots",
+      "target_table": "public.content_publications"
+    },
+    {
+      "constraint_name": "canonical_batch_evidence_inputs_evidence_id_fkey",
+      "source_table": "public.canonical_batch_evidence_inputs",
+      "target_table": "public.cie_evidence"
+    },
+    {
+      "constraint_name": "canonical_batch_evidence_inputs_tenant_id_batch_id_fkey",
+      "source_table": "public.canonical_batch_evidence_inputs",
+      "target_table": "public.canonical_interpretation_batches"
+    },
+    {
+      "constraint_name": "canonical_conflict_sets_tenant_id_subject_entity_id_fkey",
+      "source_table": "public.canonical_conflict_sets",
+      "target_table": "public.canonical_business_entities"
+    },
+    {
+      "constraint_name": "canonical_conflict_sets_tenant_id_created_by_batch_id_fkey",
+      "source_table": "public.canonical_conflict_sets",
+      "target_table": "public.canonical_interpretation_batches"
+    },
+    {
+      "constraint_name": "acquisition_mission_predictions_mission_id_fkey",
+      "source_table": "public.acquisition_mission_predictions",
+      "target_table": "public.acquisition_missions"
+    },
+    {
+      "constraint_name": "acquisition_mission_outcome_evaluations_mission_id_fkey",
+      "source_table": "public.acquisition_mission_outcome_evaluations",
+      "target_table": "public.acquisition_missions"
+    },
+    {
+      "constraint_name": "ao_routes_client_id_fkey",
+      "source_table": "public.ao_routes",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "ao_routes_ao_owner_id_fkey",
+      "source_table": "public.ao_routes",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "ao_route_stops_route_id_fkey",
+      "source_table": "public.ao_route_stops",
+      "target_table": "public.ao_routes"
+    },
+    {
+      "constraint_name": "ao_route_stops_task_id_fkey",
+      "source_table": "public.ao_route_stops",
+      "target_table": "public.ao_follow_up_tasks"
+    },
+    {
+      "constraint_name": "ao_route_stops_lead_id_fkey",
+      "source_table": "public.ao_route_stops",
+      "target_table": "public.ao_leads"
+    },
+    {
+      "constraint_name": "mission_audit_events_mission_id_fkey",
+      "source_table": "public.mission_audit_events",
+      "target_table": "public.missions"
+    },
+    {
+      "constraint_name": "account_verification_tokens_user_id_fkey",
+      "source_table": "public.account_verification_tokens",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "canonical_business_facts_tenant_id_subject_entity_id_fkey",
+      "source_table": "public.canonical_business_facts",
+      "target_table": "public.canonical_business_entities"
+    },
+    {
+      "constraint_name": "canonical_business_facts_tenant_id_conflict_set_id_fkey",
+      "source_table": "public.canonical_business_facts",
+      "target_table": "public.canonical_conflict_sets"
+    },
+    {
+      "constraint_name": "canonical_business_facts_tenant_id_created_by_batch_id_fkey",
+      "source_table": "public.canonical_business_facts",
+      "target_table": "public.canonical_interpretation_batches"
+    },
+    {
+      "constraint_name": "canonical_fact_evidence_refs_evidence_id_fkey",
+      "source_table": "public.canonical_fact_evidence_refs",
+      "target_table": "public.cie_evidence"
+    },
+    {
+      "constraint_name": "canonical_fact_evidence_refs_tenant_id_fact_id_fkey",
+      "source_table": "public.canonical_fact_evidence_refs",
+      "target_table": "public.canonical_business_facts"
+    },
+    {
+      "constraint_name": "canonical_fact_evidence_refs_tenant_id_created_by_batch_id_fkey",
+      "source_table": "public.canonical_fact_evidence_refs",
+      "target_table": "public.canonical_interpretation_batches"
+    },
+    {
+      "constraint_name": "canonical_fact_relations_tenant_id_from_fact_id_fkey",
+      "source_table": "public.canonical_fact_relations",
+      "target_table": "public.canonical_business_facts"
+    },
+    {
+      "constraint_name": "canonical_fact_relations_tenant_id_to_fact_id_fkey",
+      "source_table": "public.canonical_fact_relations",
+      "target_table": "public.canonical_business_facts"
+    },
+    {
+      "constraint_name": "canonical_fact_relations_tenant_id_created_by_batch_id_fkey",
+      "source_table": "public.canonical_fact_relations",
+      "target_table": "public.canonical_interpretation_batches"
+    },
+    {
+      "constraint_name": "canonical_business_snapshots_registry_artifact_id_fkey",
+      "source_table": "public.canonical_business_snapshots",
+      "target_table": "public.canonical_registry_artifacts"
+    },
+    {
+      "constraint_name": "canonical_business_snapshots_tenant_id_committed_batch_id_fkey",
+      "source_table": "public.canonical_business_snapshots",
+      "target_table": "public.canonical_interpretation_batches"
+    },
+    {
+      "constraint_name": "canonical_business_snapshots_tenant_id_supersedes_snapshot_fkey",
+      "source_table": "public.canonical_business_snapshots",
+      "target_table": "public.canonical_business_snapshots"
+    },
+    {
+      "constraint_name": "cie_bp_canonical_snapshot_fk",
+      "source_table": "public.cie_business_blueprints",
+      "target_table": "public.canonical_business_snapshots"
+    },
+    {
+      "constraint_name": "scout_candidate_memberships_tenant_id_search_fingerprint_p_fkey",
+      "source_table": "public.scout_candidate_memberships",
+      "target_table": "public.scout_candidate_work"
+    },
+    {
+      "constraint_name": "scout_candidate_memberships_tenant_id_search_fingerprint_q_fkey",
+      "source_table": "public.scout_candidate_memberships",
+      "target_table": "public.scout_query_checkpoints"
+    },
+    {
+      "constraint_name": "ao_leads_crm_prospect_id_fkey",
+      "source_table": "public.ao_leads",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "revenue_payments_client_id_fkey",
+      "source_table": "public.revenue_payments",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "revenue_payments_client_id_job_id_fkey",
+      "source_table": "public.revenue_payments",
+      "target_table": "public.revenue_jobs"
+    },
+    {
+      "constraint_name": "revenue_payments_client_id_customer_id_fkey",
+      "source_table": "public.revenue_payments",
+      "target_table": "public.customers"
+    },
+    {
+      "constraint_name": "revenue_events_client_id_fkey",
+      "source_table": "public.revenue_events",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "market_observations_email_id_fkey",
+      "source_table": "public.market_observations",
+      "target_table": "public.market_emails"
+    },
+    {
+      "constraint_name": "market_observations_company_id_fkey",
+      "source_table": "public.market_observations",
+      "target_table": "public.market_companies"
+    },
+    {
+      "constraint_name": "market_company_profiles_company_id_fkey",
+      "source_table": "public.market_company_profiles",
+      "target_table": "public.market_companies"
+    },
+    {
+      "constraint_name": "content_business_outcomes_publication_id_fkey",
+      "source_table": "public.content_business_outcomes",
+      "target_table": "public.content_publications"
+    },
+    {
+      "constraint_name": "content_qualitative_signals_publication_id_fkey",
+      "source_table": "public.content_qualitative_signals",
+      "target_table": "public.content_publications"
+    },
+    {
+      "constraint_name": "cie_interview_turns_session_id_fkey",
+      "source_table": "public.cie_interview_turns",
+      "target_table": "public.cie_interview_sessions"
+    },
+    {
+      "constraint_name": "cie_evidence_session_id_fkey",
+      "source_table": "public.cie_evidence",
+      "target_table": "public.cie_interview_sessions"
+    },
+    {
+      "constraint_name": "cie_evidence_source_turn_id_fkey",
+      "source_table": "public.cie_evidence",
+      "target_table": "public.cie_interview_turns"
+    },
+    {
+      "constraint_name": "cie_business_blueprints_session_id_fkey",
+      "source_table": "public.cie_business_blueprints",
+      "target_table": "public.cie_interview_sessions"
+    },
+    {
+      "constraint_name": "acquisition_mission_events_mission_id_fkey",
+      "source_table": "public.acquisition_mission_events",
+      "target_table": "public.acquisition_missions"
+    },
+    {
+      "constraint_name": "acquisition_mission_contributions_mission_id_fkey",
+      "source_table": "public.acquisition_mission_contributions",
+      "target_table": "public.acquisition_missions"
+    },
+    {
+      "constraint_name": "acquisition_mission_observations_mission_id_fkey",
+      "source_table": "public.acquisition_mission_observations",
+      "target_table": "public.acquisition_missions"
+    },
+    {
+      "constraint_name": "acquisition_mission_outcomes_mission_id_fkey",
+      "source_table": "public.acquisition_mission_outcomes",
+      "target_table": "public.acquisition_missions"
+    },
+    {
+      "constraint_name": "acquisition_prospect_projecti_acquisition_knowledge_object_fkey",
+      "source_table": "public.acquisition_prospect_projections",
+      "target_table": "public.acquisition_knowledge_objects"
+    },
+    {
+      "constraint_name": "acquisition_prospect_projections_client_id_prospect_id_fkey",
+      "source_table": "public.acquisition_prospect_projections",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "acquisition_prospect_projections_client_id_company_id_fkey",
+      "source_table": "public.acquisition_prospect_projections",
+      "target_table": "public.companies"
+    },
+    {
+      "constraint_name": "revenue_events_supersedes_event_id_fkey",
+      "source_table": "public.revenue_events",
+      "target_table": "public.revenue_events"
+    },
+    {
+      "constraint_name": "revenue_outcomes_client_id_fkey",
+      "source_table": "public.revenue_outcomes",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "revenue_outcomes_client_id_customer_id_fkey",
+      "source_table": "public.revenue_outcomes",
+      "target_table": "public.customers"
+    },
+    {
+      "constraint_name": "revenue_outcomes_client_id_prospect_id_fkey",
+      "source_table": "public.revenue_outcomes",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "revenue_outcomes_client_id_company_id_fkey",
+      "source_table": "public.revenue_outcomes",
+      "target_table": "public.companies"
+    },
+    {
+      "constraint_name": "revenue_outcomes_client_id_opportunity_id_fkey",
+      "source_table": "public.revenue_outcomes",
+      "target_table": "public.opportunities"
+    },
+    {
+      "constraint_name": "revenue_outcomes_client_id_job_id_fkey",
+      "source_table": "public.revenue_outcomes",
+      "target_table": "public.revenue_jobs"
+    },
+    {
+      "constraint_name": "revenue_outcomes_client_id_payment_id_fkey",
+      "source_table": "public.revenue_outcomes",
+      "target_table": "public.revenue_payments"
+    },
+    {
+      "constraint_name": "revenue_follow_up_recommendations_client_id_fkey",
+      "source_table": "public.revenue_follow_up_recommendations",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "revenue_follow_up_recommendations_client_id_customer_id_fkey",
+      "source_table": "public.revenue_follow_up_recommendations",
+      "target_table": "public.customers"
+    },
+    {
+      "constraint_name": "revenue_follow_up_recommendations_client_id_job_id_fkey",
+      "source_table": "public.revenue_follow_up_recommendations",
+      "target_table": "public.revenue_jobs"
+    },
+    {
+      "constraint_name": "campaigns_client_id_fkey",
+      "source_table": "public.campaigns",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "anchor_phone_setter_v1_targeting_backup_client_id_fkey",
+      "source_table": "public.anchor_phone_setter_v1_targeting_backup",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "prospects_assigned_ao_id_fkey",
+      "source_table": "public.prospects",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "revenue_feature_flags_client_id_fkey",
+      "source_table": "public.revenue_feature_flags",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "tenant_sending_identities_mailbox_integration_id_fkey",
+      "source_table": "public.tenant_sending_identities",
+      "target_table": "public.tenant_mailbox_integrations"
+    },
+    {
+      "constraint_name": "setter_follow_up_drafts_client_id_fkey",
+      "source_table": "public.setter_follow_up_drafts",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "setter_follow_up_drafts_prospect_id_fkey",
+      "source_table": "public.setter_follow_up_drafts",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "max_operational_decisions_client_id_fkey",
+      "source_table": "public.max_operational_decisions",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "max_operational_decisions_superseded_by_fkey",
+      "source_table": "public.max_operational_decisions",
+      "target_table": "public.max_operational_decisions"
+    },
+    {
+      "constraint_name": "revenue_projection_rebuilds_client_id_fkey",
+      "source_table": "public.revenue_projection_rebuilds",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "ad_accounts_company_id_fkey",
+      "source_table": "public.ad_accounts",
+      "target_table": "public.companies"
+    },
+    {
+      "constraint_name": "ad_accounts_client_id_fkey",
+      "source_table": "public.ad_accounts",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "revenue_reconciliation_runs_client_id_fkey",
+      "source_table": "public.revenue_reconciliation_runs",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "revenue_operational_metrics_client_id_fkey",
+      "source_table": "public.revenue_operational_metrics",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "revenue_operator_audit_client_id_fkey",
+      "source_table": "public.revenue_operator_audit",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "ao_prospect_tasks_client_id_fkey",
+      "source_table": "public.ao_prospect_tasks",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "ao_prospect_tasks_prospect_id_fkey",
+      "source_table": "public.ao_prospect_tasks",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "ao_prospect_tasks_assigned_ao_id_fkey",
+      "source_table": "public.ao_prospect_tasks",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "ao_advisory_debriefs_client_id_fkey",
+      "source_table": "public.ao_advisory_debriefs",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "ao_advisory_debriefs_prospect_id_fkey",
+      "source_table": "public.ao_advisory_debriefs",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "ao_advisory_debriefs_task_id_fkey",
+      "source_table": "public.ao_advisory_debriefs",
+      "target_table": "public.ao_prospect_tasks"
+    },
+    {
+      "constraint_name": "ao_advisory_debriefs_ao_owner_id_fkey",
+      "source_table": "public.ao_advisory_debriefs",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "max_operational_action_intents_decision_id_fkey",
+      "source_table": "public.max_operational_action_intents",
+      "target_table": "public.max_operational_decisions"
+    },
+    {
+      "constraint_name": "max_operational_action_intents_client_id_fkey",
+      "source_table": "public.max_operational_action_intents",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "max_ao_follow_up_tasks_client_id_fkey",
+      "source_table": "public.max_ao_follow_up_tasks",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "max_ao_follow_up_tasks_decision_id_fkey",
+      "source_table": "public.max_ao_follow_up_tasks",
+      "target_table": "public.max_operational_decisions"
+    },
+    {
+      "constraint_name": "max_attention_items_client_id_fkey",
+      "source_table": "public.max_attention_items",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "max_attention_items_source_decision_id_fkey",
+      "source_table": "public.max_attention_items",
+      "target_table": "public.max_operational_decisions"
+    },
+    {
+      "constraint_name": "max_attention_items_parent_attention_id_fkey",
+      "source_table": "public.max_attention_items",
+      "target_table": "public.max_attention_items"
+    },
+    {
+      "constraint_name": "max_attention_scheduler_runs_client_id_fkey",
+      "source_table": "public.max_attention_scheduler_runs",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "max_attention_heartbeats_last_run_id_fkey",
+      "source_table": "public.max_attention_heartbeats",
+      "target_table": "public.max_attention_scheduler_runs"
+    },
+    {
+      "constraint_name": "emmett_tenant_mailbox_capacity_reservations_envelope_id_fkey",
+      "source_table": "public.emmett_tenant_mailbox_capacity_reservations",
+      "target_table": "public.emmett_tenant_mailbox_capacity_envelopes"
+    },
+    {
+      "constraint_name": "scout_query_coverage_epochs_tenant_id_search_fingerprint_m_fkey",
+      "source_table": "public.scout_query_coverage_epochs",
+      "target_table": "public.scout_query_coverage_epoch_receipts"
+    },
+    {
+      "constraint_name": "signal_source_registry_source_id_fkey",
+      "source_table": "public.signal_source_registry",
+      "target_table": "public.signal_sources"
+    },
+    {
+      "constraint_name": "signal_source_registry_cluster_id_fkey",
+      "source_table": "public.signal_source_registry",
+      "target_table": "public.signal_source_clusters"
+    },
+    {
+      "constraint_name": "signal_raw_caller_evidence_source_id_fkey",
+      "source_table": "public.signal_raw_caller_evidence",
+      "target_table": "public.signal_sources"
+    },
+    {
+      "constraint_name": "signal_raw_caller_evidence_token_address_fkey",
+      "source_table": "public.signal_raw_caller_evidence",
+      "target_table": "public.signal_tokens"
+    },
+    {
+      "constraint_name": "signal_prospective_research_jobs_token_address_fkey",
+      "source_table": "public.signal_prospective_research_jobs",
+      "target_table": "public.signal_tokens"
+    },
+    {
+      "constraint_name": "signal_prospective_research_jobs_observation_id_fkey",
+      "source_table": "public.signal_prospective_research_jobs",
+      "target_table": "public.signal_research_observations"
+    },
+    {
+      "constraint_name": "signal_token_research_episodes_token_address_fkey",
+      "source_table": "public.signal_token_research_episodes",
+      "target_table": "public.signal_tokens"
+    },
+    {
+      "constraint_name": "signal_token_research_episodes_observation_id_fkey",
+      "source_table": "public.signal_token_research_episodes",
+      "target_table": "public.signal_research_observations"
+    },
+    {
+      "constraint_name": "signal_sources_cluster_id_fkey",
+      "source_table": "public.signal_sources",
+      "target_table": "public.signal_source_clusters"
+    },
+    {
+      "constraint_name": "signal_source_cluster_members_source_id_fkey",
+      "source_table": "public.signal_source_cluster_members",
+      "target_table": "public.signal_sources"
+    },
+    {
+      "constraint_name": "signal_source_cluster_members_cluster_id_fkey",
+      "source_table": "public.signal_source_cluster_members",
+      "target_table": "public.signal_source_clusters"
+    },
+    {
+      "constraint_name": "signal_events_token_address_fkey",
+      "source_table": "public.signal_events",
+      "target_table": "public.signal_tokens"
+    },
+    {
+      "constraint_name": "signal_events_source_id_fkey",
+      "source_table": "public.signal_events",
+      "target_table": "public.signal_sources"
+    },
+    {
+      "constraint_name": "signal_events_source_cluster_id_fkey",
+      "source_table": "public.signal_events",
+      "target_table": "public.signal_source_clusters"
+    },
+    {
+      "constraint_name": "signal_feature_snapshots_token_address_fkey",
+      "source_table": "public.signal_feature_snapshots",
+      "target_table": "public.signal_tokens"
+    },
+    {
+      "constraint_name": "signal_source_performance_source_id_fkey",
+      "source_table": "public.signal_source_performance",
+      "target_table": "public.signal_sources"
+    },
+    {
+      "constraint_name": "signal_decisions_token_address_fkey",
+      "source_table": "public.signal_decisions",
+      "target_table": "public.signal_tokens"
+    },
+    {
+      "constraint_name": "signal_decisions_feature_snapshot_id_fkey",
+      "source_table": "public.signal_decisions",
+      "target_table": "public.signal_feature_snapshots"
+    },
+    {
+      "constraint_name": "signal_market_outcomes_token_address_fkey",
+      "source_table": "public.signal_market_outcomes",
+      "target_table": "public.signal_tokens"
+    },
+    {
+      "constraint_name": "max_ingestion_mutations_ingestion_id_fkey",
+      "source_table": "public.max_ingestion_mutations",
+      "target_table": "public.max_operational_ingestions"
+    },
+    {
+      "constraint_name": "max_ingestion_mutations_claim_id_fkey",
+      "source_table": "public.max_ingestion_mutations",
+      "target_table": "public.max_ingestion_claims"
+    },
+    {
+      "constraint_name": "max_open_expectations_client_id_fkey",
+      "source_table": "public.max_open_expectations",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "max_open_expectations_ao_id_fkey",
+      "source_table": "public.max_open_expectations",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "max_open_expectations_source_ingestion_id_fkey",
+      "source_table": "public.max_open_expectations",
+      "target_table": "public.max_operational_ingestions"
+    },
+    {
+      "constraint_name": "max_open_expectations_source_claim_id_fkey",
+      "source_table": "public.max_open_expectations",
+      "target_table": "public.max_ingestion_claims"
+    },
+    {
+      "constraint_name": "max_ingestion_conflicts_ingestion_id_fkey",
+      "source_table": "public.max_ingestion_conflicts",
+      "target_table": "public.max_operational_ingestions"
+    },
+    {
+      "constraint_name": "max_ingestion_conflicts_claim_id_fkey",
+      "source_table": "public.max_ingestion_conflicts",
+      "target_table": "public.max_ingestion_claims"
+    },
+    {
+      "constraint_name": "anchor_portal_issues_location_id_fkey",
+      "source_table": "public.anchor_portal_issues",
+      "target_table": "public.anchor_portal_locations"
+    },
+    {
+      "constraint_name": "anchor_portal_issues_visit_id_fkey",
+      "source_table": "public.anchor_portal_issues",
+      "target_table": "public.anchor_portal_visits"
+    },
+    {
+      "constraint_name": "anchor_portal_issues_reported_by_user_id_fkey",
+      "source_table": "public.anchor_portal_issues",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "anchor_portal_issues_acknowledged_by_fkey",
+      "source_table": "public.anchor_portal_issues",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "anchor_portal_issues_assigned_to_fkey",
+      "source_table": "public.anchor_portal_issues",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "max_ingestion_evidence_links_client_id_fkey",
+      "source_table": "public.max_ingestion_evidence_links",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "max_ingestion_evidence_links_ingestion_id_fkey",
+      "source_table": "public.max_ingestion_evidence_links",
+      "target_table": "public.max_operational_ingestions"
+    },
+    {
+      "constraint_name": "max_ingestion_evidence_links_claim_id_fkey",
+      "source_table": "public.max_ingestion_evidence_links",
+      "target_table": "public.max_ingestion_claims"
+    },
+    {
+      "constraint_name": "max_ingestion_evidence_links_artifact_id_fkey",
+      "source_table": "public.max_ingestion_evidence_links",
+      "target_table": "public.max_evidence_artifacts"
+    },
+    {
+      "constraint_name": "max_voice_recordings_client_id_fkey",
+      "source_table": "public.max_voice_recordings",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "max_voice_recordings_actor_id_fkey",
+      "source_table": "public.max_voice_recordings",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "anchor_portal_scope_sections_location_id_fkey",
+      "source_table": "public.anchor_portal_scope_sections",
+      "target_table": "public.anchor_portal_locations"
+    },
+    {
+      "constraint_name": "signal_paper_positions_token_address_fkey",
+      "source_table": "public.signal_paper_positions",
+      "target_table": "public.signal_tokens"
+    },
+    {
+      "constraint_name": "signal_paper_positions_entry_snapshot_id_fkey",
+      "source_table": "public.signal_paper_positions",
+      "target_table": "public.signal_feature_snapshots"
+    },
+    {
+      "constraint_name": "signal_paper_transactions_position_id_fkey",
+      "source_table": "public.signal_paper_transactions",
+      "target_table": "public.signal_paper_positions"
+    },
+    {
+      "constraint_name": "signal_replay_runs_token_address_fkey",
+      "source_table": "public.signal_replay_runs",
+      "target_table": "public.signal_tokens"
+    },
+    {
+      "constraint_name": "signal_alerts_token_address_fkey",
+      "source_table": "public.signal_alerts",
+      "target_table": "public.signal_tokens"
+    },
+    {
+      "constraint_name": "anchor_portal_scope_items_section_id_fkey",
+      "source_table": "public.anchor_portal_scope_items",
+      "target_table": "public.anchor_portal_scope_sections"
+    },
+    {
+      "constraint_name": "anchor_portal_visits_location_id_fkey",
+      "source_table": "public.anchor_portal_visits",
+      "target_table": "public.anchor_portal_locations"
+    },
+    {
+      "constraint_name": "anchor_portal_visits_cleaner_id_fkey",
+      "source_table": "public.anchor_portal_visits",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "signal_research_observations_token_address_fkey",
+      "source_table": "public.signal_research_observations",
+      "target_table": "public.signal_tokens"
+    },
+    {
+      "constraint_name": "signal_research_observations_feature_snapshot_id_fkey",
+      "source_table": "public.signal_research_observations",
+      "target_table": "public.signal_feature_snapshots"
+    },
+    {
+      "constraint_name": "signal_research_cohort_members_cohort_id_fkey",
+      "source_table": "public.signal_research_cohort_members",
+      "target_table": "public.signal_research_cohorts"
+    },
+    {
+      "constraint_name": "anchor_portal_user_locations_user_id_fkey",
+      "source_table": "public.anchor_portal_user_locations",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "anchor_portal_user_locations_location_id_fkey",
+      "source_table": "public.anchor_portal_user_locations",
+      "target_table": "public.anchor_portal_locations"
+    },
+    {
+      "constraint_name": "signal_research_cohort_members_token_address_fkey",
+      "source_table": "public.signal_research_cohort_members",
+      "target_table": "public.signal_tokens"
+    },
+    {
+      "constraint_name": "signal_research_observation_outcomes_observation_id_fkey",
+      "source_table": "public.signal_research_observation_outcomes",
+      "target_table": "public.signal_research_observations"
+    },
+    {
+      "constraint_name": "anchor_portal_visit_items_visit_id_fkey",
+      "source_table": "public.anchor_portal_visit_items",
+      "target_table": "public.anchor_portal_visits"
+    },
+    {
+      "constraint_name": "anchor_portal_evidence_visit_id_fkey",
+      "source_table": "public.anchor_portal_evidence",
+      "target_table": "public.anchor_portal_visits"
+    },
+    {
+      "constraint_name": "anchor_portal_evidence_issue_id_fkey",
+      "source_table": "public.anchor_portal_evidence",
+      "target_table": "public.anchor_portal_issues"
+    },
+    {
+      "constraint_name": "signal_prospective_internal_alerts_observation_id_fkey",
+      "source_table": "public.signal_prospective_internal_alerts",
+      "target_table": "public.signal_research_observations"
+    },
+    {
+      "constraint_name": "ao_account_flags_client_id_fkey",
+      "source_table": "public.ao_account_flags",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "ao_account_flags_ao_id_fkey",
+      "source_table": "public.ao_account_flags",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "ao_followup_drafts_tenant_id_fkey",
+      "source_table": "public.ao_followup_drafts",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "ao_followup_drafts_assigned_ao_id_fkey",
+      "source_table": "public.ao_followup_drafts",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "ao_prospect_activity_tenant_id_fkey",
+      "source_table": "public.ao_prospect_activity",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "ao_prospect_activity_ao_id_fkey",
+      "source_table": "public.ao_prospect_activity",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "signal_distribution_transitions_monitor_id_fkey",
+      "source_table": "public.signal_distribution_transitions",
+      "target_table": "public.signal_distribution_monitors"
+    },
+    {
+      "constraint_name": "signal_distribution_transitio_monitor_id_tenant_id_namespa_fkey",
+      "source_table": "public.signal_distribution_transitions",
+      "target_table": "public.signal_distribution_monitors"
+    },
+    {
+      "constraint_name": "prospects_dead_by_fkey",
+      "source_table": "public.prospects",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "ao_leads_dead_by_fkey",
+      "source_table": "public.ao_leads",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "studio_substral_assessment_opportunities_client_id_fkey",
+      "source_table": "public.studio_substral_assessment_opportunities",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "studio_substral_assessment_opportunities_agent_action_id_fkey",
+      "source_table": "public.studio_substral_assessment_opportunities",
+      "target_table": "public.agent_actions"
+    },
+    {
+      "constraint_name": "studio_substral_assessment_opportunities_company_id_fkey",
+      "source_table": "public.studio_substral_assessment_opportunities",
+      "target_table": "public.companies"
+    },
+    {
+      "constraint_name": "studio_substral_assessment_opportunities_prospect_id_fkey",
+      "source_table": "public.studio_substral_assessment_opportunities",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "website_opportunity_assessments_client_id_fkey",
+      "source_table": "public.website_opportunity_assessments",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "website_opportunity_assessments_prospect_id_fkey",
+      "source_table": "public.website_opportunity_assessments",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "ao_max_conversation_reports_canonical_flag_id_fkey",
+      "source_table": "public.ao_max_conversation_reports",
+      "target_table": "public.ao_account_flags"
+    },
+    {
+      "constraint_name": "prospects_ao_reassignment_prior_ao_id_fkey",
+      "source_table": "public.prospects",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "scout_research_cycle_releases_grant_id_fkey",
+      "source_table": "public.scout_research_cycle_releases",
+      "target_table": "public.scout_research_only_grants"
+    },
+    {
+      "constraint_name": "signal_distribution_observati_monitor_id_tenant_id_namespa_fkey",
+      "source_table": "public.signal_distribution_observations",
+      "target_table": "public.signal_distribution_monitors"
+    },
+    {
+      "constraint_name": "signal_distribution_monitor_activation_fk",
+      "source_table": "public.signal_distribution_monitors",
+      "target_table": "public.signal_distribution_activations"
+    },
+    {
+      "constraint_name": "signal_market_observations_token_address_fkey",
+      "source_table": "public.signal_market_observations",
+      "target_table": "public.signal_tokens"
+    },
+    {
+      "constraint_name": "signal_market_ingestion_stats_token_address_fkey",
+      "source_table": "public.signal_market_ingestion_stats",
+      "target_table": "public.signal_tokens"
+    },
+    {
+      "constraint_name": "max_spreadsheet_proposals_client_id_fkey",
+      "source_table": "public.max_spreadsheet_proposals",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "max_spreadsheet_proposals_actor_id_fkey",
+      "source_table": "public.max_spreadsheet_proposals",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "max_spreadsheet_proposals_ao_id_fkey",
+      "source_table": "public.max_spreadsheet_proposals",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "max_spreadsheet_proposals_approved_by_fkey",
+      "source_table": "public.max_spreadsheet_proposals",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "max_spreadsheet_proposals_client_id_ao_id_fkey",
+      "source_table": "public.max_spreadsheet_proposals",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "max_spreadsheet_commit_requests_client_id_fkey",
+      "source_table": "public.max_spreadsheet_commit_requests",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "max_spreadsheet_commit_requests_proposal_id_fkey",
+      "source_table": "public.max_spreadsheet_commit_requests",
+      "target_table": "public.max_spreadsheet_proposals"
+    },
+    {
+      "constraint_name": "max_spreadsheet_effects_client_id_fkey",
+      "source_table": "public.max_spreadsheet_effects",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "max_spreadsheet_effects_proposal_id_fkey",
+      "source_table": "public.max_spreadsheet_effects",
+      "target_table": "public.max_spreadsheet_proposals"
+    },
+    {
+      "constraint_name": "max_spreadsheet_contacts_client_id_prospect_id_fkey",
+      "source_table": "public.max_spreadsheet_contacts",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "max_spreadsheet_suppressions_client_id_prospect_id_fkey",
+      "source_table": "public.max_spreadsheet_suppressions",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "max_spreadsheet_suppressions_contact_id_fkey",
+      "source_table": "public.max_spreadsheet_suppressions",
+      "target_table": "public.max_spreadsheet_contacts"
+    },
+    {
+      "constraint_name": "max_spreadsheet_relationships_client_id_prospect_id_fkey",
+      "source_table": "public.max_spreadsheet_relationships",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "max_spreadsheet_relationships_client_id_provider_id_fkey",
+      "source_table": "public.max_spreadsheet_relationships",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "scout_research_google_spend_grant_id_fkey",
+      "source_table": "public.scout_research_google_spend",
+      "target_table": "public.scout_research_only_grants"
+    },
+    {
+      "constraint_name": "scout_research_google_spend_grant_id_cycle_number_fkey",
+      "source_table": "public.scout_research_google_spend",
+      "target_table": "public.scout_research_only_cycles"
+    },
+    {
+      "constraint_name": "ao_account_flags_created_by_user_id_fkey",
+      "source_table": "public.ao_account_flags",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "ao_account_flags_assigned_to_user_id_fkey",
+      "source_table": "public.ao_account_flags",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "ao_flag_notifications_client_id_fkey",
+      "source_table": "public.ao_flag_notifications",
+      "target_table": "public.clients"
+    },
+    {
+      "constraint_name": "ao_flag_notifications_user_id_fkey",
+      "source_table": "public.ao_flag_notifications",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "ao_flag_notifications_flag_id_fkey",
+      "source_table": "public.ao_flag_notifications",
+      "target_table": "public.ao_account_flags"
+    },
+    {
+      "constraint_name": "scout_candidate_commercial_qualifica_research_candidate_id_fkey",
+      "source_table": "public.scout_candidate_commercial_qualifications",
+      "target_table": "public.scout_research_candidates"
+    },
+    {
+      "constraint_name": "signal_operator_receipts_alert_id_fkey",
+      "source_table": "public.signal_operator_receipts",
+      "target_table": "public.signal_operator_alert_outbox"
+    },
+    {
+      "constraint_name": "signal_operator_alert_outbox_operator_event_id_fkey",
+      "source_table": "public.signal_operator_alert_outbox",
+      "target_table": "public.signal_operator_events"
+    },
+    {
+      "constraint_name": "anchor_portal_visits_completed_by_fkey",
+      "source_table": "public.anchor_portal_visits",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "scout_query_coverage_grants_tenant_id_search_fingerprint_a_fkey",
+      "source_table": "public.scout_query_coverage_grants",
+      "target_table": "public.scout_query_coverage_allocations"
+    },
+    {
+      "constraint_name": "ao_communication_identities_ao_id_fkey",
+      "source_table": "public.ao_communication_identities",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "ao_communication_identities_mailbox_integration_id_fkey",
+      "source_table": "public.ao_communication_identities",
+      "target_table": "public.tenant_mailbox_integrations"
+    },
+    {
+      "constraint_name": "scout_query_coverage_grant_ro_tenant_id_search_fingerprint_fkey",
+      "source_table": "public.scout_query_coverage_grant_roots",
+      "target_table": "public.scout_query_coverage_allocations"
+    },
+    {
+      "constraint_name": "scout_query_coverage_grant_pa_tenant_id_search_fingerprint_fkey",
+      "source_table": "public.scout_query_coverage_grant_pages",
+      "target_table": "public.scout_query_coverage_grants"
+    },
+    {
+      "constraint_name": "scout_query_coverage_grant_p_tenant_id_search_fingerprint_fkey1",
+      "source_table": "public.scout_query_coverage_grant_pages",
+      "target_table": "public.scout_query_pages"
+    },
+    {
+      "constraint_name": "scout_bounded_acquisition_run_tenant_id_search_fingerprint_fkey",
+      "source_table": "public.scout_bounded_acquisition_runs",
+      "target_table": "public.scout_query_coverage_grants"
+    },
+    {
+      "constraint_name": "scout_bounded_acquisition_attempts_approval_ref_fkey",
+      "source_table": "public.scout_bounded_acquisition_attempts",
+      "target_table": "public.scout_bounded_acquisition_runs"
+    },
+    {
+      "constraint_name": "scout_bounded_acquisition_attempts_api_usage_id_fkey",
+      "source_table": "public.scout_bounded_acquisition_attempts",
+      "target_table": "public.api_usage_events"
+    },
+    {
+      "constraint_name": "prospects_tenant_assigned_ao_fkey",
+      "source_table": "public.prospects",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "ao_tasks_tenant_prospect_fkey",
+      "source_table": "public.ao_prospect_tasks",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "ao_tasks_tenant_owner_fkey",
+      "source_table": "public.ao_prospect_tasks",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "ao_debriefs_tenant_prospect_fkey",
+      "source_table": "public.ao_advisory_debriefs",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "ao_debriefs_tenant_owner_fkey",
+      "source_table": "public.ao_advisory_debriefs",
+      "target_table": "public.users"
+    },
+    {
+      "constraint_name": "ao_debriefs_task_relationship_fkey",
+      "source_table": "public.ao_advisory_debriefs",
+      "target_table": "public.ao_prospect_tasks"
+    },
+    {
+      "constraint_name": "ao_activity_tenant_prospect_fkey",
+      "source_table": "public.ao_prospect_activity",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "ao_followup_drafts_tenant_account_fkey",
+      "source_table": "public.ao_followup_drafts",
+      "target_table": "public.prospects"
+    },
+    {
+      "constraint_name": "anchor_scoped_resume_consumption_manifest_id_fkey",
+      "source_table": "public.anchor_scoped_resume_consumption",
+      "target_table": "public.anchor_scoped_resume_grants"
+    },
+    {
+      "constraint_name": "scout_backlog_recovery_runs_approval_ref_manifest_hash_fkey",
+      "source_table": "public.scout_backlog_recovery_runs",
+      "target_table": "public.scout_backlog_recovery_grants"
+    },
+    {
+      "constraint_name": "scout_backlog_recovery_items_approval_ref_fkey",
+      "source_table": "public.scout_backlog_recovery_items",
+      "target_table": "public.scout_backlog_recovery_runs"
+    },
+    {
+      "constraint_name": "scout_research_only_grants_research_mission_id_fkey",
+      "source_table": "public.scout_research_only_grants",
+      "target_table": "public.scout_research_missions"
+    },
+    {
+      "constraint_name": "scout_research_only_cycles_grant_id_fkey",
+      "source_table": "public.scout_research_only_cycles",
+      "target_table": "public.scout_research_only_grants"
+    },
+    {
+      "constraint_name": "scout_research_candidates_research_mission_id_fkey",
+      "source_table": "public.scout_research_candidates",
+      "target_table": "public.scout_research_missions"
+    },
+    {
+      "constraint_name": "scout_research_candidates_grant_id_cycle_number_fkey",
+      "source_table": "public.scout_research_candidates",
+      "target_table": "public.scout_research_only_cycles"
+    }
+  ],
+  "viewDependencies": [
+    {
+      "referenced_table": "public.acquisition_outbound_envelopes",
+      "view_name": "public.acquisition_outbound_learning_facts"
+    },
+    {
+      "referenced_table": "public.acquisition_outbound_events",
+      "view_name": "public.acquisition_outbound_learning_facts"
+    },
+    {
+      "referenced_table": "public.acquisition_outbound_items",
+      "view_name": "public.acquisition_outbound_learning_facts"
+    },
+    {
+      "referenced_table": "public.companies",
+      "view_name": "public.prospect_summary"
+    },
+    {
+      "referenced_table": "public.prospects",
+      "view_name": "public.prospect_summary"
+    },
+    {
+      "referenced_table": "public.touchpoints",
+      "view_name": "public.prospect_summary"
+    },
+    {
+      "referenced_table": "public.scout_skip_log",
+      "view_name": "public.scout_skip_summary_7d"
+    }
+  ],
+  "triggers": [
+    {
+      "function_name": "public.update_updated_at",
+      "table_name": "public.companies",
+      "trigger_name": "trg_companies_updated_at"
+    },
+    {
+      "function_name": "public.update_updated_at",
+      "table_name": "public.sequences",
+      "trigger_name": "trg_sequences_updated_at"
+    },
+    {
+      "function_name": "public.reject_max_orchestration_append_only_mutation",
+      "table_name": "public.prospect_signal_events",
+      "trigger_name": "prospect_signal_events_append_only"
+    },
+    {
+      "function_name": "public.reject_max_orchestration_append_only_mutation",
+      "table_name": "public.max_decisions",
+      "trigger_name": "max_decisions_append_only"
+    },
+    {
+      "function_name": "public.reject_max_orchestration_append_only_mutation",
+      "table_name": "public.prospect_state_transitions",
+      "trigger_name": "prospect_state_transitions_append_only"
+    },
+    {
+      "function_name": "public.reject_max_orchestration_append_only_mutation",
+      "table_name": "public.max_actions",
+      "trigger_name": "max_actions_append_only"
+    },
+    {
+      "function_name": "public.reject_max_orchestration_append_only_mutation",
+      "table_name": "public.manual_lifecycle_overrides",
+      "trigger_name": "manual_lifecycle_overrides_append_only"
+    },
+    {
+      "function_name": "public.reject_max_orchestration_append_only_mutation",
+      "table_name": "public.max_orchestration_metrics",
+      "trigger_name": "max_orchestration_metrics_append_only"
+    },
+    {
+      "function_name": "public.reject_max_orchestration_append_only_mutation",
+      "table_name": "public.max_recommendation_reviews",
+      "trigger_name": "max_recommendation_reviews_append_only"
+    },
+    {
+      "function_name": "public.reject_max_orchestration_append_only_mutation",
+      "table_name": "public.max_decay_run_events",
+      "trigger_name": "max_decay_run_events_append_only"
+    },
+    {
+      "function_name": "public.reject_max_orchestration_append_only_mutation",
+      "table_name": "public.max_meeting_outcome_events",
+      "trigger_name": "max_meeting_outcome_events_append_only"
+    },
+    {
+      "function_name": "public.update_updated_at",
+      "table_name": "public.prospects",
+      "trigger_name": "trg_prospects_updated_at"
+    },
+    {
+      "function_name": "public.canonical_assert_business_domain_binding",
+      "table_name": "public.canonical_business_entities",
+      "trigger_name": "canonical_business_domain_binding_trigger"
+    },
+    {
+      "function_name": "public.canonical_assert_merge_entity_types",
+      "table_name": "public.canonical_entity_merge_events",
+      "trigger_name": "canonical_merge_entity_types_trigger"
+    },
+    {
+      "function_name": "public.canonical_assert_batch_registry",
+      "table_name": "public.canonical_interpretation_batches",
+      "trigger_name": "canonical_batch_registry_trigger"
+    },
+    {
+      "function_name": "public.canonical_assert_evidence_tenant",
+      "table_name": "public.canonical_batch_evidence_inputs",
+      "trigger_name": "canonical_batch_evidence_tenant_trigger"
+    },
+    {
+      "function_name": "public.canonical_assert_evidence_tenant",
+      "table_name": "public.canonical_fact_evidence_refs",
+      "trigger_name": "canonical_fact_evidence_tenant_trigger"
+    },
+    {
+      "function_name": "public.canonical_assert_evidence_tenant",
+      "table_name": "public.canonical_entity_label_assertions",
+      "trigger_name": "canonical_label_evidence_tenant_trigger"
+    },
+    {
+      "function_name": "public.canonical_assert_evidence_tenant",
+      "table_name": "public.canonical_entity_merge_events",
+      "trigger_name": "canonical_merge_evidence_tenant_trigger"
+    },
+    {
+      "function_name": "public.canonical_verify_registry_artifact",
+      "table_name": "public.canonical_registry_artifacts",
+      "trigger_name": "canonical_registry_digest_trigger"
+    },
+    {
+      "function_name": "public.canonical_verify_snapshot_manifest",
+      "table_name": "public.canonical_business_snapshots",
+      "trigger_name": "canonical_snapshot_digest_trigger"
+    },
+    {
+      "function_name": "public.canonical_reject_semantic_mutation",
+      "table_name": "public.canonical_registry_artifacts",
+      "trigger_name": "canonical_registry_artifacts_append_only"
+    },
+    {
+      "function_name": "public.canonical_reject_semantic_mutation",
+      "table_name": "public.canonical_interpretation_batches",
+      "trigger_name": "canonical_interpretation_batches_append_only"
+    },
+    {
+      "function_name": "public.canonical_reject_semantic_mutation",
+      "table_name": "public.canonical_business_entities",
+      "trigger_name": "canonical_business_entities_append_only"
+    },
+    {
+      "function_name": "public.canonical_reject_semantic_mutation",
+      "table_name": "public.canonical_entity_label_assertions",
+      "trigger_name": "canonical_entity_label_assertions_append_only"
+    },
+    {
+      "function_name": "public.canonical_reject_semantic_mutation",
+      "table_name": "public.canonical_entity_merge_events",
+      "trigger_name": "canonical_entity_merge_events_append_only"
+    },
+    {
+      "function_name": "public.canonical_reject_semantic_mutation",
+      "table_name": "public.canonical_batch_evidence_inputs",
+      "trigger_name": "canonical_batch_evidence_inputs_append_only"
+    },
+    {
+      "function_name": "public.canonical_reject_semantic_mutation",
+      "table_name": "public.canonical_conflict_sets",
+      "trigger_name": "canonical_conflict_sets_append_only"
+    },
+    {
+      "function_name": "public.canonical_reject_semantic_mutation",
+      "table_name": "public.canonical_business_facts",
+      "trigger_name": "canonical_business_facts_append_only"
+    },
+    {
+      "function_name": "public.canonical_reject_semantic_mutation",
+      "table_name": "public.canonical_fact_evidence_refs",
+      "trigger_name": "canonical_fact_evidence_refs_append_only"
+    },
+    {
+      "function_name": "public.canonical_reject_semantic_mutation",
+      "table_name": "public.canonical_fact_relations",
+      "trigger_name": "canonical_fact_relations_append_only"
+    },
+    {
+      "function_name": "public.canonical_reject_semantic_mutation",
+      "table_name": "public.canonical_business_snapshots",
+      "trigger_name": "canonical_business_snapshots_append_only"
+    },
+    {
+      "function_name": "public.canonical_reject_immutable_evidence_mutation",
+      "table_name": "public.cie_evidence",
+      "trigger_name": "canonical_cie_evidence_immutable_trigger"
+    },
+    {
+      "function_name": "public.prevent_revenue_event_mutation",
+      "table_name": "public.revenue_events",
+      "trigger_name": "revenue_events_no_update_delete"
+    },
+    {
+      "function_name": "public.acquisition_outbound_observe_row",
+      "table_name": "public.acquisition_mission_provider_events",
+      "trigger_name": "acquisition_outbound_observe"
+    },
+    {
+      "function_name": "public.acquisition_outbound_observe_row",
+      "table_name": "public.tenant_outreach_messages",
+      "trigger_name": "acquisition_outbound_observe"
+    },
+    {
+      "function_name": "public.acquisition_outbound_observe_row",
+      "table_name": "public.touchpoints",
+      "trigger_name": "acquisition_outbound_observe"
+    },
+    {
+      "function_name": "public.acquisition_outbound_observe_row",
+      "table_name": "public.prospects",
+      "trigger_name": "acquisition_outbound_observe"
+    },
+    {
+      "function_name": "public.acquisition_outbound_observe_row",
+      "table_name": "public.ao_leads",
+      "trigger_name": "acquisition_outbound_observe"
+    },
+    {
+      "function_name": "public.acquisition_outbound_observe_row",
+      "table_name": "public.ao_follow_up_tasks",
+      "trigger_name": "acquisition_outbound_observe"
+    },
+    {
+      "function_name": "public.scout_exclude_mixed_coverage_allocations",
+      "table_name": "public.scout_query_coverage_epoch_receipts",
+      "trigger_name": "scout_exclude_v2_coverage_allocation"
+    },
+    {
+      "function_name": "public.scout_preserve_transferred_query_payload",
+      "table_name": "public.scout_query_checkpoints",
+      "trigger_name": "scout_preserve_transferred_payload"
+    },
+    {
+      "function_name": "public.scout_research_only_permanent",
+      "table_name": "public.scout_research_missions",
+      "trigger_name": "scout_research_missions_no_delete"
+    },
+    {
+      "function_name": "public.scout_research_only_permanent",
+      "table_name": "public.scout_research_missions",
+      "trigger_name": "scout_research_missions_no_update"
+    },
+    {
+      "function_name": "public.scout_research_only_permanent",
+      "table_name": "public.scout_research_candidates",
+      "trigger_name": "scout_research_candidates_no_delete"
+    },
+    {
+      "function_name": "public.scout_research_candidates_reconcile_once",
+      "table_name": "public.scout_research_candidates",
+      "trigger_name": "scout_research_candidates_reconcile"
+    },
+    {
+      "function_name": "public.scout_research_only_permanent",
+      "table_name": "public.scout_research_only_grants",
+      "trigger_name": "scout_research_only_grants_no_delete"
+    },
+    {
+      "function_name": "public.scout_research_only_revoke_once",
+      "table_name": "public.scout_research_only_grants",
+      "trigger_name": "scout_research_only_grants_revoke_only"
+    },
+    {
+      "function_name": "public.scout_research_only_permanent",
+      "table_name": "public.scout_research_only_cycles",
+      "trigger_name": "scout_research_only_cycles_no_delete"
+    },
+    {
+      "function_name": "public.scout_research_only_cycle_forward",
+      "table_name": "public.scout_research_only_cycles",
+      "trigger_name": "scout_research_only_cycles_forward_only"
+    },
+    {
+      "function_name": "public.scout_research_only_permanent",
+      "table_name": "public.scout_research_google_spend",
+      "trigger_name": "scout_research_google_spend_no_delete"
+    },
+    {
+      "function_name": "public.scout_research_google_spend_settle_only",
+      "table_name": "public.scout_research_google_spend",
+      "trigger_name": "scout_research_google_spend_settle"
+    },
+    {
+      "function_name": "public.scout_research_only_permanent",
+      "table_name": "public.scout_research_cycle_releases",
+      "trigger_name": "scout_research_releases_no_delete"
+    },
+    {
+      "function_name": "public.scout_research_only_permanent",
+      "table_name": "public.scout_research_cycle_releases",
+      "trigger_name": "scout_research_releases_no_update"
+    },
+    {
+      "function_name": "public.scout_research_release_forward",
+      "table_name": "public.scout_research_cycle_releases",
+      "trigger_name": "scout_research_releases_forward"
+    },
+    {
+      "function_name": "public.scout_research_cycle_released",
+      "table_name": "public.scout_research_only_cycles",
+      "trigger_name": "scout_research_cycles_release_guard"
+    },
+    {
+      "function_name": "public.scout_bounded_research_permanent",
+      "table_name": "public.scout_bounded_research_grants",
+      "trigger_name": "scout_bounded_research_no_delete"
+    },
+    {
+      "function_name": "public.scout_bounded_research_revoke_once",
+      "table_name": "public.scout_bounded_research_grants",
+      "trigger_name": "scout_bounded_research_revoke_only"
+    },
+    {
+      "function_name": "public.anchor_recovery_immutable",
+      "table_name": "public.anchor_email_recovery_control",
+      "trigger_name": "anchor_recovery_control_permanent"
+    },
+    {
+      "function_name": "public.anchor_recovery_immutable",
+      "table_name": "public.anchor_email_quarantines",
+      "trigger_name": "anchor_quarantine_permanent"
+    },
+    {
+      "function_name": "public.anchor_recovery_immutable",
+      "table_name": "public.anchor_email_recovery_reservations",
+      "trigger_name": "anchor_reservation_permanent"
+    },
+    {
+      "function_name": "public.anchor_recovery_dispatch_once",
+      "table_name": "public.anchor_email_recovery_reservations",
+      "trigger_name": "anchor_reservation_dispatch_once"
+    },
+    {
+      "function_name": "public.anchor_recovery_immutable",
+      "table_name": "public.anchor_scoped_resume_grants",
+      "trigger_name": "anchor_scoped_resume_grants_permanent"
+    },
+    {
+      "function_name": "public.anchor_scoped_resume_revoke_once",
+      "table_name": "public.anchor_scoped_resume_grants",
+      "trigger_name": "anchor_scoped_resume_grant_revoke_once"
+    },
+    {
+      "function_name": "public.anchor_recovery_immutable",
+      "table_name": "public.anchor_scoped_resume_consumption",
+      "trigger_name": "anchor_scoped_resume_consumption_permanent"
+    },
+    {
+      "function_name": "public.scout_exclude_mixed_coverage_allocations",
+      "table_name": "public.scout_query_coverage_allocations",
+      "trigger_name": "scout_exclude_v1_coverage_allocation"
+    },
+    {
+      "function_name": "public.scout_backlog_recovery_permanent",
+      "table_name": "public.scout_backlog_recovery_grants",
+      "trigger_name": "scout_backlog_recovery_grants_no_delete"
+    },
+    {
+      "function_name": "public.scout_backlog_recovery_grant_revoke_once",
+      "table_name": "public.scout_backlog_recovery_grants",
+      "trigger_name": "scout_backlog_recovery_grants_revoke_only"
+    },
+    {
+      "function_name": "public.scout_backlog_recovery_permanent",
+      "table_name": "public.scout_backlog_recovery_runs",
+      "trigger_name": "scout_backlog_recovery_runs_no_delete"
+    },
+    {
+      "function_name": "public.scout_backlog_recovery_run_finish_once",
+      "table_name": "public.scout_backlog_recovery_runs",
+      "trigger_name": "scout_backlog_recovery_runs_finish_only"
+    },
+    {
+      "function_name": "public.scout_backlog_recovery_permanent",
+      "table_name": "public.scout_backlog_recovery_items",
+      "trigger_name": "scout_backlog_recovery_items_immutable"
+    },
+    {
+      "function_name": "public.scout_tenant_query_owner_permanent",
+      "table_name": "public.scout_tenant_query_owners",
+      "trigger_name": "scout_tenant_query_owner_permanent"
+    },
+    {
+      "function_name": "public.scout_tenant_place_observation_once",
+      "table_name": "public.scout_tenant_place_observations",
+      "trigger_name": "scout_tenant_place_observation_once"
+    },
+    {
+      "function_name": "public.scout_tenant_query_owner_permanent",
+      "table_name": "public.scout_tenant_place_observations",
+      "trigger_name": "scout_tenant_place_observation_no_delete"
+    },
+    {
+      "function_name": "public.scout_tier_allocation_permanent",
+      "table_name": "public.scout_query_allocation_activations",
+      "trigger_name": "scout_query_allocation_activation_permanent"
+    },
+    {
+      "function_name": "public.scout_tier_allocation_permanent",
+      "table_name": "public.scout_candidate_commercial_qualifications",
+      "trigger_name": "scout_candidate_qualification_permanent"
+    },
+    {
+      "function_name": "public.enforce_synthetic_prospect_suppression",
+      "table_name": "public.prospects",
+      "trigger_name": "prospects_synthetic_suppression"
+    },
+    {
+      "function_name": "public.cleanup_suppressed_prospect_work",
+      "table_name": "public.prospects",
+      "trigger_name": "prospects_suppression_cleanup"
+    },
+    {
+      "function_name": "public.ao_cancel_suppressed_prospect_tasks",
+      "table_name": "public.prospects",
+      "trigger_name": "ao_cancel_suppressed_tasks"
+    },
+    {
+      "function_name": "public.max_spreadsheet_proposal_immutable",
+      "table_name": "public.max_spreadsheet_proposals",
+      "trigger_name": "max_spreadsheet_proposal_immutable"
+    }
+  ]
+}

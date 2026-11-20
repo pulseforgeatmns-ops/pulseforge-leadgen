@@ -11,5 +11,5 @@ async function migrate(pool,env=process.env){
   await c.query('COMMIT');
  }catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}
 }
-if(require.main===module){const pool=new(require('pg').Pool)({connectionString:process.env.DATABASE_URL,ssl:process.env.DATABASE_SSL==='false'?false:{rejectUnauthorized:false},max:2});migrate(pool).then(()=>console.log('[signal-dashboard] isolated schema ready')).catch(()=>{console.error('[signal-dashboard] explicit migration unavailable');process.exitCode=1;}).finally(()=>pool.end());}
+if(require.main===module){const pool=require('../../signalDb').getSignalPool();migrate(pool).then(()=>console.log('[signal-dashboard] isolated schema ready')).catch(()=>{console.error('[signal-dashboard] explicit migration unavailable');process.exitCode=1;}).finally(()=>pool.end());}
 module.exports={migrate,FILES};

@@ -1,0 +1,8 @@
+FROM postgres:18-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-requests ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+COPY scripts/migration/restoreGatewayRender.py /usr/local/bin/restoreGatewayRender.py
+COPY docs/migration/railway-source-catalog-20261117.json /usr/local/share/migration/railway-source-catalog-20261117.json
+USER postgres
+ENV PYTHONUNBUFFERED=1
+CMD ["python3", "/usr/local/bin/restoreGatewayRender.py"]

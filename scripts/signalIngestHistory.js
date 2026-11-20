@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-const pool = require('../db.js');
+const pool = require('../signalDb').getSignalPool();
 const { createSignalStore } = require('../packages/signal-v1/storage/createSignalStore');
 const { SignalService } = require('../packages/signal-v1/SignalService');
 

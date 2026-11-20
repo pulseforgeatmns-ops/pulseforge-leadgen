@@ -73,7 +73,7 @@ router.post('/api/v1/review-only-prospects/import', requireWrite, async (req, re
     });
   } catch (error) {
     console.error('[review-only-prospect-import]', error);
-    const status = error.code && /required|duplicate|limit/.test(error.code) ? 422 : 500;
+    const status = error.code && /required|duplicate|limit|invalid/.test(error.code) ? 422 : 500;
     return res.status(status).json(publicError(error));
   }
 });

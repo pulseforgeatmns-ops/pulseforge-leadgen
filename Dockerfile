@@ -1,15 +1,8 @@
-FROM ghcr.io/puppeteer/puppeteer:24
-
-ENV NODE_ENV=production
-ENV PORT=3000
-
-WORKDIR /app
-
-COPY --chown=pptruser:pptruser package.json package-lock.json ./
-RUN npm ci --omit=dev
-
-COPY --chown=pptruser:pptruser . .
-
-EXPOSE 3000
-
-CMD ["sh", "-c", "if [ \"$PF_MIGRATION_STAGING\" = \"1\" ]; then exec node migrationStagingServer.js; else exec node server.js; fi"]
+# Render one-shot restore receiver for the cutover. Creates NEW databases only.
+FROM postgres:18-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-psycopg2 python3-requests ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+COPY scripts/migration/fingerprintSql.py scripts/migration/restoreFinalRender.py /usr/local/bin/
+USER postgres
+ENV PYTHONUNBUFFERED=1
+CMD ["python3", "/usr/local/bin/restoreFinalRender.py"]
