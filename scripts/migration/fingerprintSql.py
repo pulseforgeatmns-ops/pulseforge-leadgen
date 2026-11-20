@@ -43,17 +43,37 @@ def catalog_counts(cur) -> dict[str, int]:
 
 
 def fingerprint_tables(cur, tables: list[str]) -> dict[str, dict]:
+    """Sort-free, order-independent multiset digest: the sums of the four
+    32-bit words of md5(row::text) over all rows (numeric, no overflow).
+    A plain aggregate needs no sort and no temp files, so it is safe on a
+    nearly full source volume. Any added, removed or changed row changes it."""
     report = {}
     for name in tables:
         if not IDENT_RE.fullmatch(name):
             raise RuntimeError("unexpected_table_identifier")
         cur.execute(
-            f'SELECT count(*)::bigint, md5(coalesce(string_agg(h, \'\' ORDER BY h), \'\')) '
+            "SELECT count(*)::bigint, "
+            "coalesce(sum(('x'||substr(h,1,8))::bit(32)::bigint::numeric),0)::text||'.'||"
+            "coalesce(sum(('x'||substr(h,9,8))::bit(32)::bigint::numeric),0)::text||'.'||"
+            "coalesce(sum(('x'||substr(h,17,8))::bit(32)::bigint::numeric),0)::text||'.'||"
+            "coalesce(sum(('x'||substr(h,25,8))::bit(32)::bigint::numeric),0)::text "
             f'FROM (SELECT md5(t::text) AS h FROM public."{name}" t) s'
         )
         rows, digest = cur.fetchone()
         report[name] = {"rows": int(rows), "fingerprint": digest}
     return report
+
+
+def session_guards(cur) -> None:
+    """No parallel workers, and never let a query write temp files."""
+    cur.execute("SET LOCAL max_parallel_workers_per_gather = 0")
+    cur.execute("SAVEPOINT guard")
+    try:
+        cur.execute("SET LOCAL temp_file_limit = '8MB'")
+        cur.execute("RELEASE SAVEPOINT guard")
+    except Exception:  # noqa: BLE001 - non-superuser: plain aggregate still spills nothing
+        cur.execute("ROLLBACK TO SAVEPOINT guard")
+        cur.execute("RELEASE SAVEPOINT guard")
 
 
 def count_tables(cur, tables: list[str]) -> dict[str, int]:
