@@ -13,35 +13,36 @@ Create a disposable Railway service named `migration-offsite-export-20261121` in
 | Image | `Dockerfile.migration-export` |
 | Config as code | `railway.migration-export.json` (`restartPolicyType: NEVER`) |
 | Dockerfile override | **Mandatory:** `RAILWAY_DOCKERFILE_PATH=Dockerfile.migration-export` |
+| Config file override | **Mandatory:** `RAILWAY_CONFIG_FILE=railway.migration-export.json` |
 | Approval | `EXPORT_ONCE_APPROVED=YES_READ_ONLY_TO_BUCKET` |
 | Object key | `BACKUP_OBJECT_KEY=migration-backups/railway-20261121-full-pg18.dump` |
 
-Railway's default `railway.json` / `Dockerfile` build the live application. Without `RAILWAY_DOCKERFILE_PATH=Dockerfile.migration-export`, this service would start the app against production. That is forbidden.
+Railway's default `railway.json` / `Dockerfile` build the live application. Without `RAILWAY_DOCKERFILE_PATH=Dockerfile.migration-export` and `RAILWAY_CONFIG_FILE=railway.migration-export.json`, this service would start the app against production. That is forbidden.
 
-Restart policy is **NEVER**. The worker must not loop or retry after a successful or failed dump.
+Restart policy is **NEVER**. The worker must not loop or retry after a successful or failed dump. Do **not** reuse service `migration-offsite-export-once` or object key `migration-backups/railway-20261117-full-pg18.dump`.
 
 ## Variables (reference only; never paste secrets)
 
-Wire **reference variables** from the existing Postgres and MigrationBackup services. Do not paste connection strings, passwords, or bucket keys into Git, chat, or the service form as literals.
+Worker process env keys must be `S3_*` as required by `exportRailwayToBucket.py`. Railway bucket reference **names** are `ENDPOINT`, `BUCKET`, `REGION`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY` — not `S3_*`. Postgres references are `PGHOST` / `PGUSER` / `PGPASSWORD` / `PGDATABASE` / `PGPORT`.
 
-From **Postgres**:
-- `PGHOST`
-- `PGUSER`
-- `PGDATABASE`
-- `PGPASSWORD`
-- `PGPORT`
+`PGDATABASE` must resolve to `railway` and `PGHOST` must end with `.railway.internal`. Hard-code those two non-secret values only if the references resolve wrong. Do not paste passwords, access keys, or connection URLs.
 
-From **MigrationBackup**:
-- `S3_ENDPOINT`
-- `S3_BUCKET`
-- `S3_REGION`
-- `S3_ACCESS_KEY_ID`
-- `S3_SECRET_ACCESS_KEY`
-
-Set on the worker itself:
-- `EXPORT_ONCE_APPROVED=YES_READ_ONLY_TO_BUCKET`
-- `BACKUP_OBJECT_KEY=migration-backups/railway-20261121-full-pg18.dump`
-- `RAILWAY_DOCKERFILE_PATH=Dockerfile.migration-export`
+```
+RAILWAY_DOCKERFILE_PATH=Dockerfile.migration-export
+RAILWAY_CONFIG_FILE=railway.migration-export.json
+EXPORT_ONCE_APPROVED=YES_READ_ONLY_TO_BUCKET
+BACKUP_OBJECT_KEY=migration-backups/railway-20261121-full-pg18.dump
+PGHOST=${{Postgres.PGHOST}}
+PGPORT=${{Postgres.PGPORT}}
+PGUSER=${{Postgres.PGUSER}}
+PGPASSWORD=${{Postgres.PGPASSWORD}}
+PGDATABASE=${{Postgres.PGDATABASE}}
+S3_ENDPOINT=${{MigrationBackup.ENDPOINT}}
+S3_BUCKET=${{MigrationBackup.BUCKET}}
+S3_REGION=${{MigrationBackup.REGION}}
+S3_ACCESS_KEY_ID=${{MigrationBackup.ACCESS_KEY_ID}}
+S3_SECRET_ACCESS_KEY=${{MigrationBackup.SECRET_ACCESS_KEY}}
+```
 
 The exporter refuses overwrite if the object key already exists, requires the private Railway Postgres host, and dumps database `railway` only.
 
