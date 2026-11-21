@@ -7,13 +7,14 @@ POST /internal/migration/restore-final (bearer token) with
 1. Verifies the archive bytes/SHA-256 against EXPECTED_ARCHIVE_SHA256 (pinned by the
    operator from the Railway export log) and the manifest.
 2. CREATEs a NEW database on the same Render instance (never touches an existing one):
-   rehearsal -> pulseforge_rehearsal_<stamp>, final -> pulseforge_cutover_<stamp>.
+   rehearsal -> pulseforge_rehearsal_<stamp>, final -> pulseforge_production (owner-approved
+   name; refuses if it already exists).
 3. Restores schema for everything and data for every non-Signal table, in ONE
    transaction, exit-on-error (Signal tables exist empty, as on 2026-11-17).
 4. Fingerprints the destination with the same SQL as the source snapshot and
    compares rows, content digests, sequences and catalog counts. Any difference
    = FAILED, and nothing else happens.
-5. final mode only, with MIGRATION_FINAL_SWAP_APPROVED: in one transaction
+5. (Legacy, off by default) final mode with MIGRATION_FINAL_SWAP_APPROVED: in one transaction
    renames the 2026-11-17 database to pulseforge_snapshot_20261117 (kept) and the
    verified cutover database to pulseforge_production_migration, so the existing
    internal DATABASE_URL points at the new data. Nothing is dropped.
@@ -42,6 +43,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fingerprintSql as fp  # noqa: E402
 
 PRIMARY_DB = "pulseforge_production_migration"
+PRODUCTION_DB = "pulseforge_production"
 SNAPSHOT_DB = "pulseforge_snapshot_20261117"
 RENDER_HOST_PREFIX = "dpg-dbtgtloae00c73dd8040-a"
 DATA_RE = re.compile(r"^\d+;\s+\d+\s+\d+\s+TABLE DATA\s+public\s+([a-z_][a-z0-9_]*)\s")
@@ -217,7 +219,9 @@ def process(download_url: str, manifest_url: str, mode: str):
         if manifest.get("serverVersionNum", 0) // 10000 != 18:
             raise RuntimeError("source_not_postgres18")
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
-        target = ("pulseforge_rehearsal_" if mode == "rehearsal" else "pulseforge_cutover_") + stamp
+        # final restores into the owner-approved production name; the 2026-11-17
+        # database is never renamed or touched.
+        target = ("pulseforge_rehearsal_" + stamp) if mode == "rehearsal" else PRODUCTION_DB
         if database_exists(target):
             raise RuntimeError("target_database_exists")
         if int(scalar(PRIMARY_DB, "SELECT current_setting('server_version_num')::int")) // 10000 != 18:
@@ -248,8 +252,8 @@ def process(download_url: str, manifest_url: str, mode: str):
             log("RECONCILIATION_FAILED", {**summary, "firstDifferences": diffs[:25]})
             return
         log("RECONCILIATION_PASSED", summary)
-        if mode == "final":
-            swap(target)
+        if mode == "final" and os.environ.get("MIGRATION_FINAL_SWAP_APPROVED") == "RENAME_SNAPSHOT_KEEP_AND_PROMOTE_VERIFIED":
+            swap(target)  # legacy option; default path keeps names and needs no swap
         log("COMPLETE", {"mode": mode, "database": target})
     except Exception as exc:  # noqa: BLE001
         log("FAILED", {"reason": str(exc)[:400] if isinstance(exc, RuntimeError) else type(exc).__name__,
