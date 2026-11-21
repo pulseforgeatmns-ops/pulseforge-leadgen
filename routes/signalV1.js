@@ -29,8 +29,8 @@ let servicePromise = null;
 let shadowPromise = null;
 
 async function getStore() {
-  if (process.env.DATABASE_URL) {
-    const pool = require('../db');
+  if (process.env.DATABASE_URL || process.env.SIGNAL_DATABASE_URL || process.env.SIGNAL_DB_SEPARATION_REQUIRED === '1') {
+    const pool = require('../signalDb').getSignalPool();
     return createSignalStore(pool, { seedFixtures: true });
   }
   const store = new InMemorySignalStore();

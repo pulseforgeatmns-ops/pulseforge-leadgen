@@ -34,7 +34,7 @@ const OPPORTUNITY_OBJECT_RE = /\bopportunit(?:y|ies)\b/i;
 // Strong anchor required before "opportunities" means tenant records: explicit
 // existing-data language or a numbered ranking ("top five opportunities").
 const OPPORTUNITY_ANCHOR_RE =
-  /\b(?:existing|current|stored|saved|uploaded|imported|recorded|actual)\b|\bworkspace\s+data\b|\b(?:in|from)\s+(?:this|the|my|our)\s+(?:workspace|crm|pipeline|database)\b|\btop\s+(?:\d+|three|five|ten)\s+opportunit|\bhighest[- ]priority\s+opportunit/i;
+  /\b(?:existing|current|stored|saved|uploaded|imported|recorded|actual)\b|\bworkspace\s+data\b|\b(?:in|from)\s+(?:this|the|my|our)\s+(?:workspace|crm|pipeline|database)\b|\btop\s+(?:\d+|three|five|ten)\s+opportunit|\b(?:one|two|three|four|five|six|ten|\d+)\s+highest[- ]priority(?:\s+(?:active|current|existing|recorded|qualified)){0,3}\s+opportunit|\bhighest[- ]priority(?:\s+(?:active|current|existing|recorded|qualified)){0,3}\s+opportunit/i;
 
 const READ_FORM_RE = new RegExp(
   [

@@ -1,0 +1,16 @@
+{
+  "capturedAt": "2026-11-21",
+  "objectKey": "migration-backups/railway-20261121-full-pg18.dump",
+  "bytes": 728012480,
+  "sha256": "4cf4e95bf56706e09ba411349ed68cfcf8725fef2ee4964ed6af73fce29fd734",
+  "targetDatabase": "pulseforge_production",
+  "forbiddenSnapshotDatabase": "pulseforge_production_migration",
+  "hostPrefix": "dpg-dbtgtloae00c73dd8040-a",
+  "restoreAllTableData": true,
+  "silentlyDiscardSignalData": false,
+  "mergePullRequest1146": false,
+  "forbiddenObjectKey": "migration-backups/railway-20261117-full-pg18.dump",
+  "sourceDatabaseBytesFloor": 9218275007,
+  "walHeadroomRatio": 0.12,
+  "defaultDiskBytes": 10000000000
+}

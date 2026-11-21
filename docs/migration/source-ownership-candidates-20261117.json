@@ -1,0 +1,2267 @@
+{
+  "type": "PROVISIONAL_METADATA_ONLY_NOT_FOR_PG_RESTORE",
+  "snapshotDate": "2026-11-17",
+  "sourceVersion": "18.6 (Debian 18.6-1.pgdg13+2)",
+  "sourceCapturedAt": "2026-11-17T16:50:55.872883+00:00",
+  "backupSha256": "4d44ad1f73ffcb5a3ee48ee8b30c78c2430f803da05915b40b84b6101a736628",
+  "physicalTables": 319,
+  "counts": {
+    "PULSEFORGE_CANDIDATE": 274,
+    "SIGNAL_CANDIDATE": 45
+  },
+  "bytes": {
+    "PULSEFORGE_CANDIDATE": 1032675328,
+    "SIGNAL_CANDIDATE": 8163663872
+  },
+  "crossProductForeignKeys": 0,
+  "unresolvedRuntimeDependencies": [
+    {
+      "component": "standalone/signal-dashboard/app.js",
+      "from": "Signal standalone authentication",
+      "to": "public.users",
+      "why": "Login and session authorization directly query Pulseforge users"
+    },
+    {
+      "component": "standalone/signal-dashboard/server.js",
+      "from": "Signal standalone session",
+      "to": "public.signal_dashboard_session",
+      "why": "Signal session table must survive separation; external auth identity must be resolved"
+    }
+  ],
+  "warning": "Neither table-name classification nor absence of declared FKs proves independent runtime services. Do not restore until schema/sequence/trigger/function/identity dependencies are addressed.",
+  "tables": [
+    {
+      "table": "public.account_verification_tokens",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 24576,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_intelligence_state",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_knowledge_decisions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_knowledge_objects",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 1187840,
+      "estimatedRows": 120,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_knowledge_revisions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 1228800,
+      "estimatedRows": 120,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_mission_candidate_observe_state",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 90112,
+      "estimatedRows": 19,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_mission_contributions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 8200192,
+      "estimatedRows": 392,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_mission_events",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 663552,
+      "estimatedRows": 870,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_mission_execution_audit",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 385024,
+      "estimatedRows": 238,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_mission_learning",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_mission_observations",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 131072,
+      "estimatedRows": 53,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_mission_observe_reactions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 229376,
+      "estimatedRows": 51,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_mission_outbound_executions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 188416,
+      "estimatedRows": 46,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_mission_outcome_evaluations",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_mission_outcome_learnings",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_mission_outcomes",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_mission_predictions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_mission_prepared_cadence_annotations",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 65536,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_mission_provider_events",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 139264,
+      "estimatedRows": 53,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_missions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 655360,
+      "estimatedRows": 54,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_outbound_envelopes",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 229376,
+      "estimatedRows": 25,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_outbound_events",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 101621760,
+      "estimatedRows": 30294,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_outbound_inbox_health",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 65536,
+      "estimatedRows": 2,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_outbound_items",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 425984,
+      "estimatedRows": 103,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_outbound_lifecycle",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 73728,
+      "estimatedRows": 84,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_outbound_preparation",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": 45,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_outbound_programs",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 90112,
+      "estimatedRows": 6,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_outbound_replies",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 434176,
+      "estimatedRows": 12,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_prospect_projections",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 262144,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.acquisition_targets",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 139264,
+      "estimatedRows": 64,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.activity_log",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.ad_accounts",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.agent_actions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 344064,
+      "estimatedRows": 437,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.agent_alert_dispatches",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 172032,
+      "estimatedRows": 309,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.agent_lessons",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 65536,
+      "estimatedRows": 4,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.agent_log",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 47702016,
+      "estimatedRows": 90110,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.agent_run_health",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 6561792,
+      "estimatedRows": 21547,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.aic_workspaces",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.aim_models",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.anchor_email_quarantines",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 114688,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.anchor_email_recovery_control",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.anchor_email_recovery_reservations",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 24576,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.anchor_phone_setter_v1_targeting_backup",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.anchor_portal_evidence",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.anchor_portal_issues",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 57344,
+      "estimatedRows": 1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.anchor_portal_locations",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.anchor_portal_scope_items",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.anchor_portal_scope_sections",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.anchor_portal_user_locations",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 24576,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.anchor_portal_visit_items",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 81920,
+      "estimatedRows": 112,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.anchor_portal_visits",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 57344,
+      "estimatedRows": 9,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.anchor_scoped_resume_consumption",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.anchor_scoped_resume_grants",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.ao_account_flags",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 114688,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.ao_advisory_debriefs",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 40960,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.ao_communication_identities",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 65536,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.ao_contacts",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.ao_escalations",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.ao_flag_notifications",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 24576,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.ao_follow_up_tasks",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 139264,
+      "estimatedRows": 62,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.ao_followup_drafts",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 81920,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.ao_leads",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 237568,
+      "estimatedRows": 81,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.ao_max_conversation_reports",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 172032,
+      "estimatedRows": 12,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.ao_max_sessions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 385024,
+      "estimatedRows": 87,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.ao_prospect_activity",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 114688,
+      "estimatedRows": 51,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.ao_prospect_tasks",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 344064,
+      "estimatedRows": 61,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.ao_prospect_updates",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 65536,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.ao_route_stops",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 81920,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.ao_routes",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.ao_routing_issue_flags",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 24576,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.api_spend_policies",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.api_spend_policy_changes",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.api_usage",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 65536,
+      "estimatedRows": 36,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.api_usage_events",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 3104768,
+      "estimatedRows": 8414,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.blockers",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.cal_queue",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 106496,
+      "estimatedRows": 162,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.call_dispositions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 172032,
+      "estimatedRows": 64,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.campaigns",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.canonical_batch_evidence_inputs",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 139264,
+      "estimatedRows": 159,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.canonical_business_entities",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 65536,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.canonical_business_facts",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 90112,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.canonical_business_snapshots",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 114688,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.canonical_conflict_sets",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.canonical_entity_label_assertions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.canonical_entity_merge_events",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.canonical_fact_evidence_refs",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 81920,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.canonical_fact_relations",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 24576,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.canonical_interpretation_batches",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.canonical_registry_artifacts",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 65536,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.capture_inbox",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 245760,
+      "estimatedRows": 213,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.cie_business_blueprints",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 499712,
+      "estimatedRows": 59,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.cie_evidence",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 704512,
+      "estimatedRows": 478,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.cie_interview_sessions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 1884160,
+      "estimatedRows": 59,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.cie_interview_turns",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 712704,
+      "estimatedRows": 764,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.client_notes",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 65536,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.client_playbooks",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 212992,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.clients",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 335872,
+      "estimatedRows": 12,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.command_deck_domain_priority",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.commissions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.companies",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 1646592,
+      "estimatedRows": 3651,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.content_business_outcomes",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 65536,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.content_learnings",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 98304,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.content_performance_snapshots",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 65536,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.content_performance_summary",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 221184,
+      "estimatedRows": 394,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.content_publications",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 98304,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.content_qualitative_signals",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 65536,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.content_seeds",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.customers",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.daily_anchors",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": 2,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.daily_health_log",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 221184,
+      "estimatedRows": 49,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.decision_shadow_events",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 188416,
+      "estimatedRows": 55,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.decision_shadow_evidence",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 65536,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.discovery_profiles",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 114688,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.email_events",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 11149312,
+      "estimatedRows": 5409,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.email_performance",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 253952,
+      "estimatedRows": 341,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.emmett_governor_acks",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.emmett_inbox_snapshots",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.emmett_outbound_learning",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.emmett_outbound_outcomes",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.emmett_schema_migrations",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.emmett_send_plans",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 81920,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.emmett_tenant_mailbox_capacity_envelopes",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 33095680,
+      "estimatedRows": 4803,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.emmett_tenant_mailbox_capacity_reservations",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.emmett_warmup_config",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 24576,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.enrichment_manual_queue",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 221184,
+      "estimatedRows": 73,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.excluded_domains",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 65536,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.excluded_email_patterns",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.excluded_prospect_log",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 319488,
+      "estimatedRows": 581,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.excluded_tlds",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.icp_score_history",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 884736,
+      "estimatedRows": 2977,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.icp_score_snapshots",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 6111232,
+      "estimatedRows": 29013,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.ideas",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.intelligence_seed_libraries",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 131072,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.knowledge_claims",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.knowledge_edges",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 1048576,
+      "estimatedRows": 1324,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.knowledge_evidence",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 3088384,
+      "estimatedRows": 2893,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.knowledge_flight_stages",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 1908736,
+      "estimatedRows": 2155,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.knowledge_nodes",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 1859584,
+      "estimatedRows": 1580,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.knowledge_outbox",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 3776512,
+      "estimatedRows": 1714,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.knowledge_sync_ledger",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 1114112,
+      "estimatedRows": 1649,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.linkedin_post_stats",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.manual_lifecycle_overrides",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 24576,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.market_companies",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 65536,
+      "estimatedRows": 53,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.market_company_profiles",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 155648,
+      "estimatedRows": 62,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.market_emails",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 5103616,
+      "estimatedRows": 116,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.market_intel_sync_state",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.market_observations",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 786432,
+      "estimatedRows": 1325,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_actions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 253952,
+      "estimatedRows": 111,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_ao_follow_up_tasks",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 24576,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_applied_claims",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_attention_heartbeats",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_attention_items",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 40960,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_attention_scheduler_runs",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_conversation_context",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_decay_run_events",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 425984,
+      "estimatedRows": 465,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_decisions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 2768896,
+      "estimatedRows": 1019,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_evidence_artifacts",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 24576,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_ingestion_claims",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_ingestion_conflicts",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_ingestion_evidence_links",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 24576,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_ingestion_mutations",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 24576,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_meeting_outcome_events",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_open_expectations",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_operational_action_intents",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_operational_decisions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 40960,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_operational_ingestions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_orchestration_metrics",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 2146304,
+      "estimatedRows": 5853,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_recommendation_reviews",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 81920,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_rollout_readiness_config",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_spreadsheet_commit_requests",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_spreadsheet_contacts",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_spreadsheet_effects",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 139264,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_spreadsheet_proposals",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 401408,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_spreadsheet_relationships",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_spreadsheet_suppressions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.max_voice_recordings",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 1409024,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.messages",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.mira_corrections",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.mira_warm_capture_log",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 98304,
+      "estimatedRows": 118,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.mission_audit_events",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 638976,
+      "estimatedRows": 686,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.missions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 10108928,
+      "estimatedRows": 32,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.monitor_state",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.operator_context_rebuild_events",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 90112,
+      "estimatedRows": 56,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.operator_contexts",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 229376,
+      "estimatedRows": 5,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.operator_objectives",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 73728,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.operator_scorecard_learning",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.operator_scorecards",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.opportunities",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.paige_social_content_artifacts",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 385024,
+      "estimatedRows": 86,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.pending_comments",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 1015808,
+      "estimatedRows": 612,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.places_api_requests",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 670425088,
+      "estimatedRows": 1191455,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.post_analytics",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 376832,
+      "estimatedRows": 143,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.proposal_versions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.prospect_lifecycle_events",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 106496,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.prospect_notes",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 81920,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.prospect_signal_events",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 1327104,
+      "estimatedRows": 1223,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.prospect_state_transitions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 122880,
+      "estimatedRows": 82,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.prospects",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 22634496,
+      "estimatedRows": 3920,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.refs",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.relationship_interaction_insights",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.relationship_interactions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 98304,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.reminders",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.revenue_events",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 40960,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.revenue_feature_flags",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.revenue_follow_up_recommendations",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 24576,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.revenue_jobs",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.revenue_operational_metrics",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 8192,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.revenue_operator_audit",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.revenue_outcomes",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 40960,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.revenue_payments",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.revenue_projection_rebuilds",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.revenue_reconciliation_runs",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_backlog_recovery_grants",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 81920,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_backlog_recovery_items",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_backlog_recovery_runs",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 65536,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_bounded_acquisition_attempts",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 114688,
+      "estimatedRows": 21,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_bounded_acquisition_runs",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 81920,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_bounded_research_grants",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 65536,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_candidate_commercial_qualifications",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_candidate_memberships",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 786432,
+      "estimatedRows": 291,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_candidate_work",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 647168,
+      "estimatedRows": 235,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_expansion_queue",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 196608,
+      "estimatedRows": 368,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_lock",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 65536,
+      "estimatedRows": 1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_query_allocation_activations",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_query_checkpoints",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 385024,
+      "estimatedRows": 96,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_query_coverage_allocations",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_query_coverage_epoch_receipts",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 24576,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_query_coverage_epochs",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 24576,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_query_coverage_grant_pages",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_query_coverage_grant_roots",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_query_coverage_grants",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_query_pages",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 188416,
+      "estimatedRows": 14,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_queue",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 311296,
+      "estimatedRows": 664,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_research_candidates",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 180224,
+      "estimatedRows": 63,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_research_cycle_releases",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 98304,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_research_google_spend",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 122880,
+      "estimatedRows": 154,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_research_missions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 81920,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_research_only_cycles",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 212992,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_research_only_grants",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 139264,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_skip_log",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 13369344,
+      "estimatedRows": 26022,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_tenant_place_observations",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 262144,
+      "estimatedRows": 138,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_tenant_query_owners",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_unenriched",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 860160,
+      "estimatedRows": 1604,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.scout_yield",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 344064,
+      "estimatedRows": 1174,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.sequences",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 40960,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.session",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 147456,
+      "estimatedRows": 2,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.setter_callbacks",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 65536,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.setter_follow_up_drafts",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.signal_alerts",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_collector_cursors",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_dashboard_auth_attempts",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_dashboard_provider_budget",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 65536,
+      "estimatedRows": 4,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_dashboard_records",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 500391936,
+      "estimatedRows": 314600,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_dashboard_session",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 81920,
+      "estimatedRows": 2,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_dashboard_zone_events",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 565248,
+      "estimatedRows": 51,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_decisions",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 24576,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_distribution_activations",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 24576,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_distribution_admissions",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_distribution_deliveries",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 40960,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_distribution_monitors",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 40960,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_distribution_observations",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 24576,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_distribution_request_attempts",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 2785280,
+      "estimatedRows": 25343,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_distribution_request_budget",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 24576,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_distribution_transitions",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_events",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 81920,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_feature_snapshots",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_market_ingestion_stats",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_market_observations",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 1556480,
+      "estimatedRows": 1585,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_market_outcomes",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 24576,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_operator_alert_outbox",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 90112,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_operator_events",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_operator_receipts",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_opportunity_decisions",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 7656611840,
+      "estimatedRows": 1569564,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_opportunity_notifications",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_paper_positions",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_paper_transactions",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_prospective_internal_alerts",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_prospective_research_jobs",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_raw_caller_evidence",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 131072,
+      "estimatedRows": 51,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_replay_runs",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 16384,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_research_candidates",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 40960,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_research_cohort_members",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_research_cohorts",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_research_observation_outcomes",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 65536,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_research_observations",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 81920,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_source_cluster_members",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_source_clusters",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_source_performance",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_source_registry",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 106496,
+      "estimatedRows": 1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_sources",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 98304,
+      "estimatedRows": 5,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_token_research_episodes",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_tokens",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": 5,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.signal_wallet_performance",
+      "owner": "SIGNAL_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Signal product table prefix; app/dependency review still needed"
+    },
+    {
+      "table": "public.stripe_checkout_sessions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.stripe_credit_notes",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 24576,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.stripe_events",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.stripe_invoices",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 65536,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.stripe_subscriptions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 24576,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.studio_substral_assessment_opportunities",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 81920,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.substral_assessment_notification_claims",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.tenant_mailbox_integrations",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 81920,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.tenant_mailbox_poll_state",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 65536,
+      "estimatedRows": 2,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.tenant_outreach_events",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.tenant_outreach_messages",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 114688,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.tenant_outreach_scheduled_sends",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 172032,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.tenant_outreach_suppressions",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 24576,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.tenant_outreach_threads",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.tenant_sending_identities",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.tenant_workspaces",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.touchpoints",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 1114112,
+      "estimatedRows": 2465,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.users",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 65536,
+      "estimatedRows": 17,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.verifier_call_log",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 21667840,
+      "estimatedRows": 35035,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.walkthrough_notification_claims",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 49152,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.warm_routing_control",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 32768,
+      "estimatedRows": -1,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.warm_signal_events",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 155648,
+      "estimatedRows": 113,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.warm_signal_state",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 2473984,
+      "estimatedRows": 7515,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.warm_trigger_fires",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 270336,
+      "estimatedRows": 104,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.website_opportunity_assessments",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 7806976,
+      "estimatedRows": 525,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    },
+    {
+      "table": "public.website_opportunity_events",
+      "owner": "PULSEFORGE_CANDIDATE",
+      "sourceBytes": 4063232,
+      "estimatedRows": 9408,
+      "reason": "Non-Signal table; some may be shared interfaces; verify code usage"
+    }
+  ]
+}
