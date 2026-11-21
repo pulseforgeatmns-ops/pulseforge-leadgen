@@ -35,7 +35,18 @@ Executed in Claude Code session `railway-render-cutover-5q7z85`. This file recor
 
 ## Backup
 
-<!-- filled from the worker log -->
+| Item | Value |
+|---|---|
+| Object | `MigrationBackup` bucket, `migration-backups/railway-20261120-prefreeze-pg18.dump` (+ `.manifest.json`) |
+| Snapshot | 2026-11-21T12:44:44Z, a single exported snapshot (consistent while writes continued) |
+| Size / SHA-256 | 728,011,922 bytes / `1fc6604330e81b85edb14022a75f5b7ac70e56b4934c2a17302ba206693bd85a` |
+| Manifest SHA-256 | `73e6562f4837daa65c415989efd4414fb1505ff6212cc3b1575f1c31f40a6647` |
+| Verification | Re-downloaded from the bucket after upload: SHA-256 and size match, and the `PGDMP` header is present |
+| Content | Full database: 319 tables (274 Pulseforge + 45 Signal), 3 views, 80 triggers, 779 indexes, 3,629 constraints, 56 sequences |
+| Pulseforge fingerprints | 274 tables, **1,630,255 rows** (Nov 17: 1,627,867), plus a content digest per table and every sequence value |
+| Source impact | Disk stayed at its 9.61 GB baseline throughout; the job was read-only |
+
+Status: **checksum-verified, not yet restore-tested on Render.** The Nov 17 archive and its Render restore are untouched.
 
 ## Not done, and why
 
