@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Isolated Render PostgreSQL 18 one-time restore receiver.
+"""Isolated Render PostgreSQL 18 one-time restore receiver for November 21.
 
-Accepts an authenticated short-lived presigned S3 GET URL; verifies the frozen
-archive and selectively restores 274 Pulseforge table DATA entries. The common
-source schema (including *empty* Signal tables) is restored as a rehearsal.
-Never points at Railway, enables application workers, or starts live operations.
+Downloads only the pinned full archive, restores every TABLE DATA and SEQUENCE
+SET (including Signal) into empty pulseforge_production, and leaves the
+November 17 snapshot database untouched. Never points at Railway, enables
+application workers, merges PR #1146, or starts live operations.
 """
 from __future__ import annotations
 
@@ -16,20 +16,37 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import threading
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import urlsplit
 
 import requests
 
-ARCHIVE_BYTES = 727898203
-ARCHIVE_SHA = "4d44ad1f73ffcb5a3ee48ee8b30c78c2430f803da05915b40b84b6101a736628"
-ARCHIVE_KEY = "/migration-backups/railway-20261117-full-pg18.dump"
-CATALOG_PATH = "/usr/local/share/migration/railway-source-catalog-20261117.json"
-DATA_RE = re.compile(r"^\d+;\s+\d+\s+\d+\s+TABLE DATA\s+public\s+([a-z][a-z0-9_]*)\s")
-SEQ_RE = re.compile(r"^\d+;\s+\d+\s+\d+\s+SEQUENCE SET\s+public\s+([a-z][a-z0-9_]*)\s")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from restoreGatewayContract import (  # noqa: E402
+    ARCHIVE_BYTES,
+    ARCHIVE_OBJECT_KEY,
+    ARCHIVE_SHA256,
+    DEFAULT_DISK_BYTES,
+    FINGERPRINT_TABLES,
+    FORBIDDEN_SNAPSHOT_DATABASE,
+    SOURCE_DATABASE_BYTES_FLOOR,
+    TARGET_DATABASE,
+    assert_backup_url,
+    assert_empty_postgres18,
+    assert_restore_endpoint,
+    assert_snapshot_preserved,
+    assert_staging_and_approval,
+    assert_writers_disabled,
+    catalog_tables,
+    content_fingerprint_sql,
+    require_full_restore_capacity,
+    select_restore_toc,
+    snapshot_database_url,
+)
+
 COPY_RE = re.compile(rb"^COPY public\.([a-z][a-z0-9_]*) (?:\(|FROM )")
-IDENT_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _lock = threading.Lock()
 _started = False
 
@@ -45,65 +62,87 @@ def call(cmd, *, timeout=90, stdin=None, stdout=subprocess.PIPE, stderr=subproce
                           timeout=timeout, check=True)
 
 
-def sql_output(query: str, *, timeout=45) -> str:
-    url = os.environ.get("DATABASE_URL", "")
-    if not url.startswith(("postgresql://", "postgres://")):
+def sql_output(query: str, *, timeout=45, url: str | None = None) -> str:
+    target = url or os.environ.get("DATABASE_URL", "")
+    if not target.startswith(("postgresql://", "postgres://")):
         raise RuntimeError("missing_internal_render_database")
-    target = urlsplit(url)
-    # Production restore into pulseforge_production is not armed. Do not retarget
-    # this gateway until a fresh Railway dump is verified and writers stay off.
-    if (target.path != "/pulseforge_production_migration" or
-            not (target.hostname or "").startswith("dpg-dbtgtloae00c73dd8040-a")):
-        raise RuntimeError("unapproved_restore_database_endpoint")
+    if url is None:
+        assert_restore_endpoint(target)
     env = os.environ.copy()
     env["PGCONNECT_TIMEOUT"] = "12"
     return subprocess.run(
         ["psql", "-X", "-A", "-t", "-w", "-v", "ON_ERROR_STOP=1",
-         "--dbname", url, "--file", "-"],
+         "--dbname", target, "--file", "-"],
         input=query, env=env, capture_output=True, text=True, timeout=timeout, check=True
     ).stdout.strip()
 
 
-def expected_tables():
-    catalog = json.loads(Path(CATALOG_PATH).read_text())
-    names = [x["table_name"] for x in catalog["objects"] if x["relkind"] in ("r", "p")]
-    if len(names) != 319 or any(not IDENT_RE.fullmatch(n) for n in names):
-        raise RuntimeError("invalid_snapshot_catalog")
-    signal = {n for n in names if n.startswith("signal_")}
-    core = set(names) - signal
-    if len(signal) != 45 or len(core) != 274 or len(set(names)) != 319:
-        raise RuntimeError("unexpected_table_partition")
-    return core, signal
-
-
-def preflight() -> None:
-    if os.environ.get("PF_MIGRATION_STAGING") != "1":
-        raise RuntimeError("migration_staging_not_enabled")
-    if os.environ.get("MIGRATION_RESTORE_ONE_TIME_APPROVED") != "ALLOW_EMPTY_RENDER_PG18_ONLY":
-        raise RuntimeError("restore_authority_not_enabled")
-    current = sql_output(
+def inspect_identity(url: str | None = None) -> tuple[str, str, int, int]:
+    raw = sql_output(
         "SELECT current_database() || ':' || current_setting('server_version_num') || ':' || "
         "(SELECT count(*) FROM pg_class c JOIN pg_namespace n ON c.relnamespace=n.oid "
         "WHERE n.nspname NOT IN ('pg_catalog','information_schema') "
-        "AND n.nspname NOT LIKE 'pg_toast%' AND c.relkind IN ('r','p','v','m','S'));"
+        "AND n.nspname NOT LIKE 'pg_toast%' AND c.relkind IN ('r','p','v','m','S')) "
+        "|| ':' || pg_database_size(current_database())::text;",
+        url=url,
     )
-    db_name, version, count = current.split(":")
-    if db_name != "pulseforge_production_migration" or not version.startswith("18") or int(count) != 0:
-        raise RuntimeError("target_is_not_empty_approved_postgres18")
+    database, version, count, size = raw.split(":")
+    return database, version, int(count), int(size)
+
+
+def list_database_sizes() -> dict[str, int]:
+    raw = sql_output("SELECT datname || E'\\t' || pg_database_size(datname)::text FROM pg_database;")
+    sizes = {}
+    for line in raw.splitlines():
+        name, size = line.split("\t", 1)
+        sizes[name] = int(size)
+    return sizes
+
+
+def disk_bytes() -> int:
+    raw = os.environ.get("RENDER_DISK_BYTES", str(DEFAULT_DISK_BYTES))
+    return int(raw)
+
+
+def guard_empty_target() -> None:
+    database, version, count, _size = inspect_identity()
+    assert_empty_postgres18(database=database, version=version, object_count=count)
+
+
+def guard_snapshot() -> dict:
+    snap = snapshot_database_url(os.environ.get("DATABASE_URL", ""))
+    database, version, count, size = inspect_identity(url=snap)
+    assert_snapshot_preserved(
+        database=database, version=version, object_count=count, size_bytes=size)
+    return {"database": database, "objectCount": count, "bytes": size, "postgres": version}
+
+
+def preflight() -> dict:
+    assert_staging_and_approval()
+    assert_writers_disabled()
+    assert_restore_endpoint(os.environ.get("DATABASE_URL", ""))
+    guard_empty_target()
+    snapshot = guard_snapshot()
+    assessment = require_full_restore_capacity(list_database_sizes(), disk_bytes=disk_bytes())
+    tables = catalog_tables()
+    return {
+        "status": "ready",
+        "targetDatabase": TARGET_DATABASE,
+        "snapshotDatabase": FORBIDDEN_SNAPSHOT_DATABASE,
+        "archiveObjectKey": ARCHIVE_OBJECT_KEY,
+        "archiveBytes": ARCHIVE_BYTES,
+        "physicalTables": len(tables["all"]),
+        "signalTables": len(tables["signal"]),
+        "restoreFloor": SOURCE_DATABASE_BYTES_FLOOR,
+        "requiredBytes": assessment["required_bytes"],
+        "diskBytes": assessment["disk_bytes"],
+        "siblingBytes": assessment["sibling_bytes"],
+        "snapshot": snapshot,
+    }
 
 
 def download(url: str, filename: Path) -> None:
-    parts = urlsplit(url)
-    host = (parts.hostname or "").lower()
-    if (parts.scheme != "https" or
-            not (host == "t3.storageapi.dev" or host.endswith(".t3.storageapi.dev")) or
-            not parts.path.endswith(ARCHIVE_KEY) or ".." in parts.path or
-            parts.username or parts.password or parts.fragment):
-        raise RuntimeError("invalid_backup_object_url")
-    q = parse_qs(parts.query)
-    if ("X-Amz-Signature" not in q or "X-Amz-Expires" not in q or
-            int(q["X-Amz-Expires"][0]) > 3600):
-        raise RuntimeError("unsigned_or_overlong_backup_url")
+    assert_backup_url(url)
     digest = hashlib.sha256()
     total = 0
     with requests.get(url, stream=True, allow_redirects=False, timeout=(15, 60)) as response:
@@ -118,147 +157,199 @@ def download(url: str, filename: Path) -> None:
                         raise RuntimeError("backup_size_exceeded")
                     digest.update(chunk)
                     target.write(chunk)
-    if total != ARCHIVE_BYTES or digest.hexdigest() != ARCHIVE_SHA:
+    if total != ARCHIVE_BYTES or digest.hexdigest() != ARCHIVE_SHA256:
         raise RuntimeError("backup_size_or_checksum_mismatch")
     with filename.open("rb") as item:
         if item.read(5) != b"PGDMP":
             raise RuntimeError("custom_archive_magic_missing")
-    message("ARCHIVE_VERIFIED", {"bytes":total,"sha256":ARCHIVE_SHA})
+    message("ARCHIVE_VERIFIED", {
+        "bytes": total,
+        "sha256": ARCHIVE_SHA256,
+        "objectKey": ARCHIVE_OBJECT_KEY,
+    })
 
 
-def build_toc(archive: Path, toc: Path, core: set[str], signal: set[str]):
-    listing=call(["pg_restore","--list",str(archive)],timeout=90).stdout.decode()
-    data=set()
-    signal_excluded=set()
-    seq_excluded=0
-    lines=[]
-    for line in listing.splitlines():
-        is_data=DATA_RE.match(line)
-        is_seq=SEQ_RE.match(line)
-        if is_data:
-            name=is_data.group(1)
-            if name not in core and name not in signal:
-                raise RuntimeError("archive_table_not_in_catalog")
-            if name in data:
-                raise RuntimeError("duplicate_data_table")
-            data.add(name)
-            if name in signal:
-                signal_excluded.add(name)
-                lines.append(";" + line)
-                continue
-        if is_seq and is_seq.group(1).startswith("signal_"):
-            seq_excluded += 1
-            lines.append(";" + line)
-            continue
-        if re.search(r";\s+\d+\s+\d+\s+(MATERIALIZED VIEW DATA|BLOBS|BLOB)\s",line):
-            raise RuntimeError("unhandled_archive_data_kind")
-        lines.append(line)
-    if len(data)!=319 or signal_excluded != signal:
-        raise RuntimeError("archive_catalog_table_data_disagreement")
-    toc.write_text("\n".join(lines)+"\n")
-    message("SELECTION_VERIFIED",{"allTableData":len(data),"pulseforgeTableData":len(core),
-      "signalTableDataExcluded":len(signal_excluded),"signalSequenceSetsExcluded":seq_excluded})
+def build_toc(archive: Path, toc: Path, tables: dict[str, set[str]]):
+    listing = call(["pg_restore", "--list", str(archive)], timeout=90).stdout.decode()
+    selected = select_restore_toc(listing, tables["all"])
+    toc.write_text(selected)
+    signal_data = sum(
+        1 for line in selected.splitlines()
+        if re.match(r"^\d+;\s+\d+\s+\d+\s+TABLE DATA\s+public\s+signal_", line)
+    )
+    seq_sets = sum(
+        1 for line in selected.splitlines()
+        if re.match(r"^\d+;\s+\d+\s+\d+\s+SEQUENCE SET\s+", line)
+    )
+    message("SELECTION_VERIFIED", {
+        "allTableData": len(tables["all"]),
+        "pulseforgeTableData": len(tables["core"]),
+        "signalTableData": signal_data,
+        "sequenceSets": seq_sets,
+        "restoreAllTableData": True,
+        "silentlyDiscardSignalData": False,
+    })
 
 
-def archive_counts(archive: Path, toc: Path, core: set[str]) -> dict[str,int]:
+def archive_counts(archive: Path, toc: Path, tables: set[str]) -> dict[str, int]:
     # Custom pg_restore emits COPY text; each row is one escaped physical line.
     # No customer values are retained or logged, only counts.
-    command=["pg_restore","--data-only","--use-list",str(toc),"--file=-",str(archive)]
-    p=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
-    assert p.stdout is not None
-    counts={}
-    active=None
+    command = ["pg_restore", "--data-only", "--use-list", str(toc), "--file=-", str(archive)]
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    assert process.stdout is not None
+    counts: dict[str, int] = {}
+    active = None
     try:
-        for raw in p.stdout:
+        for raw in process.stdout:
             if active is None:
                 if raw.startswith(b"COPY public."):
-                    match=COPY_RE.match(raw[:200])
+                    match = COPY_RE.match(raw[:200])
                     if not match:
                         raise RuntimeError("unrecognized_copy_statement")
-                    active=match.group(1).decode("ascii")
-                    if active not in core or active in counts:
+                    active = match.group(1).decode("ascii")
+                    if active not in tables or active in counts:
                         raise RuntimeError("unexpected_copy_table")
-                    counts[active]=0
-            elif raw in (b"\\.\n",b"\\.\r\n"):
-                active=None
+                    counts[active] = 0
+            elif raw in (b"\\.\n", b"\\.\r\n"):
+                active = None
             else:
-                counts[active]+=1
+                counts[active] += 1
         if active is not None:
             raise RuntimeError("unterminated_copy_stream")
     except BaseException:
-        p.kill()
+        process.kill()
         raise
     finally:
-        p.stdout.close()
-        result=p.wait(timeout=90)
-    if result!=0 or set(counts)!=core:
+        process.stdout.close()
+        result = process.wait(timeout=1800)
+    if result != 0 or set(counts) != tables:
         raise RuntimeError("archive_copy_count_failed")
-    message("SOURCE_ROWS_COUNTED",{"tables":len(counts),"rows":sum(counts.values())})
+    message("SOURCE_ROWS_COUNTED", {"tables": len(counts), "rows": sum(counts.values())})
     return counts
 
 
 def restore(archive: Path, toc: Path):
-    db=os.environ["DATABASE_URL"]
+    db = os.environ["DATABASE_URL"]
+    assert_restore_endpoint(db)
     message("TRANSACTION_STARTED")
-    # Any pg_restore failure rolls back all prior schema and data changes.
-    code=subprocess.run([
-       "pg_restore","--exit-on-error","--single-transaction",
-       "--no-owner","--no-acl","--no-tablespaces",
-       "--use-list",str(toc),"--dbname",db,str(archive)
-    ],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1800).returncode
-    if code!=0:
-        raise RuntimeError("pg_restore_failed_code_"+str(code))
+    code = subprocess.run([
+        "pg_restore", "--exit-on-error", "--single-transaction",
+        "--no-owner", "--no-acl", "--no-tablespaces",
+        "--use-list", str(toc), "--dbname", db, str(archive)
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1800).returncode
+    if code != 0:
+        raise RuntimeError("pg_restore_failed_code_" + str(code))
     message("TRANSACTION_COMMITTED")
 
 
-def verify_counts(core,signal,expected):
-    sql=[]
-    for n in sorted(core|signal):
-        sql.append("SELECT '"+n+"' || E'\\t' || COUNT(*)::text FROM public."+n+";")
-    values=sql_output("\n".join(sql),timeout=180)
-    actual={}
+def verify_counts(tables: set[str], expected: dict[str, int]) -> dict[str, int]:
+    sql = ["SELECT '" + name + "' || E'\\t' || COUNT(*)::text FROM public." + name + ";"
+           for name in sorted(tables)]
+    values = sql_output("\n".join(sql), timeout=180)
+    actual: dict[str, int] = {}
     for line in values.splitlines():
-        name,raw=line.split("\t",1)
-        actual[name]=int(raw)
-    if set(actual)!=core|signal:
+        name, raw = line.split("\t", 1)
+        actual[name] = int(raw)
+    if set(actual) != tables:
         raise RuntimeError("restored_table_inventory_mismatch")
-    mismatches=[n for n in core if actual[n]!=expected[n]]
-    unexpected=[n for n in signal if actual[n]!=0]
-    if mismatches or unexpected:
+    mismatches = [name for name in tables if actual[name] != expected[name]]
+    if mismatches:
         raise RuntimeError("restored_row_count_mismatch")
-    message("RECONCILIATION_PASSED",{
-      "pulseforgeTables":len(core),"pulseforgeRows":sum(actual[n] for n in core),
-      "emptySignalSchemaTables":len(signal),
-      "postgreSQLVersion":sql_output("SHOW server_version;")
-    })
+    return actual
+
+
+def verify_sequences(expected: set[str]) -> int:
+    raw = sql_output(
+        "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON c.relnamespace=n.oid "
+        "WHERE n.nspname='public' AND c.relkind='S';"
+    )
+    count = int(raw)
+    if expected and count != len(expected):
+        raise RuntimeError("restored_sequence_count_mismatch")
+    if count < 1:
+        raise RuntimeError("sequences_not_restored")
+    return count
+
+
+def verify_tenants() -> dict[str, int]:
+    raw = sql_output(
+        "SELECT 'clients:' || COUNT(*)::text FROM public.clients;\n"
+        "SELECT 'users:' || COUNT(*)::text FROM public.users;\n"
+        "SELECT 'prospects:' || COUNT(*)::text FROM public.prospects;\n"
+        "SELECT 'tenant_21:' || COUNT(*)::text FROM public.clients WHERE id = 21;"
+    )
+    counts = {}
+    for line in raw.splitlines():
+        name, value = line.split(":", 1)
+        counts[name] = int(value)
+    if counts.get("clients", 0) < 1 or counts.get("users", 0) < 1 or counts.get("prospects", 0) < 1:
+        raise RuntimeError("tenant_row_counts_missing")
+    if counts.get("tenant_21", 0) < 1:
+        raise RuntimeError("required_tenant_missing")
+    return counts
+
+
+def verify_fingerprints() -> dict[str, str]:
+    fingerprints = {}
+    for table in FINGERPRINT_TABLES:
+        fingerprints[table] = sql_output(content_fingerprint_sql(table), timeout=180)
+        if not re.fullmatch(r"[0-9a-f]{32}", fingerprints[table] or ""):
+            raise RuntimeError("content_fingerprint_failed")
+    return fingerprints
 
 
 def process(url):
     try:
+        tables = catalog_tables()
         preflight()
-        core,signal=expected_tables()
-        with tempfile.TemporaryDirectory(prefix="pg18-one-shot-restore-") as folder:
-            archive=Path(folder)/"source.dump"
-            toc=Path(folder)/"pulseforge.toc"
-            download(url,archive)
-            build_toc(archive,toc,core,signal)
-            expected=archive_counts(archive,toc,core)
-            preflight()  # A second fail-closed empty-target check before any write.
-            restore(archive,toc)
-            verify_counts(core,signal,expected)
-        message("COMPLETE",{"status":"RESTORED_AND_ROW_COUNTS_MATCH",
-            "note":"Source snapshot only; Signal schema exists empty; cutover prohibited."})
+        with tempfile.TemporaryDirectory(prefix="pg18-nov21-restore-") as folder:
+            archive = Path(folder) / "source.dump"
+            toc = Path(folder) / "full.toc"
+            download(url, archive)
+            build_toc(archive, toc, tables)
+            expected = archive_counts(archive, toc, tables["all"])
+            preflight()  # Fail-closed empty-target + disk + snapshot check before any write.
+            restore(archive, toc)
+            actual = verify_counts(tables["all"], expected)
+            sequences = verify_sequences(tables["sequences"])
+            tenants = verify_tenants()
+            fingerprints = verify_fingerprints()
+            snapshot = guard_snapshot()
+        message("RECONCILIATION_PASSED", {
+            "tables": len(actual),
+            "rows": sum(actual.values()),
+            "signalTables": len(tables["signal"]),
+            "signalRows": sum(actual[name] for name in tables["signal"]),
+            "sequences": sequences,
+            "tenants": tenants,
+            "fingerprints": fingerprints,
+            "snapshotUnchanged": snapshot,
+            "postgreSQLVersion": sql_output("SHOW server_version;"),
+        })
+        message("COMPLETE", {
+            "status": "RESTORED_AND_ROW_COUNTS_MATCH",
+            "note": "Full November 21 restore including Signal; snapshot preserved; cutover prohibited.",
+        })
     except Exception as e:
-        message("FAILED",{"reason":str(e) if isinstance(e,RuntimeError) else type(e).__name__})
+        message("FAILED", {"reason": str(e) if isinstance(e, RuntimeError) else type(e).__name__})
 
 
 class Handler(BaseHTTPRequestHandler):
-    def log_message(self,*args):
+    def log_message(self, *args):
         return  # Avoid logging request URLs and headers.
+
+    def _json(self, code: int, payload: dict):
+        body = json.dumps(payload, sort_keys=True).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
-        if self.path=="/healthz":
+        if self.path == "/healthz":
             try:
-                if os.environ.get("PF_MIGRATION_STAGING")!="1":
+                if os.environ.get("PF_MIGRATION_STAGING") != "1":
                     raise RuntimeError("staging_disabled")
                 sql_output("SELECT 1;")
                 self.send_response(200)
@@ -266,70 +357,65 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(b"isolated restore service available")
             except Exception:
                 self.send_error(503)
-        else:
-            self.send_error(404)
+            return
+        if self.path == "/internal/migration/preflight":
+            try:
+                payload = preflight()
+                self._json(200, payload)
+            except RuntimeError as exc:
+                reason = str(exc)
+                code = 409 if reason == "full_restore_exceeds_render_disk" else 503
+                self._json(code, {"status": "blocked", "reason": reason})
+            except Exception:
+                self._json(503, {"status": "blocked", "reason": "preflight_failed"})
+            return
+        self.send_error(404)
+
     def do_POST(self):
         global _started
-        if self.path!="/internal/migration/restore-once":
+        if self.path != "/internal/migration/restore-once":
             return self.send_error(404)
-        supplied=self.headers.get("Authorization","")
-        desired="Bearer "+os.environ.get("MIGRATION_BRIDGE_TOKEN","")
-        if len(desired)<45 or not hmac.compare_digest(supplied,desired):
-            return self.send_error(403)
-        if (os.environ.get("PF_MIGRATION_STAGING")!="1" or
-            os.environ.get("MIGRATION_RESTORE_ONE_TIME_APPROVED")!="ALLOW_EMPTY_RENDER_PG18_ONLY"):
+        supplied = self.headers.get("Authorization", "")
+        desired = "Bearer " + os.environ.get("MIGRATION_BRIDGE_TOKEN", "")
+        if len(desired) < 45 or not hmac.compare_digest(supplied, desired):
             return self.send_error(403)
         try:
-            n=int(self.headers.get("Content-Length","0"))
-            if n<=0 or n>8192: raise ValueError("invalid length")
-            payload=json.loads(self.rfile.read(n))
-            if set(payload)!={"downloadUrl"} or not isinstance(payload["downloadUrl"],str):
+            assert_staging_and_approval()
+            assert_writers_disabled()
+        except RuntimeError:
+            return self.send_error(403)
+        try:
+            n = int(self.headers.get("Content-Length", "0"))
+            if n <= 0 or n > 8192:
+                raise ValueError("invalid length")
+            payload = json.loads(self.rfile.read(n))
+            if set(payload) != {"downloadUrl"} or not isinstance(payload["downloadUrl"], str):
                 raise ValueError("bad request")
-            target=urlsplit(payload["downloadUrl"])
-            if target.scheme!="https" or not (target.hostname or "").endswith(".t3.storageapi.dev"):
-                raise ValueError("bad host")
+            assert_backup_url(payload["downloadUrl"])
         except Exception:
             return self.send_error(400)
         with _lock:
             if _started:
                 return self.send_error(409)
-            _started=True
-        threading.Thread(target=process,args=(payload["downloadUrl"],),daemon=True).start()
-        self.send_response(202)
-        self.send_header("Content-Type","application/json")
-        self.end_headers()
-        self.wfile.write(b'{"status":"accepted"}')
+            _started = True
+        threading.Thread(target=process, args=(payload["downloadUrl"],), daemon=True).start()
+        self._json(202, {"status": "accepted"})
 
 
-if __name__=="__main__":
-    if os.environ.get("PF_MIGRATION_STAGING")!="1":
+if __name__ == "__main__":
+    if os.environ.get("PF_MIGRATION_STAGING") != "1":
         raise SystemExit("restore_gateway_requires_staging")
-    port=int(os.environ.get("PORT","10000"))
+    port = int(os.environ.get("PORT", "10000"))
     try:
-        query=("SELECT n.nspname||'.'||c.relname||':'||c.relkind::text "
-          "FROM pg_class c JOIN pg_namespace n ON c.relnamespace=n.oid "
-          "WHERE n.nspname NOT IN ('pg_catalog','information_schema') "
-          "AND n.nspname NOT LIKE 'pg_toast%' AND c.relkind IN ('r','p','v','m','S') "
-          "ORDER BY n.nspname,c.relname LIMIT 40;")
-        objects=sql_output(query).splitlines()
-        total=int(sql_output("SELECT count(*) FROM pg_class c JOIN pg_namespace n "
-          "ON c.relnamespace=n.oid WHERE n.nspname NOT IN ('pg_catalog','information_schema') "
-          "AND n.nspname NOT LIKE 'pg_toast%' AND c.relkind IN ('r','p','v','m','S');"))
-        message("TARGET_CATALOG_INSPECTED",{"nonSystemObjectCount":total,
-          "sampleObjectNames":objects})
-        size=int(sql_output("SELECT pg_database_size(current_database());"))
-        create_priv=sql_output("SELECT rolcreatedb::text FROM pg_roles WHERE rolname=current_user;")
-        sample=sql_output("SELECT 'users:'||COUNT(*)::text FROM public.users; "
-           + "SELECT 'prospects:'||COUNT(*)::text FROM public.prospects; "
-           + "SELECT 'signal_dashboard_records:'||COUNT(*)::text FROM public.signal_dashboard_records;")
-        message("TARGET_REHEARSAL_READINESS",{"dbBytes":size,
-          "canCreateLogicalDatabase":create_priv,
-          "sampleRowCounts":sample.splitlines()})
+        message("PREFLIGHT", preflight())
     except Exception as e:
-        message("TARGET_CATALOG_INSPECTION_UNAVAILABLE",{
-          "exceptionType":type(e).__name__,
-          "pgExitCode":getattr(e,"returncode",None),
-          "pgError":getattr(e,"stderr","")[-350:] if hasattr(e,"stderr") else ""
-        })
+        reason = str(e) if isinstance(e, RuntimeError) else type(e).__name__
+        message("PREFLIGHT_BLOCKED", {"reason": reason})
+        if reason == "full_restore_exceeds_render_disk":
+            message("DISK_FAIL_CLOSED", {
+                "restoreFloor": SOURCE_DATABASE_BYTES_FLOOR,
+                "defaultDiskBytes": DEFAULT_DISK_BYTES,
+                "note": "Refusing to drop Signal data; snapshot remains untouched.",
+            })
     message("GATEWAY_READY")
-    ThreadingHTTPServer(("0.0.0.0",port),Handler).serve_forever()
+    ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()

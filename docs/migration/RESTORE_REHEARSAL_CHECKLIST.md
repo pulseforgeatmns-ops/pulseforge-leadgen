@@ -87,3 +87,10 @@
 - Read-only startup logs: **15 tests passed, 0 failed**; approved database name `pulseforge_production_migration`, PostgreSQL version 18.6 (`180006`), **378 non-system objects**, restored database size **991,557,311 bytes** (~0.99 GB). No active restore endpoint on this service.
 - Render PostgreSQL instance remains **available** (10 GB provisioned). Railway inventory shows only original `Postgres` and `OpenClaw Main` services and retained private `MigrationBackup` bucket, no pending changes.
 - Draft PR #1129 remains **OPEN, DRAFT, UNMERGED**. No Railway production cutover or data deletion.
+
+## 2026-11-21 full restore contract (NOT EXECUTED)
+
+Pinned archive: `migration-backups/railway-20261121-full-pg18.dump` (728,012,480 bytes, SHA-256 `4cf4e95bf56706e09ba411349ed68cfcf8725fef2ee4964ed6af73fce29fd734`). Intended target is empty `pulseforge_production` on host prefix `dpg-dbtgtloae00c73dd8040-a`. The November 17 snapshot database `pulseforge_production_migration` must remain untouched. Restore selection keeps every TABLE DATA and SEQUENCE SET, including all 45 `signal_` tables (`restoreAllTableData=true`, `silentlyDiscardSignalData=false`). PR #1146 stays unmerged. Production writers stay off. `PF_MIGRATION_STAGING=1`.
+
+**Restore was NOT executed.** Render's 10 GB disk cannot hold the full source floor (9,218,275,007 bytes, ~9.218 GB) plus the preserved snapshot (~991,557,311 bytes, ~0.99 GB) with WAL headroom (12%). Required capacity is `restore_floor * 1.12 + sibling_bytes` (sibling = every database except `pulseforge_production`) ≈ 11.34 GB. The gateway fails closed with `full_restore_exceeds_render_disk` rather than dropping Signal data. A larger disk is required before any write.
+

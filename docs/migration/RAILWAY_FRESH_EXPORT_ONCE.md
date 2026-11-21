@@ -48,7 +48,7 @@ The exporter refuses overwrite if the object key already exists, requires the pr
 
 ## Out of scope
 
-- No restore into Render.
-- No retarget of `restoreGatewayRender.py` to `pulseforge_production`.
+- This worker does not restore into Render.
+- After the export succeeds, a separate restore workflow may retarget `restoreGatewayRender.py` at empty `pulseforge_production`. That workflow must preserve `pulseforge_production_migration`, keep writers off, leave PR #1146 unmerged, and fail closed if the 10 GB disk cannot hold the full source plus the snapshot.
 - No production writers, application workers, or cutover.
 - Delete the one-shot service after the run. Keep the source Postgres and the `MigrationBackup` bucket.

@@ -11,8 +11,20 @@ import boto3
 import requests
 from botocore.config import Config
 
-ARCHIVE_KEY = "migration-backups/railway-20261117-full-pg18.dump"
+ARCHIVE_KEY = "migration-backups/railway-20261121-full-pg18.dump"
+FORBIDDEN_ARCHIVE_KEY = "migration-backups/railway-20261117-full-pg18.dump"
+EXPECTED_ARCHIVE_BYTES = 728012480
 RECEIVER = "https://pulseforge-api-migration.onrender.com/internal/migration/restore-once"
+HEALTHZ = "https://pulseforge-api-migration.onrender.com/healthz"
+PREFLIGHT = "https://pulseforge-api-migration.onrender.com/internal/migration/preflight"
+
+
+def assert_ticket_archive_key(key: str) -> None:
+    if key == FORBIDDEN_ARCHIVE_KEY or "railway-20261117-full-pg18.dump" in key:
+        raise RuntimeError("forbidden_november_17_archive")
+    if key != ARCHIVE_KEY:
+        raise RuntimeError("unpinned_archive_key")
+
 
 def main():
     if os.getenv("SEND_RESTORE_TICKET_APPROVED") != "ONE_TIME_RENDER_STAGING_ONLY":
@@ -26,16 +38,22 @@ def main():
         raise RuntimeError("invalid_bridge_token")
     if urlsplit(os.environ["S3_ENDPOINT"]).hostname != "t3.storageapi.dev":
         raise RuntimeError("unrecognized_s3_endpoint")
+    assert_ticket_archive_key(ARCHIVE_KEY)
     s3=boto3.client("s3",endpoint_url=os.environ["S3_ENDPOINT"],
         aws_access_key_id=os.environ["S3_ACCESS_KEY_ID"],
         aws_secret_access_key=os.environ["S3_SECRET_ACCESS_KEY"],
         region_name=os.environ["S3_REGION"],
         config=Config(s3={"addressing_style":"virtual",
                            "signature_version":"s3v4"}))
-    health=requests.get("https://pulseforge-api-migration.onrender.com/healthz",
-        allow_redirects=False,timeout=(12,25))
+    head=s3.head_object(Bucket=os.environ["S3_BUCKET"], Key=ARCHIVE_KEY)
+    if int(head["ContentLength"]) != EXPECTED_ARCHIVE_BYTES:
+        raise RuntimeError("archive_size_mismatch")
+    health=requests.get(HEALTHZ, allow_redirects=False, timeout=(12,25))
     if health.status_code != 200:
         raise RuntimeError("render_staging_health_not_ready_"+str(health.status_code))
+    preflight=requests.get(PREFLIGHT, allow_redirects=False, timeout=(12,25))
+    if preflight.status_code != 200:
+        raise RuntimeError("render_restore_preflight_blocked_"+str(preflight.status_code))
     url=s3.generate_presigned_url("get_object",
         Params={"Bucket":os.environ["S3_BUCKET"],"Key":ARCHIVE_KEY},ExpiresIn=3600)
     # One tiny authenticated message; never emit the sensitive URL to any log.
