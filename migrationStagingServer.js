@@ -2,11 +2,11 @@
 // Isolated migration probe. No application routes, schedulers, Stripe handlers, or schema writes.
 const http = require('node:http');
 const { Pool } = require('pg');
-const {validateMigrationDatabaseUrl,EXPECTED_STAGING_DB}=require('./scripts/migration/validateMigrationDatabaseUrl');
+const {validateRenderDestinationUrl,EXPECTED_STAGING_DB}=require('./scripts/migration/validateMigrationDatabaseUrl');
 const port = Number(process.env.PORT || 10000);
 const server = http.createServer(async (req, res) => {
   if (req.url !== '/healthz') { res.writeHead(404); return res.end('Not found'); }
-  try { validateMigrationDatabaseUrl(process.env.DATABASE_URL); }
+  try { validateRenderDestinationUrl(process.env.DATABASE_URL, 'staging'); }
   catch (error) {
     console.error('[migration-probe] unexpected database target:',error.message);
     res.writeHead(503); return res.end('Isolated Render database not configured');
@@ -24,7 +24,7 @@ const server = http.createServer(async (req, res) => {
   } finally { await pool.end().catch(() => {}); }
 });
 try {
-  validateMigrationDatabaseUrl(process.env.DATABASE_URL);
+  validateRenderDestinationUrl(process.env.DATABASE_URL, 'staging');
   console.log('[migration-probe] isolated destination URL matches approved database name');
 } catch (error) {
   console.error('[migration-probe] unsafe destination URL:',error.message);
@@ -33,7 +33,7 @@ try {
 async function auditStagingDatabaseReadOnly() {
   let pool;
   try {
-    validateMigrationDatabaseUrl(process.env.DATABASE_URL);
+    validateRenderDestinationUrl(process.env.DATABASE_URL, 'staging');
     pool = new Pool({connectionString:process.env.DATABASE_URL,max:1,
       connectionTimeoutMillis:5000,query_timeout:12000,
       ssl:String(process.env.DATABASE_SSL||'').toLowerCase()==='false'?false:{rejectUnauthorized:false}});

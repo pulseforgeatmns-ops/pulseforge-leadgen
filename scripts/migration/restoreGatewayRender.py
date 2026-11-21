@@ -50,6 +50,8 @@ def sql_output(query: str, *, timeout=45) -> str:
     if not url.startswith(("postgresql://", "postgres://")):
         raise RuntimeError("missing_internal_render_database")
     target = urlsplit(url)
+    # Production restore into pulseforge_production is not armed. Do not retarget
+    # this gateway until a fresh Railway dump is verified and writers stay off.
     if (target.path != "/pulseforge_production_migration" or
             not (target.hostname or "").startswith("dpg-dbtgtloae00c73dd8040-a")):
         raise RuntimeError("unapproved_restore_database_endpoint")

@@ -93,7 +93,7 @@ The 2026-11-17 Render restore is a **recovery baseline, not the final production
 - Row-text fingerprints are valid only between the same major versions, which this is.
 - The Nov 17 dump already restored cleanly into Render 18.6.
 
-**Code change needed for step 3:** `scripts/migration/validateMigrationDatabaseUrl.js` pins the database name to `pulseforge_production_migration`. The production database name must be added deliberately, as a reviewed change.
+**Destination identity:** `validateMigrationDatabaseUrl.js` still defaults to `pulseforge_production_migration`. `pulseforge_production` is accepted only when the caller passes that name or role `production`. The staging probe and restore gateway stay on the snapshot name. Production writers are not armed.
 
 ## 5. Cutover procedure
 
