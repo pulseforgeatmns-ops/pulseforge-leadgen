@@ -66,7 +66,9 @@ function shouldHandleScoutAcquisition(input = {}) {
     scoutAcquisition.looksLikeFollowUp(question) ||
     scoutAcquisition.looksLikeExplainPriority(question) ||
     scoutAcquisition.looksLikeInvestigationInspection(question);
-  const leviQuestion = /\blevi scout\b|\btenant 21\b/i.test(question);
+  const tenantId = resolveTenantId(input);
+  const leviIntent = String(tenantId) === '21'
+    && /\b(find|discover(?:y|ed|ing)?|prospects?|borrowers?)\b/i.test(question);
   if (
     !mayEnterSpecialistPath(mode, {
       question,
@@ -74,19 +76,18 @@ function shouldHandleScoutAcquisition(input = {}) {
       context,
     }) &&
     !reusePriorWork &&
-    !leviQuestion
+    !leviIntent
   ) {
     return false;
   }
   const enabled = context.enabledAgents || context.enabled_agents;
-  if (Array.isArray(enabled)) {
+  if (Array.isArray(enabled) && String(tenantId) !== '21') {
     const names = enabled.map(String);
     if (!names.includes('scout') && !names.includes('scout_levi')) {
       return false;
     }
   }
-  return scoutAcquisition.looksLikeAcquisitionQuestion(question, context)
-    || /\blevi scout\b|\btenant 21\b/i.test(question);
+  return scoutAcquisition.looksLikeAcquisitionQuestion(question, context) || leviIntent;
 }
 
 /**

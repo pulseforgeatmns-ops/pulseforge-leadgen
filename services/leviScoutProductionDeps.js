@@ -30,7 +30,7 @@ function asContacts(records = []) {
   });
 }
 
-function createProductionDeps({ db, fetch: fetchImpl, env = process.env, tenantId = TENANT_ID } = {}) {
+function createProductionDeps({ db, fetch: fetchImpl, env = process.env, tenantId = TENANT_ID, now } = {}) {
   if (String(tenantId) !== String(TENANT_ID)) fail('levi_research_tenant_invalid');
   const state = { lastDiscover: null, diagnostics: [], claims: [] };
 
@@ -61,6 +61,7 @@ function createProductionDeps({ db, fetch: fetchImpl, env = process.env, tenantI
       maxCandidates: input.maxCandidates,
       maxProviderRequests: input.maxProviderRequests,
       fetch: fetchImpl,
+      now,
     });
     state.lastDiscover = { rows, cities: citiesOf(rows), tenantId: String(TENANT_ID) };
     return rows;

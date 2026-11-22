@@ -58,9 +58,14 @@ test('foreign review states cannot become Contact Now', () => {
 });
 
 test('an unverified financing range can never produce a qualified candidate', () => {
-  const result = evaluateProspect(complete(), { criteria: { minAmount: 5000, maxAmount: 20000 } });
+  const { unverifiedBlueprintCriteria, authorityCriteria } = require('../services/leviScoutProductionContract');
+  const result = evaluateProspect(complete(), { criteria: { approved: false, source: 'approved_blueprint' } });
   assert.equal(result.qualified, false);
   assert.ok(result.blockers.includes('financing_criteria_unverified'));
+  assert.deepEqual(unverifiedBlueprintCriteria({ approved: false, source: 'approved_blueprint' }), { approved: false, source: 'approved_blueprint' });
+  assert.equal(unverifiedBlueprintCriteria({ approved: false, source: 'none' }), null);
+  assert.equal(unverifiedBlueprintCriteria({ approved: false, source: 'approved_blueprint', minAmount: 0, maxAmount: 0 }), null);
+  assert.equal(authorityCriteria({ approved: false, source: 'approved_blueprint' }).source, 'approved_blueprint');
 });
 
 test('evidence dates: published date preferred; property signals never establish intent', () => {
