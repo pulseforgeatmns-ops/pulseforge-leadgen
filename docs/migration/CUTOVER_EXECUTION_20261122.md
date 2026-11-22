@@ -153,3 +153,18 @@ Railway was not frozen, the existing Render databases were not touched, and no t
 **Expected final-cutover write-freeze window, measured:** freeze about 0.5 min, export about 9 min, transfer about 1 min, restore plus reconciliation about 2 min. That is about 13 minutes before Render can be validated.
 
 **Risk observed:** the Railway database is 9.22 GB on a 10 GB volume, so headroom is limited. The final transfer should not be delayed long.
+
+## Final cutover: COMPLETE (2026-11-22)
+
+| Step | Evidence |
+|---|---|
+| 18:45:28Z snapshot | Verified and promoted (#1151). The workflow had already unfrozen Railway at 18:49:59Z when the swap was refused (`databases_in_use`), so Railway kept writing. |
+| Render after that promotion | 0 HTTP requests from 18:50Z to 19:09Z (request log empty). Only idempotent startup DDL had run, so replacing the database lost nothing. |
+| Run 45059774226 | Frozen 19:17:04Z, snapshot 19:17:05Z, 1,631,023 rows, 0 differences. Swap failed `InsufficientPrivilege` (terminating a Render-managed session). Railway was auto-unfrozen at 19:26:33Z. That database (`pulseforge_cutover_20261122192448`) is kept, unused. |
+| Fix #1153 | The swap ends only its own role's sessions and waits out Render-managed ones. |
+| **Run 45061306144** | Frozen 19:32:58Z. Snapshot **19:32:59.059Z**. Archive 728,048,843 bytes, SHA-256 `62141ea3…f208`, kept as a GitHub artifact. Restored into `pulseforge_cutover_20261122193557`: **0 differences, 274 tables, 1,631,027 rows**, 56 sequences exact, catalog identical. **Swap committed** (4 attempts); the previous primary is kept as `pulseforge_pre_cutover_20261122193557`. |
+| Railway retired | 19:38:00Z: database renamed `railway_retired_20261122` (frozen, data intact). The Railway app logs `database "railway" does not exist` for every access, so it cannot read or act. Rollback: request `{"mode":"unretire",...}`. |
+| Render live | `PF_MIGRATION_RECEIVER=0`, restore/swap approvals `OFF`, `PF_DISABLE_BACKGROUND_WORKERS=0` (1 instance), `APP_URL`/`DASHBOARD_URL` set to the Render URL. Workers started at 22:11Z. Receiver mode remained on from 19:38Z to 22:09Z because of a session worker restart. |
+| Callers moved | Anchor Cleaning Pages forms (`anchor-cleaning@d822d59`). In-repo hosts (#1152). `main` = production (#1154): `penny-anchor-daily` targets Render; `max-context-cleanup-hourly` replaces the Railway cron service. |
+
+Render databases, all kept: `pulseforge_production` (live), `pulseforge_pre_cutover_20261122193557`, `pulseforge_pre_cutover_20261122184817`, `pulseforge_cutover_20261122192448`, `pulseforge_production_migration` (Nov 17).
