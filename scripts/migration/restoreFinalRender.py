@@ -212,32 +212,40 @@ def swap(cutover_db: str, stamp: str):
     keep_as = "pulseforge_pre_cutover_" + stamp
     if database_exists(keep_as):
         raise RuntimeError("pre_cutover_name_already_taken")
-    # The application does not run in receiver mode; leftover sessions (the
-    # previous app instance's pool) are ended first, as the #1151 promotion did.
-    end = connect("postgres", autocommit=True)
-    try:
-        with end.cursor() as c:
-            c.execute("SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity "
-                      "WHERE datname IN (%s,%s) AND pid <> pg_backend_pid()", (primary, cutover_db))
-            log("SWAP_SESSIONS_ENDED", {"ended": int(c.fetchone()[0])})
-    finally:
-        end.close()
-    conn = connect("postgres")
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT count(*) FROM pg_stat_activity WHERE datname IN (%s,%s) AND pid<>pg_backend_pid()",
-                    (primary, cutover_db))
-        if cur.fetchone()[0]:
+    # The application does not run in receiver mode. Our own role's leftover
+    # sessions (the previous app instance's pool) are ended; sessions of other
+    # roles (Render-managed) cannot be ended by this role and are waited out.
+    import time as _time
+    deadline = _time.time() + 120
+    attempt = 0
+    while True:
+        attempt += 1
+        conn = connect("postgres", autocommit=True)
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity "
+                        "WHERE datname IN (%s,%s) AND pid <> pg_backend_pid() AND usename = current_user",
+                        (primary, cutover_db))
+            ended = int(cur.fetchone()[0])
+            cur.execute("SELECT count(*) FROM pg_stat_activity WHERE datname IN (%s,%s) AND pid <> pg_backend_pid()",
+                        (primary, cutover_db))
+            others = int(cur.fetchone()[0])
+            if not others:
+                try:
+                    cur.execute("BEGIN")
+                    cur.execute(f'ALTER DATABASE "{primary}" RENAME TO "{keep_as}"')
+                    cur.execute(f'ALTER DATABASE "{cutover_db}" RENAME TO "{primary}"')
+                    cur.execute("COMMIT")
+                    break
+                except psycopg2.Error:
+                    cur.execute("ROLLBACK")
+        finally:
+            conn.close()
+        if _time.time() > deadline:
+            log("SWAP_WAIT_EXPIRED", {"attempts": attempt, "lastEnded": ended, "lastOtherSessions": others})
             raise RuntimeError("databases_in_use_swap_refused")
-        cur.execute(f'ALTER DATABASE "{primary}" RENAME TO "{keep_as}"')
-        cur.execute(f'ALTER DATABASE "{cutover_db}" RENAME TO "{primary}"')
-        conn.commit()
-    except BaseException:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-    log("SWAP_COMMITTED", {"primary": primary, "previousPrimaryKeptAs": keep_as})
+        _time.sleep(2)
+    log("SWAP_COMMITTED", {"primary": primary, "previousPrimaryKeptAs": keep_as, "attempts": attempt})
 
 
 def process(archive: Path, manifest: dict, mode: str, workdir: str):
@@ -457,7 +465,7 @@ if __name__ == "__main__":
         try:
             with conn.cursor() as cur:
                 cur.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                            "WHERE datname IN (%s,%s) AND pid <> pg_backend_pid()",
+                            "WHERE datname IN (%s,%s) AND pid <> pg_backend_pid() AND usename = current_user",
                             (primary_db(), promote))
         finally:
             conn.close()
