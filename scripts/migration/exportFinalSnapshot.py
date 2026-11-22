@@ -30,9 +30,10 @@ import fingerprintSql as fp  # noqa: E402
 PART_SIZE = 32 * 1024 * 1024
 # Railway project amused-harmony, service Postgres (c50a4d45-...), TCP proxy 72a576d6-...
 PINNED_PUBLIC_PROXY = ("shinkansen.proxy.rlwy.net", "43478")
-REQUIRED = ("PGHOST", "PGUSER", "PGDATABASE", "PGPASSWORD", "PGPORT",
-            "S3_ENDPOINT", "S3_BUCKET", "S3_REGION", "S3_ACCESS_KEY_ID",
-            "S3_SECRET_ACCESS_KEY", "BACKUP_OBJECT_KEY")
+PG_REQUIRED = ("PGHOST", "PGUSER", "PGDATABASE", "PGPASSWORD", "PGPORT")
+S3_REQUIRED = ("S3_ENDPOINT", "S3_BUCKET", "S3_REGION", "S3_ACCESS_KEY_ID",
+               "S3_SECRET_ACCESS_KEY", "BACKUP_OBJECT_KEY")
+REQUIRED = PG_REQUIRED + S3_REQUIRED
 
 
 def fail(msg: str):
@@ -46,9 +47,18 @@ def log(status: str, detail: dict | None = None):
 def validated_env() -> dict[str, str]:
     if os.environ.get("FINAL_EXPORT_APPROVED") != "YES_READ_ONLY_SNAPSHOT_TO_BUCKET":
         fail("export_not_approved")
-    missing = [k for k in REQUIRED if not os.environ.get(k)]
+    # BACKUP_OUTPUT_FILE: write the archive and manifest to a new local file
+    # (e.g. a CI runner disk) instead of the bucket. Same snapshot, same
+    # fingerprints, same re-read verification; never overwrites.
+    out_file = os.environ.get("BACKUP_OUTPUT_FILE", "")
+    required = PG_REQUIRED if out_file else REQUIRED
+    missing = [k for k in required if not os.environ.get(k)]
     if missing:
         fail("missing_required_environment: " + ",".join(missing))
+    if out_file:
+        if not out_file.startswith("/") or not out_file.endswith(".dump") or ".." in out_file:
+            fail("invalid_backup_output_file")
+        return {k: os.environ[k] for k in PG_REQUIRED} | {"BACKUP_OUTPUT_FILE": out_file}
     # Source host: the private Railway host (worker inside Railway), or - only
     # with an explicit second approval - the pinned public TCP proxy of the
     # same Railway Postgres service, TLS required (sslmode=require). Nothing else.
@@ -157,6 +167,61 @@ def stream_dump(s3, bucket, key, snapshot) -> tuple[str, int]:
         raise
 
 
+def stream_dump_file(path, snapshot) -> tuple[str, int]:
+    proc = None
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as out:
+            proc = subprocess.Popen(
+                ["pg_dump", "--format=custom", "--compress=6", "--no-owner", "--no-acl",
+                 "--no-password", "--snapshot=" + snapshot],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=child_env(), bufsize=0)
+            digest, total = hashlib.sha256(), 0
+            while True:
+                block = proc.stdout.read(PART_SIZE)
+                if not block:
+                    break
+                total += len(block)
+                digest.update(block)
+                out.write(block)
+            proc.stdout.close()
+            err = proc.stderr.read().decode("utf-8", "replace")
+            code = proc.wait()
+            if code != 0:
+                fail("pg_dump_failed_exit_code_%d: %s" % (code, err.strip()[-300:]))
+            if total < 1024:
+                fail("backup_archive_too_small")
+            out.flush()
+            os.fsync(out.fileno())
+        return digest.hexdigest(), total
+    except BaseException:
+        if proc and proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
+
+
+def verify_file(path, sha, size):
+    digest, total, first = hashlib.sha256(), 0, b""
+    with open(path, "rb") as f:
+        while True:
+            block = f.read(1024 * 1024)
+            if not block:
+                break
+            if not first:
+                first = block[:5]
+            total += len(block)
+            digest.update(block)
+    if total != size or digest.hexdigest() != sha:
+        fail("backup_reread_checksum_mismatch")
+    if first != b"PGDMP":
+        fail("custom_archive_magic_missing")
+
+
 def verify_remote(s3, bucket, key, sha, size):
     head = s3.head_object(Bucket=bucket, Key=key)
     if int(head["ContentLength"]) != size:
@@ -177,10 +242,16 @@ def verify_remote(s3, bucket, key, sha, size):
 def main() -> int:
     try:
         cfg = validated_env()
-        s3 = s3_client(cfg)
-        bucket, key = cfg["S3_BUCKET"], cfg["BACKUP_OBJECT_KEY"]
-        if exists(s3, bucket, key) or exists(s3, bucket, key + ".manifest.json"):
-            fail("archive_key_already_exists_refusing_overwrite")
+        out_file = cfg.get("BACKUP_OUTPUT_FILE")
+        if out_file:
+            s3, bucket, key = None, None, out_file
+            if os.path.exists(out_file) or os.path.exists(out_file + ".manifest.json"):
+                fail("archive_file_already_exists_refusing_overwrite")
+        else:
+            s3 = s3_client(cfg)
+            bucket, key = cfg["S3_BUCKET"], cfg["BACKUP_OBJECT_KEY"]
+            if exists(s3, bucket, key) or exists(s3, bucket, key + ".manifest.json"):
+                fail("archive_key_already_exists_refusing_overwrite")
         version = subprocess.run(["pg_dump", "--version"], capture_output=True, text=True, check=True).stdout.strip()
         if "PostgreSQL) 18." not in version:
             fail("pg_dump_18_required")
@@ -197,8 +268,17 @@ def main() -> int:
         snapshot, captured, dbname, server_num, ro, db_bytes, txsnap = cur.fetchone()
         if ro != "on":
             fail("transaction_not_read_only")
+        # Final export: the source must be under the database-level write
+        # freeze (freezeRailwaySource.py), proven again inside this snapshot.
+        cur.execute("""SELECT EXISTS (SELECT 1 FROM pg_db_role_setting s JOIN pg_database d ON d.oid = s.setdatabase
+                                      WHERE d.datname = current_database() AND s.setrole = 0
+                                        AND 'default_transaction_read_only=on' = ANY (s.setconfig))""")
+        source_frozen = bool(cur.fetchone()[0])
+        if os.environ.get("FINAL_EXPORT_REQUIRE_FROZEN") == "1" and not source_frozen:
+            fail("source_not_frozen")
         fp.session_guards(cur)  # after the export: no savepoint may precede it
         log("SNAPSHOT_EXPORTED", {"capturedAt": captured.isoformat(), "serverVersionNum": server_num,
+                                  "sourceFrozen": source_frozen,
                                   "databaseBytes": int(db_bytes)})
         # Start the dump first so pg_dump imports the snapshot while this
         # transaction (the exporter) is still open; fingerprint concurrently.
@@ -207,7 +287,8 @@ def main() -> int:
 
         def run_dump():
             try:
-                result["dump"] = stream_dump(s3, bucket, key, snapshot)
+                result["dump"] = (stream_dump_file(out_file, snapshot) if out_file
+                                  else stream_dump(s3, bucket, key, snapshot))
             except BaseException as exc:  # noqa: BLE001
                 result["error"] = exc
         worker = threading.Thread(target=run_dump)
@@ -229,20 +310,28 @@ def main() -> int:
             raise result["error"]
         sha, size = result["dump"]
         log("UPLOAD_COMPLETE", {"bytes": size, "sha256": sha})
-        verify_remote(s3, bucket, key, sha, size)
+        if out_file:
+            verify_file(out_file, sha, size)
+        else:
+            verify_remote(s3, bucket, key, sha, size)
         manifest = {
             "status": "CHECKSUM_VERIFIED_NOT_RESTORE_TESTED",
             "archiveKey": key, "sha256": sha, "bytes": size, "pgDumpVersion": version,
-            "snapshotCapturedAt": captured.isoformat(), "txidSnapshot": txsnap,
+            "snapshotCapturedAt": captured.isoformat(), "txidSnapshot": txsnap, "sourceFrozen": source_frozen,
             "serverVersionNum": server_num, "sourceDatabaseBytes": int(db_bytes),
             "catalog": catalog, "signalTables": signal,
             "fingerprints": prints, "sequences": seqs,
             "verifiedAt": datetime.now(timezone.utc).isoformat(),
             "sourceType": "Railway PostgreSQL logical backup (exported snapshot) via " + os.environ.get("FINAL_EXPORT_SOURCE", "railway_private"),
         }
-        s3.put_object(Bucket=bucket, Key=key + ".manifest.json",
-                      Body=json.dumps(manifest, indent=1, sort_keys=True).encode(),
-                      ContentType="application/json")
+        body = json.dumps(manifest, indent=1, sort_keys=True).encode()
+        if out_file:
+            fd = os.open(out_file + ".manifest.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(body)
+        else:
+            s3.put_object(Bucket=bucket, Key=key + ".manifest.json", Body=body,
+                          ContentType="application/json")
         manifest_sha = hashlib.sha256(json.dumps(manifest, indent=1, sort_keys=True).encode()).hexdigest()
         log("COMPLETE", {"archiveKey": key, "bytes": size, "sha256": sha, "manifestSha256": manifest_sha,
                          "pulseforgeRows": sum(v["rows"] for v in prints.values())})

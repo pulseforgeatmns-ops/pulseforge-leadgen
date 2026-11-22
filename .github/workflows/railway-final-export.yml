@@ -1,20 +1,24 @@
-name: Railway final export (read-only, one-shot)
+name: Railway final export -> Render restore (one-shot)
 
-# Runs scripts/migration/exportFinalSnapshot.py from a GitHub-hosted runner
-# against the pinned public TCP proxy of the Railway Postgres service. Used
-# because Railway refuses new deployments (trial expired) and the agent
-# sandbox cannot open raw TCP. Read-only: one REPEATABLE READ READ ONLY
-# snapshot, pg_dump --snapshot, fingerprints in the same snapshot, upload to
-# the MigrationBackup bucket (refuses overwrite), re-download checksum.
+# Railway refuses new deployments and the agent sandbox has no raw-TCP egress,
+# so the cutover transfer runs here. Fires only when
+# docs/migration/final-export-request.json changes on the cutover branch.
 #
-# Fires only when docs/migration/final-export-request.json changes on the
-# cutover branch. Fails closed without the secrets below. Logs counts and
-# checksums only.
+#   mode=rehearsal  read-only snapshot export (Railway keeps writing) -> Render
+#                   restores into a NEW scratch database, reconciles every
+#                   fingerprint, then drops the scratch copy.
+#   mode=final      database-level write freeze on Railway (reversible) ->
+#                   export proven frozen -> Render restores into a NEW database,
+#                   reconciles, and (if approved on Render) promotes it by
+#                   rename, keeping the previous database. Any failure after the
+#                   freeze unfreezes Railway automatically: production resumes.
+#   mode=unfreeze   rollback: lift the freeze on Railway.
 #
-# Required repository secrets (owner adds them; never commit values):
-#   RAILWAY_PG_PASSWORD          Railway -> amused-harmony -> Postgres -> Variables -> PGPASSWORD
-#   MIGRATION_S3_ACCESS_KEY_ID   Railway -> amused-harmony -> MigrationBackup -> Credentials
-#   MIGRATION_S3_SECRET_ACCESS_KEY
+# Credentials: one repository secret, RAILWAY_PG_PASSWORD (Railway -> project
+# amused-harmony -> Postgres -> Variables -> PGPASSWORD). Render authenticates
+# this job by its GitHub OIDC token; no other secret exists. Logs counts and
+# checksums only. The archive (full database incl. Signal history) is kept as
+# a private workflow artifact: an off-Railway copy.
 
 on:
   push:
@@ -23,15 +27,25 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: railway-final-export
   cancel-in-progress: false
 
+env:
+  FINAL_EXPORT_SOURCE: railway_public_proxy
+  FINAL_EXPORT_EXTERNAL_APPROVED: YES_PINNED_RAILWAY_TCP_PROXY
+  PGHOST: shinkansen.proxy.rlwy.net
+  PGPORT: "43478"
+  PGUSER: postgres
+  PGDATABASE: railway
+  PGSSLMODE: require
+
 jobs:
-  export:
+  transfer:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
 
@@ -40,18 +54,21 @@ jobs:
         run: |
           set -euo pipefail
           f=docs/migration/final-export-request.json
-          key=$(jq -er '.backupObjectKey' "$f")
+          mode=$(jq -er '.mode' "$f")
           approval=$(jq -er '.approval' "$f")
-          [ "$approval" = "YES_READ_ONLY_SNAPSHOT_TO_BUCKET" ] || { echo "::error::request not approved"; exit 1; }
-          echo "key=$key" >> "$GITHUB_OUTPUT"
+          case "$mode:$approval" in
+            rehearsal:YES_READ_ONLY_SNAPSHOT_TO_RENDER_SCRATCH) ;;
+            final:YES_FREEZE_EXPORT_RESTORE_PROMOTE) ;;
+            unfreeze:YES_LIFT_RAILWAY_FREEZE) ;;
+            *) echo "::error::request not approved"; exit 1 ;;
+          esac
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "stamp=$(date -u +%Y%m%dT%H%M%SZ)" >> "$GITHUB_OUTPUT"
 
-      - name: Check secrets present
+      - name: Check secret present
         env:
-          A: ${{ secrets.RAILWAY_PG_PASSWORD }}
-          B: ${{ secrets.MIGRATION_S3_ACCESS_KEY_ID }}
-          C: ${{ secrets.MIGRATION_S3_SECRET_ACCESS_KEY }}
-        run: |
-          [ -n "$A" ] && [ -n "$B" ] && [ -n "$C" ] || { echo "::error::missing RAILWAY_PG_PASSWORD / MIGRATION_S3_* secrets"; exit 1; }
+          PGPASSWORD: ${{ secrets.RAILWAY_PG_PASSWORD }}
+        run: '[ -n "$PGPASSWORD" ] || { echo "::error::missing repository secret RAILWAY_PG_PASSWORD"; exit 1; }'
 
       - name: Install PostgreSQL 18 client
         run: |
@@ -60,24 +77,59 @@ jobs:
           sudo curl -fsSo /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
           echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
           sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-client-18 python3-boto3 python3-psycopg2
+          sudo apt-get install -y -qq postgresql-client-18 python3-boto3 python3-psycopg2 python3-requests
           echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
 
-      - name: Export
+      - name: Source status
         env:
-          FINAL_EXPORT_APPROVED: YES_READ_ONLY_SNAPSHOT_TO_BUCKET
-          FINAL_EXPORT_SOURCE: railway_public_proxy
-          FINAL_EXPORT_EXTERNAL_APPROVED: YES_PINNED_RAILWAY_TCP_PROXY
-          PGHOST: shinkansen.proxy.rlwy.net
-          PGPORT: "43478"
-          PGUSER: postgres
-          PGDATABASE: railway
-          PGSSLMODE: require
           PGPASSWORD: ${{ secrets.RAILWAY_PG_PASSWORD }}
-          S3_ENDPOINT: https://t3.storageapi.dev
-          S3_BUCKET: migrationbackup-njzkny-vy
-          S3_REGION: auto
-          S3_ACCESS_KEY_ID: ${{ secrets.MIGRATION_S3_ACCESS_KEY_ID }}
-          S3_SECRET_ACCESS_KEY: ${{ secrets.MIGRATION_S3_SECRET_ACCESS_KEY }}
-          BACKUP_OBJECT_KEY: ${{ steps.req.outputs.key }}
+        run: python3 scripts/migration/freezeRailwaySource.py status
+
+      - name: Unfreeze (rollback request)
+        if: steps.req.outputs.mode == 'unfreeze'
+        env:
+          PGPASSWORD: ${{ secrets.RAILWAY_PG_PASSWORD }}
+        run: python3 scripts/migration/freezeRailwaySource.py unfreeze
+
+      - name: Freeze Railway writes
+        id: freeze
+        if: steps.req.outputs.mode == 'final'
+        env:
+          PGPASSWORD: ${{ secrets.RAILWAY_PG_PASSWORD }}
+          SOURCE_FREEZE_APPROVED: YES_FREEZE_RAILWAY_SOURCE_WRITES
+        run: python3 scripts/migration/freezeRailwaySource.py freeze
+
+      - name: Export snapshot
+        if: steps.req.outputs.mode != 'unfreeze'
+        env:
+          PGPASSWORD: ${{ secrets.RAILWAY_PG_PASSWORD }}
+          FINAL_EXPORT_APPROVED: YES_READ_ONLY_SNAPSHOT_TO_BUCKET
+          FINAL_EXPORT_REQUIRE_FROZEN: ${{ steps.req.outputs.mode == 'final' && '1' || '0' }}
+          BACKUP_OUTPUT_FILE: ${{ runner.temp }}/railway-${{ steps.req.outputs.stamp }}-${{ steps.req.outputs.mode }}-pg18.dump
         run: python3 scripts/migration/exportFinalSnapshot.py
+
+      - name: Keep off-Railway copy (private artifact)
+        if: steps.req.outputs.mode != 'unfreeze'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: railway-${{ steps.req.outputs.stamp }}-${{ steps.req.outputs.mode }}-pg18
+          path: |
+            ${{ runner.temp }}/railway-${{ steps.req.outputs.stamp }}-${{ steps.req.outputs.mode }}-pg18.dump
+            ${{ runner.temp }}/railway-${{ steps.req.outputs.stamp }}-${{ steps.req.outputs.mode }}-pg18.dump.manifest.json
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Transfer to Render and reconcile
+        if: steps.req.outputs.mode != 'unfreeze'
+        run: >
+          python3 scripts/migration/uploadToRender.py
+          "${{ runner.temp }}/railway-${{ steps.req.outputs.stamp }}-${{ steps.req.outputs.mode }}-pg18.dump"
+          "${{ steps.req.outputs.mode }}"
+
+      - name: Roll back freeze on failure
+        if: failure() && steps.req.outputs.mode == 'final' && steps.freeze.outcome != 'skipped'
+        env:
+          PGPASSWORD: ${{ secrets.RAILWAY_PG_PASSWORD }}
+        run: python3 scripts/migration/freezeRailwaySource.py unfreeze
