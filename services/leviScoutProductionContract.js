@@ -5,6 +5,7 @@ const { extractDealClaims } = require('../packages/max/workspace/ProspectDealCla
 const TENANT_ID = 21;
 const PROPOSED_MIN_AMOUNT = 5000;
 const PROPOSED_MAX_AMOUNT = 20000;
+const RESEARCH_SOURCE = 'scout_research_only';
 
 function metadataOf(row) {
   const value = row && row.acquisition_metadata;
@@ -128,4 +129,4 @@ function weeklyProduction(rows = [], now = new Date(), options = {}) {
   return [...weeks.values()].sort((a, b) => b.weekOf.localeCompare(a.weekOf));
 }
 
-module.exports = { TENANT_ID, PROPOSED_MIN_AMOUNT, PROPOSED_MAX_AMOUNT, approvedCriteria, evaluateProspect, weeklyProduction };
+module.exports = { TENANT_ID, PROPOSED_MIN_AMOUNT, PROPOSED_MAX_AMOUNT, RESEARCH_SOURCE, approvedCriteria, evaluateProspect, weeklyProduction };
