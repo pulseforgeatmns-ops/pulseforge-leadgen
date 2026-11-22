@@ -98,3 +98,9 @@ Storage check uses the Pulseforge physical floor **1,032,675,328 bytes** plus th
 
 PR #1146 stays unmerged. Production writers stay off. `PF_MIGRATION_STAGING=1`. Railway remains authoritative until cutover approval. Signal migration must not block the Pulseforge restore.
 
+## 2026-11-22 receiver armed (awaiting Railway ticket)
+
+Render service `pulseforge-api-migration` deploy `dep-dc1f87vf3r2c73ciaufg` is **live** on commit `1a4688b2` with `Dockerfile.migration-render-restore`. `DATABASE_URL` is the internal URL for empty `pulseforge_production`. `PF_MIGRATION_STAGING=1`. One-time restore approval is armed. Disk remains 10 GB.
+
+HTTP `/healthz` → `200 isolated restore service available`. HTTP `/internal/migration/preflight` → `200` `status=ready`. Required bytes **2,171,816,155** on a 10,000,000,000 disk. Snapshot `pulseforge_production_migration` still 378 objects / 991,557,311 bytes. No `pg_restore` yet; waiting on the Railway ticket worker.
+
