@@ -132,7 +132,7 @@ DO NOT make promises about revenue or results. Do not push past two objections â
 
 async function initiateCall(prospect, companyName) {
   return withCallAuthorization(pool, [{ prospectId: prospect.id, clientId: prospect.client_id }], async () => {
-    const appUrl = process.env.APP_URL || 'https://pulseforge-leadgen-production.up.railway.app';
+    const appUrl = process.env.APP_URL || 'https://pulseforge-api-migration.onrender.com';
 
     const res = await axios.post('https://api.bland.ai/v1/calls', {
       phone_number:          prospect.phone,

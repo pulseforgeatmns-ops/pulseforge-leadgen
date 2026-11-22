@@ -20,11 +20,14 @@ import sys
 import time
 
 import psycopg2
+import psycopg2.errors
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from exportFinalSnapshot import PINNED_PUBLIC_PROXY  # noqa: E402
 
 APPROVAL = "YES_FREEZE_RAILWAY_SOURCE_WRITES"
+SOURCE_DB = "railway"
+RETIRED_DB = "railway_retired_20261122"
 QUIET_SECONDS = int(os.environ.get("FREEZE_QUIET_SECONDS", "20"))
 
 
@@ -37,6 +40,16 @@ def fail(msg):
 
 
 def connect():
+    validate_source()
+    # This session must stay read-write even once the database default is
+    # read-only, or the rollback (RESET) would itself be refused.
+    conn = psycopg2.connect(connect_timeout=15, application_name="cutover-source-freeze",
+                            options="-c default_transaction_read_only=off")
+    conn.autocommit = True
+    return conn
+
+
+def validate_source():
     if os.environ.get("FINAL_EXPORT_SOURCE") == "railway_public_proxy":
         if (os.environ.get("PGHOST"), os.environ.get("PGPORT")) != PINNED_PUBLIC_PROXY:
             fail("source_must_be_pinned_railway_tcp_proxy")
@@ -46,12 +59,6 @@ def connect():
         fail("source_must_be_railway_host")
     if os.environ.get("PGDATABASE") != "railway" and not os.environ.get("FREEZE_TEST_HOST_OK"):
         fail("unexpected_source_database")
-    # This session must stay read-write even once the database default is
-    # read-only, or the rollback (RESET) would itself be refused.
-    conn = psycopg2.connect(connect_timeout=15, application_name="cutover-source-freeze",
-                            options="-c default_transaction_read_only=off")
-    conn.autocommit = True
-    return conn
 
 
 def status(cur):
@@ -116,17 +123,56 @@ def unfreeze(cur):
     log("UNFROZEN", status(cur))
 
 
+def retire(cur):
+    """After a verified promotion on Render: rename the Railway database so the
+    Railway app and crons can no longer read or act on it. Data is untouched;
+    reverse with `unretire`."""
+    if os.environ.get("SOURCE_RETIRE_APPROVED") != "YES_RETIRE_RAILWAY_DATABASE_AFTER_VERIFIED_PROMOTION":
+        fail("retire_not_approved")
+    if not status(cur)["frozen"]:
+        fail("retire_requires_frozen_source")
+    conn = psycopg2.connect(connect_timeout=15, application_name="cutover-source-freeze", dbname="postgres",
+                            options="-c default_transaction_read_only=off")
+    conn.autocommit = True
+    c = conn.cursor()
+    cur.connection.close()
+    for attempt in range(10):
+        c.execute("SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE datname = %s", (SOURCE_DB,))
+        try:
+            c.execute('ALTER DATABASE "%s" RENAME TO "%s"' % (SOURCE_DB, RETIRED_DB))
+            log("RETIRED", {"renamedTo": RETIRED_DB, "attempt": attempt + 1})
+            return
+        except psycopg2.errors.ObjectInUse:
+            time.sleep(0.2)
+    fail("retire_rename_kept_failing_database_in_use")
+
+
+def unretire():
+    validate_source()
+    conn = psycopg2.connect(connect_timeout=15, application_name="cutover-source-freeze", dbname="postgres",
+                            options="-c default_transaction_read_only=off")
+    conn.autocommit = True
+    conn.cursor().execute('ALTER DATABASE "%s" RENAME TO "%s"' % (RETIRED_DB, SOURCE_DB))
+    log("UNRETIRED", {"restoredName": SOURCE_DB})
+
+
 def main(argv):
     try:
         action = argv[1] if len(argv) > 1 else ""
-        if action not in ("freeze", "unfreeze", "status"):
-            fail("usage: freeze|unfreeze|status")
+        if action not in ("freeze", "unfreeze", "status", "retire", "unretire"):
+            fail("usage: freeze|unfreeze|status|retire|unretire")
+        if action == "unretire":
+            unretire()
+            return 0
         if action == "freeze" and os.environ.get("SOURCE_FREEZE_APPROVED") != APPROVAL:
             fail("freeze_not_approved")
         conn = connect()
         cur = conn.cursor()
         if action == "freeze":
             freeze(cur)
+        elif action == "retire":
+            retire(cur)
+            return 0
         elif action == "unfreeze":
             unfreeze(cur)
         else:

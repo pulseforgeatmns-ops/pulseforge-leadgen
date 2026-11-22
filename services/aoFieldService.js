@@ -1395,7 +1395,7 @@ async function notifyJakeEscalation(escalation, lead, aoName) {
       '',
       escalation.summary,
       '',
-      `Review field visits: ${process.env.APP_URL || 'https://pulseforge-leadgen-production.up.railway.app'}/admin/field-visits`,
+      `Review field visits: ${process.env.APP_URL || 'https://pulseforge-api-migration.onrender.com'}/admin/field-visits`,
     ].filter(Boolean).join('\n'),
   }, {
     headers: {

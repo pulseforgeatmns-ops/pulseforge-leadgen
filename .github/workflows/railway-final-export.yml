@@ -12,7 +12,11 @@ name: Railway final export -> Render restore (one-shot)
 #                   reconciles, and (if approved on Render) promotes it by
 #                   rename, keeping the previous database. Any failure after the
 #                   freeze unfreezes Railway automatically: production resumes.
+#                   On success the Railway database is renamed
+#                   railway_retired_20261122 (data kept) so the Railway app and
+#                   crons can no longer act on it.
 #   mode=unfreeze   rollback: lift the freeze on Railway.
+#   mode=unretire   rollback: restore the Railway database name.
 #
 # Credentials: one repository secret, RAILWAY_PG_PASSWORD (Railway -> project
 # amused-harmony -> Postgres -> Variables -> PGPASSWORD). Render authenticates
@@ -60,6 +64,7 @@ jobs:
             rehearsal:YES_READ_ONLY_SNAPSHOT_TO_RENDER_SCRATCH) ;;
             final:YES_FREEZE_EXPORT_RESTORE_PROMOTE) ;;
             unfreeze:YES_LIFT_RAILWAY_FREEZE) ;;
+            unretire:YES_RESTORE_RAILWAY_DATABASE_NAME) ;;
             *) echo "::error::request not approved"; exit 1 ;;
           esac
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
@@ -80,7 +85,14 @@ jobs:
           sudo apt-get install -y -qq postgresql-client-18 python3-boto3 python3-psycopg2 python3-requests
           echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
 
+      - name: Unretire (rollback request)
+        if: steps.req.outputs.mode == 'unretire'
+        env:
+          PGPASSWORD: ${{ secrets.RAILWAY_PG_PASSWORD }}
+        run: python3 scripts/migration/freezeRailwaySource.py unretire
+
       - name: Source status
+        if: steps.req.outputs.mode != 'unretire'
         env:
           PGPASSWORD: ${{ secrets.RAILWAY_PG_PASSWORD }}
         run: python3 scripts/migration/freezeRailwaySource.py status
@@ -100,7 +112,7 @@ jobs:
         run: python3 scripts/migration/freezeRailwaySource.py freeze
 
       - name: Export snapshot
-        if: steps.req.outputs.mode != 'unfreeze'
+        if: steps.req.outputs.mode == 'rehearsal' || steps.req.outputs.mode == 'final'
         env:
           PGPASSWORD: ${{ secrets.RAILWAY_PG_PASSWORD }}
           FINAL_EXPORT_APPROVED: YES_READ_ONLY_SNAPSHOT_TO_BUCKET
@@ -109,7 +121,7 @@ jobs:
         run: python3 scripts/migration/exportFinalSnapshot.py
 
       - name: Keep off-Railway copy (private artifact)
-        if: steps.req.outputs.mode != 'unfreeze'
+        if: steps.req.outputs.mode == 'rehearsal' || steps.req.outputs.mode == 'final'
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
@@ -122,11 +134,18 @@ jobs:
           if-no-files-found: error
 
       - name: Transfer to Render and reconcile
-        if: steps.req.outputs.mode != 'unfreeze'
+        if: steps.req.outputs.mode == 'rehearsal' || steps.req.outputs.mode == 'final'
         run: >
           python3 scripts/migration/uploadToRender.py
           "${{ runner.temp }}/railway-${{ steps.req.outputs.stamp }}-${{ steps.req.outputs.mode }}-pg18.dump"
           "${{ steps.req.outputs.mode }}"
+
+      - name: Retire Railway database (verified promotion only)
+        if: success() && steps.req.outputs.mode == 'final'
+        env:
+          PGPASSWORD: ${{ secrets.RAILWAY_PG_PASSWORD }}
+          SOURCE_RETIRE_APPROVED: YES_RETIRE_RAILWAY_DATABASE_AFTER_VERIFIED_PROMOTION
+        run: python3 scripts/migration/freezeRailwaySource.py retire
 
       - name: Roll back freeze on failure
         if: failure() && steps.req.outputs.mode == 'final' && steps.freeze.outcome != 'skipped'

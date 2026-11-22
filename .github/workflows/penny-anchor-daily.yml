@@ -22,7 +22,7 @@ jobs:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           # Repository variable PULSEFORGE_APP_URL moves this caller at cutover
           # without a code change; unset keeps the current production host.
-          APP_URL: ${{ vars.PULSEFORGE_APP_URL || 'https://pulseforge-leadgen-production.up.railway.app' }}
+          APP_URL: ${{ vars.PULSEFORGE_APP_URL || 'https://pulseforge-api-migration.onrender.com' }}
         run: |
           test -n "$CRON_SECRET"
           payload=$(jq -n --arg secret "$CRON_SECRET" '{secret: $secret, client_id: 10}')
