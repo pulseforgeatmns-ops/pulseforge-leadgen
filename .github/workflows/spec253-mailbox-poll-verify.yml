@@ -15,5 +15,5 @@ jobs:
       - name: SPEC-253 production tenant mailbox poll acceptance
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          APP_URL: https://pulseforge-leadgen-production.up.railway.app
+          APP_URL: https://pulseforge-api-migration.onrender.com
         run: node scripts/verifySpec253MailboxPollProduction.js

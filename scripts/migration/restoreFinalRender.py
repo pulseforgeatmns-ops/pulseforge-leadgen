@@ -212,10 +212,19 @@ def swap(cutover_db: str, stamp: str):
     keep_as = "pulseforge_pre_cutover_" + stamp
     if database_exists(keep_as):
         raise RuntimeError("pre_cutover_name_already_taken")
+    # The application does not run in receiver mode; leftover sessions (the
+    # previous app instance's pool) are ended first, as the #1151 promotion did.
+    end = connect("postgres", autocommit=True)
+    try:
+        with end.cursor() as c:
+            c.execute("SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity "
+                      "WHERE datname IN (%s,%s) AND pid <> pg_backend_pid()", (primary, cutover_db))
+            log("SWAP_SESSIONS_ENDED", {"ended": int(c.fetchone()[0])})
+    finally:
+        end.close()
     conn = connect("postgres")
     try:
         cur = conn.cursor()
-        # The application is not running in receiver mode; refuse if anyone is attached.
         cur.execute("SELECT count(*) FROM pg_stat_activity WHERE datname IN (%s,%s) AND pid<>pg_backend_pid()",
                     (primary, cutover_db))
         if cur.fetchone()[0]:

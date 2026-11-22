@@ -24,7 +24,7 @@ jobs:
       - name: SPEC-254/255/256 production acceptance (read-only)
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          APP_URL: https://pulseforge-leadgen-production.up.railway.app
+          APP_URL: https://pulseforge-api-migration.onrender.com
           EXPECTED_PRODUCTION_SHA: ${{ steps.sha.outputs.sha }}
         run: |
           set -euo pipefail

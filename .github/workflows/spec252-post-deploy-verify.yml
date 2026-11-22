@@ -61,7 +61,7 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          APP_URL: https://pulseforge-leadgen-production.up.railway.app
+          APP_URL: https://pulseforge-api-migration.onrender.com
           EXPECTED_PRODUCTION_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || steps.sha.outputs.sha }}
           SCHEDULE_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.schedule || 'true' }}
         run: |
