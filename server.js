@@ -65,6 +65,16 @@ const { ensureSignalSchema } = require('./packages/signal-v1');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
+// Render readiness endpoint for the real API, independent of session and portal middleware.
+app.get('/healthz', async (_req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.status(200).send('ok');
+  } catch (_error) {
+    res.status(503).send('database unavailable');
+  }
+});
+
 const { createAnchorPortalReadiness } = require('./utils/anchorPortalReadiness');
 const anchorPortalReadiness = createAnchorPortalReadiness({
   initAuth,
