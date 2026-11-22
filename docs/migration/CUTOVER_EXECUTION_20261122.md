@@ -59,3 +59,75 @@ From Railway HTTP logs, Nov 19–22, 501 sampled requests:
    - stop the Railway web service (this needs Railway to accept changes);
    - take the final export (step 1 again) and restore it.
 4. Repoint Render `DATABASE_URL`. Set `PF_DISABLE_BACKGROUND_WORKERS=0` on exactly one instance; outbound flags stay as on Railway. Validate, then switch callers.
+
+## Update: no-payment transfer path (later on 2026-11-22)
+
+Railway payment is prohibited. PR #1149 is merged into `migration/render-current-main`.
+
+### Credential investigation (proven)
+
+| Path | Result |
+|---|---|
+| Railway MCP `list-variables` on the Postgres service | `valuesRedacted: true`: names only, for this OAuth app. |
+| Railway in-platform compute | Redeploys refused (trial expired). A fork environment was denied by this session's permission policy. Restarting `migration-final-export-once` would re-run it with its pinned key, which already exists, so it refuses by design. |
+| Render env / logs | The Render MCP cannot read env values. Logs since Nov 16 contain no Railway credential. |
+| GitHub secrets | No agent tool can write repository secrets (the GitHub MCP has no secrets API, and `gh` is restricted to search). |
+
+The Railway PostgreSQL password is readable only by the owner. Everything else needs **no** new secret:
+- Render authenticates the Actions job by its **GitHub OIDC token** (issuer, audience, repository, branch, workflow file and event pinned).
+- Render already holds its own database URL.
+
+### Transfer pipeline (this branch)
+
+| Piece | Role |
+|---|---|
+| `.github/workflows/railway-final-export.yml` | Fires when `docs/migration/final-export-request.json` changes on this branch. Modes: `rehearsal`, `final`, `unfreeze`. A failure after the freeze unfreezes Railway automatically. |
+| `scripts/migration/freezeRailwaySource.py` | Database-level `default_transaction_read_only=on`, then ends sessions. The quiet-window proof requires that no session holds a transaction id **and** the next transaction id does not advance. Reverse with `unfreeze`. |
+| `scripts/migration/exportFinalSnapshot.py` | New `BACKUP_OUTPUT_FILE` mode. With `FINAL_EXPORT_REQUIRE_FROZEN=1` it records `sourceFrozen` from inside the snapshot. |
+| `scripts/migration/uploadToRender.py` | Sends 32 MiB chunks with a fresh OIDC token on each request, then polls the receiver's verdict into the Actions log. |
+| `scripts/migration/restoreFinalRender.py` + `githubOidc.py` | Render receiver (`PF_MIGRATION_RECEIVER=1`; the app is not running in this mode). Restores into a **new** database, checks disk headroom, reconciles fingerprints, drops rehearsal copies, and promotes the final copy by rename only, keeping the previous primary as `pulseforge_pre_cutover_<stamp>`. |
+| `Dockerfile` | Adds PostgreSQL 18 client tools and python, and the receiver CMD branch. Normal start is unchanged. |
+| `scripts/migration/switchPublicHost.js` | Cutover-only host switch (22 occurrences). Studio Substral is excluded: its doctrine forbids "Pulseforge" in page HTML, so it needs a neutral custom host at launch. It is not launched yet. |
+
+### End-to-end proof (disposable PostgreSQL 18.7 source and destination, real pg_dump/pg_restore 18)
+
+- **Rehearsal under a concurrent writer:**
+  - the snapshot held 50,022 prospects while writes continued to 50,400;
+  - 0 content differences across 50,543 rows;
+  - 1 live-sequence advance was reported as informational only;
+  - Signal data was excluded and the Signal tables exist empty;
+  - the scratch copy was dropped.
+- **Freeze under a live writer and a long-lived pooled session:**
+  - the session was ended;
+  - every later insert failed with `cannot execute INSERT in a read-only transaction`;
+  - the transaction id was stable through the quiet window.
+- **Final:**
+  - the export was proven frozen;
+  - 0 differences, including **exact** sequences;
+  - the swap committed, and the old primary was kept;
+  - the view, the trigger, the sequence and the empty Signal schema were present.
+- **Rollback:** unfreeze restored writes, and re-freeze is idempotent.
+- **Refused:**
+  - missing, wrong-ref, wrong-audience, expired, other-workflow, pull-request-event or tampered-signature tokens;
+  - a final upload carrying a live manifest;
+  - a chunk from another run;
+  - out-of-order chunks;
+  - a tampered archive (checksum).
+- **Defects found and fixed by this run:**
+  1. A live-sequence false positive.
+  2. **Unfreeze refused inside a read-only default.** The freeze session now forces read-write.
+- `test/test_cutoverTransfer.py` covers the OIDC gate and the manifest rules.
+
+### Runbook once the secret exists
+
+1. Merge this branch into `migration/render-current-main`, then deploy Render.
+2. Set on Render: `PF_MIGRATION_RECEIVER=1`, `MIGRATION_RESTORE_APPROVED=CREATE_NEW_DATABASE_ONLY`.
+3. Commit the request `{"mode":"rehearsal","approval":"YES_READ_ONLY_SNAPSHOT_TO_RENDER_SCRATCH"}`. This tells us the real Railway timing, archive size and the 274-table reconciliation, with no freeze.
+4. Config reconciliation: confirm the Render env holds every Railway name (153 listed above) with the outbound/publish flags unchanged. Then set `APP_URL` and `DASHBOARD_URL` to the Render host.
+5. Final:
+   - set `MIGRATION_FINAL_SWAP_APPROVED=RENAME_PRIMARY_KEEP_AND_PROMOTE_VERIFIED`;
+   - commit `{"mode":"final","approval":"YES_FREEZE_EXPORT_RESTORE_PROMOTE"}`;
+   - Railway freezes, Render restores, verifies and promotes.
+6. Set `PF_MIGRATION_RECEIVER=0` and `PF_DISABLE_BACKGROUND_WORKERS=0` (one instance). Validate login, Max, Scout, tenants and `/cron` auth.
+7. Run `switchPublicHost.js --write`. Sync the anchor-cleaning Pages repo. Set the repository variable `PULSEFORGE_APP_URL`. Repoint cron-job.org and the external consoles.
+8. Railway stays frozen and intact (rollback = `{"mode":"unfreeze",...}` plus reverting callers) until acceptance.
