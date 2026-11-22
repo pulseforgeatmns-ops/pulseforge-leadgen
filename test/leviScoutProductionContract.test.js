@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { evaluateProspect, weeklyProduction } = require('../services/leviScoutProductionContract');
+const { evaluateProspect, weeklyProduction, RESEARCH_SOURCE, PROPOSED_MIN_AMOUNT, PROPOSED_MAX_AMOUNT } = require('../services/leviScoutProductionContract');
 const criteria = { approved: true, source: 'approved_blueprint', minAmount: 5000, maxAmount: 20000 };
 
 function complete(overrides = {}) {
@@ -86,4 +86,13 @@ test('evidence dates: published date preferred; property signals never establish
   const legacy = evaluate({ ...row, acquisition_metadata: { reviewState: 'contact_now', category: 'borrower', importedAt: '2026-11-19T10:00:00Z' } });
   assert.equal(legacy.evidence.evidencePublishedAt, null);
   assert.equal(legacy.evidence.evidenceTimestamp, '2026-11-19T10:00:00Z');
+});
+
+test('proposed $5k–$20k is not an authorized production range and research source is named', () => {
+  assert.equal(RESEARCH_SOURCE, 'scout_research_only');
+  assert.equal(PROPOSED_MIN_AMOUNT, 5000);
+  assert.equal(PROPOSED_MAX_AMOUNT, 20000);
+  const result = evaluateProspect(complete(), { criteria: { approved: true, source: 'proposed', minAmount: 5000, maxAmount: 20000 } });
+  assert.equal(result.qualified, false);
+  assert.ok(result.blockers.includes('financing_criteria_unverified'));
 });

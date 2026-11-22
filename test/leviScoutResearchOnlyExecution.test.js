@@ -77,3 +77,13 @@ test('incomplete candidates are Qualify First, not qualified', async () => {
   assert.equal(d.state.persisted.records[0].classification, 'Qualify First');
   assert.ok(d.state.persisted.records[0].blockers.includes('contact_path_missing'));
 });
+
+test('a completed cycle never reports paid providers or outreach as used', async () => {
+  const d = deps();
+  const result = await execution.runResearchOnlyCycle({ authority: authority(),
+    env: { SCOUT_LEVI_RESEARCH_ONLY_ENABLED: 'true' }, deps: d });
+  assert.equal(result.outreachAttempted, false);
+  assert.equal(result.paidProvidersUsed, false);
+  assert.equal(d.state.persisted.records[0].outreachAuthorized, false);
+  assert.equal(d.state.diagnostics[0].paidProvidersUsed, false);
+});
