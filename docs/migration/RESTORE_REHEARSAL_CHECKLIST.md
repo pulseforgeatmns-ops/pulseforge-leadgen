@@ -88,9 +88,13 @@
 - Render PostgreSQL instance remains **available** (10 GB provisioned). Railway inventory shows only original `Postgres` and `OpenClaw Main` services and retained private `MigrationBackup` bucket, no pending changes.
 - Draft PR #1129 remains **OPEN, DRAFT, UNMERGED**. No Railway production cutover or data deletion.
 
-## 2026-11-21 full restore contract (NOT EXECUTED)
+## 2026-11-21 Pulseforge-selective restore contract
 
-Pinned archive: `migration-backups/railway-20261121-full-pg18.dump` (728,012,480 bytes, SHA-256 `4cf4e95bf56706e09ba411349ed68cfcf8725fef2ee4964ed6af73fce29fd734`). Intended target is empty `pulseforge_production` on host prefix `dpg-dbtgtloae00c73dd8040-a`. The November 17 snapshot database `pulseforge_production_migration` must remain untouched. Restore selection keeps every TABLE DATA and SEQUENCE SET, including all 45 `signal_` tables (`restoreAllTableData=true`, `silentlyDiscardSignalData=false`). PR #1146 stays unmerged. Production writers stay off. `PF_MIGRATION_STAGING=1`.
+Pinned archive: `migration-backups/railway-20261121-full-pg18.dump` (728,012,480 bytes, SHA-256 `4cf4e95bf56706e09ba411349ed68cfcf8725fef2ee4964ed6af73fce29fd734`). Target is empty `pulseforge_production` on host prefix `dpg-dbtgtloae00c73dd8040-a`. The November 17 snapshot database `pulseforge_production_migration` must remain untouched.
 
-**Restore was NOT executed.** Render's 10 GB disk cannot hold the full source floor (9,218,275,007 bytes, ~9.218 GB) plus the preserved snapshot (~991,557,311 bytes, ~0.99 GB) with WAL headroom (12%). Required capacity is `restore_floor * 1.12 + sibling_bytes` (sibling = every database except `pulseforge_production`) ≈ 11.34 GB. The gateway fails closed with `full_restore_exceeds_render_disk` rather than dropping Signal data. A larger disk is required before any write.
+Authorization: `SELECTIVE_PULSEFORGE_OPERATIONAL_RESTORE` (`authorizedSignalDataExclusion=true`). Restore **274 Pulseforge operational TABLE DATA** entries. Keep the **45 Signal tables as empty schema** for application compatibility. Do **not** restore Signal table data into Pulseforge PostgreSQL. Do **not** increase Render's 10 GB disk (`increaseRenderDisk=false`). This is not a silent discard: Signal history remains in the full November 21 archive for a separate Signal database workstream (`signalHistoryRetainedInArchive=true`, `silentlyDiscardSignalData=false`). `prospect_signal_events`, `warm_signal_state`, and `warm_signal_events` stay with Pulseforge.
+
+Storage check uses the Pulseforge physical floor **1,032,675,328 bytes** plus the preserved snapshot and 12% WAL headroom. Against the live sibling databases that is about **2.17 GB**, which fits the existing 10 GB disk. The 9.218 GB combined source floor is retained in the contract as archive identity only; it is not the restore capacity requirement.
+
+PR #1146 stays unmerged. Production writers stay off. `PF_MIGRATION_STAGING=1`. Railway remains authoritative until cutover approval. Signal migration must not block the Pulseforge restore.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for the November 21 full Render restore contract helpers."""
+"""Unit tests for the November 21 Pulseforge-selective Render restore contract."""
 from __future__ import annotations
 
 import os
@@ -49,8 +49,22 @@ def _toc_listing(tables):
     return "\n".join(lines) + "\n"
 
 
+def _active_data(selected, name):
+    return any(
+        (not line.startswith(";")) and f"TABLE DATA public {name} " in line
+        for line in selected.splitlines()
+    )
+
+
+def _commented_data(selected, name):
+    return any(
+        line.startswith(";") and f"TABLE DATA public {name} " in line
+        for line in selected.splitlines()
+    )
+
+
 class RestoreGatewayContractTest(unittest.TestCase):
-    def test_nov21_pin(self):
+    def test_nov21_pin_and_selective_authorization(self):
         self.assertEqual(
             contract.ARCHIVE_OBJECT_KEY,
             "migration-backups/railway-20261121-full-pg18.dump",
@@ -64,13 +78,21 @@ class RestoreGatewayContractTest(unittest.TestCase):
         self.assertEqual(
             contract.FORBIDDEN_SNAPSHOT_DATABASE, "pulseforge_production_migration")
         self.assertEqual(contract.HOST_PREFIX, "dpg-dbtgtloae00c73dd8040-a")
-        self.assertIs(contract.CONTRACT["restoreAllTableData"], True)
+        self.assertIs(contract.CONTRACT["restoreAllTableData"], False)
+        self.assertIs(contract.CONTRACT["restorePulseforgeTableData"], True)
+        self.assertIs(contract.CONTRACT["restoreSignalTableData"], False)
+        self.assertIs(contract.CONTRACT["authorizedSignalDataExclusion"], True)
         self.assertIs(contract.CONTRACT["silentlyDiscardSignalData"], False)
+        self.assertIs(contract.CONTRACT["signalHistoryRetainedInArchive"], True)
+        self.assertIs(contract.CONTRACT["increaseRenderDisk"], False)
+        self.assertEqual(contract.CONTRACT["pulseforgeTableDataCount"], 274)
+        self.assertEqual(contract.CONTRACT["signalTableDataExcluded"], 45)
         self.assertIs(contract.CONTRACT["mergePullRequest1146"], False)
         self.assertEqual(
             contract.FORBIDDEN_ARCHIVE_OBJECT_KEY,
             "migration-backups/railway-20261117-full-pg18.dump",
         )
+        self.assertEqual(contract.PULSEFORGE_RESTORE_FLOOR, 1032675328)
         self.assertEqual(contract.SOURCE_DATABASE_BYTES_FLOOR, 9218275007)
         self.assertEqual(contract.DEFAULT_DISK_BYTES, 10_000_000_000)
         contract.assert_backup_url(PRESIGNED)
@@ -96,53 +118,98 @@ class RestoreGatewayContractTest(unittest.TestCase):
                 "postgresql://user:secret@dpg-other-a/pulseforge_production"
             )
 
-    def test_toc_includes_signal_and_forbids_commenting(self):
+    def test_toc_includes_274_operational_and_excludes_45_signal_data(self):
         tables = contract.catalog_tables()
         self.assertEqual(len(tables["all"]), 319)
         self.assertEqual(len(tables["core"]), 274)
         self.assertEqual(len(tables["signal"]), 45)
+        for name in (
+            "prospect_signal_events",
+            "warm_signal_state",
+            "warm_signal_events",
+        ):
+            self.assertIn(name, tables["core"])
+            self.assertNotIn(name, tables["signal"])
         listing = _toc_listing(tables["all"])
-        selected = contract.select_restore_toc(listing, tables["all"])
+        selected, detail = contract.select_restore_toc(listing, tables)
+        self.assertEqual(detail["pulseforgeTableData"], 274)
+        self.assertEqual(detail["signalTableDataExcluded"], 45)
+        self.assertIs(detail["restoreAllTableData"], False)
+        self.assertIs(detail["authorizedSignalDataExclusion"], True)
+        self.assertIs(detail["silentlyDiscardSignalData"], False)
+        self.assertIs(detail["signalHistoryRetainedInArchive"], True)
+        included = excluded = 0
+        for name in tables["core"]:
+            self.assertTrue(_active_data(selected, name), name)
+            self.assertFalse(_commented_data(selected, name), name)
+            included += 1
         for name in tables["signal"]:
-            self.assertIn(f"TABLE DATA public {name} ", selected)
-            self.assertNotIn(f";TABLE DATA public {name} ", selected.replace(" ", ""))
-        self.assertTrue(any(
-            line.startswith(tuple("0123456789")) and "SEQUENCE SET" in line
-            for line in selected.splitlines()
-        ))
-        signal_name = sorted(tables["signal"])[0]
+            self.assertTrue(_commented_data(selected, name), name)
+            self.assertFalse(_active_data(selected, name), name)
+            self.assertTrue(
+                any(
+                    (not line.startswith(";")) and f"TABLE public {name} " in line
+                    for line in selected.splitlines()
+                ),
+                name,
+            )
+            excluded += 1
+        self.assertEqual(included, 274)
+        self.assertEqual(excluded, 45)
+        self.assertTrue(
+            any(
+                line.startswith(";") and "SEQUENCE SET public signal_" in line
+                for line in selected.splitlines()
+            )
+        )
+        self.assertTrue(
+            any(
+                (not line.startswith(";")) and "SEQUENCE SET public users_id_seq " in line
+                for line in selected.splitlines()
+            )
+        )
+
+    def test_toc_forbids_excluding_operational_data(self):
+        tables = contract.catalog_tables()
+        listing = _toc_listing(tables["all"])
         commented = []
         for line in listing.splitlines():
-            if f"TABLE DATA public {signal_name} " in line:
+            if "TABLE DATA public users " in line:
                 commented.append(";" + line)
             else:
                 commented.append(line)
-        with self.assertRaisesRegex(RuntimeError, "silent_table_data_exclusion_forbidden"):
-            contract.select_restore_toc("\n".join(commented) + "\n", tables["all"])
+        with self.assertRaisesRegex(RuntimeError, "operational_table_data_exclusion_forbidden"):
+            contract.select_restore_toc("\n".join(commented) + "\n", tables)
         with self.assertRaisesRegex(RuntimeError, "unhandled_archive_data_kind"):
             contract.select_restore_toc(
-                listing + "2300; 0 0 BLOBS blobs\n", tables["all"])
+                listing + "2300; 0 0 BLOBS blobs\n", tables)
 
-    def test_live_10gb_fails_full_restore_exceeds_render_disk(self):
-        with self.assertRaisesRegex(RuntimeError, "full_restore_exceeds_render_disk"):
-            contract.require_full_restore_capacity(LIVE_RENDER_SIZES, LIVE_DISK_BYTES)
-        blocked = contract.assess_storage(LIVE_RENDER_SIZES, LIVE_DISK_BYTES)
-        self.assertFalse(blocked["fits"])
-        self.assertGreater(blocked["required_bytes"], LIVE_DISK_BYTES)
-        self.assertEqual(blocked["restore_floor"], 9218275007)
+    def test_live_10gb_fits_pulseforge_restore_and_forbids_disk_increase(self):
+        assessment = contract.require_pulseforge_restore_capacity(
+            LIVE_RENDER_SIZES, LIVE_DISK_BYTES)
+        self.assertTrue(assessment["fits"])
+        self.assertLess(assessment["required_bytes"], LIVE_DISK_BYTES)
+        self.assertEqual(assessment["restore_floor"], 1032675328)
+        self.assertFalse(assessment["includesSignalData"])
+        self.assertFalse(assessment["increaseRenderDisk"])
         self.assertEqual(
-            blocked["sibling_bytes"],
+            assessment["sibling_bytes"],
             LIVE_RENDER_SIZES["postgres"]
             + LIVE_RENDER_SIZES["pulseforge_production_migration"]
             + LIVE_RENDER_SIZES["template0"]
             + LIVE_RENDER_SIZES["template1"],
         )
-
-    def test_20gb_passes_full_restore_capacity(self):
-        assessment = contract.require_full_restore_capacity(
-            LIVE_RENDER_SIZES, 20_000_000_000)
-        self.assertTrue(assessment["fits"])
-        self.assertLessEqual(assessment["required_bytes"], 20_000_000_000)
+        self.assertEqual(
+            assessment["required_bytes"],
+            int(1032675328 * 1.12) + assessment["sibling_bytes"],
+        )
+        with self.assertRaisesRegex(RuntimeError, "increase_render_disk_forbidden"):
+            contract.require_pulseforge_restore_capacity(
+                LIVE_RENDER_SIZES, 20_000_000_000)
+        with self.assertRaisesRegex(RuntimeError, "full_restore_not_authorized_for_pulseforge_cutover"):
+            contract.require_full_restore_capacity(LIVE_RENDER_SIZES, LIVE_DISK_BYTES)
+        with self.assertRaisesRegex(RuntimeError, "increase_render_disk_forbidden"):
+            contract.pinned_disk_bytes(10_000_000_001)
 
     def test_staging_and_writer_flags(self):
         staging = {
@@ -224,6 +291,8 @@ class RestoreGatewayContractTest(unittest.TestCase):
         self.assertIn("public.users", sql)
         with self.assertRaisesRegex(RuntimeError, "invalid_fingerprint_table"):
             contract.content_fingerprint_sql("agent_log")
+        with self.assertRaisesRegex(RuntimeError, "invalid_fingerprint_table"):
+            contract.content_fingerprint_sql("signal_dashboard_records")
 
     def test_os_environ_staging_helpers(self):
         env = {

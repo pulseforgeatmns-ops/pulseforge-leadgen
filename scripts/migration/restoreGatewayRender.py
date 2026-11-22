@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Isolated Render PostgreSQL 18 one-time restore receiver for November 21.
 
-Downloads only the pinned full archive, restores every TABLE DATA and SEQUENCE
-SET (including Signal) into empty pulseforge_production, and leaves the
-November 17 snapshot database untouched. Never points at Railway, enables
-application workers, merges PR #1146, or starts live operations.
+Downloads the pinned full archive, restores 274 Pulseforge TABLE DATA entries
+into empty pulseforge_production, and keeps the 45 Signal tables as empty
+schema for application compatibility. Signal history stays in the archive.
+Leaves the November 17 snapshot database untouched. Never points at Railway,
+enables application workers, merges PR #1146, increases the 10 GB disk, or
+starts live operations.
 """
 from __future__ import annotations
 
@@ -19,7 +21,6 @@ import subprocess
 import sys
 import tempfile
 import threading
-from urllib.parse import urlsplit
 
 import requests
 
@@ -28,10 +29,12 @@ from restoreGatewayContract import (  # noqa: E402
     ARCHIVE_BYTES,
     ARCHIVE_OBJECT_KEY,
     ARCHIVE_SHA256,
+    CORE_TABLE_COUNT,
     DEFAULT_DISK_BYTES,
     FINGERPRINT_TABLES,
     FORBIDDEN_SNAPSHOT_DATABASE,
-    SOURCE_DATABASE_BYTES_FLOOR,
+    PULSEFORGE_RESTORE_FLOOR,
+    SIGNAL_TABLE_COUNT,
     TARGET_DATABASE,
     assert_backup_url,
     assert_empty_postgres18,
@@ -41,7 +44,8 @@ from restoreGatewayContract import (  # noqa: E402
     assert_writers_disabled,
     catalog_tables,
     content_fingerprint_sql,
-    require_full_restore_capacity,
+    pinned_disk_bytes,
+    require_pulseforge_restore_capacity,
     select_restore_toc,
     snapshot_database_url,
 )
@@ -101,7 +105,7 @@ def list_database_sizes() -> dict[str, int]:
 
 def disk_bytes() -> int:
     raw = os.environ.get("RENDER_DISK_BYTES", str(DEFAULT_DISK_BYTES))
-    return int(raw)
+    return pinned_disk_bytes(int(raw))
 
 
 def guard_empty_target() -> None:
@@ -123,7 +127,7 @@ def preflight() -> dict:
     assert_restore_endpoint(os.environ.get("DATABASE_URL", ""))
     guard_empty_target()
     snapshot = guard_snapshot()
-    assessment = require_full_restore_capacity(list_database_sizes(), disk_bytes=disk_bytes())
+    assessment = require_pulseforge_restore_capacity(list_database_sizes(), disk_bytes=disk_bytes())
     tables = catalog_tables()
     return {
         "status": "ready",
@@ -132,8 +136,14 @@ def preflight() -> dict:
         "archiveObjectKey": ARCHIVE_OBJECT_KEY,
         "archiveBytes": ARCHIVE_BYTES,
         "physicalTables": len(tables["all"]),
-        "signalTables": len(tables["signal"]),
-        "restoreFloor": SOURCE_DATABASE_BYTES_FLOOR,
+        "pulseforgeTableData": len(tables["core"]),
+        "signalTableDataExcluded": len(tables["signal"]),
+        "restoreAllTableData": False,
+        "authorizedSignalDataExclusion": True,
+        "silentlyDiscardSignalData": False,
+        "signalHistoryRetainedInArchive": True,
+        "increaseRenderDisk": False,
+        "restoreFloor": PULSEFORGE_RESTORE_FLOOR,
         "requiredBytes": assessment["required_bytes"],
         "diskBytes": assessment["disk_bytes"],
         "siblingBytes": assessment["sibling_bytes"],
@@ -166,28 +176,41 @@ def download(url: str, filename: Path) -> None:
         "bytes": total,
         "sha256": ARCHIVE_SHA256,
         "objectKey": ARCHIVE_OBJECT_KEY,
+        "signalHistoryRetainedInArchive": True,
     })
 
 
 def build_toc(archive: Path, toc: Path, tables: dict[str, set[str]]):
     listing = call(["pg_restore", "--list", str(archive)], timeout=90).stdout.decode()
-    selected = select_restore_toc(listing, tables["all"])
+    selected, detail = select_restore_toc(listing, tables)
     toc.write_text(selected)
-    signal_data = sum(
+    signal_data_active = sum(
         1 for line in selected.splitlines()
         if re.match(r"^\d+;\s+\d+\s+\d+\s+TABLE DATA\s+public\s+signal_", line)
     )
-    seq_sets = sum(
+    signal_schema = sum(
         1 for line in selected.splitlines()
-        if re.match(r"^\d+;\s+\d+\s+\d+\s+SEQUENCE SET\s+", line)
+        if re.match(r"^\d+;\s+\d+\s+\d+\s+TABLE\s+public\s+signal_", line)
     )
+    if signal_data_active != 0:
+        raise RuntimeError("signal_table_data_must_be_excluded")
+    if signal_schema != SIGNAL_TABLE_COUNT:
+        raise RuntimeError("signal_schema_must_be_retained")
+    if detail["pulseforgeTableData"] != CORE_TABLE_COUNT:
+        raise RuntimeError("pulseforge_table_count_mismatch")
+    if detail["signalTableDataExcluded"] != SIGNAL_TABLE_COUNT:
+        raise RuntimeError("signal_table_count_mismatch")
     message("SELECTION_VERIFIED", {
         "allTableData": len(tables["all"]),
-        "pulseforgeTableData": len(tables["core"]),
-        "signalTableData": signal_data,
-        "sequenceSets": seq_sets,
-        "restoreAllTableData": True,
+        "pulseforgeTableData": detail["pulseforgeTableData"],
+        "signalTableDataExcluded": detail["signalTableDataExcluded"],
+        "signalSequenceSetsExcluded": detail["signalSequenceSetsExcluded"],
+        "signalSchemaTables": signal_schema,
+        "restoreAllTableData": False,
+        "authorizedSignalDataExclusion": True,
         "silentlyDiscardSignalData": False,
+        "signalHistoryRetainedInArchive": True,
+        "increaseRenderDisk": False,
     })
 
 
@@ -242,19 +265,24 @@ def restore(archive: Path, toc: Path):
     message("TRANSACTION_COMMITTED")
 
 
-def verify_counts(tables: set[str], expected: dict[str, int]) -> dict[str, int]:
+def verify_counts(tables: dict[str, set[str]], expected: dict[str, int]) -> dict[str, int]:
     sql = ["SELECT '" + name + "' || E'\\t' || COUNT(*)::text FROM public." + name + ";"
-           for name in sorted(tables)]
+           for name in sorted(tables["all"])]
     values = sql_output("\n".join(sql), timeout=180)
     actual: dict[str, int] = {}
     for line in values.splitlines():
         name, raw = line.split("\t", 1)
         actual[name] = int(raw)
-    if set(actual) != tables:
+    if set(actual) != tables["all"]:
         raise RuntimeError("restored_table_inventory_mismatch")
-    mismatches = [name for name in tables if actual[name] != expected[name]]
-    if mismatches:
+    core_mismatches = [name for name in tables["core"] if actual[name] != expected.get(name)]
+    if core_mismatches:
         raise RuntimeError("restored_row_count_mismatch")
+    nonempty_signal = [name for name in tables["signal"] if actual[name] != 0]
+    if nonempty_signal:
+        raise RuntimeError("signal_table_data_must_remain_empty")
+    if len(tables["core"]) != CORE_TABLE_COUNT or len(tables["signal"]) != SIGNAL_TABLE_COUNT:
+        raise RuntimeError("unexpected_table_partition")
     return actual
 
 
@@ -304,20 +332,26 @@ def process(url):
         preflight()
         with tempfile.TemporaryDirectory(prefix="pg18-nov21-restore-") as folder:
             archive = Path(folder) / "source.dump"
-            toc = Path(folder) / "full.toc"
+            toc = Path(folder) / "selective.toc"
             download(url, archive)
             build_toc(archive, toc, tables)
-            expected = archive_counts(archive, toc, tables["all"])
+            expected = archive_counts(archive, toc, tables["core"])
             preflight()  # Fail-closed empty-target + disk + snapshot check before any write.
             restore(archive, toc)
-            actual = verify_counts(tables["all"], expected)
+            actual = verify_counts(tables, expected)
             sequences = verify_sequences(tables["sequences"])
             tenants = verify_tenants()
             fingerprints = verify_fingerprints()
             snapshot = guard_snapshot()
+            identity = inspect_identity()
         message("RECONCILIATION_PASSED", {
+            "database": identity[0],
+            "postgres": identity[1],
+            "objectCount": identity[2],
+            "bytes": identity[3],
             "tables": len(actual),
-            "rows": sum(actual.values()),
+            "pulseforgeTables": len(tables["core"]),
+            "pulseforgeRows": sum(actual[name] for name in tables["core"]),
             "signalTables": len(tables["signal"]),
             "signalRows": sum(actual[name] for name in tables["signal"]),
             "sequences": sequences,
@@ -325,10 +359,12 @@ def process(url):
             "fingerprints": fingerprints,
             "snapshotUnchanged": snapshot,
             "postgreSQLVersion": sql_output("SHOW server_version;"),
+            "signalHistoryRetainedInArchive": True,
+            "increaseRenderDisk": False,
         })
         message("COMPLETE", {
             "status": "RESTORED_AND_ROW_COUNTS_MATCH",
-            "note": "Full November 21 restore including Signal; snapshot preserved; cutover prohibited.",
+            "note": "November 21 Pulseforge-selective restore; Signal schema empty; archive preserved; cutover prohibited.",
         })
     except Exception as e:
         message("FAILED", {"reason": str(e) if isinstance(e, RuntimeError) else type(e).__name__})
@@ -364,7 +400,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, payload)
             except RuntimeError as exc:
                 reason = str(exc)
-                code = 409 if reason == "full_restore_exceeds_render_disk" else 503
+                code = 409 if reason in (
+                    "pulseforge_restore_exceeds_render_disk",
+                    "increase_render_disk_forbidden",
+                    "full_restore_not_authorized_for_pulseforge_cutover",
+                ) else 503
                 self._json(code, {"status": "blocked", "reason": reason})
             except Exception:
                 self._json(503, {"status": "blocked", "reason": "preflight_failed"})
@@ -411,11 +451,11 @@ if __name__ == "__main__":
     except Exception as e:
         reason = str(e) if isinstance(e, RuntimeError) else type(e).__name__
         message("PREFLIGHT_BLOCKED", {"reason": reason})
-        if reason == "full_restore_exceeds_render_disk":
+        if reason == "increase_render_disk_forbidden":
             message("DISK_FAIL_CLOSED", {
-                "restoreFloor": SOURCE_DATABASE_BYTES_FLOOR,
+                "restoreFloor": PULSEFORGE_RESTORE_FLOOR,
                 "defaultDiskBytes": DEFAULT_DISK_BYTES,
-                "note": "Refusing to drop Signal data; snapshot remains untouched.",
+                "note": "Refusing to increase Render disk; Signal data stays in the archive.",
             })
     message("GATEWAY_READY")
     ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()

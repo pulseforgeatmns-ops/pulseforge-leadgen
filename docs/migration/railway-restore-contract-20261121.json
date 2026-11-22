@@ -6,11 +6,21 @@
   "targetDatabase": "pulseforge_production",
   "forbiddenSnapshotDatabase": "pulseforge_production_migration",
   "hostPrefix": "dpg-dbtgtloae00c73dd8040-a",
-  "restoreAllTableData": true,
+  "restoreAllTableData": false,
+  "restorePulseforgeTableData": true,
+  "restoreSignalTableData": false,
+  "authorizedSignalDataExclusion": true,
   "silentlyDiscardSignalData": false,
+  "signalSchemaOnlyForCompatibility": true,
+  "signalHistoryRetainedInArchive": true,
+  "increaseRenderDisk": false,
+  "pulseforgeTableDataCount": 274,
+  "signalTableDataExcluded": 45,
   "mergePullRequest1146": false,
   "forbiddenObjectKey": "migration-backups/railway-20261117-full-pg18.dump",
+  "sourcePulseforgeBytesFloor": 1032675328,
   "sourceDatabaseBytesFloor": 9218275007,
   "walHeadroomRatio": 0.12,
-  "defaultDiskBytes": 10000000000
+  "defaultDiskBytes": 10000000000,
+  "authorization": "SELECTIVE_PULSEFORGE_OPERATIONAL_RESTORE"
 }

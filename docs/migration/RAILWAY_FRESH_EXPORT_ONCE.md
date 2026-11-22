@@ -49,6 +49,6 @@ The exporter refuses overwrite if the object key already exists, requires the pr
 ## Out of scope
 
 - This worker does not restore into Render.
-- After the export succeeds, a separate restore workflow may retarget `restoreGatewayRender.py` at empty `pulseforge_production`. That workflow must preserve `pulseforge_production_migration`, keep writers off, leave PR #1146 unmerged, and fail closed if the 10 GB disk cannot hold the full source plus the snapshot.
+- After the export succeeds, a separate restore workflow may retarget `restoreGatewayRender.py` at empty `pulseforge_production`. That workflow restores the **274 Pulseforge operational tables** from this archive, keeps the **45 Signal tables as empty schema** for application compatibility, preserves `pulseforge_production_migration`, keeps writers off, leaves PR #1146 unmerged, and **does not increase** the 10 GB Render disk. The full archive, including Signal history, remains in object storage for a later Signal database workstream.
 - No production writers, application workers, or cutover.
 - Delete the one-shot service after the run. Keep the source Postgres and the `MigrationBackup` bucket.

@@ -16,30 +16,45 @@ const stagingHost = 'dpg-dbtgtloae00c73dd8040-a';
 const stagingUrl = `postgresql://user:secret@${stagingHost}/pulseforge_production_migration`;
 const productionUrl = `postgresql://user:secret@${stagingHost}/pulseforge_production`;
 
-test('pins the November 21 full restore archive and destination', () => {
+test('pins the November 21 selective Pulseforge restore archive and destination', () => {
   assert.equal(contract.objectKey, 'migration-backups/railway-20261121-full-pg18.dump');
   assert.equal(contract.bytes, 728012480);
   assert.equal(contract.sha256, '4cf4e95bf56706e09ba411349ed68cfcf8725fef2ee4964ed6af73fce29fd734');
   assert.equal(contract.targetDatabase, 'pulseforge_production');
   assert.equal(contract.forbiddenSnapshotDatabase, 'pulseforge_production_migration');
   assert.equal(contract.hostPrefix, 'dpg-dbtgtloae00c73dd8040-a');
-  assert.equal(contract.restoreAllTableData, true);
+  assert.equal(contract.restoreAllTableData, false);
+  assert.equal(contract.restorePulseforgeTableData, true);
+  assert.equal(contract.restoreSignalTableData, false);
+  assert.equal(contract.authorizedSignalDataExclusion, true);
   assert.equal(contract.silentlyDiscardSignalData, false);
+  assert.equal(contract.signalHistoryRetainedInArchive, true);
+  assert.equal(contract.increaseRenderDisk, false);
+  assert.equal(contract.pulseforgeTableDataCount, 274);
+  assert.equal(contract.signalTableDataExcluded, 45);
   assert.equal(contract.mergePullRequest1146, false);
+  assert.equal(contract.sourcePulseforgeBytesFloor, 1032675328);
 });
 
-test('gateway helpers and receiver target production and keep Signal table data', () => {
+test('gateway helpers restore 274 Pulseforge tables and skip Signal data', () => {
   const helpers = read('scripts/migration/restoreGatewayContract.py');
   const gateway = read('scripts/migration/restoreGatewayRender.py');
   assert.match(helpers, /ARCHIVE_OBJECT_KEY/);
   assert.match(helpers, /forbidden_november_17_archive/);
   assert.match(helpers, /snapshot_database_must_remain_untouched/);
-  assert.match(helpers, /silent_table_data_exclusion_forbidden/);
-  assert.match(helpers, /full_restore_exceeds_render_disk/);
-  assert.match(helpers, /SOURCE_DATABASE_BYTES_FLOOR = 9218275007/);
+  assert.match(helpers, /authorizedSignalDataExclusion/);
+  assert.match(helpers, /signal_table_data_exclusion_incomplete/);
+  assert.match(helpers, /operational_table_data_exclusion_forbidden/);
+  assert.match(helpers, /increase_render_disk_forbidden/);
+  assert.match(helpers, /PULSEFORGE_RESTORE_FLOOR = 1_032_675_328/);
+  assert.match(helpers, /CORE_TABLE_COUNT = 274/);
+  assert.match(helpers, /SIGNAL_TABLE_COUNT = 45/);
   assert.match(helpers, /SIGNAL_OPERATOR_ENABLED/);
   assert.match(helpers, /SIGNAL_OPPORTUNITY_ENGINE_ENABLED/);
   assert.match(helpers, /SIGNAL_SHADOW_MODE/);
+  assert.match(helpers, /prospect_signal_events/);
+  assert.match(helpers, /warm_signal_state/);
+  assert.match(helpers, /warm_signal_events/);
   assert.match(gateway, /from restoreGatewayContract import/);
   assert.match(gateway, /pulseforge_production/);
   assert.match(gateway, /--exit-on-error/);
@@ -49,8 +64,11 @@ test('gateway helpers and receiver target production and keep Signal table data'
   assert.match(gateway, /\/healthz/);
   assert.match(gateway, /md5\(t::text\)|content_fingerprint_sql/);
   assert.match(gateway, /tenant_21|id = 21/);
-  assert.doesNotMatch(gateway, /lines\.append\(";" \+ line\)/);
-  assert.doesNotMatch(gateway, /signalTableDataExcluded/);
+  assert.match(gateway, /signal_table_data_must_remain_empty/);
+  assert.match(gateway, /signalTableDataExcluded/);
+  assert.match(gateway, /require_pulseforge_restore_capacity/);
+  assert.doesNotMatch(gateway, /require_full_restore_capacity/);
+  assert.doesNotMatch(helpers, /silent_table_data_exclusion_forbidden/);
 });
 
 test('ticket sender pins November 21 bytes and rejects the November 17 key', () => {
@@ -91,14 +109,17 @@ test('staging validateMigrationDatabaseUrl still defaults to the snapshot name',
   );
 });
 
-test('checklist records that the November 21 restore was not executed', () => {
+test('checklist authorizes the November 21 Pulseforge-selective restore', () => {
   const checklist = read('docs/migration/RESTORE_REHEARSAL_CHECKLIST.md');
   assert.match(checklist, /2026-11-21/);
-  assert.match(checklist, /NOT EXECUTED|not executed/i);
-  assert.match(checklist, /full_restore_exceeds_render_disk|10 GB cannot hold/i);
+  assert.match(checklist, /SELECTIVE_PULSEFORGE_OPERATIONAL_RESTORE|authorizedSignalDataExclusion/);
+  assert.match(checklist, /274/);
+  assert.match(checklist, /45/);
+  assert.match(checklist, /increaseRenderDisk|do not increase/i);
   const exportOnce = read('docs/migration/RAILWAY_FRESH_EXPORT_ONCE.md');
   assert.doesNotMatch(
     exportOnce,
     /No retarget of `restoreGatewayRender\.py` to `pulseforge_production`/,
   );
+  assert.match(exportOnce, /274 Pulseforge operational tables|Pulseforge-selective restore/);
 });

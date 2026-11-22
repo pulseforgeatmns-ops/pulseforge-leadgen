@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Pure helpers for the November 21 full Render restore gateway.
+"""Pure helpers for the November 21 Pulseforge-selective Render restore.
 
-Does not connect to Render, download archives, or write to PostgreSQL.
-Callers must keep PF_MIGRATION_STAGING=1, leave writers off, and refuse to
-overwrite pulseforge_production_migration.
+Restores 274 Pulseforge operational tables into empty pulseforge_production.
+Signal table DATA is excluded by explicit cutover authorization; Signal schema
+is kept empty for compatibility. The full November 21 archive, including
+Signal history, must remain in object storage. Do not increase the 10 GB
+Render disk. Do not merge PR #1146 or enable writers.
 """
 from __future__ import annotations
 
@@ -23,7 +25,12 @@ RAILWAY_HOST_SUFFIXES = (
     ".rlwy.net",
     ".railway.app",
 )
-FINGERPRINT_TABLES = ("users", "clients", "prospects", "signal_dashboard_records")
+FINGERPRINT_TABLES = ("users", "clients", "prospects")
+PULSEFORGE_SIGNAL_EXCEPTIONS = (
+    "prospect_signal_events",
+    "warm_signal_state",
+    "warm_signal_events",
+)
 WRITER_FLAGS = (
     "SIGNAL_OPERATOR_ENABLED",
     "SIGNAL_OPPORTUNITY_ENGINE_ENABLED",
@@ -38,7 +45,8 @@ CUTOVER_FLAGS = (
 ENABLED_FLAG_VALUES = {"1", "true", "TRUE", "yes", "YES", "on", "ON"}
 
 FORBIDDEN_ARCHIVE_OBJECT_KEY = "migration-backups/railway-20261117-full-pg18.dump"
-SOURCE_DATABASE_BYTES_FLOOR = 9218275007
+PULSEFORGE_RESTORE_FLOOR = 1_032_675_328
+SOURCE_DATABASE_BYTES_FLOOR = 9_218_275_007
 DEFAULT_DISK_BYTES = 10_000_000_000
 WAL_HEADROOM_RATIO = 0.12
 SNAPSHOT_OBJECT_COUNT = 378
@@ -77,7 +85,14 @@ def load_contract(path: Path | None = None) -> dict:
         "forbiddenSnapshotDatabase",
         "hostPrefix",
         "restoreAllTableData",
+        "restorePulseforgeTableData",
+        "restoreSignalTableData",
+        "authorizedSignalDataExclusion",
         "silentlyDiscardSignalData",
+        "signalHistoryRetainedInArchive",
+        "increaseRenderDisk",
+        "pulseforgeTableDataCount",
+        "signalTableDataExcluded",
         "mergePullRequest1146",
     )
     missing = [key for key in required if key not in payload]
@@ -85,10 +100,24 @@ def load_contract(path: Path | None = None) -> dict:
         raise RuntimeError("restore_contract_incomplete")
     if payload["mergePullRequest1146"] is not False:
         raise RuntimeError("merge_of_pull_request_1146_forbidden")
-    if payload["restoreAllTableData"] is not True:
-        raise RuntimeError("restore_all_table_data_required")
+    if payload["restoreAllTableData"] is not False:
+        raise RuntimeError("full_restore_not_authorized_for_pulseforge_cutover")
+    if payload["restorePulseforgeTableData"] is not True:
+        raise RuntimeError("pulseforge_table_data_required")
+    if payload["restoreSignalTableData"] is not False:
+        raise RuntimeError("signal_table_data_not_part_of_pulseforge_cutover")
+    if payload["authorizedSignalDataExclusion"] is not True:
+        raise RuntimeError("signal_data_exclusion_not_authorized")
     if payload["silentlyDiscardSignalData"] is not False:
         raise RuntimeError("silent_signal_discard_forbidden")
+    if payload["signalHistoryRetainedInArchive"] is not True:
+        raise RuntimeError("signal_archive_must_be_preserved")
+    if payload["increaseRenderDisk"] is not False:
+        raise RuntimeError("increase_render_disk_forbidden")
+    if int(payload["pulseforgeTableDataCount"]) != CORE_TABLE_COUNT:
+        raise RuntimeError("pulseforge_table_count_mismatch")
+    if int(payload["signalTableDataExcluded"]) != SIGNAL_TABLE_COUNT:
+        raise RuntimeError("signal_table_count_mismatch")
     return payload
 
 
@@ -181,6 +210,9 @@ def catalog_tables(path: str | Path | None = None) -> dict[str, set[str]]:
         or len(set(names)) != PHYSICAL_TABLE_COUNT
     ):
         raise RuntimeError("unexpected_table_partition")
+    missing_exceptions = [name for name in PULSEFORGE_SIGNAL_EXCEPTIONS if name not in core]
+    if missing_exceptions:
+        raise RuntimeError("pulseforge_signal_exceptions_missing")
     return {
         "all": set(names),
         "core": core,
@@ -189,32 +221,81 @@ def catalog_tables(path: str | Path | None = None) -> dict[str, set[str]]:
     }
 
 
-def select_restore_toc(listing: str, catalog_tables_all) -> str:
-    expected = set(catalog_tables_all)
+def select_restore_toc(listing: str, tables) -> tuple[str, dict]:
+    """Keep Pulseforge TABLE DATA; skip Signal TABLE DATA and SEQUENCE SET.
+
+    Signal TABLE / schema entries stay in the TOC so empty Signal relations
+    exist for application compatibility. Signal history remains in the archive.
+    """
+    if isinstance(tables, dict):
+        expected = set(tables["all"])
+        core = set(tables["core"])
+        signal = set(tables["signal"])
+    else:
+        expected = set(tables)
+        signal = {name for name in expected if name.startswith("signal_")}
+        core = expected - signal
     data: set[str] = set()
-    signal: set[str] = set()
+    signal_excluded: set[str] = set()
+    seq_excluded = 0
     lines: list[str] = []
-    for line in listing.splitlines():
-        if line.startswith(";") and DATA_RE.match(line.lstrip(";")):
-            raise RuntimeError("silent_table_data_exclusion_forbidden")
-        if BLOB_RE.search(line):
-            raise RuntimeError("unhandled_archive_data_kind")
-        is_data = DATA_RE.match(line)
-        if is_data:
-            name = is_data.group(1)
+    for raw in listing.splitlines():
+        line = raw.rstrip("\n")
+        commented = line.startswith(";")
+        body = line.lstrip(";") if commented else line
+        data_match = DATA_RE.match(body)
+        seq_match = SEQ_RE.match(body)
+        if data_match:
+            name = data_match.group(1)
             if name not in expected:
                 raise RuntimeError("archive_table_not_in_catalog")
-            if name in data:
-                raise RuntimeError("duplicate_data_table")
-            data.add(name)
-            if name.startswith("signal_"):
-                signal.add(name)
+            if name in core:
+                if commented:
+                    raise RuntimeError("operational_table_data_exclusion_forbidden")
+                if name in data:
+                    raise RuntimeError("duplicate_data_table")
+                data.add(name)
+                lines.append(line)
+                continue
+            if name in signal:
+                if name in signal_excluded:
+                    raise RuntimeError("duplicate_data_table")
+                signal_excluded.add(name)
+                lines.append(line if commented else ";" + line)
+                continue
+        if seq_match and seq_match.group(1).startswith("signal_"):
+            seq_excluded += 1
+            lines.append(line if commented else ";" + line)
+            continue
+        if BLOB_RE.search(line):
+            raise RuntimeError("unhandled_archive_data_kind")
         lines.append(line)
-    if data != expected:
+    if data != core:
         raise RuntimeError("archive_catalog_table_data_disagreement")
-    if len(signal) != SIGNAL_TABLE_COUNT:
-        raise RuntimeError("signal_table_data_must_be_restored")
-    return "\n".join(lines) + "\n"
+    if signal_excluded != signal:
+        raise RuntimeError("signal_table_data_exclusion_incomplete")
+    if len(data) != CORE_TABLE_COUNT:
+        raise RuntimeError("pulseforge_table_count_mismatch")
+    if len(signal_excluded) != SIGNAL_TABLE_COUNT:
+        raise RuntimeError("signal_table_count_mismatch")
+    detail = {
+        "pulseforgeTableData": len(data),
+        "signalTableDataExcluded": len(signal_excluded),
+        "signalSequenceSetsExcluded": seq_excluded,
+        "restoreAllTableData": False,
+        "authorizedSignalDataExclusion": True,
+        "silentlyDiscardSignalData": False,
+        "signalHistoryRetainedInArchive": True,
+        "increaseRenderDisk": False,
+    }
+    return "\n".join(lines) + "\n", detail
+
+
+def pinned_disk_bytes(disk_bytes: int | None = None) -> int:
+    requested = DEFAULT_DISK_BYTES if disk_bytes is None else int(disk_bytes)
+    if requested > DEFAULT_DISK_BYTES:
+        raise RuntimeError("increase_render_disk_forbidden")
+    return DEFAULT_DISK_BYTES
 
 
 def assess_storage(
@@ -222,12 +303,12 @@ def assess_storage(
     disk_bytes: int | None = None,
     restore_floor: int | None = None,
 ) -> dict:
-    disk = DEFAULT_DISK_BYTES if disk_bytes is None else int(disk_bytes)
-    floor = SOURCE_DATABASE_BYTES_FLOOR if restore_floor is None else int(restore_floor)
+    disk = pinned_disk_bytes(disk_bytes)
+    floor = PULSEFORGE_RESTORE_FLOOR if restore_floor is None else int(restore_floor)
     sibling_bytes = sum(
         int(size) for name, size in dict(database_sizes).items() if name != TARGET_DATABASE
     )
-    required_bytes = floor * (1 + WAL_HEADROOM_RATIO) + sibling_bytes
+    required_bytes = int(floor * (1 + WAL_HEADROOM_RATIO)) + sibling_bytes
     return {
         "restore_floor": floor,
         "sibling_bytes": sibling_bytes,
@@ -235,18 +316,24 @@ def assess_storage(
         "disk_bytes": disk,
         "headroom_ratio": WAL_HEADROOM_RATIO,
         "fits": required_bytes <= disk,
+        "increaseRenderDisk": False,
+        "includesSignalData": False,
     }
 
 
-def require_full_restore_capacity(
+def require_pulseforge_restore_capacity(
     database_sizes,
     disk_bytes: int | None = None,
     restore_floor: int | None = None,
 ) -> dict:
     assessment = assess_storage(database_sizes, disk_bytes=disk_bytes, restore_floor=restore_floor)
     if not assessment["fits"]:
-        raise RuntimeError("full_restore_exceeds_render_disk")
+        raise RuntimeError("pulseforge_restore_exceeds_render_disk")
     return assessment
+
+
+def require_full_restore_capacity(*_args, **_kwargs):
+    raise RuntimeError("full_restore_not_authorized_for_pulseforge_cutover")
 
 
 def assert_empty_postgres18(*, database: str, version: str, object_count: int) -> None:
@@ -282,6 +369,8 @@ def assert_staging_and_approval(env=None) -> None:
             raise RuntimeError("cutover_flags_must_remain_off")
     if CONTRACT["mergePullRequest1146"] is not False:
         raise RuntimeError("merge_of_pull_request_1146_forbidden")
+    if CONTRACT["increaseRenderDisk"] is not False:
+        raise RuntimeError("increase_render_disk_forbidden")
 
 
 def assert_writers_disabled(env=None) -> None:
