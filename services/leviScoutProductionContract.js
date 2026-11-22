@@ -30,7 +30,7 @@ function sourceReferences(row, metadata) {
 }
 
 function evidenceTimestamp(row, metadata) {
-  return metadata.evidenceTimestamp || metadata.evidence_timestamp || metadata.observedAt
+  return metadata.evidenceDate || metadata.evidenceTimestamp || metadata.evidence_timestamp || metadata.observedAt
     || metadata.importedAt || row.evidence_timestamp || row.created_at || null;
 }
 
@@ -61,7 +61,10 @@ function evaluateProspect(row = {}, options = {}) {
   const duplicateClear = !row.duplicate_of && metadata.duplicate !== true && metadata.duplicateOf == null;
   const suppressed = row.do_not_contact === true || metadata.suppressed === true;
 
+  const sourceType = metadata.sourceType || null;
   if (!/(borrower|operator|real[- ]estate investor)/.test(category)) blockers.push('borrower_identity_unverified');
+  // Ownership/investment evidence alone never establishes borrower intent.
+  if (sourceType === 'property_record_signal') blockers.push('borrower_intent_unverified');
   if (!contactPath) blockers.push('contact_path_missing');
   if (!claims.claims.stage) blockers.push('current_project_evidence_missing');
   if (!criteria) blockers.push('financing_criteria_unverified');
@@ -90,6 +93,9 @@ function evaluateProspect(row = {}, options = {}) {
       location,
       sourceReferenceCount: sources.length,
       evidenceTimestamp: evidenceTimestamp(row, metadata),
+      evidencePublishedAt: metadata.evidenceDate || null,
+      evidenceImportedAt: metadata.importedAt || row.created_at || null,
+      sourceType,
       duplicateClear,
       suppressionClear: !suppressed,
       securityKnown: Boolean(claims.claims.security),

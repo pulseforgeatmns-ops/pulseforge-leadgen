@@ -46,3 +46,40 @@ test('rejects duplicates inside one import before any database write', () => {
     { name: 'B Two', email: 'SAME@example.com' },
   ]), /Duplicate contact/);
 });
+
+// P0-SCOUT-LEVI-001: structured evidenceDate / sourceType.
+const { normalizeEvidenceDate, normalizeSourceType } = require('../services/reviewOnlyProspectImportService');
+
+test('evidenceDate is a real, non-future calendar date distinct from import time', () => {
+  const now = Date.UTC(2026, 10, 19, 12);
+  assert.equal(normalizeEvidenceDate('2026-11-12', 0, now), '2026-11-12');
+  assert.equal(normalizeEvidenceDate('2026-11-12T08:30:00Z', 0, now), '2026-11-12');
+  assert.equal(normalizeEvidenceDate('', 0, now), null);
+  assert.equal(normalizeEvidenceDate(undefined, 0, now), null);
+  for (const bad of ['2026-02-30', '2026-13-01', 'last week', '11/12/2026', '2026-12-25', '1999-01-01']) {
+    assert.throws(() => normalizeEvidenceDate(bad, 0, now), { code: 'evidence_date_invalid' }, bad);
+  }
+});
+
+test('sourceType is a closed vocabulary', () => {
+  assert.equal(normalizeSourceType('Public financing request', 0), 'public_financing_request');
+  assert.equal(normalizeSourceType('property_record_signal', 0), 'property_record_signal');
+  assert.equal(normalizeSourceType('', 0), null);
+  assert.throws(() => normalizeSourceType('scraped_forum', 0), { code: 'source_type_invalid' });
+});
+
+test('evidence fields do not change notes, review state, score or safety defaults', () => {
+  const base = { name: 'Example Person', company: 'Example LLC', reviewState: 'contact_now',
+    fit: 'Executed purchase contract; requesting $40,000 for rehab.', sourceUrl: 'https://example.invalid/post/1' };
+  const plain = normalizeContact(base, 0);
+  const withEvidence = normalizeContact({ ...base, evidenceDate: '2026-11-10', sourceType: 'public_financing_request' }, 0);
+  assert.equal(noteFor(withEvidence), noteFor(plain));
+  assert.equal(withEvidence.reviewState, plain.reviewState);
+  assert.equal(withEvidence.icpScore, plain.icpScore);
+  assert.equal(withEvidence.status, plain.status);
+  assert.equal(withEvidence.evidenceDate, '2026-11-10');
+  assert.equal(withEvidence.sourceType, 'public_financing_request');
+  assert.equal(plain.evidenceDate, null);
+  assert.equal(plain.sourceType, null);
+  assert.throws(() => previewReviewOnlyContacts([{ ...base, evidenceDate: 'yesterday' }]), { code: 'evidence_date_invalid' });
+});
