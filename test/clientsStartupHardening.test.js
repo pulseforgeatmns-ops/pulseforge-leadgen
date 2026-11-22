@@ -77,11 +77,16 @@ test('actual server startup uses the named chain without starting live dependenc
   const stub = new Proxy(noop, { get: () => noop });
   let completion;
   let middlewareCount = 0;
+  const routes = [];
   const startup = fs.readFileSync(require.resolve('../server'), 'utf8').split('app.use(session(')[0];
   vm.runInNewContext(startup, {
     process: { env: {}, on() {} }, console: logger,
     require(name) {
-      if (name === 'express') return () => ({ use(fn) { assert.equal(typeof fn, 'function'); middlewareCount++; } });
+      if (name === 'express') return () => ({
+        use(fn) { assert.equal(typeof fn, 'function'); middlewareCount++; },
+        // Pre-session routes (e.g. the Render /healthz readiness probe) are registered, never invoked here.
+        get(path, handler) { assert.equal(typeof handler, 'function'); routes.push(path); },
+      });
       if (name === './utils/anchorPortalReadiness') return require('../utils/anchorPortalReadiness');
       if (name === './utils/clientsStartup') return {
         runClientsStartup(steps) {
@@ -95,6 +100,7 @@ test('actual server startup uses the named chain without starting live dependenc
     },
   });
   assert.equal(middlewareCount, 1);
+  assert.deepEqual(routes, ['/healthz']);
   assert.ok(completion);
   assert.equal(await completion, true);
   assert.equal(events.length, PHASES.length + 1);
