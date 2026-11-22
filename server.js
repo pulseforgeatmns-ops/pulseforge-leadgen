@@ -1056,16 +1056,20 @@ try {
         }
       })
       .catch(e => console.error('[startup] LA Endeavors workspace correction error:', e.message));
-    startLeviScoutWeeklyClock({
-      pool,
-      run: ({ cycleId, now, env }) => require('./services/leviScoutProductionRunner').runLeviScoutProductionCycle({
-        db: pool, env, now, cycleId,
-      }),
-    })
-      .then(result => {
-        if (result && result.started) console.log('[startup] Levi Scout weekly clock armed (research-only).');
+    if (process.env.PF_DISABLE_BACKGROUND_WORKERS === '1') {
+      console.log('[startup] Levi Scout weekly clock skipped (background workers disabled).');
+    } else {
+      startLeviScoutWeeklyClock({
+        pool,
+        run: ({ cycleId, now, env }) => require('./services/leviScoutProductionRunner').runLeviScoutProductionCycle({
+          db: pool, env, now, cycleId,
+        }),
       })
-      .catch(e => console.error('[startup] Levi Scout weekly clock error:', e.message));
+        .then(result => {
+          if (result && result.started) console.log('[startup] Levi Scout weekly clock armed (research-only).');
+        })
+        .catch(e => console.error('[startup] Levi Scout weekly clock error:', e.message));
+    }
     console.log(`\n🔷 Pulseforge Lead Engine Server`);
     console.log(`─────────────────────────────────`);
     console.log(`   http://localhost:${PORT}`);
