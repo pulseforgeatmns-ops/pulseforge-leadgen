@@ -96,6 +96,13 @@ async function collect(pool, { now = new Date(), expectDatabase = null, database
         },
         duplicates: list.filter(row => row.duplicate_of).length,
         suppressed: list.filter(row => row.do_not_contact === true).length,
+        bySourceType: list.reduce((out, row) => {
+          const key = (row.acquisition_metadata && row.acquisition_metadata.sourceType) || 'unrecorded';
+          return { ...out, [key]: (out[key] || 0) + 1 };
+        }, {}),
+        // Records whose evidence has no published date: freshness is unknown
+        // (importedAt is when the record entered the CRM, not when the evidence appeared).
+        evidenceDateUnpublished: list.filter(row => !(row.acquisition_metadata && row.acquisition_metadata.evidenceDate)).length,
         bySource: list.reduce((out, row) => ({ ...out, [row.source || 'unknown']: (out[row.source || 'unknown'] || 0) + 1 }), {}),
         blockers: evaluated.flatMap(item => item.blockers).reduce((out, value) => ({ ...out, [value]: (out[value] || 0) + 1 }), {}),
       };

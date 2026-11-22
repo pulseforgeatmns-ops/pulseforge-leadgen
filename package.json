@@ -107,7 +107,7 @@
     "operator:service-loop": "node scripts/serviceModeOperatorLoop.js",
     "scout:places:diagnostic": "node scripts/diagnoseScoutPlaces.js",
     "scout:levi:production-audit": "node scripts/leviScoutProductionAudit.js",
-    "test:scout:levi": "node --test test/leviScoutProductionContract.test.js test/leviScoutResearchOnlyExecution.test.js test/leviScoutProductionAuditPostgres.test.js",
+    "test:scout:levi": "node --test test/reviewOnlyProspectImportService.test.js test/leviScoutProductionContract.test.js test/leviScoutResearchOnlyExecution.test.js test/leviScoutProductionAuditPostgres.test.js",
     "gmail:token": "node getGmailToken.js",
     "intel:seed:libraries": "node scripts/seedIntelligenceLibraries.js",
     "acquisition:knowledge:import": "node scripts/importAcquisitionKnowledge.js",
