@@ -66,21 +66,28 @@ function shouldHandleScoutAcquisition(input = {}) {
     scoutAcquisition.looksLikeFollowUp(question) ||
     scoutAcquisition.looksLikeExplainPriority(question) ||
     scoutAcquisition.looksLikeInvestigationInspection(question);
+  const tenantId = resolveTenantId(input);
+  const leviIntent = String(tenantId) === '21'
+    && /\b(find|discover(?:y|ed|ing)?|prospects?|borrowers?)\b/i.test(question);
   if (
     !mayEnterSpecialistPath(mode, {
       question,
       session: input.session,
       context,
     }) &&
-    !reusePriorWork
+    !reusePriorWork &&
+    !leviIntent
   ) {
     return false;
   }
   const enabled = context.enabledAgents || context.enabled_agents;
-  if (Array.isArray(enabled) && !enabled.map(String).includes('scout')) {
-    return false;
+  if (Array.isArray(enabled) && String(tenantId) !== '21') {
+    const names = enabled.map(String);
+    if (!names.includes('scout') && !names.includes('scout_levi')) {
+      return false;
+    }
   }
-  return scoutAcquisition.looksLikeAcquisitionQuestion(question, context);
+  return scoutAcquisition.looksLikeAcquisitionQuestion(question, context) || leviIntent;
 }
 
 /**
