@@ -12,11 +12,11 @@ const { OperatorAlertOutbox } = require('../packages/signal-v1/operator/alertOut
 let bootPromise = null;
 
 async function bootShadowScheduler() {
-  if (!process.env.DATABASE_URL) return null;
+  if (!process.env.DATABASE_URL && !process.env.SIGNAL_DATABASE_URL && process.env.SIGNAL_DB_SEPARATION_REQUIRED !== '1') return null;
   if (process.env.SIGNAL_SHADOW_MODE !== '1' && process.env.SIGNAL_SHADOW_MODE !== 'true') {
     return null;
   }
-  const pool = require('../db');
+  const pool = require('../signalDb').getSignalPool();
   const store = await ProspectivePostgresStore.create(pool);
   const marketProvider = new GeckoTerminalMarketDataProvider();
   const channelId = process.env.SIGNAL_REQUIRED_CALLER_CHANNEL_ID || null;

@@ -65,6 +65,16 @@ const { ensureSignalSchema } = require('./packages/signal-v1');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
+// Render readiness endpoint for the real API, independent of session and portal middleware.
+app.get('/healthz', async (_req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.status(200).send('ok');
+  } catch (_error) {
+    res.status(503).send('database unavailable');
+  }
+});
+
 const { createAnchorPortalReadiness } = require('./utils/anchorPortalReadiness');
 const anchorPortalReadiness = createAnchorPortalReadiness({
   initAuth,
@@ -95,27 +105,32 @@ ensureLifecycleSchema(pool).catch(err => console.error('[lifecycle] init error:'
 ensurePlacesAttributionSchema().catch(err => console.error('[placesAttribution] init error:', err.message));
 require('./utils/apiSpendControl').ensureApiUsageSchema().catch(() => console.warn('[api-usage] Ledger initialization unavailable; paid calls require a working ledger.'));
 ensureSignalSchema(pool).catch(err => console.error('[signal-v1] schema init error:', err.message));
-require('./services/signalV1ShadowScheduler').startSignalV1ShadowScheduler();
-require('./services/signalOperator/optionalController').startOptionalPilotController();
-require('./services/signalOperator').startSignalOperator();
-startMiraTranscriptionWorker();
-startMiraClassifierWorker();
-startMiraRouterWorker();
-startMiraDigestScheduler();
-startWarmRoutingScheduler();
-startAnchorUnenrichedEnrichmentScheduler();
-require('./services/anchorGovernedScheduler').startAnchorGovernedScheduler({ pool });
-// Anchor keeps its legacy poll -> tick -> Max owner. Configured mailbox tenants
-// need an independent execution clock; their Max control runs separately.
-const mailboxGovernedTenantIds = require('./services/governedOutboundTenant')
-  .parseGovernedOutboundTenantIds().filter(tenantId => tenantId !== '10');
-if (mailboxGovernedTenantIds.length) {
-  require('./services/governedOutboundExecutionClock').startGovernedOutboundExecutionClock({
-    pool,
-    tenantIds: mailboxGovernedTenantIds,
-    maxControlEnabled: false,
-    mailboxOnly: false,
-  });
+if (process.env.PF_DISABLE_BACKGROUND_WORKERS === '1') {
+  console.log('[startup] background workers disabled for Render API cutover');
+} else {
+  require('./services/signalV1ShadowScheduler').startSignalV1ShadowScheduler();
+  require('./services/signalOperator/optionalController').startOptionalPilotController();
+  require('./services/signalOperator').startSignalOperator();
+  startMiraTranscriptionWorker();
+  startMiraClassifierWorker();
+  startMiraRouterWorker();
+  startMiraDigestScheduler();
+  startWarmRoutingScheduler();
+  startAnchorUnenrichedEnrichmentScheduler();
+  require('./services/anchorGovernedScheduler').startAnchorGovernedScheduler({ pool });
+  // Anchor keeps its legacy poll -> tick -> Max owner. Configured mailbox tenants
+  // need an independent execution clock; their Max control runs separately.
+  const mailboxGovernedTenantIds = require('./services/governedOutboundTenant')
+    .parseGovernedOutboundTenantIds().filter(tenantId => tenantId !== '10');
+  if (mailboxGovernedTenantIds.length) {
+    require('./services/governedOutboundExecutionClock').startGovernedOutboundExecutionClock({
+      pool,
+      tenantIds: mailboxGovernedTenantIds,
+      maxControlEnabled: false,
+      mailboxOnly: false,
+    });
+  }
+
 }
 
 app.use(session({

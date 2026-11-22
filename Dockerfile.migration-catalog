@@ -1,0 +1,6 @@
+FROM postgres:18-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends python3 \
+  && rm -rf /var/lib/apt/lists/*
+COPY scripts/migration/auditRailwayCatalogOnce.py /usr/local/bin/auditRailwayCatalogOnce.py
+USER postgres
+CMD ["python3", "/usr/local/bin/auditRailwayCatalogOnce.py"]

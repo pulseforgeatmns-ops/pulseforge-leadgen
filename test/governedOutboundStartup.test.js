@@ -83,7 +83,11 @@ function boot(t) {
   vm.runInNewContext(startup, {
     process: { env: process.env, on() {} }, console,
     require(name) {
-      if (name === 'express') return () => ({ use(middleware) { assert.equal(typeof middleware, 'function'); } });
+      if (name === 'express') return () => ({
+        use(middleware) { assert.equal(typeof middleware, 'function'); },
+        // Pre-session routes (the Render /healthz probe) are registered, never invoked here.
+        get(path, handler) { assert.equal(path, '/healthz'); assert.equal(typeof handler, 'function'); },
+      });
       if (name === './utils/anchorPortalReadiness') return require('../utils/anchorPortalReadiness');
       if (name === './db') return pool;
       if (name === './services/governedOutboundTenant') return tenants;

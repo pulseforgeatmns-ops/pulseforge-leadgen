@@ -78,7 +78,7 @@ function telegramConfig() {
 }
 
 function dashboardUrl(path = '/dashboard/warm') {
-  const base = process.env.DASHBOARD_URL || process.env.APP_URL || 'https://pulseforge-leadgen-production.up.railway.app';
+  const base = process.env.DASHBOARD_URL || process.env.APP_URL || 'https://pulseforge-api-migration.onrender.com';
   return `${String(base).replace(/\/+$/, '')}${path}`;
 }
 

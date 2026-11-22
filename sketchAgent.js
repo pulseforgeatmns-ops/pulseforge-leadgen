@@ -63,7 +63,7 @@ async function saveMockup(html, businessName) {
   const filepath = path.join(dir, filename);
   fs.writeFileSync(filepath, html);
 
-  const previewUrl = `https://pulseforge-leadgen-production.up.railway.app/preview/${filename}`;
+  const previewUrl = `${(process.env.APP_URL || 'https://pulseforge-api-migration.onrender.com').replace(/\/$/, '')}/preview/${filename}`;
 
   console.log(`Mockup saved: ${filepath}`);
   console.log(`Preview URL: ${previewUrl}`);

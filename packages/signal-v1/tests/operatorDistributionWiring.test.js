@@ -49,6 +49,8 @@ function bootFixture({enabled=true,distributionEnabled=true,transportTestApprove
     './relay':{createBrevoRelay:options=>{assert.equal(options.enabled,false);assert.equal(options.consented,false);assert.equal(options.operationalTestApproved,transportTestApproved);return {}; }},
     '../../packages/signal-v1/providers/GeckoTerminalMarketDataProvider':{GeckoTerminalMarketDataProvider:class {}},
     '../../db':{query:async()=>{}},
+    // signalDb routing (opt-in) falls back to the shared pool; the operator must take it from signalDb.
+    '../../signalDb':{getSignalPool:()=>mocks['../../db']},
     '../../packages/signal-v1/storage/ensureSignalSchema':{ensureSignalSchema:async()=>{}},
     './initialSms':{startInitialSms:async options=>{
       assert.equal(options.deferStart,true);

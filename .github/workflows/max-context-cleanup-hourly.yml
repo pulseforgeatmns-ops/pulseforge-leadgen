@@ -1,0 +1,32 @@
+name: Max conversation-context cleanup (hourly)
+
+# Replaces the Railway cron service `max-context-cleanup-hourly`
+# (node scripts/maxConversationContextCleanup.js, 0 * * * *). Same bounded
+# DELETE, executed by the production app on Render through its cron route.
+
+on:
+  schedule:
+    - cron: '7 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: max-context-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Run cleanup on production
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APP_URL: ${{ vars.PULSEFORGE_APP_URL || 'https://pulseforge-api-migration.onrender.com' }}
+        run: |
+          test -n "$CRON_SECRET"
+          curl --fail-with-body --silent --show-error --retry 2 --retry-all-errors \
+            --request POST --header "Authorization: Bearer ${CRON_SECRET}" \
+            "${APP_URL%/}/cron/max-conversation-context-cleanup"
