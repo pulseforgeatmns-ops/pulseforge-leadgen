@@ -24,6 +24,6 @@
   "defaultDiskBytes": 10000000000,
   "tigrisEndpoint": "https://t3.storageapi.dev",
   "tigrisRegion": "auto",
-  "tigrisBucket": "migrationbackup",
+  "tigrisBucket": "migrationbackup-njzkny-vy",
   "authorization": "SELECTIVE_PULSEFORGE_OPERATIONAL_RESTORE"
 }

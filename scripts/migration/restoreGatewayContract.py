@@ -126,7 +126,7 @@ def load_contract(path: Path | None = None) -> dict:
         raise RuntimeError("unrecognized_s3_endpoint")
     if payload["tigrisRegion"] != "auto":
         raise RuntimeError("unrecognized_s3_region")
-    if payload["tigrisBucket"] != "migrationbackup":
+    if payload["tigrisBucket"] != "migrationbackup-njzkny-vy":
         raise RuntimeError("unapproved_tigris_bucket")
     return payload
 
@@ -141,10 +141,7 @@ HOST_PREFIX = CONTRACT["hostPrefix"]
 TIGRIS_ENDPOINT = CONTRACT["tigrisEndpoint"]
 TIGRIS_REGION = CONTRACT["tigrisRegion"]
 TIGRIS_BUCKET = CONTRACT["tigrisBucket"]
-APPROVED_TIGRIS_BUCKETS = frozenset({
-    TIGRIS_BUCKET,
-    "8580503c-e7fb-41a7-ac9e-715081f95ad1",
-})
+APPROVED_TIGRIS_BUCKETS = frozenset({TIGRIS_BUCKET})
 
 
 def _flag_enabled(value: str | None) -> bool:

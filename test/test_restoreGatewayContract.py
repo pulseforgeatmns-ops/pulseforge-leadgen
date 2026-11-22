@@ -25,12 +25,12 @@ LIVE_RENDER_SIZES = {
 }
 LIVE_DISK_BYTES = 10_000_000_000
 PRESIGNED = (
-    "https://migrationbackup.t3.storageapi.dev/"
+    "https://migrationbackup-njzkny-vy.t3.storageapi.dev/"
     "migration-backups/railway-20261121-full-pg18.dump"
     "?X-Amz-Signature=abc&X-Amz-Expires=3600"
 )
 NOV17 = (
-    "https://migrationbackup.t3.storageapi.dev/"
+    "https://migrationbackup-njzkny-vy.t3.storageapi.dev/"
     "migration-backups/railway-20261117-full-pg18.dump"
     "?X-Amz-Signature=abc&X-Amz-Expires=3600"
 )
@@ -100,7 +100,7 @@ class RestoreGatewayContractTest(unittest.TestCase):
         self.assertEqual(contract.DEFAULT_DISK_BYTES, 10_000_000_000)
         self.assertEqual(contract.TIGRIS_ENDPOINT, "https://t3.storageapi.dev")
         self.assertEqual(contract.TIGRIS_REGION, "auto")
-        self.assertEqual(contract.TIGRIS_BUCKET, "migrationbackup")
+        self.assertEqual(contract.TIGRIS_BUCKET, "migrationbackup-njzkny-vy")
         contract.assert_backup_url(PRESIGNED)
 
     def test_tigris_settings_pin_endpoint_and_reject_wrong_bucket(self):
@@ -112,13 +112,25 @@ class RestoreGatewayContractTest(unittest.TestCase):
         })
         self.assertEqual(settings["endpoint"], "https://t3.storageapi.dev")
         self.assertEqual(settings["region"], "auto")
-        self.assertEqual(settings["bucket"], "migrationbackup")
+        self.assertEqual(settings["bucket"], "migrationbackup-njzkny-vy")
         self.assertEqual(settings["key"], contract.ARCHIVE_OBJECT_KEY)
+        pinned = contract.tigris_settings({
+            "S3_ACCESS_KEY_ID": "AKIATEST",
+            "S3_SECRET_ACCESS_KEY": "secret-test-value",
+            "S3_BUCKET": "migrationbackup-njzkny-vy",
+        })
+        self.assertEqual(pinned["bucket"], "migrationbackup-njzkny-vy")
         with self.assertRaisesRegex(RuntimeError, "unapproved_tigris_bucket"):
             contract.tigris_settings({
                 "S3_ACCESS_KEY_ID": "AKIATEST",
                 "S3_SECRET_ACCESS_KEY": "secret-test-value",
                 "S3_BUCKET": "someone-else",
+            })
+        with self.assertRaisesRegex(RuntimeError, "unapproved_tigris_bucket"):
+            contract.tigris_settings({
+                "S3_ACCESS_KEY_ID": "AKIATEST",
+                "S3_SECRET_ACCESS_KEY": "secret-test-value",
+                "S3_BUCKET": "migrationbackup",
             })
         with self.assertRaisesRegex(RuntimeError, "unrecognized_s3_endpoint"):
             contract.tigris_settings({
@@ -126,12 +138,6 @@ class RestoreGatewayContractTest(unittest.TestCase):
                 "S3_SECRET_ACCESS_KEY": "secret-test-value",
                 "S3_ENDPOINT": "https://evil.example",
             })
-        uuid_ok = contract.tigris_settings({
-            "S3_ACCESS_KEY_ID": "AKIATEST",
-            "S3_SECRET_ACCESS_KEY": "secret-test-value",
-            "S3_BUCKET": "8580503c-e7fb-41a7-ac9e-715081f95ad1",
-        })
-        self.assertEqual(uuid_ok["bucket"], "8580503c-e7fb-41a7-ac9e-715081f95ad1")
 
     def test_write_verified_archive_checks_size_sha_and_magic(self):
         payload = b"PGDMP" + b"archive-body"

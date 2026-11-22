@@ -36,7 +36,7 @@ test('pins the November 21 selective Pulseforge restore archive and destination'
   assert.equal(contract.sourcePulseforgeBytesFloor, 1032675328);
   assert.equal(contract.tigrisEndpoint, 'https://t3.storageapi.dev');
   assert.equal(contract.tigrisRegion, 'auto');
-  assert.equal(contract.tigrisBucket, 'migrationbackup');
+  assert.equal(contract.tigrisBucket, 'migrationbackup-njzkny-vy');
 });
 
 test('gateway helpers restore 274 Pulseforge tables and skip Signal data', () => {

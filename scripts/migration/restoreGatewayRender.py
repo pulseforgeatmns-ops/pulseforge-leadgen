@@ -172,11 +172,9 @@ def tigris_client(settings: dict):
 
 
 def _bucket_candidates(preferred: str) -> list[str]:
-    ordered = []
-    for name in (preferred, TIGRIS_BUCKET, "8580503c-e7fb-41a7-ac9e-715081f95ad1"):
-        if name in APPROVED_TIGRIS_BUCKETS and name not in ordered:
-            ordered.append(name)
-    return ordered
+    if preferred not in APPROVED_TIGRIS_BUCKETS:
+        raise RuntimeError("unapproved_tigris_bucket")
+    return [preferred]
 
 
 def verify_tigris_head() -> dict:
