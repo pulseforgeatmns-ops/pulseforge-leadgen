@@ -131,3 +131,25 @@ The Railway PostgreSQL password is readable only by the owner. Everything else n
 6. Set `PF_MIGRATION_RECEIVER=0` and `PF_DISABLE_BACKGROUND_WORKERS=0` (one instance). Validate login, Max, Scout, tenants and `/cron` auth.
 7. Run `switchPublicHost.js --write`. Sync the anchor-cleaning Pages repo. Set the repository variable `PULSEFORGE_APP_URL`. Repoint cron-job.org and the external consoles.
 8. Railway stays frozen and intact (rollback = `{"mode":"unfreeze",...}` plus reverting callers) until acceptance.
+
+## Production-data rehearsal: PASSED (2026-11-22 17:28–17:40Z)
+
+Railway was not frozen, the existing Render databases were not touched, and no traffic was redirected. Background workers stayed off.
+
+| Item | Evidence |
+|---|---|
+| Render | Deploy `dep-dc1i5id9fdbs73au9d00` (`83a91ec`, PR #1150) built with PG 18 tools. Receiver mode `dep-dc1i8h142hec73ael28g` reported `FINAL_RESTORE_RECEIVER_READY` with primary `pulseforge_production` (992.9 MB) and the Nov 17 database (991.6 MB). Swap approval `OFF`. |
+| Actions run | `45049608576`, job `137291619574`: success. `RAILWAY_PG_PASSWORD` was masked (`***`) in all output. |
+| Source | `SOURCE_FREEZE_STATUS frozen=false`, 3 application sessions. Freeze step **skipped**. Railway server 18.6, database 9,219,577,535 bytes. |
+| Snapshot | `2026-11-22T17:28:44.426195Z`, a single REPEATABLE READ READ ONLY exported snapshot. |
+| Archive | 728,046,603 bytes. SHA-256 `cd4dbcfe298e1fa0ea3d2d5cc2dc41f7f31eafdcbf2d626e6a49ade43c168d88`. Manifest SHA-256 `5f54f2849be9e9961896d98ff3d61416a8bd38d7f6c6d6b0965d695d38d1d6a7`. Re-read verified on the runner. Export took 8 m 37 s. |
+| Off-Railway copy | GitHub artifact `14765103365` (`railway-20261122T172824Z-rehearsal-pg18`, 728,081,741 bytes, retained 90 days): the full database including Signal history. |
+| Transfer | 22 chunks in 68 s, each authenticated by GitHub OIDC (run `45049608576`). Render re-verified size, SHA-256 and the `PGDMP` header. |
+| Selection | 319 TABLE DATA entries: 274 Pulseforge tables restored; 45 Signal tables kept as empty schema. |
+| Restore | New database `pulseforge_rehearsal_20261122173838`. Single transaction committed in 59 s. |
+| Reconciliation | **0 differences.** 274 tables, **1,630,980 rows** with matching content digests. 56 sequences compared (0 advanced). Catalog identical: 319 tables, 3 views, 80 triggers, 779 indexes, 3,629 constraints, 84 functions, 56 sequences. 45 Signal tables empty. |
+| Cleanup | Rehearsal copy dropped. Render returned to app mode (`PF_MIGRATION_RECEIVER=0`, restore approval `OFF`) on the unchanged `pulseforge_production`. |
+
+**Expected final-cutover write-freeze window, measured:** freeze about 0.5 min, export about 9 min, transfer about 1 min, restore plus reconciliation about 2 min. That is about 13 minutes before Render can be validated.
+
+**Risk observed:** the Railway database is 9.22 GB on a 10 GB volume, so headroom is limited. The final transfer should not be delayed long.
