@@ -194,4 +194,8 @@ test('Max tenant-21 find/discover/prospects/borrowers questions do not require t
     question: 'Who should we call in Manchester?',
     context: { enabledAgents: ['max'], tenantId: '10' },
   }), false);
+  assert.equal(shouldHandleScoutAcquisition({
+    question: 'Brief me on my prospects. Identify the top five opportunities.',
+    context: { enabledAgents: ['max'], tenantId: '21' },
+  }), false);
 });

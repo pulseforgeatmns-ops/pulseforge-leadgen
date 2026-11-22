@@ -53,6 +53,12 @@ function shouldHandleScoutAcquisition(input = {}) {
   } catch (_) {
     /* classifier unavailable — fall through */
   }
+  try {
+    const { isOperationalReadRequest } = require('./OperationalReadIntent');
+    if (isOperationalReadRequest(question, { session: input.session })) return false;
+  } catch (_) {
+    /* classifier unavailable — fall through */
+  }
   const context = {
     ...(input.session && input.session.context),
     ...(input.context || {}),
@@ -67,8 +73,12 @@ function shouldHandleScoutAcquisition(input = {}) {
     scoutAcquisition.looksLikeExplainPriority(question) ||
     scoutAcquisition.looksLikeInvestigationInspection(question);
   const tenantId = resolveTenantId(input);
+  // Tenant 21 may enter Scout without the words "levi scout", but only for
+  // discovery of new borrowers/prospects — never for reads of records already
+  // in the workspace (P0 #1110: "Brief me on my prospects").
   const leviIntent = String(tenantId) === '21'
-    && /\b(find|discover(?:y|ed|ing)?|prospects?|borrowers?)\b/i.test(question);
+    && /\b(?:find|discover(?:y|ed|ing)?|search\s+for|look\s+for|locate|source|prospect\s+for)\b/i.test(question)
+    && /\b(?:prospects?|borrowers?|leads?)\b/i.test(question);
   if (
     !mayEnterSpecialistPath(mode, {
       question,
