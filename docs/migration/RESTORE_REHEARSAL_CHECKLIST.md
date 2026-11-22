@@ -104,3 +104,17 @@ Render service `pulseforge-api-migration` deploy `dep-dc1f87vf3r2c73ciaufg` is *
 
 HTTP `/healthz` → `200 isolated restore service available`. Direct Tigris download is deployed at `73afcba` (`dep-dc1fd6ff3r2c73ciq0s0`). HTTP `/internal/migration/preflight` currently returns `503 missing_tigris_credentials`: `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` are not present on `pulseforge-api-migration` (API listing or runtime). No `pg_restore` has run. Snapshot `pulseforge_production_migration` is unchanged. The receiver remains armed on empty `pulseforge_production`.
 
+## 2026-11-22 Pulseforge-selective restore SUCCESS
+
+Tigris bucket pin corrected to `migrationbackup-njzkny-vy` (commit `0502336`, deploy `dep-dc1fjed6e07s73d87s9g`). Preflight `200` `status=ready`; HeadObject size 728,012,480. One-time POST `{"source":"tigris"}` accepted `202`.
+
+- `ARCHIVE_VERIFIED`: 728,012,480 bytes, SHA-256 `4cf4e95bf56706e09ba411349ed68cfcf8725fef2ee4964ed6af73fce29fd734`
+- `SELECTION_VERIFIED`: 274 Pulseforge TABLE DATA in; 45 Signal TABLE DATA excluded; 45 Signal schema tables kept; 1 Signal SEQUENCE SET excluded
+- `SOURCE_ROWS_COUNTED`: **1,630,268** rows across 274 tables
+- Single-transaction `pg_restore` committed
+- `RECONCILIATION_PASSED` on `pulseforge_production`, PostgreSQL 18.6, 378 objects, 994,416,319 bytes: 274 Pulseforge tables **1,630,268** rows; 45 Signal tables **0** rows; 56 sequences; tenants `users=17`, `clients=12`, `prospects=3947`, `tenant_21=1`
+- Fingerprints: `users=05a802844530557b0854cc92a475c534`, `clients=0bceff414b231466f410981d049b14ce`, `prospects=37a56a124f0f555442de91501bd71b1a`
+- Snapshot `pulseforge_production_migration` unchanged: 378 objects, 991,557,311 bytes
+
+Restore endpoint retired: S3 keys removed, token inert, Dockerfile restored to the Node probe (`dep-dc1fkllg1s2s73d834i0`). `/healthz` → `200 staging database reachable`. PR #1146 remains draft/unmerged. Railway remains authoritative. No production traffic switch.
+
