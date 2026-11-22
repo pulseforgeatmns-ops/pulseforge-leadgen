@@ -1,5 +1,5 @@
 FROM postgres:18-bookworm
-RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-requests ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-boto3 ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 COPY scripts/migration/restoreGatewayContract.py /usr/local/bin/restoreGatewayContract.py
 COPY scripts/migration/restoreGatewayRender.py /usr/local/bin/restoreGatewayRender.py

@@ -9,6 +9,7 @@ Render disk. Do not merge PR #1146 or enable writers.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -94,6 +95,9 @@ def load_contract(path: Path | None = None) -> dict:
         "pulseforgeTableDataCount",
         "signalTableDataExcluded",
         "mergePullRequest1146",
+        "tigrisEndpoint",
+        "tigrisRegion",
+        "tigrisBucket",
     )
     missing = [key for key in required if key not in payload]
     if missing:
@@ -118,6 +122,12 @@ def load_contract(path: Path | None = None) -> dict:
         raise RuntimeError("pulseforge_table_count_mismatch")
     if int(payload["signalTableDataExcluded"]) != SIGNAL_TABLE_COUNT:
         raise RuntimeError("signal_table_count_mismatch")
+    if payload["tigrisEndpoint"] != "https://t3.storageapi.dev":
+        raise RuntimeError("unrecognized_s3_endpoint")
+    if payload["tigrisRegion"] != "auto":
+        raise RuntimeError("unrecognized_s3_region")
+    if payload["tigrisBucket"] != "migrationbackup":
+        raise RuntimeError("unapproved_tigris_bucket")
     return payload
 
 
@@ -128,6 +138,13 @@ ARCHIVE_SHA256 = CONTRACT["sha256"]
 TARGET_DATABASE = CONTRACT["targetDatabase"]
 FORBIDDEN_SNAPSHOT_DATABASE = CONTRACT["forbiddenSnapshotDatabase"]
 HOST_PREFIX = CONTRACT["hostPrefix"]
+TIGRIS_ENDPOINT = CONTRACT["tigrisEndpoint"]
+TIGRIS_REGION = CONTRACT["tigrisRegion"]
+TIGRIS_BUCKET = CONTRACT["tigrisBucket"]
+APPROVED_TIGRIS_BUCKETS = frozenset({
+    TIGRIS_BUCKET,
+    "8580503c-e7fb-41a7-ac9e-715081f95ad1",
+})
 
 
 def _flag_enabled(value: str | None) -> bool:
@@ -142,6 +159,55 @@ def _database_name(url: str) -> str:
 def is_railway_host(host: str) -> bool:
     host = (host or "").lower()
     return any(host.endswith(suffix) for suffix in RAILWAY_HOST_SUFFIXES)
+
+
+def tigris_settings(env=None) -> dict:
+    """Return pinned Tigris settings. Never log the returned secrets."""
+    env = os.environ if env is None else env
+    if not env.get("S3_ACCESS_KEY_ID") or not env.get("S3_SECRET_ACCESS_KEY"):
+        raise RuntimeError("missing_tigris_credentials")
+    if env.get("S3_ENDPOINT"):
+        host = (urlsplit(env["S3_ENDPOINT"]).hostname or "").lower()
+        if host != "t3.storageapi.dev":
+            raise RuntimeError("unrecognized_s3_endpoint")
+    if env.get("S3_REGION") and env["S3_REGION"] not in ("auto", "iad"):
+        raise RuntimeError("unrecognized_s3_region")
+    bucket = env.get("S3_BUCKET") or TIGRIS_BUCKET
+    if bucket not in APPROVED_TIGRIS_BUCKETS:
+        raise RuntimeError("unapproved_tigris_bucket")
+    if ARCHIVE_OBJECT_KEY != CONTRACT["objectKey"] or ".." in ARCHIVE_OBJECT_KEY:
+        raise RuntimeError("unpinned_archive_key")
+    return {
+        "endpoint": TIGRIS_ENDPOINT,
+        "region": TIGRIS_REGION,
+        "bucket": bucket,
+        "key": ARCHIVE_OBJECT_KEY,
+        "access_key_id": env["S3_ACCESS_KEY_ID"],
+        "secret_access_key": env["S3_SECRET_ACCESS_KEY"],
+    }
+
+
+def write_verified_archive(body, filename: Path) -> int:
+    """Stream an archive to disk and require the pinned size, SHA-256, and PGDMP magic."""
+    digest = hashlib.sha256()
+    total = 0
+    with filename.open("xb") as target:
+        os.chmod(filename, 0o600)
+        while True:
+            chunk = body.read(4 * 1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > ARCHIVE_BYTES:
+                raise RuntimeError("backup_size_exceeded")
+            digest.update(chunk)
+            target.write(chunk)
+    if total != ARCHIVE_BYTES or digest.hexdigest() != ARCHIVE_SHA256:
+        raise RuntimeError("backup_size_or_checksum_mismatch")
+    with filename.open("rb") as item:
+        if item.read(5) != b"PGDMP":
+            raise RuntimeError("custom_archive_magic_missing")
+    return total
 
 
 def assert_backup_url(url: str) -> None:

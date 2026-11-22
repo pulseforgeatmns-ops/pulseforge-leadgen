@@ -2,8 +2,11 @@
 """Unit tests for the November 21 Pulseforge-selective Render restore contract."""
 from __future__ import annotations
 
+import hashlib
+import io
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -95,7 +98,67 @@ class RestoreGatewayContractTest(unittest.TestCase):
         self.assertEqual(contract.PULSEFORGE_RESTORE_FLOOR, 1032675328)
         self.assertEqual(contract.SOURCE_DATABASE_BYTES_FLOOR, 9218275007)
         self.assertEqual(contract.DEFAULT_DISK_BYTES, 10_000_000_000)
+        self.assertEqual(contract.TIGRIS_ENDPOINT, "https://t3.storageapi.dev")
+        self.assertEqual(contract.TIGRIS_REGION, "auto")
+        self.assertEqual(contract.TIGRIS_BUCKET, "migrationbackup")
         contract.assert_backup_url(PRESIGNED)
+
+    def test_tigris_settings_pin_endpoint_and_reject_wrong_bucket(self):
+        with self.assertRaisesRegex(RuntimeError, "missing_tigris_credentials"):
+            contract.tigris_settings({})
+        settings = contract.tigris_settings({
+            "S3_ACCESS_KEY_ID": "AKIATEST",
+            "S3_SECRET_ACCESS_KEY": "secret-test-value",
+        })
+        self.assertEqual(settings["endpoint"], "https://t3.storageapi.dev")
+        self.assertEqual(settings["region"], "auto")
+        self.assertEqual(settings["bucket"], "migrationbackup")
+        self.assertEqual(settings["key"], contract.ARCHIVE_OBJECT_KEY)
+        with self.assertRaisesRegex(RuntimeError, "unapproved_tigris_bucket"):
+            contract.tigris_settings({
+                "S3_ACCESS_KEY_ID": "AKIATEST",
+                "S3_SECRET_ACCESS_KEY": "secret-test-value",
+                "S3_BUCKET": "someone-else",
+            })
+        with self.assertRaisesRegex(RuntimeError, "unrecognized_s3_endpoint"):
+            contract.tigris_settings({
+                "S3_ACCESS_KEY_ID": "AKIATEST",
+                "S3_SECRET_ACCESS_KEY": "secret-test-value",
+                "S3_ENDPOINT": "https://evil.example",
+            })
+        uuid_ok = contract.tigris_settings({
+            "S3_ACCESS_KEY_ID": "AKIATEST",
+            "S3_SECRET_ACCESS_KEY": "secret-test-value",
+            "S3_BUCKET": "8580503c-e7fb-41a7-ac9e-715081f95ad1",
+        })
+        self.assertEqual(uuid_ok["bucket"], "8580503c-e7fb-41a7-ac9e-715081f95ad1")
+
+    def test_write_verified_archive_checks_size_sha_and_magic(self):
+        payload = b"PGDMP" + b"archive-body"
+        digest = hashlib.sha256(payload).hexdigest()
+        with mock.patch.object(contract, "ARCHIVE_BYTES", len(payload)), \
+             mock.patch.object(contract, "ARCHIVE_SHA256", digest):
+            with tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / "ok.dump"
+                written = contract.write_verified_archive(io.BytesIO(payload), path)
+                self.assertEqual(written, len(payload))
+                self.assertEqual(path.read_bytes(), payload)
+            with tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / "short.dump"
+                with self.assertRaisesRegex(RuntimeError, "backup_size_or_checksum_mismatch"):
+                    contract.write_verified_archive(io.BytesIO(payload[:-1]), path)
+            with tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / "magic.dump"
+                bad = b"XXXXX" + payload[5:]
+                with mock.patch.object(contract, "ARCHIVE_BYTES", len(bad)), \
+                     mock.patch.object(contract, "ARCHIVE_SHA256", hashlib.sha256(bad).hexdigest()):
+                    with self.assertRaisesRegex(RuntimeError, "custom_archive_magic_missing"):
+                        contract.write_verified_archive(io.BytesIO(bad), path)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "over.dump"
+            with mock.patch.object(contract, "ARCHIVE_BYTES", 4):
+                with self.assertRaisesRegex(RuntimeError, "backup_size_exceeded"):
+                    contract.write_verified_archive(io.BytesIO(b"PGDMP-too-big"), path)
 
     def test_reject_november_17_archive(self):
         with self.assertRaisesRegex(RuntimeError, "forbidden_november_17_archive"):

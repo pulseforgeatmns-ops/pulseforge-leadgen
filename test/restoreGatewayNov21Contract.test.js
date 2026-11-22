@@ -34,6 +34,9 @@ test('pins the November 21 selective Pulseforge restore archive and destination'
   assert.equal(contract.signalTableDataExcluded, 45);
   assert.equal(contract.mergePullRequest1146, false);
   assert.equal(contract.sourcePulseforgeBytesFloor, 1032675328);
+  assert.equal(contract.tigrisEndpoint, 'https://t3.storageapi.dev');
+  assert.equal(contract.tigrisRegion, 'auto');
+  assert.equal(contract.tigrisBucket, 'migrationbackup');
 });
 
 test('gateway helpers restore 274 Pulseforge tables and skip Signal data', () => {
@@ -67,6 +70,11 @@ test('gateway helpers restore 274 Pulseforge tables and skip Signal data', () =>
   assert.match(gateway, /signal_table_data_must_remain_empty/);
   assert.match(gateway, /signalTableDataExcluded/);
   assert.match(gateway, /require_pulseforge_restore_capacity/);
+  assert.match(gateway, /tigris_settings/);
+  assert.match(gateway, /write_verified_archive/);
+  assert.match(gateway, /source.: .tigris|"source": "tigris"/);
+  assert.match(helpers, /TIGRIS_ENDPOINT/);
+  assert.match(helpers, /missing_tigris_credentials/);
   assert.doesNotMatch(gateway, /require_full_restore_capacity/);
   assert.doesNotMatch(helpers, /silent_table_data_exclusion_forbidden/);
 });
@@ -87,6 +95,7 @@ test('restore Dockerfile copies contract helpers and both JSON files', () => {
   assert.match(dockerfile, /restoreGatewayRender\.py/);
   assert.match(dockerfile, /railway-source-catalog-20261117\.json/);
   assert.match(dockerfile, /railway-restore-contract-20261121\.json/);
+  assert.match(dockerfile, /python3-boto3/);
 });
 
 test('staging Dockerfile runs the November 21 contract test with the existing four', () => {

@@ -11,7 +11,6 @@ starts live operations.
 from __future__ import annotations
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import hashlib
 import hmac
 import json
 import os
@@ -22,10 +21,12 @@ import sys
 import tempfile
 import threading
 
-import requests
+import boto3
+from botocore.config import Config
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from restoreGatewayContract import (  # noqa: E402
+    APPROVED_TIGRIS_BUCKETS,
     ARCHIVE_BYTES,
     ARCHIVE_OBJECT_KEY,
     ARCHIVE_SHA256,
@@ -36,7 +37,7 @@ from restoreGatewayContract import (  # noqa: E402
     PULSEFORGE_RESTORE_FLOOR,
     SIGNAL_TABLE_COUNT,
     TARGET_DATABASE,
-    assert_backup_url,
+    TIGRIS_BUCKET,
     assert_empty_postgres18,
     assert_restore_endpoint,
     assert_snapshot_preserved,
@@ -48,6 +49,8 @@ from restoreGatewayContract import (  # noqa: E402
     require_pulseforge_restore_capacity,
     select_restore_toc,
     snapshot_database_url,
+    tigris_settings,
+    write_verified_archive,
 )
 
 COPY_RE = re.compile(rb"^COPY public\.([a-z][a-z0-9_]*) (?:\(|FROM )")
@@ -129,12 +132,14 @@ def preflight() -> dict:
     snapshot = guard_snapshot()
     assessment = require_pulseforge_restore_capacity(list_database_sizes(), disk_bytes=disk_bytes())
     tables = catalog_tables()
+    archive = verify_tigris_head()
     return {
         "status": "ready",
         "targetDatabase": TARGET_DATABASE,
         "snapshotDatabase": FORBIDDEN_SNAPSHOT_DATABASE,
         "archiveObjectKey": ARCHIVE_OBJECT_KEY,
         "archiveBytes": ARCHIVE_BYTES,
+        "archiveHeadBytes": archive["bytes"],
         "physicalTables": len(tables["all"]),
         "pulseforgeTableData": len(tables["core"]),
         "signalTableDataExcluded": len(tables["signal"]),
@@ -148,34 +153,71 @@ def preflight() -> dict:
         "diskBytes": assessment["disk_bytes"],
         "siblingBytes": assessment["sibling_bytes"],
         "snapshot": snapshot,
+        "source": "tigris",
     }
 
 
-def download(url: str, filename: Path) -> None:
-    assert_backup_url(url)
-    digest = hashlib.sha256()
-    total = 0
-    with requests.get(url, stream=True, allow_redirects=False, timeout=(15, 60)) as response:
-        if response.status_code != 200:
-            raise RuntimeError("bucket_download_failed_" + str(response.status_code))
-        with filename.open("xb") as target:
-            os.chmod(filename, 0o600)
-            for chunk in response.iter_content(chunk_size=4*1024*1024):
-                if chunk:
-                    total += len(chunk)
-                    if total > ARCHIVE_BYTES:
-                        raise RuntimeError("backup_size_exceeded")
-                    digest.update(chunk)
-                    target.write(chunk)
-    if total != ARCHIVE_BYTES or digest.hexdigest() != ARCHIVE_SHA256:
-        raise RuntimeError("backup_size_or_checksum_mismatch")
-    with filename.open("rb") as item:
-        if item.read(5) != b"PGDMP":
-            raise RuntimeError("custom_archive_magic_missing")
+def tigris_client(settings: dict):
+    return boto3.client(
+        "s3",
+        endpoint_url=settings["endpoint"],
+        aws_access_key_id=settings["access_key_id"],
+        aws_secret_access_key=settings["secret_access_key"],
+        region_name=settings["region"],
+        config=Config(
+            s3={"addressing_style": "virtual", "signature_version": "s3v4"},
+            retries={"mode": "standard", "max_attempts": 5},
+        ),
+    )
+
+
+def _bucket_candidates(preferred: str) -> list[str]:
+    ordered = []
+    for name in (preferred, TIGRIS_BUCKET, "8580503c-e7fb-41a7-ac9e-715081f95ad1"):
+        if name in APPROVED_TIGRIS_BUCKETS and name not in ordered:
+            ordered.append(name)
+    return ordered
+
+
+def verify_tigris_head() -> dict:
+    settings = tigris_settings()
+    client = tigris_client(settings)
+    last_error = "tigris_head_failed"
+    for bucket in _bucket_candidates(settings["bucket"]):
+        try:
+            head = client.head_object(Bucket=bucket, Key=settings["key"])
+        except Exception:
+            last_error = "tigris_head_failed"
+            continue
+        size = int(head.get("ContentLength") or 0)
+        if size != ARCHIVE_BYTES:
+            raise RuntimeError("backup_size_or_checksum_mismatch")
+        return {"bytes": size, "bucket": bucket, "objectKey": ARCHIVE_OBJECT_KEY}
+    raise RuntimeError(last_error)
+
+
+def download(filename: Path) -> None:
+    settings = tigris_settings()
+    client = tigris_client(settings)
+    located = verify_tigris_head()
+    body = None
+    try:
+        obj = client.get_object(Bucket=located["bucket"], Key=settings["key"])
+        body = obj["Body"]
+        total = write_verified_archive(body, filename)
+    except RuntimeError:
+        raise
+    except Exception:
+        raise RuntimeError("bucket_download_failed") from None
+    finally:
+        close = getattr(body, "close", None)
+        if close:
+            close()
     message("ARCHIVE_VERIFIED", {
         "bytes": total,
         "sha256": ARCHIVE_SHA256,
         "objectKey": ARCHIVE_OBJECT_KEY,
+        "source": "tigris",
         "signalHistoryRetainedInArchive": True,
     })
 
@@ -326,14 +368,14 @@ def verify_fingerprints() -> dict[str, str]:
     return fingerprints
 
 
-def process(url):
+def process(_unused=None):
     try:
         tables = catalog_tables()
         preflight()
         with tempfile.TemporaryDirectory(prefix="pg18-nov21-restore-") as folder:
             archive = Path(folder) / "source.dump"
             toc = Path(folder) / "selective.toc"
-            download(url, archive)
+            download(archive)
             build_toc(archive, toc, tables)
             expected = archive_counts(archive, toc, tables["core"])
             preflight()  # Fail-closed empty-target + disk + snapshot check before any write.
@@ -426,20 +468,29 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_error(403)
         try:
             n = int(self.headers.get("Content-Length", "0"))
-            if n <= 0 or n > 8192:
+            if n < 0 or n > 8192:
                 raise ValueError("invalid length")
-            payload = json.loads(self.rfile.read(n))
-            if set(payload) != {"downloadUrl"} or not isinstance(payload["downloadUrl"], str):
+            payload = {}
+            if n > 0:
+                payload = json.loads(self.rfile.read(n) or b"{}")
+            if not isinstance(payload, dict):
                 raise ValueError("bad request")
-            assert_backup_url(payload["downloadUrl"])
+            if "downloadUrl" in payload:
+                raise ValueError("presigned_url_restore_disabled")
+            extra = set(payload) - {"source"}
+            if extra:
+                raise ValueError("bad request")
+            if payload.get("source", "tigris") != "tigris":
+                raise ValueError("bad request")
+            tigris_settings()
         except Exception:
             return self.send_error(400)
         with _lock:
             if _started:
                 return self.send_error(409)
             _started = True
-        threading.Thread(target=process, args=(payload["downloadUrl"],), daemon=True).start()
-        self._json(202, {"status": "accepted"})
+        threading.Thread(target=process, daemon=True).start()
+        self._json(202, {"status": "accepted", "source": "tigris"})
 
 
 if __name__ == "__main__":
