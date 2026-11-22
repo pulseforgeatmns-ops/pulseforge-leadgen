@@ -437,5 +437,22 @@ if __name__ == "__main__":
         log("FAILED", {"reason": "pg_restore_18_required"})
         sys.exit(1)
     log("INSTANCE_DATABASES", {"databases": database_sizes(), "primary": primary_db()})
+    promote = os.environ.get("MIGRATION_PROMOTE_EXISTING", "")
+    if promote:
+        if (os.environ.get("MIGRATION_FINAL_SWAP_APPROVED") != SWAP_APPROVAL
+                or not re.fullmatch(r"pulseforge_cutover_\d{14}", promote)
+                or not database_exists(promote)):
+            raise RuntimeError("existing_promotion_not_approved_or_missing")
+        stamp = promote.removeprefix("pulseforge_cutover_")
+        conn = connect("postgres", autocommit=True)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                            "WHERE datname IN (%s,%s) AND pid <> pg_backend_pid()",
+                            (primary_db(), promote))
+        finally:
+            conn.close()
+        swap(promote, stamp)
+        log("EXISTING_PROMOTION_COMPLETE", {"database": promote})
     log("RECEIVER_READY")
     ThreadingHTTPServer(("0.0.0.0", int(os.environ.get("PORT", "10000"))), Handler).serve_forever()
