@@ -102,5 +102,5 @@ PR #1146 stays unmerged. Production writers stay off. `PF_MIGRATION_STAGING=1`. 
 
 Render service `pulseforge-api-migration` deploy `dep-dc1f87vf3r2c73ciaufg` is **live** on commit `1a4688b2` with `Dockerfile.migration-render-restore`. `DATABASE_URL` is the internal URL for empty `pulseforge_production`. `PF_MIGRATION_STAGING=1`. One-time restore approval is armed. Disk remains 10 GB.
 
-HTTP `/healthz` → `200 isolated restore service available`. HTTP `/internal/migration/preflight` → `200` `status=ready`. Required bytes **2,171,816,155** on a 10,000,000,000 disk. Snapshot `pulseforge_production_migration` still 378 objects / 991,557,311 bytes. No `pg_restore` yet; waiting on the Railway ticket worker.
+HTTP `/healthz` → `200 isolated restore service available`. Direct Tigris download is deployed at `73afcba` (`dep-dc1fd6ff3r2c73ciq0s0`). HTTP `/internal/migration/preflight` currently returns `503 missing_tigris_credentials`: `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` are not present on `pulseforge-api-migration` (API listing or runtime). No `pg_restore` has run. Snapshot `pulseforge_production_migration` is unchanged. The receiver remains armed on empty `pulseforge_production`.
 
