@@ -1,7 +1,7 @@
 'use strict';
 
 const { createHash } = require('node:crypto');
-const { evaluateProspect, approvedCriteria, TENANT_ID } = require('./leviScoutProductionContract');
+const { evaluateProspect, authorityCriteria, TENANT_ID } = require('./leviScoutProductionContract');
 
 const VERSION = 1;
 const MAX_CANDIDATES = 20;
@@ -22,7 +22,7 @@ function validateAuthority(input) {
     || input.version !== VERSION || input.kind !== 'levi_scout_research_only' || input.tenantId !== String(TENANT_ID)
     || !/^[a-zA-Z0-9_.:-]{1,120}$/.test(input.cycleId || '')
     || !/^[a-zA-Z0-9_.:-]{1,120}$/.test(input.approvalRef || '')
-    || !approvedCriteria(input.criteria)
+    || !authorityCriteria(input.criteria)
     || !input.limits || !Number.isSafeInteger(input.limits.maxCandidates) || input.limits.maxCandidates < 1
     || input.limits.maxCandidates > MAX_CANDIDATES
     || !Number.isSafeInteger(input.limits.maxProviderRequests) || input.limits.maxProviderRequests < 0

@@ -78,6 +78,20 @@ test('incomplete candidates are Qualify First, not qualified', async () => {
   assert.ok(d.state.persisted.records[0].blockers.includes('contact_path_missing'));
 });
 
+test('unverified Blueprint criteria still run discovery and never invent a range', async () => {
+  const d = deps();
+  const result = await execution.runResearchOnlyCycle({
+    authority: authority({ criteria: { approved: false, source: 'approved_blueprint' } }),
+    env: { SCOUT_LEVI_RESEARCH_ONLY_ENABLED: 'true' }, deps: d,
+  });
+  assert.equal(result.status, 'completed');
+  assert.equal(result.discovered, 1);
+  assert.equal(result.qualified, 0);
+  assert.ok(d.state.persisted.records[0].blockers.includes('financing_criteria_unverified'));
+  assert.throws(() => execution.validateAuthority(authority({ criteria: { approved: false, source: 'none', minAmount: 0, maxAmount: 0 } })),
+    { code: 'levi_research_authority_invalid' });
+});
+
 test('a completed cycle never reports paid providers or outreach as used', async () => {
   const d = deps();
   const result = await execution.runResearchOnlyCycle({ authority: authority(),

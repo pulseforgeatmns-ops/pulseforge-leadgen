@@ -37,16 +37,19 @@ async function tick({ now = new Date(), env = process.env, run, lastCycleId = nu
 }
 
 function startLeviScoutWeeklyClock({ env = process.env, now = new Date(), run, timers = globalThis } = {}) {
-  if (!researchEnabled(env)) {
-    return Promise.resolve({ started: false, reason: 'levi_research_disabled', tenantId: TENANT_ID });
-  }
   const delay = Math.max(1000, msUntilNextWeek(now));
   if (timers && typeof timers.setTimeout === 'function') {
     timers.setTimeout(() => {
       tick({ now: new Date(), env, run }).catch(() => {});
     }, delay);
   }
-  return Promise.resolve({ started: true, cycleId: cycleIdFor(now), tenantId: TENANT_ID, delayMs: delay });
+  return Promise.resolve({
+    started: true,
+    armed: researchEnabled(env),
+    cycleId: cycleIdFor(now),
+    tenantId: TENANT_ID,
+    delayMs: delay,
+  });
 }
 
 module.exports = { weekOf, cycleIdFor, msUntilNextWeek, tick, startLeviScoutWeeklyClock };

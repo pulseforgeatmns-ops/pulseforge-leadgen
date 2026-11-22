@@ -1,21 +1,24 @@
 #!/usr/bin/env node
 'use strict';
 
-const { runLeviScoutProductionCycle } = require('../services/leviScoutProductionRunner');
-const { researchEnabled } = require('../services/leviScoutEnablement');
+const { discover, citiesOf, DISCOVERY_CAP } = require('../services/leviScoutBorrowerDiscovery');
 
-async function smoke({ env = process.env, db, fetch: fetchImpl, now = new Date(), understanding, loadUnderstanding } = {}) {
-  if (!researchEnabled(env)) {
-    return { discovered: 0, cities: [], qualified: 0, outbound: false, status: 'disabled' };
-  }
-  const result = await runLeviScoutProductionCycle({ env, db, fetch: fetchImpl, now, understanding, loadUnderstanding, sink: async () => {} });
+async function smoke({ env = process.env, fetch: fetchImpl = globalThis.fetch, now = new Date() } = {}) {
+  const rows = await discover({
+    maxCandidates: DISCOVERY_CAP,
+    maxProviderRequests: 0,
+    fetch: fetchImpl,
+    now,
+  });
+  const qualified = 0;
   return {
-    discovered: Number(result.discovered || 0),
-    cities: [...(result.cities || [])],
-    qualified: Number(result.qualified || 0),
+    discovered: rows.length,
+    cities: citiesOf(rows),
+    qualified,
     outbound: false,
-    status: result.status,
-    persisted: Number(result.persisted || 0),
+    persist: 'dry-run',
+    status: 'dry_run',
+    enabled: env.SCOUT_LEVI_RESEARCH_ONLY_ENABLED === 'true',
   };
 }
 
@@ -23,10 +26,10 @@ module.exports = { smoke };
 
 if (require.main === module) {
   Promise.resolve()
-    .then(() => smoke({ db: require('../db') }))
+    .then(() => smoke({}))
     .then(summary => {
       console.log(JSON.stringify(summary));
-      process.exit(0);
+      process.exit(summary.discovered >= 1 && summary.qualified === 0 && summary.outbound === false ? 0 : 2);
     })
     .catch(error => {
       console.error(`[levi-scout-production-smoke] ${error.code || error.message}`);

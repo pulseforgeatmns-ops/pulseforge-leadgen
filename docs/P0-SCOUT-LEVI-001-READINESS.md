@@ -58,7 +58,7 @@ The corrected audit reports per-blocker counts for this cohort (`production.revi
 ## Remaining blockers to a controlled research-only cycle
 
 1. **Approved financing criteria (Levi).** Production reads the Blueprint through `tenantCriteria` and never substitutes the proposed $5k–$20k range. Until one KNOWN `Financing range: $X–$Y` fact is approved, qualification stays blocked and permit rows remain Qualify First.
-2. **Research-only flag is still off.** `SCOUT_LEVI_RESEARCH_ONLY_ENABLED` is not set on the production service. The `scout_levi` clock, cron and smoke path fail closed. `SCOUT_LEVI_PAID_PROVIDERS_APPROVED` stays unset; `maxProviderRequests` is 0.
+2. **Research-only flag is still off.** `SCOUT_LEVI_RESEARCH_ONLY_ENABLED` is not set on the production service. The weekly clock starts at boot and ticks no-op until that flag is true. `/cron/scout_levi` stays skipped. Smoke calls live NYC/Chicago discovery with persist dry-run and outbound off even while the flag is unset. `SCOUT_LEVI_PAID_PROVIDERS_APPROVED` stays unset; `maxProviderRequests` is 0.
 3. **Permit rows are signals, not qualified borrowers.** NYC and Chicago open-data permits persist as `property_record_signal` with `setter_visible=false`. They cannot become Contact Now without a contact path, borrower intent, and an approved range.
 4. **Weekly output metric.** The audit now sees `scout_levi` claims in `agent_log`. `observedProductionQualifiedNew` stays `null` until a contract-qualified research record exists.
 

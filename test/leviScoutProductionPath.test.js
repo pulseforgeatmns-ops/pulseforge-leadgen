@@ -12,14 +12,17 @@ const { smoke } = require('../scripts/leviScoutProductionSmoke');
 const { TENANT_ID } = require('../services/leviScoutProductionContract');
 const { shouldHandleScoutAcquisition } = require('../packages/max/workspace/ScoutAcquisitionContext');
 
+const NOW = new Date('2026-11-22T15:00:00Z');
 const nycRow = {
-  permit_si_no: 'NYC-100', owner_s_first_name: 'Ada', owner_s_last_name: 'Borrower',
-  owner_s_business_name: 'Ada Holdings LLC', filing_date: '2026-11-02T00:00:00.000',
-  borough: 'MANHATTAN', permit_type: 'NB', owner_s_house__: '10', owner_s_house_street_name: 'WALL STREET',
+  job_filing_number: 'B00-TEST-1', job_type: 'Alteration', first_permit_date: '2026-11-18T00:00:00.000',
+  owner_s_business_name: 'Ada Holdings LLC', house_no: '10', street_name: 'WALL STREET', borough: 'Manhattan',
+  job_description: 'Interior renovation of dwelling units', sidewalk_shed_work_type_: 'NO',
 };
 const chicagoRow = {
-  permit_: 'CHI-200', contact_1_name: 'Ben Operator', issue_date: '2026-11-03T00:00:00.000',
-  street_number: '100', street_name: 'MICHIGAN', permit_type: 'PERMIT',
+  permit_: '100519123', permit_type: 'PERMIT - RENOVATION/ALTERATION', issue_date: '2026-11-18T00:00:00.000',
+  contact_1_type: 'OWNER', contact_1_name: 'Ben Operator LLC', contact_1_city: 'SKOKIE',
+  street_number: '100', street_direction: 'N', street_name: 'MICHIGAN', suffix: 'AVE',
+  work_description: 'Interior renovation of a two-flat dwelling',
 };
 
 const understanding = (services = 'Bridge loans. Financing range: $5,000–$20,000.') => ({
@@ -70,17 +73,21 @@ test('disabled production cycle never discovers, persists or sends outreach', as
   await assert.rejects(runLeviScoutProductionCycle({ env: {}, fetch: fetchFor() }), { code: 'levi_research_disabled' });
 });
 
-test('missing Blueprint range blocks qualification without inventing $5k–$20k', async () => {
+test('missing Blueprint range still discovers and persists Qualify First without inventing $5k–$20k', async () => {
   const result = await runLeviScoutProductionCycle({
     env: { SCOUT_LEVI_RESEARCH_ONLY_ENABLED: 'true' },
     fetch: fetchFor(),
     understanding: understanding('Lending to investors.'),
+    now: NOW,
     sink: async () => {},
   });
-  assert.equal(result.status, 'blocked_financing_criteria_unverified');
+  assert.equal(result.status, 'completed');
+  assert.ok(result.discovered >= 1);
   assert.equal(result.qualified, 0);
-  assert.equal(result.discovered, 0);
   assert.equal(result.outreachAttempted, false);
+  assert.equal(authorityFor({ cycleId: 'levi-week-2026-11-16' }).criteria.source, 'approved_blueprint');
+  assert.equal(authorityFor({ cycleId: 'levi-week-2026-11-16' }).criteria.approved, false);
+  assert.equal(Object.prototype.hasOwnProperty.call(authorityFor({ cycleId: 'levi-week-2026-11-16' }).criteria, 'minAmount'), false);
 });
 
 test('a production cycle discovers NYC and Chicago, persists review-only, and never qualifies a permit', async () => {
@@ -90,7 +97,7 @@ test('a production cycle discovers NYC and Chicago, persists review-only, and ne
     env: { SCOUT_LEVI_RESEARCH_ONLY_ENABLED: 'true' },
     fetch: fetchImpl,
     understanding: understanding(),
-    now: new Date('2026-11-18T12:00:00Z'),
+    now: NOW,
     sink: async card => cards.push(card),
   });
   assert.equal(result.tenantId, String(TENANT_ID));
@@ -121,14 +128,23 @@ test('weekly clock is idempotent for the same cycle id', async () => {
   assert.equal(first.outreachAttempted, false);
 });
 
-test('the weekly clock does not arm when research is disabled', async () => {
-  const started = await startLeviScoutWeeklyClock({ env: {}, run: async () => { throw new Error('should not run'); } });
-  assert.equal(started.started, false);
-  assert.equal(started.reason, 'levi_research_disabled');
+test('the weekly clock starts at boot even when research is disabled, and ticks no-op', async () => {
+  const timers = { setTimeout() { return 0; } };
+  const started = await startLeviScoutWeeklyClock({
+    env: {},
+    timers,
+    run: async () => { throw new Error('should not run'); },
+  });
+  assert.equal(started.started, true);
+  assert.equal(started.armed, false);
+  const idle = await tick({ env: {}, run: async () => { throw new Error('should not run'); } });
+  assert.equal(idle.ran, false);
+  assert.equal(idle.status, 'disabled');
+  assert.equal(idle.outreachAttempted, false);
 });
 
 test('in-memory production deps claim once, skip tenant 10, and keep review-only flags', async () => {
-  const deps = createProductionDeps({ fetch: fetchFor(), env: { SCOUT_LEVI_RESEARCH_ONLY_ENABLED: 'true' } });
+  const deps = createProductionDeps({ fetch: fetchFor(), env: { SCOUT_LEVI_RESEARCH_ONLY_ENABLED: 'true' }, now: NOW });
   const first = await deps.claimRun({ cycleId: 'levi-week-2026-11-16', authorityHash: 'abc' });
   const replay = await deps.claimRun({ cycleId: 'levi-week-2026-11-16', authorityHash: 'abc' });
   assert.equal(first.claimed, true);
@@ -156,25 +172,23 @@ test('Max compact result always reports outbound and paid providers off', () => 
   assert.equal(snapshot.tenantId, '21');
 });
 
-test('smoke reports discovered count, cities, qualified and outbound=false', async () => {
-  const disabled = await smoke({ env: {} });
-  assert.deepEqual(disabled, { discovered: 0, cities: [], qualified: 0, outbound: false, status: 'disabled' });
-  const enabled = await smoke({
-    env: { SCOUT_LEVI_RESEARCH_ONLY_ENABLED: 'true' },
-    fetch: fetchFor(),
-    now: new Date('2026-11-18T12:00:00Z'),
-    understanding: understanding(),
-  });
-  assert.equal(enabled.outbound, false);
-  assert.equal(enabled.qualified, 0);
-  assert.equal(enabled.discovered, 2);
-  assert.deepEqual([...enabled.cities].sort(), ['Chicago', 'New York']);
+test('smoke discovers with persist dry-run even when the research flag is unset', async () => {
+  const disabled = await smoke({ env: {}, fetch: fetchFor(), now: NOW });
+  assert.equal(disabled.outbound, false);
+  assert.equal(disabled.qualified, 0);
+  assert.equal(disabled.persist, 'dry-run');
+  assert.ok(disabled.discovered >= 1);
+  assert.deepEqual([...disabled.cities].sort(), ['Chicago', 'New York']);
 });
 
-test('Max workspace can route tenant 21 Levi Scout without enabling Places scout', () => {
+test('Max tenant-21 find/discover/prospects/borrowers questions do not require the words levi scout', () => {
   assert.equal(shouldHandleScoutAcquisition({
-    question: 'What did Levi Scout find this week?',
-    context: { enabledAgents: ['scout_levi', 'max'], tenantId: '21' },
+    question: 'Find borrowers in New York this week',
+    context: { enabledAgents: ['max'], tenantId: '21' },
+  }), true);
+  assert.equal(shouldHandleScoutAcquisition({
+    question: 'Discover prospects for the Chicago book',
+    context: { enabledAgents: ['max'], tenantId: '21' },
   }), true);
   assert.equal(shouldHandleScoutAcquisition({
     question: 'Who should we call in Manchester?',

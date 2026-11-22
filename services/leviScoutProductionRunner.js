@@ -16,7 +16,7 @@ function authorityFor({ cycleId, criteria, approvalRef = 'P0-SCOUT-LEVI-001' }) 
     tenantId: String(TENANT_ID),
     cycleId,
     approvalRef,
-    criteria: criteria || { approved: false, source: 'none', minAmount: 0, maxAmount: 0 },
+    criteria: criteria || { approved: false, source: 'approved_blueprint' },
     limits: productionLimits(),
     permissions: productionPermissions(),
   };
@@ -35,24 +35,9 @@ async function runLeviScoutProductionCycle({
 } = {}) {
   assertResearchEnabled(env);
   const id = cycleId || cycleIdFor(now);
-  const criteria = await loadApprovedCriteria({ tenantId: TENANT_ID, loadUnderstanding, understanding });
-  if (!criteria) {
-    const snapshot = {
-      status: 'blocked_financing_criteria_unverified',
-      tenantId: String(TENANT_ID),
-      cycleId: id,
-      discovered: 0,
-      persisted: 0,
-      qualified: 0,
-      cities: [],
-      outreachAttempted: false,
-      paidProvidersUsed: false,
-      agent: AGENT,
-    };
-    await deliverToMax(snapshot, { db, sink });
-    return snapshot;
-  }
-  const resolvedDeps = deps || createProductionDeps({ db, fetch: fetchImpl, env });
+  const loaded = await loadApprovedCriteria({ tenantId: TENANT_ID, loadUnderstanding, understanding });
+  const criteria = loaded || { approved: false, source: 'approved_blueprint' };
+  const resolvedDeps = deps || createProductionDeps({ db, fetch: fetchImpl, env, now });
   const result = await execution.runResearchOnlyCycle({
     authority: authorityFor({ cycleId: id, criteria }),
     env,
