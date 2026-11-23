@@ -17,6 +17,7 @@ before(async()=>{
  const admin=new Pool({connectionString:pg.connectionString});
  await admin.query('CREATE DATABASE anchor_portal_synthetic');await admin.end();
  pool=new Pool({connectionString:pg.connectionString.replace(/\/postgres$/,'/anchor_portal_synthetic')});
+ pool.on('error',()=>{}); // idle clients are terminated when the DB stops
  password=crypto.randomBytes(32).toString('base64url');
  const hash=await bcrypt.hash(password,12); hashes=Object.fromEntries(keys.map(k=>[k,hash]));
  await initializeSchema(pool,MARKER);
@@ -28,7 +29,13 @@ before(async()=>{
  const cfg=config({PORTAL_MODE:'local',PORT:String(server.address().port),PORTAL_ORIGIN:base,PORTAL_DATABASE_URL:pool.options.connectionString,PORTAL_SYNTHETIC_MARKER:MARKER,PORTAL_SESSION_SECRET:crypto.randomBytes(32).toString('hex')});
  const runtime=await createApp(cfg,pool);store=runtime.store;outer.use(runtime.app);
 });
-after(async()=>{if(store)store.close();if(server)await new Promise(r=>server.close(r));if(pool)await pool.end();if(pg)await pg.stop();password=undefined;});
+after(async()=>{
+ if(store)await Promise.resolve(store.close());
+ if(server)await new Promise(r=>server.close(r));
+ if(pool){pool.on('error',()=>{});await pool.end();}
+ if(pg)await pg.stop();
+ password=undefined;
+});
 async function call(path, actor={},method='GET',body,headers={}) {
  const r=await fetch(base+path,{method,redirect:'manual',headers:{Cookie:actor.cookie||'',Origin:base,'Content-Type':'application/json','X-CSRF-Token':actor.csrf||'',...headers},body:body?JSON.stringify(body):undefined});
  const text=await r.text();let value;try{value=JSON.parse(text);}catch{value=text;}
