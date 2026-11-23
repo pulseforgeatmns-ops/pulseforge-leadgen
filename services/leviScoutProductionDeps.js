@@ -43,7 +43,7 @@ function createProductionDeps({ db, fetch: fetchImpl, env = process.env, tenantI
     }
     const inserted = await db.query(
       `INSERT INTO agent_log (agent_name, action, status, payload, ran_at, client_id)
-       SELECT $1, 'research_cycle_claim', 'ok', $2::jsonb, NOW(), $3
+       SELECT $1, 'research_cycle_claim', 'success', $2::jsonb, NOW(), $3
        WHERE NOT EXISTS (
          SELECT 1 FROM agent_log
           WHERE client_id = $3 AND agent_name = $1 AND action = 'research_cycle_claim'
@@ -111,7 +111,7 @@ function createProductionDeps({ db, fetch: fetchImpl, env = process.env, tenantI
       await db.query(
         `INSERT INTO agent_log (agent_name, action, status, payload, ran_at, client_id)
          VALUES ($1, 'research_cycle_diagnostic', $2, $3::jsonb, NOW(), $4)`,
-        [AGENT, diagnostic.status === 'failed' ? 'error' : 'ok', JSON.stringify(payload), Number(TENANT_ID)]
+        [AGENT, diagnostic.status === 'failed' ? 'failed' : 'completed', JSON.stringify(payload), Number(TENANT_ID)]
       );
     }
     return payload;

@@ -211,6 +211,36 @@ test('Levi cron accepts Bearer CRON_SECRET and is not gated on PF_DISABLE_BACKGR
   assert.match(cronSource, /cronSecretMatches\(req, process\.env\)/);
 });
 
+const ALLOWED_AGENT_LOG_STATUSES = new Set([
+  'success', 'failed', 'skipped', 'pending', 'completed', 'posted', 'in_progress',
+]);
+
+test('production agent_log claim and diagnostic use agent_log_status_check values', async () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'services', 'leviScoutProductionDeps.js'), 'utf8');
+  assert.match(src, /research_cycle_claim',\s*'success'/);
+  assert.doesNotMatch(src, /research_cycle_claim',\s*'ok'/);
+  assert.doesNotMatch(src, /'\s*error\s*'/);
+  const writes = [];
+  const db = {
+    query: async (sql, params) => {
+      if (!/INSERT INTO agent_log/i.test(sql)) return { rows: [] };
+      const literal = (sql.match(/research_cycle_claim',\s*'([^']+)'/) || [])[1];
+      const status = literal || params[1];
+      if (!ALLOWED_AGENT_LOG_STATUSES.has(status)) {
+        throw Object.assign(new Error('new row for relation "agent_log" violates check constraint "agent_log_status_check"'), { code: '23514' });
+      }
+      writes.push({ sql, status });
+      return { rows: [{ id: writes.length }] };
+    },
+  };
+  const deps = createProductionDeps({ db, fetch: fetchFor(), env: { SCOUT_LEVI_RESEARCH_ONLY_ENABLED: 'true' }, now: NOW });
+  const first = await deps.claimRun({ cycleId: 'levi-week-2026-11-23', authorityHash: 'abc' });
+  assert.equal(first.claimed, true);
+  await deps.recordDiagnostic({ status: 'completed', cycleId: 'levi-week-2026-11-23' });
+  await deps.recordDiagnostic({ status: 'failed', cycleId: 'levi-week-2026-11-23', reason: 'synthetic' });
+  assert.deepEqual(writes.map(row => row.status), ['success', 'completed', 'failed']);
+});
+
 test('in-memory production deps claim once, skip tenant 10, and keep review-only flags', async () => {
   const deps = createProductionDeps({ fetch: fetchFor(), env: { SCOUT_LEVI_RESEARCH_ONLY_ENABLED: 'true' }, now: NOW });
   const first = await deps.claimRun({ cycleId: 'levi-week-2026-11-16', authorityHash: 'abc' });
