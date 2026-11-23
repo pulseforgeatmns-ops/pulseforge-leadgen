@@ -1,6 +1,7 @@
 'use strict';
 
 const { TENANT_ID } = require('./leviScoutProductionContract');
+const { enrichCandidates } = require('./leviScoutEnrichment');
 
 const CITIES = Object.freeze(['New York', 'Chicago']);
 const SOURCE_TYPE = 'property_record_signal';
@@ -299,9 +300,21 @@ async function discover({
     if (error && error.code) throw error;
     chiRows = [];
   }
-  const nyc = nycRows.map(row => mapNyc(row, now)).filter(Boolean);
-  const chi = chiRows.map(row => mapChicago(row, now)).filter(Boolean);
-  return interleave(nyc, chi).slice(0, cap);
+  const nyc = nycRows.map(row => {
+    const candidate = mapNyc(row, now);
+    return candidate ? { candidate, sourceRow: row } : null;
+  }).filter(Boolean);
+  const chi = chiRows.map(row => {
+    const candidate = mapChicago(row, now);
+    return candidate ? { candidate, sourceRow: row } : null;
+  }).filter(Boolean);
+  const mapped = interleave(nyc, chi).slice(0, cap);
+  return enrichCandidates({
+    tenantId,
+    items: mapped,
+    fetch: fetchImpl,
+    now,
+  });
 }
 
 function citiesOf(rows = []) {

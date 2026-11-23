@@ -4,6 +4,7 @@ const { TENANT_ID } = require('./leviScoutProductionContract');
 const execution = require('./leviScoutResearchOnlyExecution');
 const { assertResearchEnabled, productionLimits, productionPermissions, AGENT } = require('./leviScoutEnablement');
 const { loadApprovedCriteria } = require('./leviScoutApprovedCriteria');
+const { inspectApprovedBlueprint, loadTenantUnderstanding } = require('./leviScoutBlueprintReadiness');
 const { createProductionDeps } = require('./leviScoutProductionDeps');
 const { citiesOf } = require('./leviScoutBorrowerDiscovery');
 const { deliverToMax } = require('./leviScoutMaxDelivery');
@@ -35,8 +36,14 @@ async function runLeviScoutProductionCycle({
 } = {}) {
   assertResearchEnabled(env);
   const id = cycleId || cycleIdFor(now);
-  const loaded = await loadApprovedCriteria({ tenantId: TENANT_ID, loadUnderstanding, understanding });
+  const resolvedUnderstanding = understanding !== undefined
+    ? understanding
+    : (typeof loadUnderstanding === 'function'
+      ? await loadUnderstanding({ tenantId: TENANT_ID })
+      : (db ? await loadTenantUnderstanding({ db, tenantId: TENANT_ID }) : null));
+  const loaded = await loadApprovedCriteria({ tenantId: TENANT_ID, understanding: resolvedUnderstanding });
   const criteria = loaded || { approved: false, source: 'approved_blueprint' };
+  const blueprint = inspectApprovedBlueprint(resolvedUnderstanding, TENANT_ID);
   const resolvedDeps = deps || createProductionDeps({ db, fetch: fetchImpl, env, now });
   const result = await execution.runResearchOnlyCycle({
     authority: authorityFor({ cycleId: id, criteria }),
@@ -51,6 +58,8 @@ async function runLeviScoutProductionCycle({
     cities,
     outreachAttempted: false,
     paidProvidersUsed: false,
+    blueprintQuestions: blueprint.questionsForLevi,
+    missingBlueprintDecisions: blueprint.missing,
   };
   await deliverToMax(snapshot, { db, sink });
   return snapshot;

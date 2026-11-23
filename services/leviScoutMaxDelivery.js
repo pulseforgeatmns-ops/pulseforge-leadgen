@@ -11,19 +11,31 @@ function compactResult(result = {}) {
     discovered: Number(result.discovered || 0),
     persisted: Number(result.persisted || 0),
     qualified: Number(result.qualified || 0),
+    researchCandidates: Number(result.researchCandidates != null ? result.researchCandidates : result.discovered || 0),
+    qualifiedProspects: Number(result.qualifiedProspects != null ? result.qualifiedProspects : result.qualified || 0),
+    verifiableBusinessContacts: Number(result.verifiableBusinessContacts || 0),
     cities: Object.freeze([...(result.cities || [])]),
     outreachAttempted: false,
     paidProvidersUsed: false,
+    inventedCriteria: false,
     classifications: Object.freeze({ ...(result.classifications || {}) }),
+    missingBlueprintDecisions: Object.freeze([...(result.missingBlueprintDecisions || [])]),
+    blueprintQuestions: Object.freeze([...(result.blueprintQuestions || [])]),
   });
 }
 
 function briefingText(snapshot) {
-  return [
+  const questions = snapshot.blueprintQuestions || [];
+  const lines = [
     `Levi Scout (tenant ${snapshot.tenantId}) ${snapshot.cycleId || 'cycle'} ${snapshot.status}.`,
-    `Discovered ${snapshot.discovered} in ${(snapshot.cities || []).join(', ') || 'no cities'}; ${snapshot.qualified} contract-qualified.`,
-    'Review-only persist. Places, paid providers and outbound stayed off.',
-  ].join(' ');
+    `Discovered ${snapshot.discovered} in ${(snapshot.cities || []).join(', ') || 'no cities'}.`,
+    `Research candidates: ${snapshot.researchCandidates}; qualified prospects: ${snapshot.qualifiedProspects}; verifiable public business contacts: ${snapshot.verifiableBusinessContacts}.`,
+    'A permit is property activity, not borrower intent. Review-only persist. Places, paid providers and outbound stayed off.',
+  ];
+  if (questions.length) {
+    lines.push(`Missing Blueprint decisions for Levi: ${questions.join(' ')}`);
+  }
+  return lines.join(' ');
 }
 
 async function deliverToMax(result, { db, sink } = {}) {

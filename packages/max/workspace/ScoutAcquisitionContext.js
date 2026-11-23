@@ -6,6 +6,7 @@
  */
 
 const scoutAcquisition = require('../../../services/scoutAcquisitionIntelligence');
+const { maybeHandleLeviScoutReviewTurn } = require('./LeviScoutReviewContext');
 const { classifyCognitiveMode } = require('../specialistDelegation/CognitiveMode');
 const { mayEnterSpecialistPath } = require('../specialistDelegation/RetrievalGate');
 const { buildStructuredResponse } = require('./WorkspaceTypes');
@@ -111,6 +112,12 @@ async function maybeHandleScoutAcquisitionTurn(input = {}) {
 
   const tenantId = resolveTenantId(input);
   if (!tenantId) return null;
+
+  if (String(tenantId) === '21') {
+    const review = await maybeHandleLeviScoutReviewTurn({ ...input, forceLeviReview: true });
+    if (review) return review;
+    return null;
+  }
 
   const session = input.session || null;
   const sessionCtx =

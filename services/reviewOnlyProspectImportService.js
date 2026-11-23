@@ -132,6 +132,7 @@ function normalizeContact(input, index) {
     reviewState: state,
     status: state === 'reject' ? 'disqualified' : 'cold',
     icpScore: score,
+    extraMetadata: input.extraMetadata && typeof input.extraMetadata === 'object' ? input.extraMetadata : null,
   };
 }
 
@@ -236,6 +237,9 @@ async function importReviewOnlyContacts(inputs, { clientId, db, actorId, source,
         sourceType: contact.sourceType,
         importedBy: actorId || null,
         importedAt: new Date().toISOString(),
+        ...(contact.extraMetadata && typeof contact.extraMetadata === 'object' ? contact.extraMetadata : {}),
+        outreachAuthorized: false,
+        importMode: 'review_only',
       };
       const created = await connection.query(
         `INSERT INTO prospects(
