@@ -324,4 +324,5 @@ function citiesOf(rows = []) {
 module.exports = {
   CITIES, SOURCE_TYPE, SOURCES, NYC_URL, CHICAGO_URL, USER_AGENT, LOOKBACK_DAYS, DISCOVERY_CAP,
   mapNyc, mapChicago, discover, citiesOf, isPlacesUrl, lookbackDate, fitEvidence,
+  sodaUrl, chicagoWhere, chicagoOwner,
 };
