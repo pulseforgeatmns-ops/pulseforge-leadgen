@@ -75,11 +75,28 @@ async function readJson({
   maxAttempts = MAX_ATTEMPTS,
   wait,
   telemetry,
+  budget,
 } = {}) {
   if (isPaidEnrichmentUrl(url)) fail('levi_research_paid_provider_approval_required');
   const events = Array.isArray(telemetry) ? telemetry : [];
   let lastStatus = 'empty';
+  let httpAttempts = 0;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    if (budget && !budget.consume()) {
+      events.push({
+        url,
+        attempt,
+        status: 'skipped_budget',
+        datasetId: datasetIdOf(url),
+      });
+      return {
+        rows: [],
+        status: httpAttempts === 0 ? 'skipped_budget' : lastStatus,
+        attempts: httpAttempts,
+        telemetry: events,
+      };
+    }
+    httpAttempts += 1;
     const started = Date.now();
     try {
       const options = { headers: requestHeaders() };
@@ -89,7 +106,7 @@ async function readJson({
       if (!response) {
         lastStatus = 'empty_response';
         events.push({ url, attempt, status: lastStatus, datasetId: datasetIdOf(url) });
-        return { rows: [], status: lastStatus, attempts: attempt, telemetry: events };
+        return { rows: [], status: lastStatus, attempts: httpAttempts, telemetry: events };
       }
       if (response.ok === false) {
         const httpStatus = Number(response.status) || 0;
@@ -107,7 +124,7 @@ async function readJson({
           await waitMs(BACKOFF_MS[attempt - 1] || BACKOFF_MS.at(-1), wait);
           continue;
         }
-        return { rows: [], status: lastStatus, attempts: attempt, httpStatus, telemetry: events };
+        return { rows: [], status: lastStatus, attempts: httpAttempts, httpStatus, telemetry: events };
       }
       const body = typeof response.json === 'function' ? await response.json() : [];
       const rows = Array.isArray(body) ? body : [];
@@ -120,7 +137,7 @@ async function readJson({
         datasetId: datasetIdOf(url),
         ms: Date.now() - started,
       });
-      return { rows, status: lastStatus, attempts: attempt, telemetry: events };
+      return { rows, status: lastStatus, attempts: httpAttempts, telemetry: events };
     } catch (error) {
       if (error && error.code === 'levi_research_paid_provider_approval_required') throw error;
       const transient = isTransientFetchError(error);
@@ -139,10 +156,10 @@ async function readJson({
         await waitMs(BACKOFF_MS[attempt - 1] || BACKOFF_MS.at(-1), wait);
         continue;
       }
-      return { rows: [], status: lastStatus, attempts: attempt, telemetry: events };
+      return { rows: [], status: lastStatus, attempts: httpAttempts, telemetry: events };
     }
   }
-  return { rows: [], status: lastStatus, attempts: maxAttempts, telemetry: events };
+  return { rows: [], status: lastStatus, attempts: httpAttempts, telemetry: events };
 }
 
 async function boundedReadJson({
@@ -153,12 +170,12 @@ async function boundedReadJson({
   wait,
   telemetry,
 } = {}) {
-  if (!budget || !budget.consume()) {
+  if (budget && budget.remaining() <= 0) {
     const event = { url, status: 'skipped_budget', datasetId: datasetIdOf(url) };
     if (Array.isArray(telemetry)) telemetry.push(event);
     return { rows: [], status: 'skipped_budget', attempts: 0, telemetry: Array.isArray(telemetry) ? telemetry : [event] };
   }
-  return readJson({ fetchImpl, url, timeoutMs, wait, telemetry });
+  return readJson({ fetchImpl, url, timeoutMs, wait, telemetry, budget });
 }
 
 module.exports = {

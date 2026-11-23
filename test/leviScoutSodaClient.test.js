@@ -64,3 +64,35 @@ test('lookup budget skips further SODA requests and paid URLs stay forbidden', a
     fetchImpl: async () => ({ ok: true, json: async () => [] }),
   }), { code: 'levi_research_paid_provider_approval_required' });
 });
+
+test('four-request budget counts HTTP retries across both Chicago datasets and never issues a fifth request', async () => {
+  let calls = 0;
+  const budget = soda.createLookupBudget(4);
+  const fetchImpl = async () => {
+    calls += 1;
+    throw timeoutError();
+  };
+  const owners = await soda.boundedReadJson({
+    fetchImpl,
+    url: 'https://data.cityofchicago.org/resource/ezma-pppn.json',
+    budget,
+    wait: async () => {},
+  });
+  const licenses = await soda.boundedReadJson({
+    fetchImpl,
+    url: 'https://data.cityofchicago.org/resource/r5kz-chrr.json',
+    budget,
+    wait: async () => {},
+  });
+  const extra = await soda.boundedReadJson({
+    fetchImpl,
+    url: 'https://data.cityofchicago.org/resource/ezma-pppn.json',
+    budget,
+    wait: async () => {},
+  });
+  assert.equal(calls, 4);
+  assert.equal(budget.used(), 4);
+  assert.equal(owners.status, 'timeout');
+  assert.equal(licenses.status, 'timeout');
+  assert.equal(extra.status, 'skipped_budget');
+});

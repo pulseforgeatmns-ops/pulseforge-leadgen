@@ -118,6 +118,18 @@ function pickLicense(rows = [], entityName) {
     || namesMatch(row.legal_name, entityName)) || null;
 }
 
+const INCOMPLETE_LOOKUP_STATUSES = Object.freeze([
+  'timeout', 'http_error', 'error', 'skipped_budget', 'empty_response',
+]);
+const COMPLETE_LOOKUP_STATUSES = Object.freeze(['ok', 'empty']);
+
+function lookupCompleteness(ownersStatus, licensesStatus) {
+  if (INCOMPLETE_LOOKUP_STATUSES.includes(ownersStatus) || INCOMPLETE_LOOKUP_STATUSES.includes(licensesStatus)) {
+    return 'incomplete';
+  }
+  return 'authoritative';
+}
+
 function emptyLookup(overrides = {}) {
   return {
     city: null,
@@ -130,6 +142,8 @@ function emptyLookup(overrides = {}) {
     ownersExactMatch: false,
     licensesExactMatch: false,
     partial: false,
+    completeness: 'skipped',
+    authoritativeZeroMatch: false,
     failures: [],
     ...overrides,
   };
@@ -343,9 +357,13 @@ async function researchContact({
       licensesStatus: chicago.licensesStatus,
       ownersExactMatch: false,
       licensesExactMatch: false,
-      partial: chicago.ownersStatus !== chicago.licensesStatus
-        && [chicago.ownersStatus, chicago.licensesStatus].some(status => status === 'ok' || status === 'empty')
-        && [chicago.ownersStatus, chicago.licensesStatus].some(status => ['timeout', 'http_error', 'error', 'skipped_budget'].includes(status)),
+      partial: COMPLETE_LOOKUP_STATUSES.includes(chicago.ownersStatus) !== COMPLETE_LOOKUP_STATUSES.includes(chicago.licensesStatus)
+        && (
+          COMPLETE_LOOKUP_STATUSES.includes(chicago.ownersStatus)
+          || COMPLETE_LOOKUP_STATUSES.includes(chicago.licensesStatus)
+        ),
+      completeness: lookupCompleteness(chicago.ownersStatus, chicago.licensesStatus),
+      authoritativeZeroMatch: false,
       failures: summary.failures,
     };
     const maker = pickDecisionMaker(chicago.owners, name);
@@ -405,13 +423,14 @@ async function researchContact({
         limitations: 'License match is exact legal or DBA name only. Inactive or unrelated entities are not inferred.',
       });
     }
-    if (summary.timeouts) {
-      limitations.push(`Chicago SODA contact lookup timed out ${summary.timeouts} time(s); unmatched contact fields were left empty.`);
+    lookup.authoritativeZeroMatch = lookup.completeness === 'authoritative' && !maker && !license;
+    if (lookup.completeness === 'incomplete') {
+      limitations.push('Chicago SODA contact lookup was incomplete because of timeout, HTTP failure, or exhausted request budget; unmatched contact fields were left empty. This is not an authoritative zero-match.');
     }
     if (lookup.partial) {
       limitations.push('Chicago SODA contact lookup returned a partial result; only exact-matched fields from successful datasets were kept.');
     }
-    if (!maker && !license) {
+    if (lookup.authoritativeZeroMatch) {
       limitations.push('No Chicago Business Owners or Business License row matched this exact legal or DBA name.');
     }
   }
@@ -447,11 +466,17 @@ async function measureChicagoExactMatchCoverage({
     const telemetry = [];
     const chicago = await lookupChicago(fetchImpl, name, { wait, telemetry });
     const summary = summarizeLookup(chicago.telemetry);
+    const ownersExactMatch = Boolean(pickDecisionMaker(chicago.owners, name));
+    const licensesExactMatch = Boolean(pickLicense(chicago.licenses, name));
+    const completeness = lookupCompleteness(chicago.ownersStatus, chicago.licensesStatus);
     results.push({
-      ownersExactMatch: Boolean(pickDecisionMaker(chicago.owners, name)),
-      licensesExactMatch: Boolean(pickLicense(chicago.licenses, name)),
+      ownersExactMatch,
+      licensesExactMatch,
       ownersStatus: chicago.ownersStatus,
       licensesStatus: chicago.licensesStatus,
+      completeness,
+      authoritativeZeroMatch: completeness === 'authoritative' && !ownersExactMatch && !licensesExactMatch,
+      incomplete: completeness === 'incomplete',
       requests: chicago.requests,
       timeouts: summary.timeouts,
       retries: summary.retries,
@@ -461,12 +486,16 @@ async function measureChicagoExactMatchCoverage({
   const licensesMatches = results.filter(row => row.licensesExactMatch).length;
   const either = results.filter(row => row.ownersExactMatch || row.licensesExactMatch).length;
   const both = results.filter(row => row.ownersExactMatch && row.licensesExactMatch).length;
+  const authoritativeZeroMatches = results.filter(row => row.authoritativeZeroMatch).length;
+  const incompleteLookups = results.filter(row => row.incomplete).length;
   return {
     queried: unique.length,
     ownersExactMatches: ownersMatches,
     licensesExactMatches: licensesMatches,
     eitherExactMatch: either,
     bothExactMatch: both,
+    authoritativeZeroMatches,
+    incompleteLookups,
     ownersMatchRate: unique.length ? ownersMatches / unique.length : 0,
     licensesMatchRate: unique.length ? licensesMatches / unique.length : 0,
     eitherMatchRate: unique.length ? either / unique.length : 0,
@@ -487,4 +516,5 @@ module.exports = {
   researchContact,
   lookupChicago,
   measureChicagoExactMatchCoverage,
+  lookupCompleteness,
 };

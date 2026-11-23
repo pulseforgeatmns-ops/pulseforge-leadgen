@@ -26,6 +26,7 @@ test('ambiguous source hosts and existing cities are not overwritten', () => {
   });
   assert.equal(ambiguous.city, null);
   assert.equal(ambiguous.source, 'ambiguous_source_hosts');
+  assert.equal(ambiguous.conflict, true);
 
   const preserved = applyCityToMetadata({
     city: 'Chicago',
@@ -33,6 +34,34 @@ test('ambiguous source hosts and existing cities are not overwritten', () => {
   });
   assert.equal(preserved.metadata.city, 'Chicago');
   assert.equal(preserved.metadata.cityInference.source, 'preserved_existing_city');
+  assert.equal(preserved.metadata.cityInference.conflict, true);
+});
+
+test('conflicting trusted city evidence preserves the existing city and records the conflict', () => {
+  const applied = applyCityToMetadata({
+    city: 'Chicago',
+    provider: 'chicago_open_data_permits',
+    sourceUrls: [
+      'https://data.cityofchicago.org/resource/ydr8-5enu.json?permit_=1',
+      'https://data.cityofnewyork.us/resource/w9ak-ipjd.json?job_filing_number=B00-1',
+    ],
+  });
+  assert.equal(applied.metadata.city, 'Chicago');
+  assert.equal(applied.metadata.provider, 'chicago_open_data_permits');
+  assert.equal(applied.metadata.cityInference.conflict, true);
+  assert.equal(applied.metadata.cityInference.source, 'preserved_existing_city');
+  assert.ok(applied.metadata.cityInference.conflictingCities.includes('Chicago'));
+  assert.ok(applied.metadata.cityInference.conflictingCities.includes('New York'));
+
+  const unresolved = applyCityToMetadata({
+    sourceUrls: [
+      'https://data.cityofchicago.org/resource/ydr8-5enu.json?permit_=1',
+      'https://data.cityofnewyork.us/resource/w9ak-ipjd.json?job_filing_number=B00-1',
+    ],
+  });
+  assert.equal(unresolved.metadata.city, undefined);
+  assert.equal(unresolved.metadata.cityInference.conflict, true);
+  assert.equal(unresolved.metadata.cityInference.source, 'conflicting_trusted_evidence');
 });
 
 test('service-area match backfills city only when no city is stored', () => {

@@ -69,6 +69,9 @@ test('no match leaves names, emails and phones empty instead of inventing them',
   assert.equal(result.email, null);
   assert.equal(result.address, null);
   assert.equal(result.fabricated, false);
+  assert.equal(result.lookup.completeness, 'authoritative');
+  assert.equal(result.lookup.authoritativeZeroMatch, true);
+  assert.ok(result.limitations.some(line => /No Chicago Business Owners or Business License row matched/i.test(line)));
   assert.ok(result.limitations.some(line => /No verifiable public business/i.test(line)));
 });
 
@@ -118,7 +121,29 @@ test('TimeoutError code 23 does not abort enrichment or invent a contact', async
   assert.equal(result.phone, null);
   assert.equal(result.email, null);
   assert.equal(result.lookup.timeouts >= 1, true);
-  assert.ok(result.limitations.some(line => /timed out/i.test(line)));
+  assert.equal(result.lookup.completeness, 'incomplete');
+  assert.equal(result.lookup.authoritativeZeroMatch, false);
+  assert.ok(result.limitations.some(line => /not an authoritative zero-match/i.test(line)));
+  assert.ok(!result.limitations.some(line => /No Chicago Business Owners or Business License row matched/i.test(line)));
+});
+
+test('Chicago contact lookup never issues a fifth HTTP request including retries', async () => {
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    throw Object.assign(new Error('The operation was aborted due to timeout'), {
+      name: 'TimeoutError',
+      code: 23,
+    });
+  };
+  await research.researchContact({
+    entityName: 'Ben Operator LLC',
+    city: 'Chicago',
+    observedAt: '2026-11-18',
+    fetch: fetchImpl,
+    wait: async () => {},
+  });
+  assert.equal(calls, 4);
 });
 
 test('Chicago lookups run from a trusted source URL when city was not persisted', async () => {
@@ -181,6 +206,8 @@ test('owner timeout still keeps an exact license match instead of fabricating th
   assert.equal(result.lookup.ownersExactMatch, false);
   assert.equal(result.lookup.licensesExactMatch, true);
   assert.equal(result.lookup.partial, true);
+  assert.equal(result.lookup.completeness, 'incomplete');
+  assert.equal(result.lookup.authoritativeZeroMatch, false);
   assert.equal(result.phone.value, '(312) 555-0199');
   assert.equal(result.decisionMakerRole, null);
 });
@@ -229,6 +256,8 @@ test('coverage measurement reports exact-match rates without inventing contacts'
   assert.equal(coverage.queried, 2);
   assert.equal(coverage.licensesExactMatches, 1);
   assert.equal(coverage.eitherExactMatch, 1);
+  assert.equal(coverage.authoritativeZeroMatches, 1);
+  assert.equal(coverage.incompleteLookups, 0);
   assert.equal(coverage.fabricatedContacts, 0);
   assert.equal(coverage.licensesMatchRate, 0.5);
 });
