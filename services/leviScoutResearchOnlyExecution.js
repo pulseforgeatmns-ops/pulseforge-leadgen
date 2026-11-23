@@ -2,6 +2,7 @@
 
 const { createHash } = require('node:crypto');
 const { evaluateProspect, authorityCriteria, TENANT_ID } = require('./leviScoutProductionContract');
+const { composeRecordReview } = require('./leviScoutMaxReview');
 
 const VERSION = 1;
 const MAX_CANDIDATES = 20;
@@ -41,7 +42,20 @@ function assertEnvironment(authority, env = process.env) {
   }
 }
 
+function metadataOf(row) {
+  const value = row && row.acquisition_metadata;
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try { return JSON.parse(value); } catch (_) { return {}; }
+}
+
 function identityKey(row) {
+  const metadata = metadataOf(row);
+  // Property-record signals stay entity-keyed so later public phones do not
+  // create a second identity and a duplicate persist.
+  if (metadata.sourceType === 'property_record_signal') {
+    return `entity:${String(row.name || row.company || '').trim().toLowerCase()}|${String(row.service_area_match || row.location || '').trim().toLowerCase()}`;
+  }
   const email = String(row.email || '').trim().toLowerCase();
   if (email) return `email:${email}`;
   const phone = String(row.phone || '').replace(/\D/g, '');
@@ -76,8 +90,14 @@ async function runResearchOnlyCycle({ authority: raw, env = process.env, deps })
       const duplicate = existing.has(key) || seen.has(key);
       seen.add(key);
       const evaluation = evaluateProspect({ ...row, duplicate_of: duplicate ? 'existing' : null }, { criteria: authority.criteria });
+      const review = composeRecordReview({
+        candidate: row,
+        evaluation,
+        criteria: authority.criteria,
+      });
       return Object.freeze({ candidate: row, identityKey: key, classification: evaluation.classification,
         qualified: evaluation.qualified, blockers: Object.freeze([...evaluation.blockers]),
+        review, bucket: review.bucket,
         outreachAuthorized: false, campaignEnrollmentAuthorized: false, setterVisible: false,
         aoOutreachReviewRequired: true, source: 'scout_research_only' });
     });
@@ -88,6 +108,9 @@ async function runResearchOnlyCycle({ authority: raw, env = process.env, deps })
       qualified: records.filter(row => row.qualified).length,
       classifications: records.reduce((out, row) => ({ ...out, [row.classification]: (out[row.classification] || 0) + 1 }), {}),
       duplicateBlocked: records.filter(row => row.blockers.includes('duplicate')).length,
+      researchCandidates: records.filter(row => row.bucket === 'research_candidate').length,
+      qualifiedProspects: records.filter(row => row.bucket === 'qualified_prospect').length,
+      verifiableBusinessContacts: records.filter(row => row.review && row.review.verifiableBusinessContact).length,
       outreachAttempted: false, paidProvidersUsed: false };
   } catch (error) {
     diagnostic = { status: 'failed', tenantId: String(TENANT_ID), cycleId: authority.cycleId,

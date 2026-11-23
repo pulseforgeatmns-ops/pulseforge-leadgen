@@ -2,19 +2,25 @@
 'use strict';
 
 const { discover, citiesOf, DISCOVERY_CAP } = require('../services/leviScoutBorrowerDiscovery');
+const { enrichmentCounts } = require('../services/leviScoutEnrichment');
+const { inspectApprovedBlueprint } = require('../services/leviScoutBlueprintReadiness');
 
-async function smoke({ env = process.env, fetch: fetchImpl = globalThis.fetch, now = new Date() } = {}) {
+async function smoke({ env = process.env, fetch: fetchImpl = globalThis.fetch, now = new Date(), understanding } = {}) {
   const rows = await discover({
     maxCandidates: DISCOVERY_CAP,
     maxProviderRequests: 0,
     fetch: fetchImpl,
     now,
   });
-  const qualified = 0;
+  const counts = enrichmentCounts(rows);
+  const blueprint = inspectApprovedBlueprint(understanding);
   return {
     discovered: rows.length,
     cities: citiesOf(rows),
-    qualified,
+    qualified: 0,
+    researchCandidates: counts.researchCandidates,
+    verifiableBusinessContacts: counts.verifiableBusinessContacts,
+    missingBlueprintDecisions: blueprint.missing.length,
     outbound: false,
     persist: 'dry-run',
     status: 'dry_run',
