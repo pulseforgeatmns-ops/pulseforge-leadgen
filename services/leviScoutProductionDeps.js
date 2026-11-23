@@ -5,6 +5,7 @@ const { identityKey } = require('./leviScoutResearchOnlyExecution');
 const { AGENT } = require('./leviScoutEnablement');
 const { discover: discoverBorrowers, citiesOf } = require('./leviScoutBorrowerDiscovery');
 const { importReviewOnlyContacts } = require('./reviewOnlyProspectImportService');
+const { applyCityToMetadata } = require('./leviScoutProvenance');
 
 function fail(code) { throw Object.assign(new Error(code), { code }); }
 
@@ -14,6 +15,12 @@ function asContacts(records = []) {
     const metadata = candidate.acquisition_metadata || {};
     const review = row.review || metadata.review || {};
     const sourceUrl = Array.isArray(metadata.sourceUrls) ? metadata.sourceUrls[0] : null;
+    const applied = applyCityToMetadata(metadata, {
+      permalink: sourceUrl,
+      location: candidate.service_area_match,
+      serviceAreaMatch: candidate.service_area_match,
+    });
+    const cityMetadata = applied.metadata;
     return {
       name: candidate.name || candidate.company || `Permit operator ${index + 1}`,
       company: candidate.company || candidate.name,
@@ -21,7 +28,7 @@ function asContacts(records = []) {
       phone: undefined,
       linkedin: candidate.linkedin_url || undefined,
       reviewState: metadata.reviewState || 'qualify_first',
-      market: candidate.service_area_match,
+      market: candidate.service_area_match || cityMetadata.city,
       category: metadata.category || 'borrower',
       fit: String(candidate.notes || '').replace(/^Review state:[^\n]*\n?/i, '').replace(/^Fit evidence:\s*/im, ''),
       sourceUrl,
@@ -30,6 +37,9 @@ function asContacts(records = []) {
       nextAction: review.nextResearchAction,
       risks: Array.isArray(review.missingInformation) ? review.missingInformation.join(' ') : undefined,
       extraMetadata: {
+        city: cityMetadata.city || null,
+        provider: cityMetadata.provider || null,
+        cityInference: cityMetadata.cityInference || null,
         signals: metadata.signals || [],
         contactResearch: metadata.contactResearch || null,
         review,

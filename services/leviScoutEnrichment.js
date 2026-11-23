@@ -4,6 +4,7 @@ const { TENANT_ID, evaluateProspect } = require('./leviScoutProductionContract')
 const { fromPermit, qualificationSignal } = require('./leviScoutSignalModel');
 const { researchContact } = require('./leviScoutContactResearch');
 const { composeRecordReview } = require('./leviScoutMaxReview');
+const { applyCityToMetadata } = require('./leviScoutProvenance');
 
 function fail(code) { throw Object.assign(new Error(code), { code }); }
 
@@ -30,8 +31,16 @@ async function enrichCandidate({
   if (String(tenantId) !== String(TENANT_ID)) fail('levi_research_tenant_invalid');
   if (!candidate) return null;
   const enriched = cloneCandidate(candidate);
+  const permalink = Array.isArray(enriched.acquisition_metadata.sourceUrls)
+    ? enriched.acquisition_metadata.sourceUrls[0]
+    : null;
+  const applied = applyCityToMetadata(enriched.acquisition_metadata, {
+    permalink,
+    location: enriched.service_area_match,
+    serviceAreaMatch: enriched.service_area_match,
+  });
+  enriched.acquisition_metadata = applied.metadata;
   const metadata = enriched.acquisition_metadata;
-  const permalink = Array.isArray(metadata.sourceUrls) ? metadata.sourceUrls[0] : null;
   const observedAt = metadata.evidenceDate || new Date(now).toISOString().slice(0, 10);
   const permitSignals = fromPermit({
     row: sourceRow,
@@ -46,6 +55,9 @@ async function enrichCandidate({
     city: metadata.city,
     sourceRow,
     permalink,
+    sourceUrls: metadata.sourceUrls,
+    location: enriched.service_area_match,
+    provider: metadata.provider,
     observedAt,
     fetch: fetchImpl,
     cache,

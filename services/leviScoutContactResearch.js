@@ -1,11 +1,12 @@
 'use strict';
 
 const { TENANT_ID } = require('./leviScoutProductionContract');
+const { inferCityFromProvenance } = require('./leviScoutProvenance');
+const soda = require('./leviScoutSodaClient');
 
-const USER_AGENT = 'pulseforge-levi-scout-research-only/1.0';
+const USER_AGENT = soda.USER_AGENT;
 const CHICAGO_OWNERS_URL = 'https://data.cityofchicago.org/resource/ezma-pppn.json';
 const CHICAGO_LICENSES_URL = 'https://data.cityofchicago.org/resource/r5kz-chrr.json';
-const FETCH_TIMEOUT_MS = 8000;
 const DECISION_TITLES = Object.freeze([
   'OWNER', 'PRESIDENT', 'MANAGING MEMBER', 'MEMBER', 'MANAGER', 'CEO',
   'PRINCIPAL', 'PARTNER', 'MANAGING PARTNER', 'DIRECTOR',
@@ -15,11 +16,6 @@ function fail(code) { throw Object.assign(new Error(code), { code }); }
 
 function text(value) {
   return value == null ? '' : String(value).trim();
-}
-
-function isPaidEnrichmentUrl(url) {
-  return /maps\.googleapis\.com|places\.googleapis\.com|serpapi\.com|hunter\.io|prospeo\.io|apollo\.io|clearbit\.com|lusha\.com/i
-    .test(String(url || ''));
 }
 
 function sodaLiteral(value) {
@@ -50,33 +46,12 @@ function normalizeEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : null;
 }
 
-function requestHeaders() {
-  return { Accept: 'application/json', 'User-Agent': USER_AGENT };
-}
-
 function sodaUrl(base, where, limit = 5) {
   const params = new URLSearchParams({
     $limit: String(limit),
     $where: where,
   });
   return `${base}?${params.toString()}`;
-}
-
-async function readJson(fetchImpl, url) {
-  if (isPaidEnrichmentUrl(url)) fail('levi_research_paid_provider_approval_required');
-  const options = { headers: requestHeaders() };
-  if (typeof AbortSignal === 'function' && typeof AbortSignal.timeout === 'function') {
-    options.signal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
-  }
-  try {
-    const response = await fetchImpl(url, options);
-    if (!response || response.ok === false) return [];
-    const body = typeof response.json === 'function' ? await response.json() : [];
-    return Array.isArray(body) ? body : [];
-  } catch (error) {
-    if (error && error.code) throw error;
-    return [];
-  }
 }
 
 function provenance({ value, source, evidence, observedAt, field, limitations }) {
@@ -143,19 +118,114 @@ function pickLicense(rows = [], entityName) {
     || namesMatch(row.legal_name, entityName)) || null;
 }
 
-async function lookupChicago(fetchImpl, entityName) {
-  const name = sodaLiteral(normalizeEntityName(entityName));
-  if (!name) return { owners: [], licenses: [] };
-  const clause = `(upper(doing_business_as_name)='${name}' OR upper(legal_name)='${name}')`;
-  const dbaOnly = `upper(doing_business_as_name)='${name}'`;
-  let owners = await readJson(fetchImpl, sodaUrl(CHICAGO_OWNERS_URL, dbaOnly));
-  if (!owners.length) owners = await readJson(fetchImpl, sodaUrl(CHICAGO_OWNERS_URL, clause));
-  let licenses = await readJson(fetchImpl, sodaUrl(CHICAGO_LICENSES_URL, clause));
-  if (!licenses.length) licenses = await readJson(fetchImpl, sodaUrl(CHICAGO_LICENSES_URL, dbaOnly));
-  return { owners, licenses };
+const INCOMPLETE_LOOKUP_STATUSES = Object.freeze([
+  'timeout', 'http_error', 'error', 'skipped_budget', 'empty_response',
+]);
+const COMPLETE_LOOKUP_STATUSES = Object.freeze(['ok', 'empty']);
+
+function lookupCompleteness(ownersStatus, licensesStatus) {
+  if (INCOMPLETE_LOOKUP_STATUSES.includes(ownersStatus) || INCOMPLETE_LOOKUP_STATUSES.includes(licensesStatus)) {
+    return 'incomplete';
+  }
+  return 'authoritative';
 }
 
-function emptyResult(limitations) {
+function emptyLookup(overrides = {}) {
+  return {
+    city: null,
+    citySource: null,
+    requests: 0,
+    timeouts: 0,
+    retries: 0,
+    ownersStatus: 'skipped',
+    licensesStatus: 'skipped',
+    ownersExactMatch: false,
+    licensesExactMatch: false,
+    partial: false,
+    completeness: 'skipped',
+    authoritativeZeroMatch: false,
+    failures: [],
+    ...overrides,
+  };
+}
+
+async function queryDataset({ fetchImpl, url, clauses, budget, wait, telemetry }) {
+  let lastStatus = 'empty';
+  for (const where of clauses) {
+    const result = await soda.boundedReadJson({
+      fetchImpl,
+      url: sodaUrl(url, where),
+      budget,
+      wait,
+      telemetry,
+    });
+    lastStatus = result.status;
+    if (result.rows.length) return { rows: result.rows, status: 'ok' };
+    if (result.status === 'timeout' || result.status === 'http_error' || result.status === 'error' || result.status === 'skipped_budget') {
+      return { rows: [], status: result.status };
+    }
+  }
+  return { rows: [], status: lastStatus };
+}
+
+async function lookupChicago(fetchImpl, entityName, { wait, telemetry, budget } = {}) {
+  const name = sodaLiteral(normalizeEntityName(entityName));
+  const events = Array.isArray(telemetry) ? telemetry : [];
+  const lookupBudget = budget || soda.createLookupBudget();
+  if (!name) {
+    return {
+      owners: [],
+      licenses: [],
+      ownersStatus: 'empty',
+      licensesStatus: 'empty',
+      telemetry: events,
+      requests: lookupBudget.used(),
+    };
+  }
+  const clause = `(upper(doing_business_as_name)='${name}' OR upper(legal_name)='${name}')`;
+  const dbaOnly = `upper(doing_business_as_name)='${name}'`;
+  const owners = await queryDataset({
+    fetchImpl,
+    url: CHICAGO_OWNERS_URL,
+    clauses: [dbaOnly, clause],
+    budget: lookupBudget,
+    wait,
+    telemetry: events,
+  });
+  const licenses = await queryDataset({
+    fetchImpl,
+    url: CHICAGO_LICENSES_URL,
+    clauses: [clause, dbaOnly],
+    budget: lookupBudget,
+    wait,
+    telemetry: events,
+  });
+  return {
+    owners: owners.rows,
+    licenses: licenses.rows,
+    ownersStatus: owners.status,
+    licensesStatus: licenses.status,
+    telemetry: events,
+    requests: lookupBudget.used(),
+  };
+}
+
+function summarizeLookup(events = []) {
+  const timeouts = events.filter(event => event.status === 'timeout').length;
+  const retries = events.filter(event => event.attempt > 1).length;
+  const failures = events
+    .filter(event => ['timeout', 'http_error', 'error', 'skipped_budget'].includes(event.status))
+    .map(event => ({
+      datasetId: event.datasetId || soda.datasetIdOf(event.url),
+      status: event.status,
+      attempt: event.attempt || null,
+      code: event.code || null,
+      httpStatus: event.httpStatus || null,
+    }));
+  return { timeouts, retries, failures };
+}
+
+function emptyResult(limitations, lookup = emptyLookup()) {
   return Object.freeze({
     operatingBusiness: null,
     decisionMakerRole: null,
@@ -166,6 +236,7 @@ function emptyResult(limitations) {
     fabricated: false,
     paidProvidersUsed: false,
     limitations: Object.freeze([limitations].filter(Boolean)),
+    lookup: Object.freeze(lookup),
   });
 }
 
@@ -175,24 +246,42 @@ async function researchContact({
   city,
   sourceRow = {},
   permalink,
+  sourceUrls,
+  location,
+  provider,
   observedAt,
   fetch: fetchImpl = globalThis.fetch,
   cache,
+  wait,
 } = {}) {
   if (String(tenantId) !== String(TENANT_ID)) fail('levi_research_tenant_invalid');
   const name = text(entityName);
   if (!name) return emptyResult('No operating-entity name was present on the public permit.');
+  const inferred = inferCityFromProvenance({
+    city,
+    sourceUrls: sourceUrls || (permalink ? [permalink] : []),
+    permalink,
+    location,
+    provider,
+  });
+  const resolvedCity = inferred.city || text(city) || null;
   const stamp = text(observedAt) || new Date().toISOString().slice(0, 10);
   const source = permalink || null;
-  const cacheKey = `${normalizeEntityName(name)}|${text(city)}`;
+  const cacheKey = `${normalizeEntityName(name)}|${text(resolvedCity)}`;
   if (cache && cache.has(cacheKey)) return cache.get(cacheKey);
 
   const limitations = [];
+  const telemetry = [];
+  let lookup = emptyLookup({
+    city: resolvedCity,
+    citySource: inferred.source,
+  });
+
   let operatingBusiness = provenance({
     value: name,
     field: 'operating_business',
     source,
-    evidence: `Named as the entity owner or operating business on a public ${text(city) || 'permit'} record.`,
+    evidence: `Named as the entity owner or operating business on a public ${resolvedCity || 'permit'} record.`,
     observedAt: stamp,
     limitations: 'The permit names an entity. It does not prove current operations, ownership percentage, or financing intent.',
   });
@@ -216,7 +305,7 @@ async function researchContact({
   });
   let address = null;
 
-  const chicagoPermitOwner = /chicago/i.test(text(city)) ? chicagoOwnerFromPermit(sourceRow) : null;
+  const chicagoPermitOwner = /chicago/i.test(text(resolvedCity)) ? chicagoOwnerFromPermit(sourceRow) : null;
   if (chicagoPermitOwner) {
     if (chicagoPermitOwner.phone && !phone) {
       phone = provenance({
@@ -255,9 +344,30 @@ async function researchContact({
     }
   }
 
-  if (/chicago/i.test(text(city))) {
-    const { owners, licenses } = await lookupChicago(fetchImpl, name);
-    const maker = pickDecisionMaker(owners, name);
+  if (/chicago/i.test(text(resolvedCity))) {
+    const chicago = await lookupChicago(fetchImpl, name, { wait, telemetry });
+    const summary = summarizeLookup(chicago.telemetry);
+    lookup = {
+      city: resolvedCity,
+      citySource: inferred.source,
+      requests: chicago.requests,
+      timeouts: summary.timeouts,
+      retries: summary.retries,
+      ownersStatus: chicago.ownersStatus,
+      licensesStatus: chicago.licensesStatus,
+      ownersExactMatch: false,
+      licensesExactMatch: false,
+      partial: COMPLETE_LOOKUP_STATUSES.includes(chicago.ownersStatus) !== COMPLETE_LOOKUP_STATUSES.includes(chicago.licensesStatus)
+        && (
+          COMPLETE_LOOKUP_STATUSES.includes(chicago.ownersStatus)
+          || COMPLETE_LOOKUP_STATUSES.includes(chicago.licensesStatus)
+        ),
+      completeness: lookupCompleteness(chicago.ownersStatus, chicago.licensesStatus),
+      authoritativeZeroMatch: false,
+      failures: summary.failures,
+    };
+    const maker = pickDecisionMaker(chicago.owners, name);
+    lookup.ownersExactMatch = Boolean(maker);
     if (maker) {
       decisionMakerRole = provenance({
         value: [maker.title, maker.name].filter(Boolean).join(' — ') || maker.title,
@@ -268,7 +378,8 @@ async function researchContact({
         limitations: 'Public owner-title filing. Names are copied only as filed. No ownership percentage or contact path is assumed.',
       });
     }
-    const license = pickLicense(licenses, name);
+    const license = pickLicense(chicago.licenses, name);
+    lookup.licensesExactMatch = Boolean(license);
     if (license) {
       const registered = licenseAddress(license);
       if (registered) {
@@ -312,7 +423,14 @@ async function researchContact({
         limitations: 'License match is exact legal or DBA name only. Inactive or unrelated entities are not inferred.',
       });
     }
-    if (!maker && !license) {
+    lookup.authoritativeZeroMatch = lookup.completeness === 'authoritative' && !maker && !license;
+    if (lookup.completeness === 'incomplete') {
+      limitations.push('Chicago SODA contact lookup was incomplete because of timeout, HTTP failure, or exhausted request budget; unmatched contact fields were left empty. This is not an authoritative zero-match.');
+    }
+    if (lookup.partial) {
+      limitations.push('Chicago SODA contact lookup returned a partial result; only exact-matched fields from successful datasets were kept.');
+    }
+    if (lookup.authoritativeZeroMatch) {
       limitations.push('No Chicago Business Owners or Business License row matched this exact legal or DBA name.');
     }
   }
@@ -331,16 +449,72 @@ async function researchContact({
     fabricated: false,
     paidProvidersUsed: false,
     limitations: Object.freeze(limitations),
+    lookup: Object.freeze(lookup),
   });
   if (cache) cache.set(cacheKey, result);
   return result;
+}
+
+async function measureChicagoExactMatchCoverage({
+  names = [],
+  fetch: fetchImpl = globalThis.fetch,
+  wait,
+} = {}) {
+  const unique = [...new Set(names.map(name => normalizeEntityName(name)).filter(Boolean))];
+  const results = [];
+  for (const name of unique) {
+    const telemetry = [];
+    const chicago = await lookupChicago(fetchImpl, name, { wait, telemetry });
+    const summary = summarizeLookup(chicago.telemetry);
+    const ownersExactMatch = Boolean(pickDecisionMaker(chicago.owners, name));
+    const licensesExactMatch = Boolean(pickLicense(chicago.licenses, name));
+    const completeness = lookupCompleteness(chicago.ownersStatus, chicago.licensesStatus);
+    results.push({
+      ownersExactMatch,
+      licensesExactMatch,
+      ownersStatus: chicago.ownersStatus,
+      licensesStatus: chicago.licensesStatus,
+      completeness,
+      authoritativeZeroMatch: completeness === 'authoritative' && !ownersExactMatch && !licensesExactMatch,
+      incomplete: completeness === 'incomplete',
+      requests: chicago.requests,
+      timeouts: summary.timeouts,
+      retries: summary.retries,
+    });
+  }
+  const ownersMatches = results.filter(row => row.ownersExactMatch).length;
+  const licensesMatches = results.filter(row => row.licensesExactMatch).length;
+  const either = results.filter(row => row.ownersExactMatch || row.licensesExactMatch).length;
+  const both = results.filter(row => row.ownersExactMatch && row.licensesExactMatch).length;
+  const authoritativeZeroMatches = results.filter(row => row.authoritativeZeroMatch).length;
+  const incompleteLookups = results.filter(row => row.incomplete).length;
+  return {
+    queried: unique.length,
+    ownersExactMatches: ownersMatches,
+    licensesExactMatches: licensesMatches,
+    eitherExactMatch: either,
+    bothExactMatch: both,
+    authoritativeZeroMatches,
+    incompleteLookups,
+    ownersMatchRate: unique.length ? ownersMatches / unique.length : 0,
+    licensesMatchRate: unique.length ? licensesMatches / unique.length : 0,
+    eitherMatchRate: unique.length ? either / unique.length : 0,
+    timeouts: results.reduce((sum, row) => sum + row.timeouts, 0),
+    requests: results.reduce((sum, row) => sum + row.requests, 0),
+    retries: results.reduce((sum, row) => sum + row.retries, 0),
+    fabricatedContacts: 0,
+    results,
+  };
 }
 
 module.exports = {
   USER_AGENT,
   CHICAGO_OWNERS_URL,
   CHICAGO_LICENSES_URL,
-  isPaidEnrichmentUrl,
+  isPaidEnrichmentUrl: soda.isPaidEnrichmentUrl,
   namesMatch,
   researchContact,
+  lookupChicago,
+  measureChicagoExactMatchCoverage,
+  lookupCompleteness,
 };
