@@ -69,7 +69,8 @@ function evaluateProspect(row = {}, options = {}) {
   const sources = sourceReferences(row, metadata);
   const blockers = [];
   const category = String(metadata.category || row.category || row.job_title || '').toLowerCase();
-  const contactPath = Boolean(row.email || row.phone || row.linkedin_url || metadata.profileUrl);
+  const publicContact = Boolean(metadata.contactResearch && metadata.contactResearch.verifiable);
+  const contactPath = Boolean(row.email || row.phone || row.linkedin_url || metadata.profileUrl || publicContact);
   const location = Boolean(row.service_area_match || row.company_location || metadata.projectLocation);
   const duplicateClear = !row.duplicate_of && metadata.duplicate !== true && metadata.duplicateOf == null;
   const suppressed = row.do_not_contact === true || metadata.suppressed === true;
@@ -109,6 +110,9 @@ function evaluateProspect(row = {}, options = {}) {
       evidencePublishedAt: metadata.evidenceDate || null,
       evidenceImportedAt: metadata.importedAt || row.created_at || null,
       sourceType,
+      permitDoesNotEstablishIntent: sourceType === 'property_record_signal' || metadata.permitDoesNotEstablishIntent === true,
+      verifiableBusinessContact: publicContact,
+      signalLayers: Array.isArray(metadata.signals) ? metadata.signals.map(item => item && item.layer).filter(Boolean) : [],
       duplicateClear,
       suppressionClear: !suppressed,
       securityKnown: Boolean(claims.claims.security),

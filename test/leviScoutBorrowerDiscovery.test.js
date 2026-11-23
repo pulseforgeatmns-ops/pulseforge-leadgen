@@ -90,11 +90,16 @@ test('discover interleaves cities, caps at 10, sends User-Agent, and never calls
   assert.deepEqual(discovery.citiesOf(rows).sort(), ['Chicago', 'New York']);
   assert.equal(rows[0].acquisition_metadata.city, 'New York');
   assert.equal(rows[1].acquisition_metadata.city, 'Chicago');
-  assert.ok(fetchImpl.calls.every(call => /w9ak-ipjd|ydr8-5enu/.test(call.url)));
-  assert.ok(fetchImpl.calls.every(call => !/ipu4-2q9a/.test(call.url)));
+  assert.ok(fetchImpl.calls.every(call => /w9ak-ipjd|ydr8-5enu|ezma-pppn|r5kz-chrr/.test(call.url)));
+  assert.ok(fetchImpl.calls.every(call => !/ipu4-2q9a|hunter|prospeo|apollo|googleapis|serpapi/.test(call.url)));
   assert.ok(fetchImpl.calls.every(call => !discovery.isPlacesUrl(call.url)));
   assert.ok(fetchImpl.calls.every(call => call.headers['User-Agent'] === discovery.USER_AGENT));
   assert.ok(fetchImpl.calls.some(call => /first_permit_date/.test(decodeURIComponent(call.url))));
+  assert.ok(rows.every(row => row.acquisition_metadata.permitDoesNotEstablishIntent === true));
+  assert.ok(rows.every(row => row.acquisition_metadata.signals.some(signal => signal.layer === 'property_activity')));
+  assert.ok(rows.every(row => row.acquisition_metadata.signals.every(signal => signal.layer !== 'verified_borrower_intent')));
+  assert.equal(rows[0].email, null);
+  assert.equal(rows[0].phone, null);
 });
 
 test('maxProviderRequests above zero is rejected so paid providers stay off', async () => {

@@ -12,12 +12,13 @@ function asContacts(records = []) {
   return records.map((row, index) => {
     const candidate = row.candidate || row;
     const metadata = candidate.acquisition_metadata || {};
+    const review = row.review || metadata.review || {};
     const sourceUrl = Array.isArray(metadata.sourceUrls) ? metadata.sourceUrls[0] : null;
     return {
       name: candidate.name || candidate.company || `Permit operator ${index + 1}`,
       company: candidate.company || candidate.name,
-      email: candidate.email || undefined,
-      phone: candidate.phone || undefined,
+      email: undefined,
+      phone: undefined,
       linkedin: candidate.linkedin_url || undefined,
       reviewState: metadata.reviewState || 'qualify_first',
       market: candidate.service_area_match,
@@ -26,6 +27,16 @@ function asContacts(records = []) {
       sourceUrl,
       evidenceDate: metadata.evidenceDate || undefined,
       sourceType: metadata.sourceType || 'property_record_signal',
+      nextAction: review.nextResearchAction,
+      risks: Array.isArray(review.missingInformation) ? review.missingInformation.join(' ') : undefined,
+      extraMetadata: {
+        signals: metadata.signals || [],
+        contactResearch: metadata.contactResearch || null,
+        review,
+        bucket: review.bucket || metadata.bucket || 'research_candidate',
+        permitDoesNotEstablishIntent: true,
+        verifiedBorrowerIntent: false,
+      },
     };
   });
 }
@@ -70,7 +81,8 @@ function createProductionDeps({ db, fetch: fetchImpl, env = process.env, tenantI
   async function existingIdentityKeys({ keys }) {
     if (!db || typeof db.query !== 'function') return [];
     const result = await db.query(
-      `SELECT first_name, last_name, email, phone, linkedin_url, service_area_match
+      `SELECT first_name, last_name, email, phone, linkedin_url, service_area_match,
+              discovery_method, source, acquisition_metadata
          FROM prospects WHERE client_id = $1`,
       [Number(TENANT_ID)]
     );
@@ -80,6 +92,9 @@ function createProductionDeps({ db, fetch: fetchImpl, env = process.env, tenantI
       linkedin_url: row.linkedin_url,
       name: [row.first_name, row.last_name].filter(Boolean).join(' '),
       service_area_match: row.service_area_match,
+      acquisition_metadata: row.acquisition_metadata || {
+        sourceType: row.discovery_method === 'open_data_permit' ? 'property_record_signal' : undefined,
+      },
     })));
     return [...keys].filter(key => present.has(key));
   }

@@ -10,7 +10,8 @@ const { compactResult } = require('../services/leviScoutMaxDelivery');
 const { researchEnabled, productionLimits, productionPermissions, AGENT } = require('../services/leviScoutEnablement');
 const { smoke } = require('../scripts/leviScoutProductionSmoke');
 const { TENANT_ID } = require('../services/leviScoutProductionContract');
-const { shouldHandleScoutAcquisition } = require('../packages/max/workspace/ScoutAcquisitionContext');
+const { shouldHandleScoutAcquisition, maybeHandleScoutAcquisitionTurn } = require('../packages/max/workspace/ScoutAcquisitionContext');
+const { inspectApprovedBlueprint } = require('../services/leviScoutBlueprintReadiness');
 
 const NOW = new Date('2026-11-22T15:00:00Z');
 const nycRow = {
@@ -41,8 +42,11 @@ function fetchFor() {
   const calls = [];
   const fetchImpl = async (url) => {
     calls.push(String(url));
-    if (/googleapis|serpapi|prospeo|hunter/i.test(url)) throw new Error(`forbidden_provider:${url}`);
-    const rows = /cityofnewyork/.test(url) ? [nycRow] : /cityofchicago/.test(url) ? [chicagoRow] : [];
+    if (/googleapis|serpapi|prospeo|hunter|apollo/i.test(url)) throw new Error(`forbidden_provider:${url}`);
+    const id = (/resource\/([a-z0-9]{4}-[a-z0-9]{4})/.exec(String(url)) || [])[1];
+    const rows = id === 'w9ak-ipjd' ? [nycRow]
+      : id === 'ydr8-5enu' ? [chicagoRow]
+        : [];
     return { ok: true, json: async () => rows };
   };
   fetchImpl.calls = calls;
@@ -194,4 +198,37 @@ test('Max tenant-21 find/discover/prospects/borrowers questions do not require t
     question: 'Who should we call in Manchester?',
     context: { enabledAgents: ['max'], tenantId: '10' },
   }), false);
+});
+
+test('tenant 21 Max review does not call Places or the general Scout loop', async () => {
+  let loopCalled = 0;
+  const turn = await maybeHandleScoutAcquisitionTurn({
+    question: 'Discover prospects for the Chicago book',
+    context: { enabledAgents: ['max'], tenantId: '21' },
+    runLoop: async () => { loopCalled += 1; throw new Error('general_scout_loop_forbidden'); },
+    reviewRecords: [],
+    understanding: understanding('Lending to investors.'),
+  });
+  assert.equal(loopCalled, 0);
+  assert.equal(turn.reason, 'levi_scout_research_review');
+  assert.equal(turn.structured.metadata.operationalRead.paidProvidersUsed, false);
+  const missing = inspectApprovedBlueprint(understanding('Lending to investors.')).questionsForLevi;
+  assert.ok(missing.length >= 1);
+  assert.match(turn.prose, /Missing Blueprint decisions/);
+});
+
+test('property-record identity keys stay entity-based after public phone enrichment', () => {
+  const { identityKey } = require('../services/leviScoutResearchOnlyExecution');
+  const row = {
+    name: 'Ben Operator LLC',
+    company: 'Ben Operator LLC',
+    phone: '(312) 555-0199',
+    service_area_match: '100 N MICHIGAN AVE, Chicago, IL',
+    acquisition_metadata: { sourceType: 'property_record_signal' },
+  };
+  assert.equal(
+    identityKey(row),
+    identityKey({ ...row, phone: null })
+  );
+  assert.match(identityKey(row), /^entity:ben operator llc\|/);
 });
