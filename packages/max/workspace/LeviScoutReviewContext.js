@@ -25,17 +25,37 @@ function resolveTenantId(input = {}) {
   ).trim();
 }
 
+function isOperationalReadQuestion(question, input = {}) {
+  const q = String(question || '').trim();
+  if (!q) return false;
+  try {
+    const operating = require('./OperatingEvidenceRetrieval');
+    if (operating.shouldRetrieveOperatingEvidence(q)) return true;
+  } catch (_) {
+    /* classifier unavailable */
+  }
+  try {
+    const { isOperationalReadRequest } = require('./OperationalReadIntent');
+    if (isOperationalReadRequest(q, { session: input.session, context: input.context })) return true;
+  } catch (_) {
+    /* classifier unavailable */
+  }
+  return false;
+}
+
 function shouldHandleLeviScoutReview(input = {}) {
   if (resolveTenantId(input) !== String(TENANT_ID)) return false;
   const question = String(input.question || '').trim();
   if (!question) return false;
-  return /\b(find|discover(?:y|ed|ing)?|prospects?|borrowers?|candidates?|scout|qualif(?:y|ied|ication)|research|briefing|contact|operator)\b/i
-    .test(question);
+  if (isOperationalReadQuestion(question, input)) return false;
+  return /\b(?:find|discover(?:y|ed|ing)?|search\s+for|look\s+for|locate|source|prospect\s+for)\b/i.test(question)
+    && /\b(?:prospects?|borrowers?|leads?|candidates?|operators?)\b/i.test(question);
 }
 
 async function maybeHandleLeviScoutReviewTurn(input = {}) {
   const tenantId = resolveTenantId(input);
   if (tenantId !== String(TENANT_ID)) return null;
+  if (isOperationalReadQuestion(input.question, input)) return null;
   if (!input.forceLeviReview && !shouldHandleLeviScoutReview(input)) return null;
   const db = input.db || (input.context && input.context.db) || null;
   const understanding = input.understanding
@@ -124,4 +144,5 @@ async function maybeHandleLeviScoutReviewTurn(input = {}) {
 module.exports = {
   shouldHandleLeviScoutReview,
   maybeHandleLeviScoutReviewTurn,
+  isOperationalReadQuestion,
 };

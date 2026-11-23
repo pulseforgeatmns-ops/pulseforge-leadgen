@@ -311,6 +311,23 @@ test('Max tenant-21 find/discover/prospects/borrowers questions do not require t
   }), false);
 });
 
+test('tenant 21 operational-read questions stay out of Scout and the Levi review intercept', async () => {
+  let loopCalled = 0;
+  const question = 'Brief me on my prospects. Identify the top five opportunities.';
+  assert.equal(shouldHandleScoutAcquisition({
+    question,
+    context: { enabledAgents: ['max'], tenantId: '21' },
+  }), false);
+  const turn = await maybeHandleScoutAcquisitionTurn({
+    question,
+    context: { enabledAgents: ['max'], tenantId: '21' },
+    runLoop: async () => { loopCalled += 1; throw new Error('general_scout_loop_forbidden'); },
+    reviewRecords: [],
+  });
+  assert.equal(turn, null);
+  assert.equal(loopCalled, 0);
+});
+
 test('tenant 21 Max review does not call Places or the general Scout loop', async () => {
   let loopCalled = 0;
   const turn = await maybeHandleScoutAcquisitionTurn({

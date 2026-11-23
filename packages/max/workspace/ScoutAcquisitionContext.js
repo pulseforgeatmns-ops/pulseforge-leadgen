@@ -114,7 +114,9 @@ async function maybeHandleScoutAcquisitionTurn(input = {}) {
   if (!tenantId) return null;
 
   if (String(tenantId) === '21') {
-    return maybeHandleLeviScoutReviewTurn({ ...input, forceLeviReview: true });
+    const review = await maybeHandleLeviScoutReviewTurn({ ...input, forceLeviReview: true });
+    if (review) return review;
+    return null;
   }
 
   const session = input.session || null;

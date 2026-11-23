@@ -10,6 +10,7 @@ const {
   QUALIFIED_PROSPECT,
 } = require('../services/leviScoutMaxReview');
 const { maybeHandleScoutAcquisitionTurn } = require('../packages/max/workspace/ScoutAcquisitionContext');
+const { maybeHandleLeviScoutReviewTurn } = require('../packages/max/workspace/LeviScoutReviewContext');
 const { evaluateProspect } = require('../services/leviScoutProductionContract');
 const { QUESTIONS } = require('../services/leviScoutBlueprintReadiness');
 
@@ -101,6 +102,23 @@ test('tenant 21 Max find/discover answers from persisted Scout records and does 
   assert.equal(turn.structured.metadata.operationalRead.outreachAttempted, false);
   assert.equal(turn.structured.metadata.operationalRead.paidProvidersUsed, false);
   assert.ok(turn.structured.nextInvestigations.length >= 1);
+});
+
+test('tenant 21 operational reads are not captured by Levi Scout review, even with forceLeviReview', async () => {
+  let loopCalled = 0;
+  const question = 'Brief me on my prospects. Identify the top five opportunities, explain why they\'re ranked that way, and recommend the next action for each. Use actual workspace data and cite the supporting evidence.';
+  const input = {
+    question,
+    context: { enabledAgents: ['max'], tenantId: '21' },
+    session: { context: { tenantId: '21' } },
+    runLoop: async () => { loopCalled += 1; throw new Error('general_scout_loop_forbidden'); },
+    reviewRecords: [permitCandidate],
+    forceLeviReview: true,
+  };
+  assert.equal(await maybeHandleLeviScoutReviewTurn(input), null);
+  const turn = await maybeHandleScoutAcquisitionTurn(input);
+  assert.equal(turn, null);
+  assert.equal(loopCalled, 0);
 });
 
 test('a complete verified record can be a qualified prospect without mixing buckets', () => {
