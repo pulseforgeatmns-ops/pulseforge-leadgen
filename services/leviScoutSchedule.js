@@ -36,20 +36,36 @@ async function tick({ now = new Date(), env = process.env, run, lastCycleId = nu
   return { status: result.status || 'completed', cycleId, ran: true, result, outreachAttempted: false };
 }
 
-function startLeviScoutWeeklyClock({ env = process.env, now = new Date(), run, timers = globalThis } = {}) {
-  const delay = Math.max(1000, msUntilNextWeek(now));
+function scheduleNextWeek({ env, run, timers, from }) {
+  const delay = Math.max(1000, msUntilNextWeek(from));
   if (timers && typeof timers.setTimeout === 'function') {
     timers.setTimeout(() => {
-      tick({ now: new Date(), env, run }).catch(() => {});
+      const tickNow = new Date();
+      tick({ now: tickNow, env, run })
+        .catch(() => {})
+        .finally(() => scheduleNextWeek({ env, run, timers, from: tickNow }));
     }, delay);
   }
-  return Promise.resolve({
-    started: true,
-    armed: researchEnabled(env),
-    cycleId: cycleIdFor(now),
-    tenantId: TENANT_ID,
-    delayMs: delay,
-  });
+  return delay;
 }
 
-module.exports = { weekOf, cycleIdFor, msUntilNextWeek, tick, startLeviScoutWeeklyClock };
+function startLeviScoutWeeklyClock({ env = process.env, now = new Date(), run, timers = globalThis } = {}) {
+  const delayMs = scheduleNextWeek({ env, run, timers, from: now });
+  const armed = researchEnabled(env);
+  // Catch up the current ISO week when armed. claimRun makes this idempotent
+  // across Render restarts; disabled clocks stay no-op until the flag is on.
+  const catchUp = armed && typeof run === 'function'
+    ? tick({ now, env, run }).catch(() => ({ status: 'catch_up_failed', ran: false }))
+    : Promise.resolve({ status: 'disabled', ran: false });
+  return catchUp.then(catchUpTick => ({
+    started: true,
+    independentOfBackgroundWorkers: true,
+    armed,
+    cycleId: cycleIdFor(now),
+    tenantId: TENANT_ID,
+    delayMs,
+    catchUpRan: Boolean(catchUpTick && catchUpTick.ran),
+  }));
+}
+
+module.exports = { weekOf, cycleIdFor, msUntilNextWeek, tick, startLeviScoutWeeklyClock, scheduleNextWeek };

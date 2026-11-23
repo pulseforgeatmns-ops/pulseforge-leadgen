@@ -21,6 +21,7 @@ on:
       - 'routes/cron.js'
       - 'test/leviScout*.test.js'
       - '.github/workflows/levi-scout.yml'
+      - '.github/workflows/levi-scout-weekly.yml'
 jobs:
   levi-scout:
     runs-on: ubuntu-latest

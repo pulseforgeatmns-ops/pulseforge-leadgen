@@ -2,12 +2,14 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { runLeviScoutProductionCycle, authorityFor } = require('../services/leviScoutProductionRunner');
 const { createProductionDeps } = require('../services/leviScoutProductionDeps');
 const { loadApprovedCriteria, fromUnderstanding, proposedRangeIsNotAuthority } = require('../services/leviScoutApprovedCriteria');
 const { tick, cycleIdFor, startLeviScoutWeeklyClock } = require('../services/leviScoutSchedule');
 const { compactResult } = require('../services/leviScoutMaxDelivery');
-const { researchEnabled, productionLimits, productionPermissions, AGENT } = require('../services/leviScoutEnablement');
+const { researchEnabled, productionLimits, productionPermissions, AGENT, cronSecretMatches } = require('../services/leviScoutEnablement');
 const { smoke } = require('../scripts/leviScoutProductionSmoke');
 const { TENANT_ID } = require('../services/leviScoutProductionContract');
 const { shouldHandleScoutAcquisition } = require('../packages/max/workspace/ScoutAcquisitionContext');
@@ -137,10 +139,76 @@ test('the weekly clock starts at boot even when research is disabled, and ticks 
   });
   assert.equal(started.started, true);
   assert.equal(started.armed, false);
+  assert.equal(started.independentOfBackgroundWorkers, true);
+  assert.equal(started.catchUpRan, false);
   const idle = await tick({ env: {}, run: async () => { throw new Error('should not run'); } });
   assert.equal(idle.ran, false);
   assert.equal(idle.status, 'disabled');
   assert.equal(idle.outreachAttempted, false);
+});
+
+test('an armed clock catch-up runs the current week and reschedules the next week', async () => {
+  const delays = [];
+  const timers = {
+    setTimeout(fn, delay) {
+      delays.push(delay);
+      return delays.length;
+    },
+  };
+  let runs = 0;
+  const now = new Date('2026-11-23T03:00:00Z');
+  const started = await startLeviScoutWeeklyClock({
+    env: { SCOUT_LEVI_RESEARCH_ONLY_ENABLED: 'true' },
+    now,
+    timers,
+    run: async ({ cycleId }) => {
+      runs += 1;
+      return { status: 'completed', cycleId };
+    },
+  });
+  assert.equal(started.armed, true);
+  assert.equal(started.catchUpRan, true);
+  assert.equal(started.independentOfBackgroundWorkers, true);
+  assert.equal(runs, 1);
+  assert.equal(delays.length, 1);
+  assert.ok(delays[0] >= 1000);
+});
+
+test('server.js starts Levi Scout even when background workers are disabled', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const listen = source.slice(source.indexOf('app.listen'));
+  assert.match(listen, /startLeviScoutWeeklyClock/);
+  assert.doesNotMatch(listen, /Levi Scout weekly clock skipped/);
+  assert.match(listen, /independent of background workers/);
+  const workerGate = source.slice(
+    source.indexOf("if (process.env.PF_DISABLE_BACKGROUND_WORKERS === '1')"),
+    source.indexOf('app.use(session')
+  );
+  assert.match(workerGate, /background workers disabled for Render API cutover/);
+  assert.doesNotMatch(workerGate, /startLeviScoutWeeklyClock/);
+});
+
+test('Levi cron accepts Bearer CRON_SECRET and is not gated on PF_DISABLE_BACKGROUND_WORKERS', () => {
+  const env = { CRON_SECRET: 'levi-route-test-secret', PF_DISABLE_BACKGROUND_WORKERS: '1' };
+  assert.equal(cronSecretMatches({
+    body: {},
+    query: {},
+    get: (name) => (name === 'authorization' ? 'Bearer levi-route-test-secret' : ''),
+  }, env), true);
+  assert.equal(cronSecretMatches({
+    body: { secret: 'levi-route-test-secret' },
+    query: {},
+    get: () => '',
+  }, env), true);
+  assert.equal(cronSecretMatches({
+    body: {},
+    query: {},
+    get: (name) => (name === 'authorization' ? 'Bearer wrong' : ''),
+  }, env), false);
+  const cronSource = fs.readFileSync(path.join(__dirname, '..', 'routes', 'cron.js'), 'utf8');
+  const handler = cronSource.slice(cronSource.indexOf('async function handleLeviScoutCron'));
+  assert.doesNotMatch(handler.slice(0, 800), /PF_DISABLE_BACKGROUND_WORKERS/);
+  assert.match(cronSource, /cronSecretMatches\(req, process\.env\)/);
 });
 
 test('in-memory production deps claim once, skip tenant 10, and keep review-only flags', async () => {

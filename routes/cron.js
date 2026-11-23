@@ -101,9 +101,12 @@ function isLeviScoutAgent(agent) {
   return CRON_SPECIAL_HANDLERS[key] === 'scoutLevi';
 }
 
+function leviCronAuthorized(req) {
+  return require('../services/leviScoutEnablement').cronSecretMatches(req, process.env);
+}
+
 async function handleLeviScoutCron(req, res) {
-  const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!leviCronAuthorized(req)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
@@ -952,6 +955,7 @@ module.exports.handleRecoverAnchorCanonicalOutboundCron = handleRecoverAnchorCan
 module.exports.isScoutPlacesDiagnosticAgent = isScoutPlacesDiagnosticAgent;
 module.exports.isLeviScoutAgent = isLeviScoutAgent;
 module.exports.handleLeviScoutCron = handleLeviScoutCron;
+module.exports.leviCronAuthorized = leviCronAuthorized;
 module.exports.CRON_SPECIAL_HANDLERS = CRON_SPECIAL_HANDLERS;
 
 module.exports.runCronAgent = runCronAgent;

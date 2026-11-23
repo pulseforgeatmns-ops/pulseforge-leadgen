@@ -21,6 +21,22 @@ function assertResearchEnabled(env = process.env) {
   if (!researchEnabled(env)) fail('levi_research_disabled');
 }
 
+function cronSecretMatches(req, env = process.env) {
+  const expectedRaw = env.CRON_SECRET || '';
+  if (!expectedRaw) return true;
+  const crypto = require('crypto');
+  const expected = Buffer.from(expectedRaw);
+  const candidates = [
+    String((req && req.body && req.body.secret) || ''),
+    String((req && req.query && req.query.secret) || ''),
+    String(req && req.get && req.get('authorization') || '').replace(/^Bearer\s+/i, ''),
+  ];
+  return candidates.some((value) => {
+    const supplied = Buffer.from(value);
+    return expected.length === supplied.length && crypto.timingSafeEqual(expected, supplied);
+  });
+}
+
 function productionLimits() {
   return Object.freeze({ maxCandidates: MAX_CANDIDATES, maxProviderRequests: 0 });
 }
@@ -37,6 +53,6 @@ function productionPermissions() {
 
 module.exports = {
   TENANT_ID, AGENT, ENABLE_FLAG, PAID_FLAG, MAX_CANDIDATES,
-  researchEnabled, paidProvidersApproved, assertResearchEnabled,
+  researchEnabled, paidProvidersApproved, assertResearchEnabled, cronSecretMatches,
   productionLimits, productionPermissions,
 };
