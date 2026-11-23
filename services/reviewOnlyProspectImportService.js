@@ -8,6 +8,8 @@ const SOURCE_TYPES = new Set([
   'operator_research', 'property_record_signal', 'other',
 ]);
 const DAY_MS = 86400000;
+const IMPORT_SOURCES = new Set(['review_only_import', 'scout_research_only']);
+const DISCOVERY_METHODS = new Set(['operator_import', 'open_data_permit']);
 
 function text(value) {
   return value == null ? '' : String(value).trim();
@@ -178,7 +180,15 @@ function matchesExisting(contact, row) {
     && text(row.company_name).toLowerCase() === contact.company.toLowerCase();
 }
 
-async function importReviewOnlyContacts(inputs, { clientId, db, actorId }) {
+async function importReviewOnlyContacts(inputs, { clientId, db, actorId, source, discoveryMethod } = {}) {
+  const importSource = source || 'review_only_import';
+  const method = discoveryMethod || 'operator_import';
+  if (!IMPORT_SOURCES.has(importSource)) {
+    throw Object.assign(new Error('Unknown review-only import source.'), { code: 'import_source_invalid' });
+  }
+  if (!DISCOVERY_METHODS.has(method)) {
+    throw Object.assign(new Error('Unknown review-only discovery method.'), { code: 'discovery_method_invalid' });
+  }
   const contacts = previewReviewOnlyContacts(inputs);
   const connection = await db.connect();
   try {
@@ -234,8 +244,8 @@ async function importReviewOnlyContacts(inputs, { clientId, db, actorId }) {
            service_area_match, setter_visible, do_not_contact,
            ao_outreach_review_required, discovery_method, acquisition_metadata
          ) VALUES(
-           $1,$2,$3,$4,$5,$6,$7,$8,'review_only_import',$9,$10,$11,'private_lending',
-           $12,false,false,true,'operator_import',$13::jsonb
+           $1,$2,$3,$4,$5,$6,$7,$8,$14,$9,$10,$11,'private_lending',
+           $12,false,false,true,$15,$13::jsonb
          )
          RETURNING id, first_name, last_name, email, phone, status,
                    ao_outreach_review_required, setter_visible`,
@@ -253,6 +263,8 @@ async function importReviewOnlyContacts(inputs, { clientId, db, actorId }) {
           noteFor(contact),
           contact.market || null,
           JSON.stringify(metadata),
+          importSource,
+          method,
         ]
       );
       const row = { ...created.rows[0], company_name: company.rows[0].name, review_state: contact.reviewState };
@@ -272,6 +284,8 @@ async function importReviewOnlyContacts(inputs, { clientId, db, actorId }) {
 
 module.exports = {
   SOURCE_TYPES,
+  IMPORT_SOURCES,
+  DISCOVERY_METHODS,
   normalizeEvidenceDate,
   normalizeSourceType,
   normalizeContact,

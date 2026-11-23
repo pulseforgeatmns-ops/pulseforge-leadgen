@@ -87,11 +87,45 @@ const anthropic = new Anthropic();
 const CRON_SPECIAL_HANDLERS = Object.freeze({
   'scout-places-diagnostic': 'scoutPlacesDiagnostic',
   scout_places_diagnostic: 'scoutPlacesDiagnostic',
+  scout_levi: 'scoutLevi',
+  'scout-levi': 'scoutLevi',
 });
 
 function isScoutPlacesDiagnosticAgent(agent) {
   const key = String(agent || '').trim();
   return CRON_SPECIAL_HANDLERS[key] === 'scoutPlacesDiagnostic';
+}
+
+function isLeviScoutAgent(agent) {
+  const key = String(agent || '').trim();
+  return CRON_SPECIAL_HANDLERS[key] === 'scoutLevi';
+}
+
+async function handleLeviScoutCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const result = await require('../services/leviScoutProductionRunner').runLeviScoutProductionCycle({
+      env: process.env,
+      db: pool,
+    });
+    return res.set('Cache-Control', 'no-store').json({
+      ...result,
+      outreachAttempted: false,
+      paidProvidersUsed: false,
+    });
+  } catch (err) {
+    const code = err.code || 'levi_scout_cron_failed';
+    return res.status(code === 'levi_research_disabled' ? 200 : 500).json({
+      ok: false,
+      skipped: code === 'levi_research_disabled',
+      reason: code,
+      outreachAttempted: false,
+      paidProvidersUsed: false,
+    });
+  }
 }
 
 const CRON_MODULES = {
@@ -883,6 +917,9 @@ router.post('/cron/:agent', async (req, res) => {
   if (isScoutPlacesDiagnosticAgent(agent)) {
     return handleScoutPlacesDiagnostic(req, res);
   }
+  if (isLeviScoutAgent(agent)) {
+    return handleLeviScoutCron(req, res);
+  }
   const secret = req.body?.secret || req.query.secret;
   if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -894,6 +931,9 @@ router.get('/cron/:agent', async (req, res) => {
   const { agent } = req.params;
   if (isScoutPlacesDiagnosticAgent(agent)) {
     return handleScoutPlacesDiagnostic(req, res);
+  }
+  if (isLeviScoutAgent(agent)) {
+    return handleLeviScoutCron(req, res);
   }
   const secret = req.query.secret;
   if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
@@ -910,6 +950,8 @@ module.exports.handleExecuteAnchorOneOutboundCron = handleExecuteAnchorOneOutbou
 module.exports.handleInspectAnchorCanonicalOutboundCron = handleInspectAnchorCanonicalOutboundCron;
 module.exports.handleRecoverAnchorCanonicalOutboundCron = handleRecoverAnchorCanonicalOutboundCron;
 module.exports.isScoutPlacesDiagnosticAgent = isScoutPlacesDiagnosticAgent;
+module.exports.isLeviScoutAgent = isLeviScoutAgent;
+module.exports.handleLeviScoutCron = handleLeviScoutCron;
 module.exports.CRON_SPECIAL_HANDLERS = CRON_SPECIAL_HANDLERS;
 
 module.exports.runCronAgent = runCronAgent;

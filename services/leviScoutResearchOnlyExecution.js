@@ -1,7 +1,7 @@
 'use strict';
 
 const { createHash } = require('node:crypto');
-const { evaluateProspect, approvedCriteria, TENANT_ID } = require('./leviScoutProductionContract');
+const { evaluateProspect, authorityCriteria, TENANT_ID } = require('./leviScoutProductionContract');
 
 const VERSION = 1;
 const MAX_CANDIDATES = 20;
@@ -22,7 +22,7 @@ function validateAuthority(input) {
     || input.version !== VERSION || input.kind !== 'levi_scout_research_only' || input.tenantId !== String(TENANT_ID)
     || !/^[a-zA-Z0-9_.:-]{1,120}$/.test(input.cycleId || '')
     || !/^[a-zA-Z0-9_.:-]{1,120}$/.test(input.approvalRef || '')
-    || !approvedCriteria(input.criteria)
+    || !authorityCriteria(input.criteria)
     || !input.limits || !Number.isSafeInteger(input.limits.maxCandidates) || input.limits.maxCandidates < 1
     || input.limits.maxCandidates > MAX_CANDIDATES
     || !Number.isSafeInteger(input.limits.maxProviderRequests) || input.limits.maxProviderRequests < 0
@@ -88,10 +88,10 @@ async function runResearchOnlyCycle({ authority: raw, env = process.env, deps })
       qualified: records.filter(row => row.qualified).length,
       classifications: records.reduce((out, row) => ({ ...out, [row.classification]: (out[row.classification] || 0) + 1 }), {}),
       duplicateBlocked: records.filter(row => row.blockers.includes('duplicate')).length,
-      outreachAttempted: false };
+      outreachAttempted: false, paidProvidersUsed: false };
   } catch (error) {
     diagnostic = { status: 'failed', tenantId: String(TENANT_ID), cycleId: authority.cycleId,
-      reason: error.code || 'levi_research_cycle_failed', outreachAttempted: false };
+      reason: error.code || 'levi_research_cycle_failed', outreachAttempted: false, paidProvidersUsed: false };
   }
   await deps.recordDiagnostic(diagnostic);
   if (diagnostic.status === 'failed') fail(diagnostic.reason);

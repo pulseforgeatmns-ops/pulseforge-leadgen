@@ -57,14 +57,10 @@ The corrected audit reports per-blocker counts for this cohort (`production.revi
 
 ## Remaining blockers to a controlled research-only cycle
 
-1. **Approved financing criteria (Levi).** The Blueprint needs one explicit KNOWN service fact of the form `Financing range: $X–$Y`, the only form `tenantCriteria` accepts. It is added through the approved Blueprint flow, never by hand.
-2. **No borrower discovery source exists.**
-   - `CLIENT_SCOUT_PLANS` has no tenant 21 entry, and Google Places and SerpAPI target businesses, not individual real-estate borrowers.
-   - `runResearchOnlyCycle` needs five injected dependencies. None has a production implementation: `claimRun` (replay table), `discover`, `existingIdentityKeys`, `persistReviewOnly` and `recordDiagnostic`.
-   - It has no entry point (route, CLI or cron) and no schema migration.
-   - A source must be chosen and approved first. Candidates are public deal posts, county deed or recorder transfers to investor LLCs, and operator research. Each has its own cost, terms-of-service and provenance profile.
-3. **Production audit not yet run** (see above).
-4. **Weekly output metric.** The audit separates imports (`review_only_import`) from other sources, duplicates, suppressed records and contract-qualified records. `observedProductionQualifiedNew` stays `null` until a Scout source produces records with research provenance.
+1. **Approved financing criteria (Levi).** Production reads the Blueprint through `tenantCriteria` and never substitutes the proposed $5k–$20k range. Until one KNOWN `Financing range: $X–$Y` fact is approved, qualification stays blocked and permit rows remain Qualify First.
+2. **Research-only flag is still off.** `SCOUT_LEVI_RESEARCH_ONLY_ENABLED` is not set on the production service. The weekly clock starts at boot and ticks no-op until that flag is true. `/cron/scout_levi` stays skipped. Smoke calls live NYC/Chicago discovery with persist dry-run and outbound off even while the flag is unset. `SCOUT_LEVI_PAID_PROVIDERS_APPROVED` stays unset; `maxProviderRequests` is 0.
+3. **Permit rows are signals, not qualified borrowers.** NYC and Chicago open-data permits persist as `property_record_signal` with `setter_visible=false`. They cannot become Contact Now without a contact path, borrower intent, and an approved range.
+4. **Weekly output metric.** The audit now sees `scout_levi` claims in `agent_log`. `observedProductionQualifiedNew` stays `null` until a contract-qualified research record exists.
 
 ## Gates validated offline
 
