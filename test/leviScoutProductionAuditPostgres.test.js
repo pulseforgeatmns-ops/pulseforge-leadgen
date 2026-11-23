@@ -49,7 +49,9 @@ async function schema(db) {
       ao_outreach_review_required BOOLEAN NOT NULL DEFAULT false, discovery_method TEXT,
       acquisition_metadata JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TIMESTAMPTZ DEFAULT NOW());
     CREATE TABLE agent_log(id SERIAL PRIMARY KEY, agent_name TEXT, action TEXT, prospect_id UUID, payload JSONB,
-      status TEXT, error_msg TEXT, duration_ms INTEGER, ran_at TIMESTAMPTZ DEFAULT NOW(), client_id INTEGER);
+      status TEXT, error_msg TEXT, duration_ms INTEGER, ran_at TIMESTAMPTZ DEFAULT NOW(), client_id INTEGER,
+      CONSTRAINT agent_log_status_check
+        CHECK (status IN ('success', 'failed', 'skipped', 'pending', 'completed', 'posted', 'in_progress')));
     CREATE TABLE cie_interview_sessions(id UUID PRIMARY KEY DEFAULT gen_random_uuid(), client_id INTEGER NOT NULL,
       status TEXT NOT NULL DEFAULT 'NEW', started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), completed_at TIMESTAMPTZ,
       current_stage TEXT NOT NULL DEFAULT 'Identity', summary TEXT, confidence_score NUMERIC(4,3),
