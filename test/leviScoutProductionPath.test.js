@@ -205,6 +205,15 @@ test('Levi cron accepts Bearer CRON_SECRET and is not gated on PF_DISABLE_BACKGR
     query: {},
     get: (name) => (name === 'authorization' ? 'Bearer wrong' : ''),
   }, env), false);
+  // No missing-secret bypass: an unset or empty CRON_SECRET rejects everything,
+  // including an empty Bearer token or empty body/query secret.
+  for (const missing of [{}, { CRON_SECRET: '' }]) {
+    for (const req of [
+      { body: {}, query: {}, get: () => '' },
+      { body: { secret: '' }, query: { secret: '' }, get: (name) => (name === 'authorization' ? 'Bearer ' : '') },
+      { body: { secret: 'anything' }, query: {}, get: () => '' },
+    ]) assert.equal(cronSecretMatches(req, missing), false);
+  }
   const cronSource = fs.readFileSync(path.join(__dirname, '..', 'routes', 'cron.js'), 'utf8');
   const handler = cronSource.slice(cronSource.indexOf('async function handleLeviScoutCron'));
   assert.doesNotMatch(handler.slice(0, 800), /PF_DISABLE_BACKGROUND_WORKERS/);

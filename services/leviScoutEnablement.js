@@ -23,7 +23,8 @@ function assertResearchEnabled(env = process.env) {
 
 function cronSecretMatches(req, env = process.env) {
   const expectedRaw = env.CRON_SECRET || '';
-  if (!expectedRaw) return true;
+  // Fail closed: routes/cron.js policy is "no missing-secret bypass".
+  if (!expectedRaw) return false;
   const crypto = require('crypto');
   const expected = Buffer.from(expectedRaw);
   const candidates = [
