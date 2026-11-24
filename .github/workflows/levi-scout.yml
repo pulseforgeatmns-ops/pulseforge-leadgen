@@ -35,6 +35,8 @@ on:
       - 'test/setterVisibilityReviewHoldPostgres.test.js'
       - 'test/leviTenant21ClientAccessPostgres.test.js'
       - 'test/tenantPilotPolicy*.test.js'
+      - 'packages/max/workspace/tests/p0TenantPilotMaxChat.test.js'
+      - 'packages/max/workspace/AcquisitionMissionExecution.js'
       - 'utils/tenantPilotPolicy.js'
       - 'utils/anchorResearchProviderPause.js'
       - 'utils/agentDispatchPolicy.js'

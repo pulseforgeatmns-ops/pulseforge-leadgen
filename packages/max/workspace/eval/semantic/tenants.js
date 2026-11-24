@@ -81,12 +81,14 @@ const ANCHOR = (() => {
 })();
 
 // ---------------------------------------------------------------------------
-// Tenant 21 — Harbor Dental Group (patient acquisition). Failure mode:
+// Tenant 27 — Harbor Dental Group (patient acquisition). Synthetic id; it was
+// 21 until tenant 21 became a real prospecting-only pilot (utils/tenantPilotPolicy),
+// which this fixture (Scout runs, outbound capability) must not model. Failure mode:
 // Scout runs, but every recent run errored; no new prospects in 16 days.
 // No tenant-specific outbound gate. Different mission vocabulary.
 // ---------------------------------------------------------------------------
 const HARBOR = (() => {
-  const id = '21';
+  const id = '27';
   const reactivation = { id: 'am_patient_reactivation_9a2', title: 'Patient reactivation — lapsed recall list', last: '2026-10-19T14:05:00.000Z' };
   const referral = { id: 'am_ortho_referral_51f', title: 'Referral partner outreach — orthodontists', last: ago(2) };
   const scoutLast = ago(1);
