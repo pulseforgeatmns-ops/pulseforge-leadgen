@@ -19,6 +19,12 @@ async function setup(t, touch = false) {
   return { page, url, errors, requests };
 }
 const state = page => page.evaluate(() => window.livingWorkspace.getState());
+// Panel placement goes through the compact title-bar menu.
+async function panelAction(page, action, panel = '.panel') {
+  await page.click(`${panel} .panel-menu-button`);
+  await page.waitForSelector('#panel-menu');
+  await page.click(`#panel-menu [data-action="${action}"]`);
+}
 test('desktop field, mouse move/resize, docking, focus, Max commands and tenant reset', async t => {
   const { page, url, errors, requests } = await setup(t);
   assert.equal(await page.$$eval('#cdSpatialOrbit button[data-domain-id]', nodes => nodes.length), 4);
@@ -27,7 +33,7 @@ test('desktop field, mouse move/resize, docking, focus, Max commands and tenant 
   await page.evaluate(() => { const w = window.livingWorkspace; for (const p of w.getState().panels) w.dispatch({ ...w.scope(), type: 'close_panel', source: 'human', panelId: p.id }); });
   await page.click('#cdSpatialOrbit button[data-domain-id="acquisition"]');
   await page.waitForSelector('.panel');
-  await page.select('.panel [aria-label="Dock panel region"]', 'floating');
+  await panelAction(page, 'dock-floating');
   const panel = '.panel';
   const grip = await page.$(`${panel} .grip`), box = await grip.boundingBox();
   await page.mouse.move(box.x + 50, box.y + 15); await page.mouse.down(); await page.mouse.move(box.x + 150, box.y + 75, { steps: 5 }); await page.mouse.up();
@@ -35,9 +41,9 @@ test('desktop field, mouse move/resize, docking, focus, Max commands and tenant 
   const resize = await page.$(`${panel} .resize`), rb = await resize.boundingBox();
   await page.mouse.move(rb.x + 15, rb.y + 15); await page.mouse.down(); await page.mouse.move(rb.x + 95, rb.y + 65, { steps: 5 }); await page.mouse.up();
   assert.ok((await state(page)).panels[0].width > 400);
-  await page.select('[aria-label="Dock panel region"]', 'right'); assert.equal((await state(page)).panels[0].dock, 'right');
-  await page.click('.maximize'); assert.equal((await state(page)).panels[0].maximized, true);
-  await page.click('.maximize'); assert.equal((await state(page)).panels[0].maximized, false);
+  await panelAction(page, 'dock-right'); assert.equal((await state(page)).panels[0].dock, 'right');
+  await panelAction(page, 'maximize'); assert.equal((await state(page)).panels[0].maximized, true);
+  await panelAction(page, 'maximize'); assert.equal((await state(page)).panels[0].maximized, false);
   await page.click('#max-orb'); await page.type('#question', 'investigate acquisition'); await page.click('#ask button');
   assert.equal((await state(page)).panels.length, 2);
   assert.deepEqual((await state(page)).panels.map(p => p.dock), ['left', 'right']);
@@ -143,7 +149,7 @@ test('operator and Max layouts preserve context; named layouts persist and isola
   await page.select('#field-dock', 'right');
   await page.$eval('#field-ratio', el => { el.value = 43; el.dispatchEvent(new Event('change', { bubbles: true })); });
   await page.click('#layout-menu summary');
-  await page.select('.panel [aria-label="Dock panel region"]', 'top');
+  await panelAction(page, 'dock-top');
   await assertContext();
   await page.click('#layout-menu summary'); await page.type('#layout-name', 'My research'); await page.click('#save-layout-form button');
   await page.click('#layout-menu summary');

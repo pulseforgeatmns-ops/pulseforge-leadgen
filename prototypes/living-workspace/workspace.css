@@ -942,3 +942,75 @@ button:disabled { opacity:.45; cursor:default; }
 #cdSpatialList [data-object-id] { padding-left:22px; }
 #cdSpatialList [data-list-back] { color:#ecd8ad; }
 .settling .sun, .settling .planet, .settling .moon, .settling .moon-hint, .settling .sun-body, .settling .planet-body, .settling .moon-body { transition:none!important; }
+
+/* ── V0.5: Max collaborative workspace ─────────────────────────────────── */
+/* Refined Max sphere: translucent glass, warm inner core, static meridians.
+   The only motion is a slow, low-amplitude halo breath; open state is a steady ring. */
+#max-orb { width:48px; height:48px; background:none; box-shadow:none; border-radius:50%; }
+#max-orb:hover { background:none; box-shadow:none; }
+#max-orb svg { filter:drop-shadow(0 0 6px #e8cb9133); transition:filter .3s; }
+#max-orb:hover svg, #max-orb:focus-visible svg { filter:drop-shadow(0 0 9px #ecd09c66); }
+#max-orb .filaments { animation:none; opacity:1; }
+#max-orb .orb-halo { animation:orb-breathe 12s ease-in-out infinite alternate; transform-origin:32px 32px; }
+#max-orb .orb-ring { opacity:0; transition:opacity .3s; }
+#max-orb[aria-expanded=true] .orb-ring { opacity:.75; }
+#max-orb[aria-expanded=true] .orb-core { opacity:1; }
+#max-orb .orb-core { opacity:.82; transition:opacity .3s; }
+@keyframes orb-breathe { from { opacity:.65; } to { opacity:1; } }
+/* Conversation */
+#conversation { width:392px; background:#0d1a2bf2; border-color:#a68c5f66; }
+#conversation header strong { color:#f1dcae; font-weight:500; letter-spacing:.03em; }
+#max-context { padding:10px 14px; border-bottom:1px solid #22384f; background:#0f2135; }
+#max-context dl { display:grid; grid-template-columns:auto 1fr; gap:3px 10px; margin:0; font-size:10.5px; }
+#max-context dt { color:#c9b58d; letter-spacing:.08em; text-transform:uppercase; font-size:8.5px; padding-top:2px; }
+#max-context dd { margin:0; color:#dbe3ea; overflow-wrap:anywhere; }
+#messages { display:flex; flex-direction:column; gap:10px; }
+#messages .message { max-width:92%; }
+#messages .message.human { align-self:flex-end; }
+#messages .message p { margin:3px 0 0; padding:10px 12px; border-radius:10px; font-size:12px; line-height:1.5; background:#17304a; border:1px solid #2b4762; }
+#messages .message.max p { background:#d6b7750c; border-color:#cbae7a33; color:#efe7d7; }
+#messages .speaker { font-size:8.5px; letter-spacing:.12em; text-transform:uppercase; color:#93a7b9; }
+#messages .message.max .speaker { color:#d8c093; }
+.receipt { margin-top:5px; font-size:10px; color:#a9bac9; }
+.receipt summary { cursor:pointer; color:#cbb68c; padding:3px 0; min-height:24px; }
+.receipt ol { margin:4px 0 0; padding-left:18px; display:grid; gap:2px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:9.5px; }
+#max-suggestions { display:flex; flex-wrap:wrap; gap:6px; padding:8px 12px 0; }
+#max-suggestions button { font-size:10.5px; min-height:32px; border-radius:16px; padding:5px 11px; background:#1a2b38; border-color:#6f5f45; color:#ead7ae; }
+#max-suggestions button:hover { background:#2a3337; border-color:#c3a874; }
+#question { background:#091626; border-color:#3d5368; }
+/* Panels touched by Max get a brief, static gold outline (no motion). */
+.panel[data-max-touched=true] { box-shadow:0 0 0 1px #e3c58f, 0 0 26px #e3c58f2e; }
+/* Compact title bar with one options menu. */
+.panel header { gap:4px; padding:4px 6px 4px 8px; }
+.grip { display:flex; align-items:baseline; gap:8px; min-width:0; overflow:hidden; min-height:34px; }
+.grip-title { font-size:11.5px; color:#efe7d8; white-space:nowrap; }
+.grip-record { font-size:10.5px; color:#a8b8c7; font-weight:400; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.panel header>button:not(.grip) { min-width:34px; min-height:34px; padding:0 6px; background:transparent; border-color:transparent; color:#b8c6d3; font-size:15px; line-height:1; }
+.panel header>button:not(.grip):hover, .panel-menu-button[aria-expanded=true] { background:#22394f!important; border-color:#7d6a4a!important; color:#f0dcb0!important; }
+.panel-menu { position:fixed; z-index:300; min-width:212px; padding:6px; display:grid; gap:1px; background:#102336; border:1px solid #a08861; border-radius:9px; box-shadow:0 18px 48px #000a; }
+.panel-menu .menu-heading { font-size:8.5px; letter-spacing:.14em; text-transform:uppercase; color:#c9b58d; padding:7px 9px 3px; }
+.panel-menu .menu-heading:not(:first-child) { border-top:1px solid #263d53; margin-top:4px; }
+.panel-menu button { text-align:left; background:transparent; border:0; border-radius:5px; min-height:34px; padding:6px 9px 6px 26px; font-size:11.5px; color:#e3e9ee; position:relative; }
+.panel-menu button:hover, .panel-menu button:focus-visible { background:#223a50; outline-offset:-2px; }
+.panel-menu [aria-checked=true]::before { content:'●'; position:absolute; left:10px; color:#e5c98f; font-size:8px; top:50%; transform:translateY(-50%); }
+/* Field splitter. The visible bar is thin; the hit area is ≥ 24px for touch. */
+#field-splitter { position:absolute; z-index:15; touch-action:none; outline:none; display:flex; align-items:center; justify-content:center; }
+#field-splitter::before { content:''; position:absolute; inset:-9px 0; }
+#field-splitter[data-orientation=vertical]::before { inset:0 -9px; }
+#field-splitter[data-orientation=horizontal] { cursor:row-resize; }
+#field-splitter[data-orientation=vertical] { cursor:col-resize; }
+#field-splitter::after { content:''; width:46px; height:3px; border-radius:2px; background:#6d7f90; transition:background .2s, width .2s; }
+#field-splitter[data-orientation=vertical]::after { width:3px; height:46px; }
+#field-splitter:hover::after, #field-splitter[data-dragging=true]::after { background:#e1c690; width:72px; }
+#field-splitter[data-orientation=vertical]:hover::after, #field-splitter[data-orientation=vertical][data-dragging=true]::after { width:3px; height:72px; }
+#field-splitter:focus-visible::after { background:#e1c690; box-shadow:0 0 0 2px #0b1b2e, 0 0 0 4px #dec99e; }
+@media(min-width:1000px) {
+  body[data-max-open=true] main { margin-right:calc(min(392px, 36vw) + 12px); }
+  #conversation { width:min(392px, 36vw); }
+}
+/* Label clearance: the distant sun labels above itself (moons sit below the tether);
+   in narrow fields receded planets show their name only on hover/focus. */
+.sun[data-state=distant] .body-label { top:auto; bottom:calc(50% + var(--size) / 2 + 6px); }
+.narrow-field .planet[data-state=recede] .body-label { opacity:0; transition:opacity .2s; }
+.narrow-field .planet[data-state=recede]:hover .body-label, .narrow-field .planet[data-state=recede]:focus-visible .body-label { opacity:1; }
+.moon[data-label-side=above] .body-label { top:auto; bottom:calc(50% + var(--size) / 2 + 7px); }

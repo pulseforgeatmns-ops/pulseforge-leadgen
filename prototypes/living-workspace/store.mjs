@@ -11,7 +11,7 @@ export function createWorkspace(fixtures, initialTenant = Object.keys(fixtures)[
   let past = [], future = [];
   const layoutKeys = ['panels', 'focused', 'fieldMode', 'fieldView', 'fieldFocus', 'fieldDock', 'fieldRatio', 'savedLayouts'];
   const capture = () => Object.fromEntries(layoutKeys.map(key => [key, clone(state[key])]));
-  const layoutCommands = new Set(['open_tool', 'dock_panel', 'resize_panel', 'move_panel', 'focus_panel', 'maximize_panel', 'close_panel', 'minimize_panel', 'restore_panel', 'set_field_mode', 'set_field_view', 'focus_domain', 'retarget_panel', 'set_field_dock', 'arrange_layout', 'save_layout', 'load_layout', 'delete_layout']);
+  const layoutCommands = new Set(['open_tool', 'dock_panel', 'resize_panel', 'move_panel', 'focus_panel', 'maximize_panel', 'close_panel', 'minimize_panel', 'restore_panel', 'set_field_mode', 'set_field_view', 'focus_domain', 'retarget_panel', 'restore_checkpoint', 'set_field_dock', 'arrange_layout', 'save_layout', 'load_layout', 'delete_layout']);
   const storageKey = id => `pulseforge.fixture.layouts.v1.${id}`;
   function validTemplate(t) {
     return t && ['docked', 'expanded', 'minimized'].includes(t.fieldMode)
@@ -39,7 +39,7 @@ export function createWorkspace(fixtures, initialTenant = Object.keys(fixtures)[
     if (!Object.hasOwn(fixtures, tenantId)) throw new Error('Unknown fixture tenant');
     generation++; past = []; future = [];
     state = { tenantId, generation, selected: null, trail: [], panels: [], focused: null,
-      history: [], messages: [], maxOpen: false, fieldMode: 'docked', fieldDock: 'top', fieldRatio: .48, savedLayouts: readLayouts(tenantId), canUndo: false, canRedo: false, storageWarning: false, fieldView: { x: 0, y: 0, zoom: 1 }, fieldFocus: null };
+      history: [], messages: [], maxOpen: false, fieldMode: 'docked', fieldDock: 'top', fieldRatio: .48, savedLayouts: readLayouts(tenantId), canUndo: false, canRedo: false, storageWarning: false, fieldView: { x: 0, y: 0, zoom: 1 }, fieldFocus: null, layoutCheckpoint: null };
     emit();
   }
   switchTenant(initialTenant);
@@ -57,7 +57,42 @@ export function createWorkspace(fixtures, initialTenant = Object.keys(fixtures)[
     }
     const before = capture();
     const next = clone(state);
-    const record = fixtures[state.tenantId].records.find(r => r.id === command.recordId);
+    let changedLayout = false, touchedSaved = false;
+    // A batch applies registered commands in order to one draft: all or nothing,
+    // one undo step. Max plans run this way so the operator never sees half a plan.
+    const list = command.type === 'batch' ? command.commands : [command];
+    if (!Array.isArray(list) || !list.length || list.length > 24) return false;
+    for (const step of list) {
+      if (!step || typeof step !== 'object' || ['batch', 'undo_layout', 'redo_layout'].includes(step.type)) return false;
+      if (!applyCommand(next, { ...step, source: command.source })) return false;
+      next.history.push({ type: step.type, source: command.source, recordId: step.recordId || next.panels.find(p => p.id === step.panelId)?.recordId || null });
+      if (layoutCommands.has(step.type)) changedLayout = true;
+      if (['save_layout', 'delete_layout'].includes(step.type)) touchedSaved = true;
+    }
+    next.history = next.history.slice(-60);
+    if (changedLayout && JSON.stringify(before) !== JSON.stringify(Object.fromEntries(layoutKeys.map(k => [k, next[k]])))) {
+      past.push(before); past = past.slice(-40); future = [];
+    }
+    next.canUndo = past.length > 0; next.canRedo = future.length > 0;
+    state = next;
+    if (touchedSaved) persist();
+    emit(); return true;
+  }
+  const templateOf = s => ({ fieldDock: s.fieldDock, fieldRatio: s.fieldRatio, fieldMode: s.fieldMode,
+    panels: s.panels.map(({ toolId, dock, x, y, width, height, minimized, maximized }) => ({ toolId, dock, x, y, width, height, minimized, maximized })) });
+  // Applies a record-free template to the open tools, matching slots by tool; records and selection are untouched.
+  function applyTemplate(next, template) {
+    if (!validTemplate(template)) return false;
+    next.fieldDock = template.fieldDock; next.fieldRatio = template.fieldRatio; next.fieldMode = template.fieldMode;
+    const used = new Set();
+    next.panels.forEach(p => {
+      const index = template.panels.findIndex((slot, i) => !used.has(i) && slot.toolId === p.toolId);
+      if (index >= 0) { used.add(index); for (const key of ['dock', 'x', 'y', 'width', 'height', 'minimized', 'maximized']) p[key] = template.panels[index][key]; }
+    });
+    return true;
+  }
+  function applyCommand(next, command) {
+    const record = fixtures[next.tenantId].records.find(r => r.id === command.recordId);
     const panel = next.panels.find(p => p.id === command.panelId);
     switch (command.type) {
       case 'set_field_dock':
@@ -75,23 +110,21 @@ export function createWorkspace(fixtures, initialTenant = Object.keys(fixtures)[
       case 'save_layout': {
         const name = typeof command.name === 'string' ? command.name.trim() : '';
         if (!name || name.length > 40 || (!Object.hasOwn(next.savedLayouts, name) && Object.keys(next.savedLayouts).length >= 12)) return false;
-        const template = { fieldDock: next.fieldDock, fieldRatio: next.fieldRatio, fieldMode: next.fieldMode,
-          panels: next.panels.map(({ toolId, dock, x, y, width, height, minimized, maximized }) => ({ toolId, dock, x, y, width, height, minimized, maximized })) };
-        next.savedLayouts = { ...next.savedLayouts, [name]: template };
+        next.savedLayouts = { ...next.savedLayouts, [name]: templateOf(next) };
         break;
       }
       case 'load_layout': {
         if (!Object.hasOwn(next.savedLayouts, command.name)) return false;
-        const template = next.savedLayouts[command.name];
-        if (!validTemplate(template)) return false;
-        next.fieldDock = template.fieldDock; next.fieldRatio = template.fieldRatio; next.fieldMode = template.fieldMode;
-        const used = new Set();
-        next.panels.forEach(p => {
-          const index = template.panels.findIndex((slot, i) => !used.has(i) && slot.toolId === p.toolId);
-          if (index >= 0) { used.add(index); for (const key of ['dock', 'x', 'y', 'width', 'height', 'minimized', 'maximized']) p[key] = template.panels[index][key]; }
-        });
+        if (!applyTemplate(next, next.savedLayouts[command.name])) return false;
         break;
       }
+      case 'checkpoint_layout':
+        // Max records the operator's layout before changing it, so "restore my previous layout" is exact.
+        if (command.source !== 'max') return false;
+        next.layoutCheckpoint = templateOf(next); break;
+      case 'restore_checkpoint':
+        if (!next.layoutCheckpoint || !applyTemplate(next, next.layoutCheckpoint)) return false;
+        next.layoutCheckpoint = null; break;
       case 'delete_layout':
         if (!Object.hasOwn(next.savedLayouts, command.name)) return false;
         delete next.savedLayouts[command.name]; break;
@@ -173,22 +206,17 @@ export function createWorkspace(fixtures, initialTenant = Object.keys(fixtures)[
         if (next.focused === panel.id) next.focused = next.panels.at(-1)?.id || null;
         break;
       case 'toggle_max': next.maxOpen = !next.maxOpen; break;
-      case 'message':
+      case 'message': {
         if (typeof command.text !== 'string' || !command.text.trim() || command.text.length > 1000) return false;
-        next.messages.push({ source: command.source, text: command.text });
+        const receipt = command.receipt ?? [];
+        if (!Array.isArray(receipt) || receipt.length > 12 || !receipt.every(r => typeof r === 'string' && r.length <= 120)) return false;
+        next.messages.push(receipt.length ? { source: command.source, text: command.text, receipt: [...receipt] } : { source: command.source, text: command.text });
         next.messages = next.messages.slice(-40);
         break;
+      }
       default: return false;
     }
-    next.history.push({ type: command.type, source: command.source, recordId: command.recordId || panel?.recordId || null });
-    next.history = next.history.slice(-60);
-    if (layoutCommands.has(command.type) && JSON.stringify(before) !== JSON.stringify(Object.fromEntries(layoutKeys.map(k => [k, next[k]])))) {
-      past.push(before); past = past.slice(-40); future = [];
-    }
-    next.canUndo = past.length > 0; next.canRedo = future.length > 0;
-    state = next;
-    if (['save_layout', 'delete_layout'].includes(command.type)) persist();
-    emit(); return true;
+    return true;
   }
   return { getState: () => clone(state), scope: () => ({ tenantId: state.tenantId, generation }),
     dispatch, switchTenant, subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); } };

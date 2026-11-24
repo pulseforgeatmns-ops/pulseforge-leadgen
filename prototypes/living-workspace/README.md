@@ -35,6 +35,20 @@ New store commands: `focus_domain { domainId | null }` and `retarget_panel { pan
 
 **Minimum panel sizes.** Docked panels never render below 300×220. When another panel would push a region under that, top/bottom rows fold into the side columns, two too-narrow columns merge, and any panels that still do not fit are stacked into the workspace dock (marked ⧉, with a "stacked to keep panels usable" note). The focused panel, then the most recently opened, stay visible; selecting a stacked tab brings it forward.
 
+## V0.5 — Max collaborative workspace
+
+**Context.** Max reads the shared store only: tenant, focused domain, selected record, open panels with their dock and record, and field state (`describeContext` in `max-sim.mjs`). The conversation shows that context ("What Max sees") and offers context-aware suggestion chips that submit the same text as typing.
+
+**Requests** (simulated phrase interpreter, no model): “Max, show me Northgate Bakery.” · “Open the investigation.” · “Put the evidence beside / below the prospect details.” · “Expand / dock / minimize the spatial field.” · “Make the field bigger / smaller.” · “Restore my previous layout.” · “Take me back to Acquisition.” · “Overview.” · “What am I looking at?” · “Close the investigation.” plus the earlier undo/redo, save/load layout, arrange, minimize/close panels. Names are matched in the **current tenant only**.
+
+**How a turn works.** `planMaxTurn(text, state, fixture)` returns registered dispatcher commands. The app dispatches them as one `batch` from `source: 'max'`, which means all or nothing and one undo step. The reply is then composed by `plan.report(afterState, ok)` from the resulting state, never from intent. A rejected batch says nothing moved; a state that disagrees with the plan is reported as such. Each reply carries a receipt of the commands applied. Panels Max moved get a brief static outline. On screens ≥ 1000 px the workspace reflows beside the open conversation, so Max's changes are never hidden under it.
+
+**Previous layout.** Before any layout-changing plan, Max records a `checkpoint_layout` (a record-free template, the same format as saved layouts). “Restore my previous layout” applies it with `restore_checkpoint`, keeps selection and records, and tells you what changed, including any later manual changes it replaced. Undo still steps back through every change. Checkpoints reset on tenant switch.
+
+**Presentation.** A splitter between the field and the panels resizes the field by drag (mouse or touch) or as a keyboard ARIA separator (arrows ±2%, PageUp/PageDown ±6%, Home/End). It previews live, commits one undo step, and is capped so open panels keep 300×220. Panel docking, floating, sizing, focus, minimize and close live in one title-bar **⋯** menu (`role="menu"`: arrow keys, Home/End, Escape returns focus, outside click closes). The Max sphere is static translucent glass with one slow halo breath. When open, it shows a steady ring.
+
+New store commands: `batch { commands }`, `checkpoint_layout` (Max only), `restore_checkpoint`; `message` accepts an optional `receipt` array.
+
 ## Architecture and scope
 
 - `fixtures.mjs`: two fictional tenants with disjoint record IDs, the four-domain overview shape, and fictional business objects (`kind: 'object'`) orbiting each domain.
@@ -43,6 +57,7 @@ New store commands: `focus_domain { domainId | null }` and `retarget_panel { pan
 - `layout.mjs`: pure responsive geometry for field anchoring, four panel docking regions, floating windows, and focus.
 - `spatial-field.mjs`: prototype-only orbital renderer (sun, planets, moons, orbit paths), domain focus camera, pan/zoom, accessible list view, and shared selection.
 - `index.html` / `workspace.css`: isolated desktop shell, touch fallback, golden Max presence, and reduced-motion treatment.
+- `max-sim.mjs`: simulated Max — context description, phrase → command planning, verified reporting, suggestions.
 - `server.cjs`: dependency-free static server with an explicit asset allowlist, no application routes, and CSP `connect-src 'none'`.
 
 The corrected presentation is a full-viewport dark application shell with deep navy surfaces, champagne-gold highlights, warm off-white text and blue-gray secondary text, bounded internal scrolling, and a translucent champagne sphere with SVG filaments. The sphere has no visible resting label; its accessible name and reduced-motion behavior remain intact.
@@ -79,6 +94,8 @@ NODE_PATH=/tmp/pulseforge-browser/node_modules CHROMIUM_PATH=/usr/bin/chromium n
 ```
 
 Adjust `CHROMIUM_PATH` to your installation, or omit it when Puppeteer has a downloaded browser. Tests launch headless Chromium with `--no-sandbox`, following the existing local browser harness convention. Only loopback fixtures/intercepted requests are used. Tests cover tenant reset and stale scopes, command validation, shared context, mouse move/resize, dock/focus/restore, simulated commands, touch resize, keyboard controls, reduced motion, no API requests, and server isolation.
+
+`acceptance.browser.test.cjs` runs the full V0.5 scenario on desktop (1440×900, mouse and keyboard) and tablet landscape (1180×820 and 1024×768, touch). The steps are overview → open Max → show Northgate Bakery → verify orbit, breadcrumbs and both panels → evidence beside details → manual field resize → restore previous layout → selection still Northgate → tenant switch isolation. It also covers the remaining Max commands, honest replies, and keyboard operation of the title-bar menu. `max-sim.test.mjs` covers planning, verification and isolation without a browser. With `WORKSPACE_SCREENSHOTS` set, it writes `v05-<desktop|tablet|tablet-small>-<1..6>-*.png`.
 
 ## Screenshot capture and verification
 

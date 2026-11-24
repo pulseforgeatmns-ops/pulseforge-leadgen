@@ -127,6 +127,7 @@ export function createSpatialField({ host, orbit, connections, list, dispatch, s
     const compact = w < 560;
     host.dataset.level = focus ? 'domain' : 'overview';
     host.classList.toggle('compact-field', compact);
+    host.classList.toggle('narrow-field', w < 900);
     const rx = Math.min(w * 0.42, h * 2.3), ry = Math.min(h * 0.36, rx * 0.72);
     connections.querySelectorAll('.orbit-path').forEach((ring, i) => {
       const scale = RINGS[i] * (focus ? 1.25 : 1);
@@ -163,7 +164,7 @@ export function createSpatialField({ host, orbit, connections, list, dispatch, s
       place(node, x, y, size, light(x, y, sunPos[0], sunPos[1]));
     });
     const tether = connections.querySelector('.tether'), objectOrbit = connections.querySelector('.object-orbit');
-    const orx = clamp(Math.min(w * 0.3, h * 1.6), 90, 440), ory = Math.min(h * 0.37, orx * 0.6);
+    const orx = clamp(Math.min(w * 0.3, h * 1.6, w / 2 - 130), 90, 440), ory = Math.min(h * 0.37, orx * 0.6);
     if (focus) {
       const [px, py] = planetPos[focus];
       tether.setAttribute('d', `M${sunPos[0]} ${sunPos[1]} Q${(sunPos[0] + px) / 2} ${py - h * 0.18} ${px} ${py}`);
@@ -179,7 +180,7 @@ export function createSpatialField({ host, orbit, connections, list, dispatch, s
       if (visible) {
         const a = (160 + i * 360 / n) * Math.PI / 180; // keeps the planet label (below) and tether (above-left) clear
         const x = px + orx * Math.cos(a), y = py + ory * Math.sin(a);
-        moon.dataset.labelSide = compact ? 'below' : Math.cos(a) >= 0 ? 'right' : 'left';
+        moon.dataset.labelSide = w < 900 ? (Math.sin(a) < 0 ? 'above' : 'below') : Math.cos(a) >= 0 ? 'right' : 'left';
         moon.style.zIndex = String(Math.sin(a) > 0 ? 40 : 20);
         place(moon, x, y, 30, light(x, y, px, py));
       } else place(moon, px, py, 8, light(px, py, sunPos[0], sunPos[1]));

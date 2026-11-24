@@ -12,7 +12,7 @@ test('tenant switch clears all records, investigations, panels, history and conv
   command(store, 'toggle_max');
   const oldScope = store.scope();
   store.switchTenant('cedar');
-  assert.deepEqual(store.getState(), { tenantId: 'cedar', generation: 2, selected: null, trail: [], panels: [], focused: null, history: [], messages: [], maxOpen: false, fieldMode: 'docked', fieldDock: 'top', fieldRatio: .48, savedLayouts: {}, canUndo: false, canRedo: false, storageWarning: false, fieldView: { x: 0, y: 0, zoom: 1 }, fieldFocus: null });
+  assert.deepEqual(store.getState(), { tenantId: 'cedar', generation: 2, selected: null, trail: [], panels: [], focused: null, history: [], messages: [], maxOpen: false, fieldMode: 'docked', fieldDock: 'top', fieldRatio: .48, savedLayouts: {}, canUndo: false, canRedo: false, storageWarning: false, fieldView: { x: 0, y: 0, zoom: 1 }, fieldFocus: null, layoutCheckpoint: null });
   assert.equal(store.dispatch({ ...oldScope, type: 'open_tool', source: 'max', recordId: 'harbor-content', toolId: 'domain' }), false);
   assert.equal(command(store, 'select_entity', { recordId: 'harbor-content' }), false);
   store.switchTenant('harbor');
@@ -127,4 +127,34 @@ test('invalid saved layouts and denied storage fail safely; stale commands canno
   command(bad, 'save_layout', { name: 'Local' }); assert.equal(bad.getState().storageWarning, true);
   const scope = bad.scope(); bad.switchTenant('cedar');
   for (const type of ['undo_layout', 'redo_layout', 'load_layout']) assert.equal(bad.dispatch({ ...scope, type, name: 'Local', source: 'max' }), false);
+});
+
+test('batches are atomic single undo steps; Max checkpoints restore the prior layout without touching context', () => {
+  const w = make();
+  command(w, 'select_entity', { recordId: 'harbor-acquisition-1' });
+  command(w, 'open_tool', { toolId: 'domain', recordId: 'harbor-acquisition-1' });
+  command(w, 'dock_panel', { panelId: 'domain:harbor-acquisition-1', dock: 'left' });
+  const before = w.getState();
+  // A failing step rejects the whole batch.
+  assert.equal(command(w, 'batch', { commands: [{ type: 'set_field_mode', mode: 'expanded' }, { type: 'dock_panel', panelId: 'missing', dock: 'left' }] }, 'max'), false);
+  assert.deepEqual(w.getState(), before);
+  assert.equal(command(w, 'batch', { commands: [{ type: 'undo_layout' }] }, 'max'), false);
+  assert.equal(command(w, 'checkpoint_layout', {}), false, 'only Max records checkpoints');
+  assert.equal(command(w, 'batch', { commands: [
+    { type: 'checkpoint_layout' }, { type: 'open_tool', toolId: 'investigation', recordId: 'harbor-acquisition-1' },
+    { type: 'dock_panel', panelId: 'domain:harbor-acquisition-1', dock: 'top' }, { type: 'set_field_dock', dock: 'top', ratio: .4 },
+  ] }, 'max'), true);
+  assert.equal(w.getState().panels.length, 2);
+  assert.equal(command(w, 'set_field_dock', { dock: 'top', ratio: .6 }), true);
+  assert.equal(command(w, 'restore_checkpoint', {}, 'max'), true);
+  const restored = w.getState();
+  assert.equal(restored.fieldRatio, .48); assert.equal(restored.panels[0].dock, 'left');
+  assert.equal(restored.selected, 'harbor-acquisition-1'); assert.equal(restored.layoutCheckpoint, null);
+  assert.equal(command(w, 'restore_checkpoint', {}, 'max'), false);
+  // One undo reverts the restore; the next reverts the operator resize; the next the whole Max batch.
+  command(w, 'undo_layout'); assert.equal(w.getState().fieldRatio, .6);
+  command(w, 'undo_layout'); assert.equal(w.getState().fieldRatio, .4);
+  command(w, 'undo_layout'); assert.deepEqual(w.getState().panels, before.panels);
+  w.switchTenant('cedar'); assert.equal(w.getState().layoutCheckpoint, null);
+  assert.equal(command(w, 'message', { text: 'ok', receipt: ['a'.repeat(121)] }, 'max'), false);
 });
