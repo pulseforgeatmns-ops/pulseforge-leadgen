@@ -15,6 +15,7 @@
 
 const path = require('path');
 const express = require('express');
+const { legacyCronSecretValid } = require('../utils/cronAuth');
 const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
 const {
@@ -142,7 +143,7 @@ router.post(
 
 async function handleKnowledgeOutboxCron(req, res) {
   const secret = req.query.secret || req.headers['x-cron-secret'];
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret, process.env)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   const result = await safeProcessOutbox({

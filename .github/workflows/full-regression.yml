@@ -2,7 +2,11 @@ name: Full platform regression (off PR path)
 
 on:
   push:
-    branches: [main]
+    # MAX-P0-002: production deploys from migration/render-current-main (Render,
+    # manual deploy). Full regression must run on the actual deployment candidate.
+    branches: [main, migration/render-current-main]
+  pull_request:
+    branches: [migration/render-current-main]
   schedule:
     - cron: '0 6 * * *'
   workflow_dispatch:
@@ -90,3 +94,29 @@ jobs:
         run: node --require ./test/helpers/denyExternalProviders.cjs --test test/browser/anchorPreparationApprovalBrowser.test.js
       - name: Run regression slice
         run: ${{ matrix.run }}
+
+  # MAX-P0-002: the acquisition-mission suite (execution routing, TME, outbound
+  # verification, replay) was in no CI lane. It is not yet green, so it runs as
+  # a ratchet: any failure outside the reviewed baseline fails this job.
+  # Baseline: test/baselines/amo-known-failures.json (remove entries as they are
+  # fixed; adding one needs review). Offline harness and no DATABASE_URL, matching
+  # how the baseline was produced.
+  amo-ratchet:
+    name: Acquisition mission suite (test:amo ratchet)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NODE_ENV: test
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Ratchet test:amo against the reviewed baseline
+        env:
+          NODE_OPTIONS: --require ./test/helpers/denyWebsiteEvidenceNetwork.cjs
+        run: node scripts/ci/testRatchet.js --baseline test/baselines/amo-known-failures.json packages/acquisition-mission/tests/*.test.js test/acquisitionMission.test.js
