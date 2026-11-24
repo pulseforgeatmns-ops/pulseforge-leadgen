@@ -92,6 +92,8 @@ For tenant 21 with discovery pending, these phrasings each reach **zero** Scout 
 
 Controls: tenants 10 and 1 still dispatch discovery on "Go ahead and run Scout".
 
+Side fix: `test/maxInvestigationAcceptancePostgres.test.js` seeded a tenant-21 mission at `execution_approval` by running Scout, Paige and Emmett stages, which the policy now refuses. That broke CI on #1160's first commit (`e592578`). The test now builds the stages under a synthetic tenant and stores the identical record as tenant 21. This models a legacy mission that was pending before the policy, and it still proves that operational reads win over a pending approval: 3/3.
+
 Side fix: the semantic-generalization eval used a synthetic "Harbor Dental Group" fixture that happened to carry tenant id 21. It now uses synthetic id 27, with its baseline keys remapped and nothing else changed. The eval passes exactly as on the base. The full Max workspace and AMO suites (203 files, 2,910 tests) show no new failures; the same 44 fail on the base.
 
 ## 7. Deployment order (each numbered step needs explicit approval)
