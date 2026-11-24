@@ -71,7 +71,7 @@ function fixtureSections(mutate = s => s) {
     ],
     briefings: [{ cycle_id: audit.CLAIMED_CYCLE, cycle_status: 'completed', status: 'pending', rows: 1 }],
     claimIndex: [{ unique_claim_indexes: 1 }],
-    touchpoints: [], activityLog: [], emailPerformance: [{ sends: 0 }], outreachActions: [],
+    touchpoints: [], activityLog: [], emailEvents: [], outboundItems: [], scheduledSends: [{ rows: 0 }], sendPlans: [], outreachActions: [],
   });
 }
 
@@ -96,7 +96,9 @@ test('each violation is reported as FAIL', () => {
     'cycle.claimed_once': s => { s.agentLog[0].rows = 2; return s; },
     'cycle.no_later_cycle_claimed': s => { s.agentLog.push({ action: 'research_cycle_claim', cycle_id: 'levi-week-2026-11-30', rows: 1 }); return s; },
     'cycle.claim_race_protection': s => ({ ...s, claimIndex: [{ unique_claim_indexes: 0 }] }),
-    'outreach.none': s => ({ ...s, emailPerformance: [{ sends: 3 }] }),
+    'outreach.none': s => ({ ...s, emailEvents: [{ event_type: 'sent', rows: 3 }] }),
+    'gates.recompute_exposure': s => { Object.assign(s.prospects[13], { icp_score: 80, service_area_match: 'Example', status: 'cold' }); return s; },
+    'gates.qualified_contacts': s => { s.prospects[5].acquisition_metadata.bucket = 'qualified_prospect'; return s; },
     'dedup.no_duplicate_identities': s => { s.prospects[20].first_name = 'P0'; s.prospects[20].company_name = 'Co0'; return s; },
     'inventory.checkpoint': s => { s.prospects.pop(); return s; },
   };
@@ -128,7 +130,10 @@ const SCHEMA = `
     status TEXT, executed_at TIMESTAMPTZ, result JSONB, created_at TIMESTAMPTZ DEFAULT NOW(), client_id INTEGER);
   CREATE TABLE touchpoints(id SERIAL PRIMARY KEY, client_id INTEGER, prospect_id UUID, channel TEXT, action_type TEXT);
   CREATE TABLE activity_log(id SERIAL PRIMARY KEY, client_id INTEGER, lead_id UUID, action_type TEXT);
-  CREATE TABLE email_performance(id SERIAL PRIMARY KEY, client_id INTEGER, sends INTEGER DEFAULT 0);
+  CREATE TABLE email_events(event_id TEXT PRIMARY KEY, client_id INTEGER, prospect_id UUID, event_type TEXT, event_at TIMESTAMPTZ);
+  CREATE TABLE acquisition_outbound_items(id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, prospect_id TEXT, status TEXT NOT NULL DEFAULT 'pending');
+  CREATE TABLE tenant_outreach_scheduled_sends(id SERIAL PRIMARY KEY, tenant_id TEXT NOT NULL);
+  CREATE TABLE emmett_send_plans(id SERIAL PRIMARY KEY, tenant_id TEXT NOT NULL, client_id INTEGER, status TEXT NOT NULL);
   INSERT INTO clients(id,name,slug,enabled_agents) VALUES (21,'t21','t21','{max}'),(22,'t22','t22','{scout}');`;
 
 function sodaFetch(now) {
@@ -154,6 +159,7 @@ test('real research path on disposable PostgreSQL, then read-only audit', async 
   const pg = await startDisposablePostgres('levi-post1157-');
   allowedPort = Number(pg.port);
   const db = new Pool({ connectionString: pg.connectionString, max: 4 });
+  db.on('error', () => {});
   t.after(async () => { await db.end().catch(() => {}); await pg.stop(); });
   await db.query(SCHEMA);
 
@@ -161,7 +167,8 @@ test('real research path on disposable PostgreSQL, then read-only audit', async 
   await importReviewOnlyContacts(Array.from({ length: 19 }, (_, i) => ({ name: `${PII} Person ${i}`, company: `${PII} Co ${i}`,
     reviewState: 'qualify_first', market: 'Example', sourceUrl: `https://example.invalid/${i}` })), { clientId: 21, db, actorId: 'test' });
   await db.query(`INSERT INTO prospects(client_id, source, setter_visible, first_name) VALUES (22,'scout',true,'${PII}')`);
-  await db.query(`INSERT INTO email_performance(client_id, sends) VALUES (22, 50)`);
+  await db.query(`INSERT INTO email_events(event_id, client_id, event_type) VALUES ('e1', 22, 'sent')`);
+  await db.query(`INSERT INTO acquisition_outbound_items(id, tenant_id, status) VALUES ('o1', '22', 'sent')`);
 
   // Real production deps; SODA mocked; the claimed cycle runs once.
   const now = new Date('2026-11-23T03:20:00Z');
@@ -195,7 +202,7 @@ test('real research path on disposable PostgreSQL, then read-only audit', async 
   for (const id of ['target.read_only_transaction', 'inventory.tenant_scope', 'inventory.checkpoint',
     'city.no_city_invented_from_conflict', 'city.conflicts_recorded', 'soda.request_budget',
     'soda.incomplete_not_zero_match', 'soda.evidence_present', 'soda.no_fabrication_or_paid', 'research_only.classification',
-    'gates.qualified_contacts', 'gates.setter_visibility', 'outreach.none', 'dedup.no_duplicate_identities',
+    'gates.qualified_contacts', 'gates.setter_visibility', 'gates.recompute_exposure', 'outreach.none', 'dedup.no_duplicate_identities',
     'cycle.claimed_once', 'cycle.no_double_claim', 'cycle.single_diagnostic', 'cycle.no_outreach_or_paid_in_diagnostics']) {
     assert.equal(status(report, id), 'PASS', `${id}: ${JSON.stringify(report.checks.find(c => c.id === id))}`);
   }
@@ -206,10 +213,3 @@ test('real research path on disposable PostgreSQL, then read-only audit', async 
   assert.equal(status(report, 'cycle.claim_race_protection'), 'FAIL');
 });
 
-test('known defect: one owner with two permits in a batch fails the whole claimed cycle', { todo: 'dedupe by import identity before persistReviewOnly' }, async () => {
-  const { asContacts } = require('../services/leviScoutProductionDeps');
-  const { previewReviewOnlyContacts } = require('../services/reviewOnlyProspectImportService');
-  const mk = addr => ({ name: 'ACME HOLDINGS LLC', company: 'ACME HOLDINGS LLC', service_area_match: addr,
-    acquisition_metadata: { sourceType: 'property_record_signal', city: 'Chicago', sourceUrls: ['https://data.cityofchicago.org/x'] } });
-  assert.doesNotThrow(() => previewReviewOnlyContacts(asContacts([mk('1 N A ST, Chicago, IL'), mk('2 N B ST, Chicago, IL')])));
-});

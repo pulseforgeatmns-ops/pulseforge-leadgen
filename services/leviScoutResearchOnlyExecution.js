@@ -105,6 +105,7 @@ async function runResearchOnlyCycle({ authority: raw, env = process.env, deps })
       authorityHash, records: Object.freeze(records) });
     diagnostic = { status: 'completed', tenantId: String(TENANT_ID), cycleId: authority.cycleId,
       discovered: discovered.length, persisted: Number(saved?.persisted || 0),
+      mergedSameIdentity: Number(saved?.merged || 0), skippedExisting: Number(saved?.skipped || 0),
       qualified: records.filter(row => row.qualified).length,
       classifications: records.reduce((out, row) => ({ ...out, [row.classification]: (out[row.classification] || 0) + 1 }), {}),
       duplicateBlocked: records.filter(row => row.blockers.includes('duplicate')).length,

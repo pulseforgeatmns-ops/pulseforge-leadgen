@@ -80,19 +80,43 @@ SELECT acquisition_metadata->>'sourceType' AS source_type, acquisition_metadata-
        acquisition_metadata->>'reviewState' AS review_state, count(*)
   FROM prospects WHERE client_id = 21 AND source = 'scout_research_only' GROUP BY 1,2,3;
 
--- Q5 Qualified-contact and setter-visibility gates. Expect 0 / 0 / 0.
-SELECT count(*) FILTER (WHERE setter_visible IS TRUE)                              AS setter_visible,
-       count(*) FILTER (WHERE icp_score >= 70)                                     AS icp_ge_70,
+-- Q5 Qualified-contact and setter-visibility gates. Expect setter_visible 0, qualified_bucket 0,
+-- setter_status_not_new 0. setter_status defaults to 'new' (utils/clientContext), so NULL/'new' is untouched.
+SELECT count(*) FILTER (WHERE setter_visible IS TRUE)                                 AS setter_visible,
+       count(*) FILTER (WHERE icp_score >= 70)                                        AS icp_ge_70,
        count(*) FILTER (WHERE acquisition_metadata->>'bucket' = 'qualified_prospect') AS qualified_bucket,
-       count(*) FILTER (WHERE setter_status IS NOT NULL)                           AS setter_status_set
+       count(*) FILTER (WHERE coalesce(setter_status, 'new') <> 'new')                AS setter_status_not_new
   FROM prospects WHERE client_id = 21;
--- Contract qualification (evaluateProspect) cannot be expressed in SQL; the script computes it.
+-- Q5b Recompute exposure (expect 0). Mirrors utils/setterVisibility.recomputeSetterVisibility:
+-- the review-only hard exclusion applies to tenant 10 only, so a setter_handoff run for
+-- client 21 would set setter_visible on these rows (icp_score >= 70 + service area).
+SELECT source, coalesce(acquisition_metadata->>'reviewState', 'null') AS review_state, count(*) AS would_become_setter_visible
+  FROM prospects
+ WHERE client_id = 21
+   AND coalesce(status, '') NOT IN ('dead', 'disqualified', 'bounced', 'do_not_email')
+   AND coalesce(do_not_contact, false) = false
+   AND coalesce(icp_score, 0) >= 70
+   AND nullif(btrim(coalesce(service_area_match, '')), '') IS NOT NULL
+ GROUP BY 1, 2;
+-- Q5c Qualification inputs. evaluateProspect (services/leviScoutProductionContract.js) qualifies a row only
+-- when review state = contact_now AND an APPROVED Blueprint financing range exists AND no blocker applies.
+-- Review state comes from acquisition_metadata.reviewState, else the notes line "Review state: ...".
+SELECT coalesce(lower(acquisition_metadata->>'reviewState'),
+                lower(replace(btrim(substring(notes FROM 'Review state:\s*([^.\n]+)')), ' ', '_')), 'null') AS review_state,
+       source, count(*)
+  FROM prospects WHERE client_id = 21 GROUP BY 1, 2 ORDER BY 1, 2;
+-- Approved Blueprint presence (the range itself is parsed by the application; run the script for it).
+SELECT status, count(*), max(updated_at) FROM cie_business_blueprints WHERE client_id = 21 GROUP BY 1;
 
 -- Q6 Outreach prevention and dedup. Every count must be 0 (a missing table = UNVERIFIED).
 SELECT count(*) AS last_contacted FROM prospects WHERE client_id = 21 AND last_contacted_at IS NOT NULL;
 SELECT channel, action_type, count(*) FROM touchpoints WHERE client_id = 21 GROUP BY 1,2;
 SELECT action_type, count(*) FROM activity_log WHERE client_id = 21 GROUP BY 1;
-SELECT coalesce(sum(sends), 0) AS email_sends FROM email_performance WHERE client_id = 21;
+-- email_performance is deprecated (utils/emailPerformance.js); email_events is the source of truth.
+SELECT event_type, count(*) FROM email_events WHERE client_id = 21 GROUP BY 1;
+SELECT status, count(*) FROM acquisition_outbound_items WHERE tenant_id = '21' GROUP BY 1;
+SELECT count(*) AS scheduled_sends FROM tenant_outreach_scheduled_sends WHERE tenant_id = '21';
+SELECT status, count(*) FROM emmett_send_plans WHERE tenant_id = '21' OR client_id = 21 GROUP BY 1;
 SELECT action_type, status, count(*) FROM agent_actions
  WHERE client_id = 21 AND action_type <> 'levi_scout_research_briefing'
    AND action_type ~* '(outreach|send|email|sms|call|handoff|enroll)' GROUP BY 1,2;
@@ -117,8 +141,14 @@ SELECT action, status, payload->>'cycleId' AS cycle_id, payload->>'status' AS pa
 SELECT payload->>'cycleId' AS cycle_id, payload->>'status' AS cycle_status, status, count(*), min(created_at), max(created_at)
   FROM agent_actions WHERE client_id = 21 AND created_by = 'scout_levi' AND action_type = 'levi_scout_research_briefing'
  GROUP BY 1,2,3 ORDER BY min(created_at);
--- Claim race protection: expect >= 1 unique index covering the claim; 0 = concurrent double-claim possible.
-SELECT indexname, indexdef FROM pg_indexes
- WHERE schemaname = current_schema() AND tablename = 'agent_log' AND indexdef ILIKE '%UNIQUE%';
+-- Claim race protection. The application now serializes claims with an advisory lock
+-- (fix/levi-scout-p0-reliability); the database key is agent_log_scout_levi_cycle_claim_uniq
+-- (migrations/2026-11-24-levi-scout-cycle-claim-unique.sql), absent until approved and applied.
+SELECT c.relname AS index_name, i.indisvalid AS valid, i.indisunique AS is_unique
+  FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+ WHERE c.relname = 'agent_log_scout_levi_cycle_claim_uniq';
+SELECT count(*) AS duplicate_claim_groups FROM (
+  SELECT client_id, payload->>'cycleId' FROM agent_log
+   WHERE agent_name = 'scout_levi' AND action = 'research_cycle_claim' GROUP BY 1, 2 HAVING count(*) > 1) d;
 
 ROLLBACK;

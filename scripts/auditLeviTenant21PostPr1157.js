@@ -23,10 +23,11 @@ const { planRow } = require('../services/leviScoutCityBackfill');
 const { inferCityFromProvenance } = require('../services/leviScoutProvenance');
 const { MAX_REQUESTS_PER_LOOKUP } = require('../services/leviScoutSodaClient');
 const { AGENT } = require('../services/leviScoutEnablement');
+const { SETTER_VISIBILITY_THRESHOLD } = require('../utils/qualificationThreshold');
 
 const RESEARCH_SOURCE = 'scout_research_only';
 const CLAIMED_CYCLE = 'levi-week-2026-11-23';
-const EXPECTED = Object.freeze({ totalProspects: 29, researchOnly: 10 });
+const EXPECTED = Object.freeze({ totalProspects: 29, researchOnly: 10, qualified: 0 });
 
 // Every query is tenant-bound through $1. Optional tables run behind a
 // savepoint so a missing table/column becomes UNVERIFIED, never a crash.
@@ -40,6 +41,7 @@ const QUERIES = Object.freeze({
       p.linkedin_url, p.job_title, p.notes, p.service_area_match, p.do_not_contact, p.setter_visible,
       p.setter_status, p.icp_score, p.ao_outreach_review_required, p.discovery_method,
       p.last_contacted_at, p.acquisition_metadata, p.created_at, c.name AS company_name,
+      to_jsonb(p)->>'setter_visibility_reason' AS setter_visibility_reason,
       c.location AS company_location
     FROM prospects p
     LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
@@ -66,7 +68,11 @@ const QUERIES = Object.freeze({
     FROM touchpoints WHERE client_id = $1 GROUP BY 1,2 ORDER BY 3 DESC`,
   activityLog: `SELECT action_type, count(*)::int AS rows
     FROM activity_log WHERE client_id = $1 GROUP BY 1 ORDER BY 2 DESC`,
-  emailPerformance: `SELECT coalesce(sum(sends),0)::int AS sends FROM email_performance WHERE client_id = $1`,
+  // email_performance is deprecated (utils/emailPerformance.js); email_events is the source of truth.
+  emailEvents: `SELECT event_type, count(*)::int AS rows FROM email_events WHERE client_id = $1 GROUP BY 1 ORDER BY 2 DESC`,
+  outboundItems: `SELECT status, count(*)::int AS rows FROM acquisition_outbound_items WHERE tenant_id = $1::int::text GROUP BY 1`,
+  scheduledSends: `SELECT count(*)::int AS rows FROM tenant_outreach_scheduled_sends WHERE tenant_id = $1::int::text`,
+  sendPlans: `SELECT status, count(*)::int AS rows FROM emmett_send_plans WHERE tenant_id = $1::int::text OR client_id = $1::int GROUP BY 1`,
   outreachActions: `SELECT action_type, status, count(*)::int AS rows
     FROM agent_actions
     WHERE client_id = $1 AND action_type <> 'levi_scout_research_briefing'
@@ -76,7 +82,7 @@ const QUERIES = Object.freeze({
     GROUP BY 1,2 ORDER BY 3 DESC`,
 });
 
-const OPTIONAL = new Set(['tenant', 'briefings', 'claimIndex', 'touchpoints', 'activityLog', 'emailPerformance', 'outreachActions']);
+const OPTIONAL = new Set(['tenant', 'briefings', 'claimIndex', 'touchpoints', 'activityLog', 'emailEvents', 'outboundItems', 'scheduledSends', 'sendPlans', 'outreachActions']);
 
 function assertSelectOnly(sql) {
   const body = String(sql).replace(/--[^\n]*/g, '').trim();
@@ -110,7 +116,7 @@ function unavailable(section) {
 }
 
 // Pure: sections -> checks. Exported for tests.
-function evaluate(sections, { expectDatabase = null } = {}) {
+function evaluate(sections, { expectDatabase = null, criteria = null, criteriaStatus = 'not_loaded' } = {}) {
   const checks = [];
   const identity = Array.isArray(sections.identity) ? sections.identity[0] : null;
 
@@ -224,31 +230,58 @@ function evaluate(sections, { expectDatabase = null } = {}) {
   }));
 
   // 5. Qualified-contact and setter-visibility gates
-  const evaluated = all.map(row => evaluateProspect(row));
+  // Same function and same criteria source the runner uses (approved Blueprint
+  // range via loadApprovedCriteria; null when no approved range exists).
+  const evaluated = all.map(row => evaluateProspect(row, { criteria }));
   const setterVisible = all.filter(row => row.setter_visible === true);
   const qualifiedBucket = research.filter(row => metadataOf(row).bucket === 'qualified_prospect');
-  checks.push(check('gates.qualified_contacts', evaluated.filter(e => e.qualified).length === 0 && qualifiedBucket.length === 0 ? 'PASS' : 'FAIL', {
+  const storedNotRecomputed = all.filter((row, i) => metadataOf(row).bucket === 'qualified_prospect' && !evaluated[i].qualified);
+  checks.push(check('gates.qualified_contacts',
+    evaluated.filter(e => e.qualified).length === EXPECTED.qualified && storedNotRecomputed.length === 0 ? 'PASS' : 'FAIL', {
     contractQualified: evaluated.filter(e => e.qualified).length,
+    expectedAtCheckpoint: EXPECTED.qualified,
     qualifiedBucket: qualifiedBucket.length,
+    storedQualifiedButNotRecomputed: storedNotRecomputed.length,
+    criteria: criteria ? { approved: true, minAmount: criteria.minAmount, maxAmount: criteria.maxAmount } : 'none_approved',
+    criteriaStatus,
+    reviewStates: countBy(evaluated, e => e.reviewState || 'null'),
     classifications: countBy(evaluated, e => e.classification),
     topBlockers: Object.entries(countBy(evaluated.flatMap(e => e.blockers), b => b)).sort((a, b) => b[1] - a[1]).slice(0, 8),
-  }, 'Expected 0: no approved Blueprint financing range exists, so financing_criteria_unverified blocks every row.'));
+  }, 'Checkpoint is 0 qualified. Re-baseline if an approved Blueprint financing range is added; storedQualifiedButNotRecomputed must always be 0.'));
   checks.push(check('gates.setter_visibility', setterVisible.length === 0 ? 'PASS' : 'FAIL', {
     setterVisible: setterVisible.length,
     icpScoreAtLeast70: all.filter(row => Number(row.icp_score) >= 70).length,
-    setterStatus: countBy(all, row => row.setter_status || 'null'),
+    setterStatusNotNew: all.filter(row => (row.setter_status || 'new') !== 'new').length,
   }));
+  // Mirrors utils/setterVisibility.recomputeSetterVisibility (reason 'handoff'):
+  // the review-only hard exclusion applies to tenant 10 only, so for tenant 21
+  // a handoff/recompute would expose any non-terminal, non-DNC row with
+  // icp_score >= threshold and a service area.
+  const exposed = all.filter(row => !['dead', 'disqualified', 'bounced', 'do_not_email'].includes(String(row.status || ''))
+    && row.do_not_contact !== true
+    && Number(row.icp_score || 0) >= SETTER_VISIBILITY_THRESHOLD
+    && String(row.service_area_match || '').trim().length > 0);
+  checks.push(check('gates.recompute_exposure', exposed.length === 0 ? 'PASS' : 'FAIL', {
+    wouldBecomeSetterVisibleOnHandoffRecompute: exposed.length,
+    bySource: countBy(exposed, row => row.source || 'null'),
+    byReviewState: countBy(exposed, row => metadataOf(row).reviewState || 'null'),
+    threshold: SETTER_VISIBILITY_THRESHOLD,
+  }, 'Latent: only if setter_handoff runs for client 21. Review-only status does not exclude tenant 21 in the shared setter gate.'));
 
   // 6. Outreach prevention and deduplication
   const contacted = all.filter(row => row.last_contacted_at);
   const tp = Array.isArray(sections.touchpoints) ? sections.touchpoints : null;
   const act = Array.isArray(sections.activityLog) ? sections.activityLog : null;
-  const ep = Array.isArray(sections.emailPerformance) ? sections.emailPerformance : null;
+  const ee = Array.isArray(sections.emailEvents) ? sections.emailEvents : null;
+  const oi = Array.isArray(sections.outboundItems) ? sections.outboundItems : null;
+  const ss = Array.isArray(sections.scheduledSends) ? sections.scheduledSends : null;
+  const sp = Array.isArray(sections.sendPlans) ? sections.sendPlans : null;
+  const total = list => (list ? list.reduce((sum, r) => sum + r.rows, 0) : null);
   const oa = Array.isArray(sections.outreachActions) ? sections.outreachActions : null;
   const outboundTouchpoints = tp ? tp.filter(r => !/inbound|research|note|review/i.test(`${r.channel} ${r.action_type}`))
     .reduce((s, r) => s + r.rows, 0) : null;
   const outreachSignals = [contacted.length, outboundTouchpoints, act ? act.reduce((s, r) => s + r.rows, 0) : null,
-    ep ? ep[0].sends : null, oa ? oa.reduce((s, r) => s + r.rows, 0) : null];
+    total(ee), total(oi), total(ss), total(sp), total(oa)];
   const outreachStatus = outreachSignals.some(v => Number(v) > 0) ? 'FAIL'
     : (outreachSignals.some(v => v == null) ? 'UNVERIFIED' : 'PASS');
   checks.push(check('outreach.none', outreachStatus, {
@@ -256,7 +289,10 @@ function evaluate(sections, { expectDatabase = null } = {}) {
     outboundTouchpoints: outboundTouchpoints == null ? 'unavailable' : outboundTouchpoints,
     touchpointsByChannel: tp || 'unavailable',
     setterActivity: act || 'unavailable',
-    emailSends: ep ? ep[0].sends : 'unavailable',
+    emailEvents: ee || 'unavailable',
+    outboundItems: oi || 'unavailable',
+    scheduledSends: ss ? total(ss) : 'unavailable',
+    sendPlans: sp || 'unavailable',
     outreachActionCards: oa || 'unavailable',
   }));
   const keyed = countBy(all, row => identityKey({
@@ -320,6 +356,8 @@ function summarize(checks) {
 
 async function collect(client, { expectDatabase = null } = {}) {
   const sections = {};
+  let criteria = null;
+  let criteriaStatus = 'not_loaded';
   await client.query('BEGIN TRANSACTION READ ONLY');
   try {
     await client.query("SET LOCAL statement_timeout = '15s'");
@@ -335,10 +373,26 @@ async function collect(client, { expectDatabase = null } = {}) {
         sections[name] = { unavailable: error.code || 'query_failed', optional: OPTIONAL.has(name) };
       }
     }
+    // Application qualification authority: the approved Blueprint range, loaded
+    // the way the runner loads it, through a SELECT-only wrapper.
+    await client.query('SAVEPOINT a_criteria');
+    try {
+      const { loadTenantUnderstanding } = require('../services/leviScoutBlueprintReadiness');
+      const { fromUnderstanding } = require('../services/leviScoutApprovedCriteria');
+      const { readOnlyQueryable } = require('../packages/max/workspace/OperationalInspection');
+      const understanding = await loadTenantUnderstanding({
+        db: readOnlyQueryable(client, { writesBlocked: 0, reads: 0 }), tenantId: TENANT_ID,
+      });
+      criteria = fromUnderstanding(understanding, TENANT_ID);
+      criteriaStatus = understanding && understanding.loadError ? `load_error:${understanding.loadError}` : 'loaded';
+    } catch (error) {
+      criteriaStatus = `unavailable:${error.code || 'error'}`;
+    }
+    await client.query('ROLLBACK TO SAVEPOINT a_criteria').catch(() => {});
   } finally {
     await client.query('ROLLBACK').catch(() => {});
   }
-  const checks = evaluate(sections, { expectDatabase });
+  const checks = evaluate(sections, { expectDatabase, criteria, criteriaStatus });
   return {
     audit: 'levi_tenant21_post_pr1157',
     tenantId: Number(TENANT_ID),
