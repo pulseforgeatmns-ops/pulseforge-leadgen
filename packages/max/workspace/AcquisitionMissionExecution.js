@@ -1640,6 +1640,7 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
       });
     } catch (err) {
       if (amo.isSyntheticEvidenceError(err)) return buildSyntheticBlockedTurn({ mission, action, intent });
+      if (err && err.code === 'tenant_pilot_policy_denied') return buildTenantPilotBlockedTurn({ err, mission, action, intent });
       if (err && err.code === RESEARCH_PLANNING_REQUIRED) return buildResearchPlanningRequiredTurn({ err, mission, action, intent });
       if (!amo.isAuthorizationConstraintError(err)) throw err;
       return buildConstraintBlockedTurn({ err, mission, action, intent });
@@ -1815,6 +1816,47 @@ function applySyntheticNotice(response, mission, execution) {
   response.prose = [notice, response.prose].filter(Boolean).join('\n\n');
   structured.answer = [notice, structured.answer].filter(Boolean).join('\n\n');
   return response;
+}
+
+/**
+ * P0-SCOUT-LEVI-001 — the workspace is a prospecting-only pilot
+ * (utils/tenantPilotPolicy.js). The router refused before any handler ran.
+ */
+function buildTenantPilotBlockedTurn({ err, mission, action, intent }) {
+  const answer = [
+    'Not executed: this workspace is a prospecting-only pilot.',
+    'Discovery runs, paid research providers and outreach are not available here; no specialist was dispatched and no external action was taken.',
+    'You can keep reviewing your prospects, their research evidence and the pipeline.',
+  ].join(' ');
+  const structured = buildStructuredResponse({
+    answer,
+    reasoning: [`Prospecting-only pilot policy refused ${intent} for mission ${mission.id}.`],
+    relatedEntities: [{ id: mission.id, type: 'acquisition_mission', name: mission.title || mission.id }],
+  });
+  Object.assign(structured.metadata, {
+    acquisitionMission: true,
+    acquisitionMissionExecution: true,
+    missionExecutionAction: action,
+    executionState: 'blocked',
+    executionVerified: false,
+    blocker: 'tenant_pilot_policy_denied',
+  });
+  return {
+    reason: 'acquisition_mission_tenant_pilot_policy_denied',
+    structured,
+    prose: answer,
+    mission,
+    action,
+    executionResult: null,
+    executionRequest: null,
+    execution: {
+      state: 'blocked',
+      verified: false,
+      reason: 'tenant_pilot_policy',
+      evidence: { policy: (err && err.policy) || 'prospecting_only_pilot', tenantId: (err && err.tenantId) || null },
+      correlation: { missionId: mission.id, intent, specialist: amo.specialistForIntent(intent) },
+    },
+  };
 }
 
 /**

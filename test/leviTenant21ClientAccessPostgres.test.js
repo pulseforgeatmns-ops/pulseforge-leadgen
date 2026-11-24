@@ -128,6 +128,7 @@ test('Levi tenant-21 client: isolation, prospect visibility, and closed operator
   });
   app.use('/', require('../routes/api'));
   app.use('/', require('../routes/tenantOutreach'));
+  app.use('/', require('../routes/emmettOutbound'));
   app.use('/', require('../routes/approvals'));
   app.use('/', require('../routes/users'));
   app.use('/setter', require('../routes/setter'));
@@ -187,10 +188,14 @@ test('Levi tenant-21 client: isolation, prospect visibility, and closed operator
   const sched = await as('/api/v1/tenant-outreach/schedules/authorize', { method: 'POST', body: {
     prospect_id: t21[1], outreach_asset_id: 'a1', sending_identity_id: 'not-a-tenant-21-identity', recipient_email: 'x@example.invalid',
     scheduled_for: '2030-01-01T00:00:00Z', subject: 's', body: 'b', client_id: 1 } });
-  // Refused with sending_identity_tenant_mismatch. Note: the route maps this code to 500, not 4xx (cosmetic).
-  assert.notEqual(sched.status, 200);
-  assert.notEqual(sched.status, 201);
-  assert.equal(sched.json && sched.json.error, 'sending_identity_tenant_mismatch');
+  // The prospecting-only pilot policy refuses scheduling for tenant 21 outright.
+  assert.equal(sched.status, 403);
+  assert.equal(sched.json && sched.json.error, 'tenant_pilot_policy_denied');
+  for (const path of ['/api/v1/eoi/plan', '/api/v1/eoi/plans/any/approve', '/api/v1/eoi/plans/any/acknowledge']) {
+    const eoi = await as(path, { method: 'POST', body: { client_id: 1 } });
+    assert.equal(eoi.status, 403, path);
+    assert.equal(eoi.json && eoi.json.error, 'tenant_pilot_policy_denied', path);
+  }
   const scheduled = await pool.query(`SELECT to_regclass('tenant_outreach_scheduled_sends') IS NOT NULL AS present`);
   if (scheduled.rows[0].present) {
     assert.equal((await pool.query(`SELECT count(*)::int AS n FROM tenant_outreach_scheduled_sends`)).rows[0].n, 0);

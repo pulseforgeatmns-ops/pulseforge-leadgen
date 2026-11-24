@@ -47,6 +47,7 @@ function actorFrom(req) {
 function fail(res, err, fallbackCode, fallbackStatus = 500) {
   const code = (err && err.code) || fallbackCode;
   const status = code === 'schedule_not_found' ? 404
+    : code === 'tenant_pilot_policy_denied' || code === 'sending_identity_tenant_mismatch' ? 403
     : [
       'tenant_required',
       'prospect_required',

@@ -69,6 +69,13 @@ async function isAgentEnabledForClient(clientOrId, agentName) {
     }
   }
 
+  // Prospecting-only pilot tenants: only the policy allowlist may dispatch,
+  // whatever enabled_agents says (utils/tenantPilotPolicy).
+  const pilot = require('./tenantPilotPolicy').decide(clientId, 'agent_dispatch', { agent: normalizedAgent });
+  if (!pilot.allowed) {
+    return { allowed: false, reason: 'tenant_pilot_policy_denied', normalizedAgent };
+  }
+
   const normalizedEnabled = [
     ...new Set(enabledAgents.map(normalizeAgentName).filter(Boolean)),
   ];

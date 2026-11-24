@@ -35,6 +35,17 @@ SELECT count(*) AS total,
 SELECT source, count(*) FILTER (WHERE ao_outreach_review_required IS NOT TRUE) AS not_held, count(*) AS total
   FROM prospects WHERE client_id = 21 GROUP BY 1;
 
+-- P4b AIM / Max state (informational: with the pilot policy deployed, a published AIM unlocks Max chat
+--     for reading, but cannot unlock discovery, paid providers or outreach).
+SELECT status, count(*), max(version) AS latest_version FROM aim_models WHERE client_id = 21 GROUP BY 1;
+
+-- P4c Pilot policy evidence after deploy: refusals are audited, nothing ran.
+SELECT agent_name, action, coalesce(error_msg, payload->>'reason') AS reason, count(*), max(ran_at)
+  FROM agent_log WHERE client_id = 21 AND ran_at >= NOW() - INTERVAL '14 days'
+ GROUP BY 1, 2, 3 ORDER BY max(ran_at) DESC;
+-- Expect 0: no paid-provider usage attributed to tenant 21 (Places attribution ledger).
+SELECT count(*) AS places_calls_tenant_21, max(created_at) AS last_call FROM places_api_requests WHERE tenant_id = 21;
+
 -- P5 Weekly cycle (must not be replayed): exactly one claim for levi-week-2026-11-23.
 SELECT payload->>'cycleId' AS cycle_id, count(*) FROM agent_log
  WHERE client_id = 21 AND agent_name = 'scout_levi' AND action = 'research_cycle_claim' GROUP BY 1;
