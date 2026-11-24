@@ -26,6 +26,7 @@ test('desktop field, mouse move/resize, docking, focus, Max commands and tenant 
   await page.evaluate(() => { const w = window.livingWorkspace; for (const p of w.getState().panels) w.dispatch({ ...w.scope(), type: 'close_panel', source: 'human', panelId: p.id }); });
   await page.click('#cdSpatialOrbit button[data-domain-id="acquisition"]');
   await page.waitForSelector('.panel');
+  await page.select('.panel [aria-label="Dock panel region"]', 'floating');
   const panel = '.panel';
   const grip = await page.$(`${panel} .grip`), box = await grip.boundingBox();
   await page.mouse.move(box.x + 50, box.y + 15); await page.mouse.down(); await page.mouse.move(box.x + 150, box.y + 75, { steps: 5 }); await page.mouse.up();
@@ -33,7 +34,7 @@ test('desktop field, mouse move/resize, docking, focus, Max commands and tenant 
   const resize = await page.$(`${panel} .resize`), rb = await resize.boundingBox();
   await page.mouse.move(rb.x + 15, rb.y + 15); await page.mouse.down(); await page.mouse.move(rb.x + 95, rb.y + 65, { steps: 5 }); await page.mouse.up();
   assert.ok((await state(page)).panels[0].width > 400);
-  await page.click('[aria-label="Dock secondary slot"]'); assert.equal((await state(page)).panels[0].dock, 'right');
+  await page.select('[aria-label="Dock panel region"]', 'right'); assert.equal((await state(page)).panels[0].dock, 'right');
   await page.click('.maximize'); assert.equal((await state(page)).panels[0].maximized, true);
   await page.click('.maximize'); assert.equal((await state(page)).panels[0].maximized, false);
   await page.click('#max-orb'); await page.type('#question', 'investigate acquisition'); await page.click('#ask button');
@@ -96,8 +97,8 @@ test('desktop and tablet: field and two panels fit viewport, layout transitions 
     });
     assert.equal(layout.scrollHeight, height); assert.equal(layout.scrollWidth, width);
     for (const box of layout.boxes) { assert.ok(box.x >= 0 && box.y >= 0 && box.right <= width + 1 && box.bottom <= height + 1); assert.ok(box.width > 250 && box.height > 200); }
-    assert.ok(layout.boxes[0].right <= layout.boxes[1].x);
-    assert.ok(layout.boxes[1].bottom <= layout.boxes[2].y);
+    assert.ok(layout.boxes[0].bottom <= layout.boxes[1].y);
+    assert.ok(layout.boxes[1].right <= layout.boxes[2].x);
     for (const mode of ['expanded', 'minimized', 'docked']) {
       await page.click(`[data-field-mode="${mode}"]`);
       const after = await state(page);
@@ -122,5 +123,45 @@ test('desktop and tablet: field and two panels fit viewport, layout transitions 
       await page.screenshot({ path: `${process.env.WORKSPACE_SCREENSHOTS}/expanded-${width}x${height}.png` });
     }
   }
+  assert.deepEqual(errors, []);
+});
+
+test('operator and Max layouts preserve context; named layouts persist and isolate tenants', async t => {
+  const { page, errors } = await setup(t);
+  await page.setViewport({ width: 1180, height: 820 });
+  const initial = await state(page);
+  const assertContext = async () => {
+    const now = await state(page); assert.equal(now.selected, initial.selected); assert.deepEqual(now.trail, initial.trail);
+    assert.deepEqual(now.panels.map(p => [p.id, p.recordId]), initial.panels.map(p => [p.id, p.recordId]));
+  };
+  const capture = async name => {
+    if (process.env.WORKSPACE_SCREENSHOTS) await page.screenshot({ path: `${process.env.WORKSPACE_SCREENSHOTS}/${name}-1180x820.png` });
+  };
+  await capture('default');
+  await page.click('#layout-menu summary');
+  await page.select('#field-dock', 'right');
+  await page.$eval('#field-ratio', el => { el.value = 43; el.dispatchEvent(new Event('change', { bubbles: true })); });
+  await page.click('#layout-menu summary');
+  await page.select('.panel [aria-label="Dock panel region"]', 'top');
+  await assertContext();
+  await page.click('#layout-menu summary'); await page.type('#layout-name', 'My research'); await page.click('#save-layout-form button');
+  await page.click('#layout-menu summary');
+  const custom = await state(page); await capture('customized');
+  await page.click('#max-orb'); await page.type('#question', 'arrange research'); await page.click('#ask button'); await page.click('#close-max');
+  await assertContext(); assert.equal((await state(page)).fieldDock, 'left'); await capture('max-rearranged');
+  await page.click('#undo-layout'); await assertContext();
+  assert.deepEqual((await state(page)).panels, custom.panels); assert.equal((await state(page)).fieldDock, 'right');
+  await page.click('#redo-layout'); assert.equal((await state(page)).fieldDock, 'left');
+  await page.click('#layout-menu summary'); await page.select('#saved-layouts', 'My research'); await page.click('#load-layout');
+  assert.equal((await state(page)).fieldDock, 'right'); await assertContext();
+  await page.click('.panel [aria-label="Minimize panel"]'); assert.equal((await state(page)).panels[0].minimized, true);
+  await page.click('.panel-tabs button'); assert.equal((await state(page)).panels[0].minimized, false); await assertContext();
+  await page.reload(); await page.waitForFunction(() => window.livingWorkspace);
+  assert.ok((await state(page)).savedLayouts['My research']);
+  await page.select('#tenant', 'cedar');
+  assert.deepEqual((await state(page)).savedLayouts, {}); assert.equal((await state(page)).canUndo, false);
+  assert.equal(await page.$eval('#saved-layouts', el => el.options.length), 0);
+  await page.select('#tenant', 'harbor'); assert.ok((await state(page)).savedLayouts['My research']);
+  assert.equal((await state(page)).selected, null); assert.equal((await state(page)).panels.length, 0);
   assert.deepEqual(errors, []);
 });

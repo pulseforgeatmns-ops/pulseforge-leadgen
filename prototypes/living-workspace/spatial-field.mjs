@@ -1,6 +1,7 @@
 // Prototype-only spatial presentation. Domain priorities are fixture inputs, never recomputed.
 export function createSpatialField({ host, orbit, connections, list, dispatch, scope, onOpen, onInvestigate }) {
   const positions = { content: [24, 19], acquisition: [80, 35], clients: [68, 78], campaigns: [20, 65] };
+  let currentFixture = null;
   let tenant = '', view = { x: 0, y: 0, zoom: 1 }, start;
   const svgNS = 'http://www.w3.org/2000/svg';
   host.tabIndex = 0; host.setAttribute('aria-label', 'Exploration field. Drag background to pan; use arrow keys to pan.');
@@ -27,7 +28,29 @@ export function createSpatialField({ host, orbit, connections, list, dispatch, s
     const delta = { ArrowLeft: [-25, 0], ArrowRight: [25, 0], ArrowUp: [0, -25], ArrowDown: [0, 25] }[e.key];
     if (delta) { e.preventDefault(); change({ ...view, x: view.x + delta[0], y: view.y + delta[1] }); }
   });
+  function position() {
+    if (!currentFixture) return;
+    const wide = host.clientWidth > host.clientHeight * 2.2;
+    host.classList.toggle('wide-field', wide);
+    const center = wide ? [51, 78] : [48, 51];
+    const origin = orbit.querySelector('.field-origin'); origin.style.left = `${center[0]}%`; origin.style.top = `${center[1]}%`;
+    const horizontal = { content: [14, 34], acquisition: [38, 29], clients: [65, 37], campaigns: [87, 31] };
+    for (const domain of currentFixture.overview.domains) {
+      const raw = (wide ? horizontal : positions)[domain.id];
+      const proximity = { urgent: .66, elevated: .82, normal: 1, monitored: 1.08 }[domain.priority];
+      const x = center[0] + (raw[0] - center[0]) * proximity, y = center[1] + (raw[1] - center[1]) * proximity;
+      const node = orbit.querySelector(`button[data-domain-id="${domain.id}"]`);
+      const item = orbit.querySelector(`[data-record-id="${currentFixture.id}-${domain.id}"]`);
+      node.style.left = `${x}%`; node.style.top = `${y}%`;
+      const satelliteY = wide ? Math.min(88, y + 43) : y + 15;
+      item.style.left = `${x}%`; item.style.top = `${satelliteY}%`;
+      connections.querySelector(`[data-domain-id="${domain.id}"]`).setAttribute('d', `M${center[0]*10} ${center[1]*7} Q${x*10} ${center[1]*7} ${x*10} ${y*7}`);
+      connections.querySelector(`[data-record-domain="${domain.id}"]`).setAttribute('d', `M${x*10} ${y*7+35} L${x*10} ${satelliteY*7}`);
+    }
+  }
+  new ResizeObserver(position).observe(host);
   function render(fixture, state) {
+    currentFixture = fixture;
     view = state.fieldView;
     orbit.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.zoom})`;
     if (tenant !== fixture.id) {
@@ -53,10 +76,11 @@ export function createSpatialField({ host, orbit, connections, list, dispatch, s
         item.setAttribute('aria-label', `Investigate ${record.name}`); item.addEventListener('click', () => onInvestigate(record)); orbit.append(item);
         const path = document.createElementNS(svgNS, 'path'); path.classList.add('domain-link'); path.dataset.domainId = domain.id;
         path.setAttribute('d', `M480 357 Q${x * 10} 357 ${x * 10} ${y * 7}`); connections.append(path);
-        const branch = document.createElementNS(svgNS, 'path'); branch.classList.add('record-link'); branch.setAttribute('d', `M${x * 10} ${y * 7 + 35} L${x * 10} ${(y + 15) * 7}`); connections.append(branch);
+        const branch = document.createElementNS(svgNS, 'path'); branch.classList.add('record-link'); branch.dataset.recordDomain = domain.id; branch.setAttribute('d', `M${x * 10} ${y * 7 + 35} L${x * 10} ${(y + 15) * 7}`); connections.append(branch);
         const row = document.createElement('button'); row.dataset.domainId = domain.id; row.textContent = `${domain.label} · ${domain.priority} — ${record.summary}`; row.addEventListener('click', () => onOpen(record)); list.append(row);
       }
     }
+    position();
     const selected = fixture.records.find(r => r.id === state.selected)?.domain;
     orbit.querySelectorAll('[data-domain-id]').forEach(n => n.classList.toggle('selected', n.dataset.domainId === selected));
     list.querySelectorAll('[data-domain-id]').forEach(n => n.setAttribute('aria-pressed', String(n.dataset.domainId === selected)));

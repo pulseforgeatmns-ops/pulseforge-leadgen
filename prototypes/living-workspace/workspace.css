@@ -1,11 +1,11 @@
 :root {
   color-scheme:dark;
-  --bg:#0d0d13;
-  --surface:#15151f;
-  --border:#2c2a3b;
-  --text:#dddce8;
-  --muted:#9390a7;
-  --purple:#b6a0ee;
+  --bg:#0a111a;
+  --surface:#0e1826;
+  --border:#1b2f4a;
+  --text:#ede6d7;
+  --muted:#8b9fb1;
+  --accent:#dccfb2;
   --gold:#e5d0a6;
   font:12px/1.5 system-ui,sans-serif
 }
@@ -30,7 +30,7 @@ button,input,select {
 }
 button,select {
   color:var(--text);
-  background:#1b1a26;
+  background:#111e2f;
   border:1px solid var(--border);
   border-radius:5px;
   padding:5px 9px;
@@ -38,16 +38,16 @@ button,select {
   cursor:pointer
 }
 button:hover {
-  background:#292438;
-  border-color:#685785
+  background:#192b43;
+  border-color:#c8b384
 }
 button[aria-pressed=true] {
-  color:#d4bfff;
-  border-color:#7e65ac;
-  background:#31263f
+  color:#ebe4d3;
+  border-color:#c8b384;
+  background:#1b2f4a
 }
 button:focus-visible,select:focus-visible,input:focus-visible,[tabindex]:focus-visible {
-  outline:2px solid var(--purple);
+  outline:2px solid var(--accent);
   outline-offset:2px
 }
 [hidden] {
@@ -66,7 +66,7 @@ button:focus-visible,select:focus-visible,input:focus-visible,[tabindex]:focus-v
 .eyebrow {
   font-size:9px;
   letter-spacing:.15em;
-  color:var(--purple);
+  color:var(--accent);
   margin:0
 }
 .topbar {
@@ -77,11 +77,11 @@ button:focus-visible,select:focus-visible,input:focus-visible,[tabindex]:focus-v
   align-items:center;
   gap:18px;
   padding:0 18px;
-  background:#101017
+  background:#0b121c
 }
 .brand {
   text-decoration:none;
-  color:#e7e5ef;
+  color:#f2ede2;
   letter-spacing:.16em;
   font-size:10px;
   flex:1;
@@ -91,7 +91,7 @@ button:focus-visible,select:focus-visible,input:focus-visible,[tabindex]:focus-v
 }
 .brand b {
   font-size:27px;
-  color:var(--purple)
+  color:var(--accent)
 }
 .brand span {
   font-size:11px;
@@ -101,8 +101,8 @@ button:focus-visible,select:focus-visible,input:focus-visible,[tabindex]:focus-v
 .fixture-tag {
   font-size:8px;
   letter-spacing:.13em;
-  color:#9c91ae;
-  border:1px solid #383044;
+  color:#8ca0b3;
+  border:1px solid #1f3655;
   border-radius:4px;
   padding:3px 6px
 }
@@ -165,10 +165,10 @@ main {
   display:inline-block;
   width:5px;
   height:5px;
-  background:#b1a0cc;
+  background:#d2c19a;
   border-radius:50%;
   margin-right:9px;
-  box-shadow:0 0 8px #b1a0cc55
+  box-shadow:0 0 8px #d2c19a55
 }
 .field-modes {
   display:flex;
@@ -193,7 +193,7 @@ main {
   height:100%;
   border:1px solid var(--border);
   border-radius:9px;
-  background:radial-gradient(ellipse at 65% 42%,#31254144,transparent 58%),#101019;
+  background:radial-gradient(ellipse at 65% 42%,#1c304a44,transparent 58%),#0b131e;
   overflow:hidden;
   display:flex;
   flex-direction:column
@@ -213,7 +213,7 @@ main {
 }
 .field-header button {
   font-size:10px;
-  background:#15151e
+  background:#0e1825
 }
 .field-bottom {
   display:flex;
@@ -221,17 +221,17 @@ main {
   justify-content:space-between;
   gap:8px;
   padding:10px 12px;
-  border-top:1px solid #252332;
+  border-top:1px solid #17283e;
   color:var(--muted);
   font-size:9px;
   flex-shrink:0;
-  background:#111019;
+  background:#0b131e;
   z-index:2
 }
 .field-bottom i {
   margin:0 5px;
   font-style:normal;
-  color:#7b698f
+  color:#8b9fb1
 }
 .field-bottom>div {
   display:flex;
@@ -260,7 +260,7 @@ main {
   overflow:hidden;
   touch-action:none;
   cursor:grab;
-  background:radial-gradient(ellipse at 46% 50%,#7261850a,transparent 50%)
+  background:radial-gradient(ellipse at 46% 50%,#8b9fb10a,transparent 50%)
 }
 #cdSpatialCanvas:active {
   cursor:grabbing
@@ -269,7 +269,7 @@ main {
   position:absolute;
   inset:0;
   pointer-events:none;
-  background-image:radial-gradient(#80729135 .65px,transparent .65px);
+  background-image:radial-gradient(#8b9fb135 .65px,transparent .65px);
   background-size:24px 24px;
   mask-image:radial-gradient(ellipse,#0008,transparent 75%)
 }
@@ -289,19 +289,19 @@ main {
 }
 .domain-link {
   fill:none;
-  stroke:#61516f;
+  stroke:#8b9fb1;
   stroke-width:1;
   vector-effect:non-scaling-stroke;
   opacity:.6
 }
 .domain-link.selected {
-  stroke:#b59bdc;
+  stroke:#d5c5a2;
   stroke-width:1.4;
   opacity:.9
 }
 .record-link {
   fill:none;
-  stroke:#746480;
+  stroke:#8b9fb1;
   stroke-width:1;
   stroke-dasharray:2 4;
   vector-effect:non-scaling-stroke;
@@ -322,22 +322,22 @@ main {
   width:10px;
   height:10px;
   transform:rotate(45deg);
-  border:1px solid #ba9ce5;
-  box-shadow:0 0 18px #c5a5f655;
-  background:#c5a5f61a
+  border:1px solid #d8caa9;
+  box-shadow:0 0 18px #e0d5bb55;
+  background:#e0d5bb1a
 }
 .field-origin span {
   display:block;
   font-size:7px;
   letter-spacing:.17em;
-  color:#9585a7
+  color:#8b9fb1
 }
 .field-origin strong {
   display:block;
   font-size:12px;
   font-weight:400;
   margin-top:5px;
-  color:#c6bdd4
+  color:#ddd0b4
 }
 .spatial-node {
   position:absolute;
@@ -347,15 +347,15 @@ main {
   min-width:108px;
   padding:13px 12px;
   text-align:left;
-  border:1px solid #43364e;
+  border:1px solid #243e60;
   border-radius:10px;
-  background:linear-gradient(130deg,#272031ee,#17151fee);
+  background:linear-gradient(130deg,#16263bee,#0e1826ee);
   box-shadow:0 10px 35px #0004;
   transition:background .2s,border-color .2s
 }
 .spatial-node .node-symbol {
   font-size:24px;
-  color:#bc9ae0;
+  color:#d6c7a4;
   display:block;
   line-height:1.1;
   margin-bottom:7px
@@ -364,7 +364,7 @@ main {
   display:block;
   font-size:7px;
   letter-spacing:.1em;
-  color:#9f8db0;
+  color:#8b9fb2;
   white-space:nowrap
 }
 .spatial-node strong {
@@ -376,11 +376,11 @@ main {
 .node-summary {
   display:block;
   font-size:10px;
-  color:#9a8fa9
+  color:#8b9fb1
 }
 .spatial-node.priority-elevated {
   border-color:#81705b;
-  background:linear-gradient(135deg,#342b32,#1d1923);
+  background:linear-gradient(135deg,#1a2c45,#101c2c);
   box-shadow:0 8px 35px #d8bf7a0c
 }
 .priority-elevated .node-symbol,.priority-elevated small {
@@ -391,12 +391,12 @@ main {
   box-shadow:0 0 30px #dec58f20
 }
 .spatial-node.selected {
-  outline:1px solid #c4a4ec;
+  outline:1px solid #ddd0b3;
   outline-offset:4px;
-  border-color:#a684c7
+  border-color:#c8b384
 }
 .spatial-node:hover {
-  background:#342a40;
+  background:#1d324d;
   box-shadow:0 12px 40px #0005
 }
 .record-satellite {
@@ -405,9 +405,9 @@ main {
   font-size:9px;
   padding:4px 8px;
   min-height:25px;
-  color:#a89ab8;
-  border-color:#3c324a;
-  background:#17141edb;
+  color:#98aaba;
+  border-color:#213a5b;
+  background:#0e1724db;
   white-space:nowrap;
   border-radius:4px
 }
@@ -434,22 +434,22 @@ main {
   display:flex;
   flex-direction:column;
   min-height:0;
-  border:1px solid #383243;
-  background:#16151e;
+  border:1px solid #203755;
+  background:#0e1825;
   border-radius:8px;
   overflow:hidden;
   box-shadow:0 5px 20px #0002
 }
 .panel[data-focused=true] {
-  border-color:#78618f
+  border-color:#8b9fb1
 }
 .panel header {
   display:flex;
   align-items:center;
   justify-content:space-between;
   padding:6px 9px;
-  background:#1b1824;
-  border-bottom:1px solid #322a3b;
+  background:#101c2c;
+  border-bottom:1px solid #1b2f4a;
   flex-shrink:0
 }
 .panel header>button:last-child {
@@ -458,7 +458,7 @@ main {
   padding:0 6px;
   background:transparent;
   border:0;
-  color:#9b8ca9
+  color:#8b9fb1
 }
 .grip {
   border:0;
@@ -479,7 +479,7 @@ main {
   display:flex;
   gap:4px;
   padding:6px 12px;
-  border-bottom:1px solid #25212d;
+  border-bottom:1px solid #152439;
   flex-shrink:0
 }
 .panel-controls button {
@@ -487,7 +487,7 @@ main {
   min-height:23px;
   padding:2px 6px;
   background:transparent;
-  border-color:#34303e
+  border-color:#1e3350
 }
 .panel-body {
   min-height:0;
@@ -495,13 +495,13 @@ main {
   overflow:auto;
   padding:12px 16px 18px;
   font-size:11px;
-  color:#aaa3b7
+  color:#9daebd
 }
 .panel-body h2 {
   font-size:17px;
   font-weight:500;
   line-height:1.3;
-  color:#e5dff0;
+  color:#f0ebdf;
   margin:7px 0 10px
 }
 .panel-body p {
@@ -512,9 +512,9 @@ main {
 }
 .panel-body button {
   font-size:10px;
-  color:#d1b6ef;
-  background:#2b2038;
-  border-color:#574065
+  color:#e3d9c2;
+  background:#182940;
+  border-color:#2d4d78
 }
 .record-facts {
   display:grid;
@@ -522,16 +522,16 @@ main {
   font-size:10px;
   padding:8px 0;
   margin:10px 0;
-  border-top:1px solid #292331;
-  border-bottom:1px solid #292331;
+  border-top:1px solid #17273d;
+  border-bottom:1px solid #17273d;
   gap:5px
 }
 .record-facts dt {
-  color:#8d819c
+  color:#8b9fb1
 }
 .record-facts dd {
   margin:0;
-  color:#bab0c6;
+  color:#adbcc9;
   overflow-wrap:anywhere
 }
 .evidence-list {
@@ -543,22 +543,22 @@ main {
 }
 .evidence-list li {
   counter-increment:evidence;
-  background:#1c1925;
-  border:1px solid #352b40;
-  border-left:2px solid #8e6db3;
+  background:#111d2d;
+  border:1px solid #1d324e;
+  border-left:2px solid #c8b384;
   padding:10px 12px;
-  color:#c4b8d0;
+  color:#dacdae;
   font-size:11px
 }
 .evidence-list li:before {
   content:'0' counter(evidence) ' / ';
   font-size:9px;
-  color:#a17bbe
+  color:#c8b384
 }
 .trail {
   font-size:9px;
-  color:#8c7d9d;
-  border-top:1px solid #302638;
+  color:#8b9fb1;
+  border-top:1px solid #192c45;
   padding-top:9px
 }
 .resize {
@@ -573,8 +573,8 @@ main {
   border-radius:6px 0 0 0;
   cursor:nwse-resize;
   touch-action:none;
-  background:#28202f;
-  color:#a591b9;
+  background:#15253a;
+  color:#c8b384;
   font-size:13px
 }
 .panel-tabs {
@@ -590,7 +590,7 @@ main {
   content:'WORKSPACE';
   font-size:8px;
   letter-spacing:.15em;
-  color:#8b7b99;
+  color:#8b9fb1;
   margin:0 12px 0 4px
 }
 .panel-tabs button {
@@ -621,12 +621,12 @@ main {
   right:0;
   top:0;
   bottom:0;
-  border:1px dashed #393045;
+  border:1px dashed #203755;
   padding:25px;
   display:flex;
   flex-direction:column;
   justify-content:center;
-  background:#14111a;
+  background:#0c141f;
   border-radius:8px
 }
 #empty-tools h2 {
@@ -646,9 +646,9 @@ footer {
   display:flex;
   align-items:center;
   gap:14px;
-  border-top:1px solid #26212e;
+  border-top:1px solid #15253a;
   font-size:9px;
-  color:#8d819b
+  color:#8b9fb1
 }
 #selection {
   overflow:hidden;
@@ -658,7 +658,7 @@ footer {
 }
 #status {
   margin:0;
-  color:#766c83
+  color:#8b9fb1
 }
 footer details {
   position:relative
@@ -674,8 +674,8 @@ footer summary {
   width:320px;
   max-height:300px;
   overflow:auto;
-  background:#1b1524;
-  border:1px solid #4f3c60;
+  background:#0f1b2a;
+  border:1px solid #2a4972;
   border-radius:8px;
   padding:15px 15px 15px 30px;
   z-index:110;
@@ -696,7 +696,7 @@ footer summary {
   flex-direction:column;
   border:1px solid #9c876266;
   border-radius:12px;
-  background:#18151ef5;
+  background:#0e1825f5;
   box-shadow:0 18px 75px #0009;
   backdrop-filter:blur(16px)
 }
@@ -704,7 +704,7 @@ footer summary {
   padding:14px;
   display:flex;
   justify-content:space-between;
-  border-bottom:1px solid #3b3041
+  border-bottom:1px solid #1f3552
 }
 #conversation small {
   display:block;
@@ -720,7 +720,7 @@ footer summary {
 }
 #messages p {
   padding:12px;
-  background:#292131;
+  background:#16263c;
   border-radius:8px;
   font-size:12px;
   overflow-wrap:anywhere
@@ -744,8 +744,8 @@ footer summary {
   flex:1;
   width:0;
   min-width:0;
-  background:#100d16;
-  border:1px solid #483c53;
+  background:#0a111a;
+  border:1px solid #274368;
   border-radius:5px;
   color:var(--text);
   padding:8px
@@ -914,7 +914,7 @@ main {
 }
 .spatial-node[data-domain-id=campaigns] {
   width:21%;
-  background:linear-gradient(130deg,#201b2b,#15131c)
+  background:linear-gradient(130deg,#132133,#0d1622)
 }
 .spatial-node[data-domain-id=acquisition] {
   width:27%;
@@ -923,3 +923,58 @@ main {
 .spatial-node[data-domain-id=clients] {
   width:23%
 }
+/* Navy/gold application system and configurable layout controls. */
+:root { --bg:#091727; --surface:#102337; --border:#34485c; --text:#eee9df; --muted:#a6b6c5; --accent:#dec99e; --gold:#ead5aa; }
+body { background:var(--bg); color:var(--text); }
+.topbar { background:#0b1a2b; border-color:#314357; }
+.brand { color:#f1eadc; }
+button, select { color:#e9e5dc; background:#142b40; border-color:#3c5265; }
+button:hover { background:#223e52; border-color:#aa9773; }
+button[aria-pressed=true] { color:#f0dbad; background:#3a352c; border-color:#a58d61; }
+button:disabled { opacity:.45; cursor:default; }
+.panel { background:#102235; border-color:#3c5062; }
+.panel[data-focused=true] { border-color:#b59b70; }
+.panel header { background:#152b40; border-color:#354a5c; }
+.panel-body, .node-summary { color:#b6c3cf; }
+.panel-body h2, .spatial-node strong { color:#f0e9dc; }
+.panel-body .eyebrow, .eyebrow { color:#dfc99b; }
+#field { background:radial-gradient(ellipse at 55% 50%,#31577730,transparent 65%),#0b1b2e; border-color:#344a5f; }
+.spatial-node { background:linear-gradient(130deg,#1d364d,#102235); border-color:#466076; }
+.spatial-node[data-domain-id=campaigns] { background:linear-gradient(130deg,#183148,#102135); }
+.spatial-node.priority-elevated { background:linear-gradient(135deg,#353a3b,#182d40); border-color:#aa9068; }
+.spatial-node.selected { outline-color:#cdb27f; border-color:#cdb27f; }
+.spatial-node small { color:#b8c6d3; }
+.priority-elevated small, .priority-elevated .node-symbol { color:#edd6a6; }
+.domain-link { stroke:#829fb5; }.domain-link.selected { stroke:#dfc491; }
+.record-satellite { color:#c3cfda; background:#13293d; border-color:#435c70; }
+.field-bottom { background:#0f2235; color:#b0becd; border-color:#31485e; }
+.field-header p, footer, .trail { color:#b0bdcb; }
+.panel-body button { background:#393629; border-color:#89764f; color:#efdbb0; }
+.panel-controls { position:relative; overflow:visible; align-items:center; }
+.panel-controls select { font-size:10px; min-height:26px; padding:2px 6px; max-width:115px; }
+.panel-controls button { min-height:26px; }
+.adjust-panel summary { cursor:pointer; color:#bdcbd7; font-size:10px; padding:4px; }
+.adjust-pad { display:flex; flex-wrap:wrap; gap:3px; max-width:240px; padding:4px 0; }
+.adjust-pad button { min-width:36px; min-height:30px; }
+.layout-actions { display:flex; align-items:center; gap:4px; margin-left:auto; }
+.layout-actions>button, #layout-menu>summary { font-size:10px; min-height:27px; }
+#layout-menu>summary { cursor:pointer; background:#172d41; border:1px solid #3b5063; border-radius:5px; padding:4px 9px; }
+.layout-popover { position:absolute; right:12px; top:97px; width:320px; max-height:calc(100dvh - 140px); overflow:auto; z-index:150; background:#102336; border:1px solid #9a835d; border-radius:8px; padding:16px; box-shadow:0 16px 50px #0009; display:grid; gap:12px; }
+.layout-popover label { display:flex; gap:8px; align-items:center; color:#c8d2dd; font-size:11px; justify-content:space-between; }
+.layout-popover input:not([type=range]) { min-width:0; width:100%; background:#0a1b2b; color:#eee8db; border:1px solid #4d6377; border-radius:4px; padding:6px; }
+.layout-popover select { max-width:180px; }
+#save-layout-form { display:grid; grid-template-columns:1fr auto; gap:6px; }
+#save-layout-form label { grid-column:1/-1; }
+#layout-status { color:#b4c4d2; font-size:10px; margin:0; }
+.presets { display:flex; gap:4px; }
+.presets button { font-size:10px; }
+.wide-field .spatial-node { width:16%; max-width:170px; padding:7px 10px; border-radius:8px; }
+.wide-field .spatial-node .node-symbol { float:left; font-size:22px; margin-right:8px; margin-bottom:0; }
+.wide-field .spatial-node small { font-size:7px; }
+.wide-field .spatial-node strong { font-size:13px; margin:3px 0; }
+.wide-field .spatial-node .node-summary { font-size:9px; clear:both; }
+.wide-field .field-origin span, .wide-field .field-origin strong { display:none; }
+.wide-field .record-satellite { min-height:22px; padding:2px 8px; }
+#empty-tools { inset:55% 0 0; padding:12px; justify-content:flex-start; background:#102336; border-color:#53677c; }
+@media(max-width:1100px) { .workspace-bar .muted { display:none; } .workspace-bar { gap:5px; }.field-modes button { padding:3px 6px; }.panel-body h2 { font-size:15px; } }
+@media(max-width:700px) { .workspace-bar { height:92px; flex-wrap:wrap; }.layout-actions { margin-left:0; }.layout-popover { top:142px; right:8px; max-width:calc(100vw - 16px); }.panel-controls select { min-height:34px; }.adjust-pad button { min-height:36px; }.wide-field .spatial-node { min-width:90px; }.topbar select { max-width:125px; } }
