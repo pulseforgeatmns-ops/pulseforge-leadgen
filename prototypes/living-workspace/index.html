@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pulseforge · Living Workspace prototype</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/shared/tokens.css"><link rel="stylesheet" href="/command-deck/command-deck.css"><link rel="stylesheet" href="/workspace.css">
+</head><body>
+<header class="topbar"><a href="#field" class="brand">PULSEFORGE <span>Living Workspace</span></a>
+<label>Fixture workspace <select id="tenant"><option value="harbor">Harbor Works</option><option value="cedar">Cedar Studio</option></select></label>
+<button id="max-orb" aria-label="Talk to Max (simulation)" aria-expanded="false" aria-controls="conversation"><span>Max</span></button></header>
+<main><div class="intro"><p class="eyebrow">LOCAL PROTOTYPE · FICTIONAL DATA</p><h1>Your business, in view.</h1><p>Explore a domain. Keep the evidence beside you.</p></div>
+<div class="work-area" id="work-area">
+<section id="field" aria-label="Business exploration field">
+<section id="cdSpatialDeck" class="cd-spatial-deck">
+<button id="cdViewToggle" class="cd-view-toggle" aria-pressed="false">View as list</button>
+<div id="cdSpatialCanvas" class="cd-spatial-canvas"><svg id="cdIntelConnections" class="cd-intel-connections" aria-hidden="true"></svg>
+<div id="cdSpatialOrbit" class="cd-spatial-orbit"><div id="cdSpatialMax" class="field-origin"><span>SHARED CONTEXT</span><strong>Business field</strong><small>Four connected domains</small></div></div></div>
+<div id="cdSpatialList" class="cd-spatial-list" hidden></div></section></section>
+<div id="panels" aria-label="Working panels"></div>
+</div>
+<aside id="conversation" hidden aria-label="Simulated Max conversation"><header><div><strong>Max</strong><small>Simulated · presentation commands only</small></div><button id="close-max" aria-label="Close Max">×</button></header><div id="messages" role="log" aria-live="polite"></div><form id="ask"><label for="question">Explore together</label><input id="question" maxlength="1000" placeholder="Try: investigate acquisition" autocomplete="off"><button>Ask</button></form><p class="hint">Try “investigate content”, “arrange”, or “close panels”. No AI or production connection.</p></aside>
+<footer><div id="selection">No selection</div><details><summary>Workspace history</summary><ol id="history"></ol></details><p id="status" role="status" aria-live="polite">Ready to explore.</p></footer>
+</main><script src="/command-deck/spatial-deck.js"></script><script type="module" src="/app.mjs"></script></body></html>
