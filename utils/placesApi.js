@@ -28,6 +28,8 @@ const {
 
 async function guardedPlacesCall(recordBase, deps, execute) {
   const row = buildAttributionRow(recordBase, getPlacesContext());
+  // Pilot tenants (utils/tenantPilotPolicy) never reach Google Places.
+  require('./anchorResearchProviderPause').assertPilotPaidResearchAllowed('google_places', row.tenantId);
   // SPEC-SCOUT-P0-003: inside a claimed Tenant 10 research-only cycle each
   // possible HTTP attempt first takes a durable Tenant 10 debit, and the paused
   // Places provider opens only inside that debit. Outside one this is null.

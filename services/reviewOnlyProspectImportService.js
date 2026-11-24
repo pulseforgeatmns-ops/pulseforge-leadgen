@@ -149,6 +149,20 @@ function noteFor(contact) {
   ].filter(Boolean).join('\n');
 }
 
+// The in-import identity a batch must not repeat. Shared with callers that
+// pre-merge records (Levi Scout) so their key can never drift from this one.
+function contactIdentityKey(contact) {
+  return contact.email
+    ? `email:${contact.email}`
+    : contact.phone
+      ? `phone:${phoneDigits(contact.phone)}`
+      : `identity:${contact.name.toLowerCase()}|${contact.company.toLowerCase()}`;
+}
+
+function importIdentityKey(input, index = 0) {
+  return contactIdentityKey(normalizeContact(input, index));
+}
+
 function previewReviewOnlyContacts(inputs) {
   if (!Array.isArray(inputs) || !inputs.length) {
     throw Object.assign(new Error('Provide at least one contact.'), { code: 'contacts_required' });
@@ -159,11 +173,7 @@ function previewReviewOnlyContacts(inputs) {
   const contacts = inputs.map(normalizeContact);
   const seen = new Set();
   for (const contact of contacts) {
-    const key = contact.email
-      ? `email:${contact.email}`
-      : contact.phone
-        ? `phone:${phoneDigits(contact.phone)}`
-        : `identity:${contact.name.toLowerCase()}|${contact.company.toLowerCase()}`;
+    const key = contactIdentityKey(contact);
     if (seen.has(key)) {
       throw Object.assign(new Error(`Duplicate contact in import: ${contact.name}.`), { code: 'duplicate_contact' });
     }
@@ -287,6 +297,7 @@ async function importReviewOnlyContacts(inputs, { clientId, db, actorId, source,
 }
 
 module.exports = {
+  importIdentityKey,
   SOURCE_TYPES,
   IMPORT_SOURCES,
   DISCOVERY_METHODS,

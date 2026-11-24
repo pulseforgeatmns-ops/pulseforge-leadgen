@@ -269,17 +269,27 @@ test('operational reads while an execution approval is pending, on disposable Po
     const before = await snapshot(db);
     const tenantIds = (await db.query('SELECT id FROM prospects WHERE client_id = 21 ORDER BY id')).rows.map(r => r.id);
 
-    // Tenant 21 mission at execution_approval (in-memory AMO runtime).
+    // Tenant 21 mission at execution_approval (in-memory AMO runtime). Tenant 21
+    // is a prospecting-only pilot (utils/tenantPilotPolicy) and can no longer
+    // execute specialist stages, so this models a legacy mission that reached
+    // execution_approval before the policy: the stages run under a synthetic
+    // build tenant and the identical record is then stored as tenant 21.
+    const BUILD = '29';
     const missions = amo.createAcquisitionMissionEngine();
-    const mission = missions.create({ tenantId: '21', objective: 'Acquire recurring commercial cleaning clients in Greater Manchester.', targetSegment: 'Facility buyers' });
+    const mission = missions.create({ tenantId: BUILD, objective: 'Acquire recurring commercial cleaning clients in Greater Manchester.', targetSegment: 'Facility buyers' });
+    const b = () => missions.get(mission.id, BUILD);
+    await AmoApproval.advancePlanAfterApproval({ engine: missions, mission, tenantId: BUILD, question: 'Approved.' });
+    await AmoApproval.advanceDiscoveryAfterApproval({ engine: missions, mission, tenantId: BUILD, question: 'Approved. Begin Discovery.', runScout: liveScoutStub });
+    await AmoApproval.advancePrioritizationAfterApproval({ engine: missions, mission: b(), tenantId: BUILD, question: 'Approved prioritization.' });
+    await AmoApproval.advanceMaxPrioritization({ engine: missions, mission: b(), tenantId: BUILD, allowFixtureFallback: true });
+    await AmoApproval.advanceAcquisitionApproach({ engine: missions, mission: b(), tenantId: BUILD, allowFixtureFallback: true });
+    await AmoApproval.advancePaigeVariants({ engine: missions, mission: b(), tenantId: BUILD, allowFixtureFallback: true, question: 'Generate variants.' });
+    await AmoApproval.advanceEmmettCapacity({ engine: missions, mission: b(), tenantId: BUILD, allowFixtureFallback: true, question: 'Plan capacity.' });
+    const legacy = JSON.parse(JSON.stringify(missions.store.getMission(mission.id)));
+    legacy.tenantId = '21';
+    if (legacy.clientId != null) legacy.clientId = '21';
+    missions.store.putMission(legacy);
     const g = () => missions.get(mission.id, '21');
-    await AmoApproval.advancePlanAfterApproval({ engine: missions, mission, tenantId: '21', question: 'Approved.' });
-    await AmoApproval.advanceDiscoveryAfterApproval({ engine: missions, mission, tenantId: '21', question: 'Approved. Begin Discovery.', runScout: liveScoutStub });
-    await AmoApproval.advancePrioritizationAfterApproval({ engine: missions, mission: g(), tenantId: '21', question: 'Approved prioritization.' });
-    await AmoApproval.advanceMaxPrioritization({ engine: missions, mission: g(), tenantId: '21', allowFixtureFallback: true });
-    await AmoApproval.advanceAcquisitionApproach({ engine: missions, mission: g(), tenantId: '21', allowFixtureFallback: true });
-    await AmoApproval.advancePaigeVariants({ engine: missions, mission: g(), tenantId: '21', allowFixtureFallback: true, question: 'Generate variants.' });
-    await AmoApproval.advanceEmmettCapacity({ engine: missions, mission: g(), tenantId: '21', allowFixtureFallback: true, question: 'Plan capacity.' });
     assert.equal(g().pendingOperatorDecision.kind, 'execution_approval');
     const missionBefore = JSON.stringify(g());
 

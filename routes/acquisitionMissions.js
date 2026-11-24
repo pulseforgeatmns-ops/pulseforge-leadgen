@@ -75,7 +75,8 @@ function fail(res, err, fallbackCode, fallbackStatus = 500) {
       : code === 'cer_permission_denied' || code === 'cer_policy_blocked'
         || code === 'authorization_constraint_blocked'
         || code === 'authorization_amendment_forbidden'
-        || code === 'synthetic_evidence_blocked' ? 403
+        || code === 'synthetic_evidence_blocked'
+        || code === 'tenant_pilot_policy_denied' ? 403
       : code === 'amo_mission_exists' ? 409
       : code === 'authorization_amendment_stale' ? 409
       : code === 'research_planning_required' ? 409

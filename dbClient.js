@@ -23,6 +23,8 @@ function ensurePendingCommentPublishSchema() {
 async function checkDNC(prospectId, options = {}) {
   const clientId = options.clientId || getRuntimeClientId();
   const db = options.pool || pool;
+  // Prospecting-only pilot tenants: every prospect is do-not-contact for agents.
+  if (require('./utils/tenantPilotPolicy').isPilotTenant(clientId)) return true;
   if (await isPhase3dSetterSchemaPresent(db)) {
     const res = await db.query(
       `SELECT do_not_contact, is_synthetic, ${anchorOutreachReviewValueSql('prospects')} AS ao_outreach_review_required FROM prospects WHERE id = $1 AND client_id = $2`,
