@@ -26,6 +26,17 @@ const {
 
 const requireActor = [requireAuth, requireRole('admin', 'manager', 'client')];
 
+// Prospecting-only pilot tenants (utils/tenantPilotPolicy) cannot plan or
+// approve outbound. Sends are also refused at the contact-authorization gate.
+function denyPilotOutbound(req, res, next) {
+  const tenantId = actorTenantId(req);
+  const decision = require('../utils/tenantPilotPolicy').decide(tenantId, 'outbound', { channel: 'eoi' });
+  if (decision.allowed) return next();
+  res.set('Cache-Control', 'no-store');
+  return res.status(403).json({ error: 'tenant_pilot_policy_denied',
+    message: 'This workspace is a prospecting-only pilot: outbound is not permitted.' });
+}
+
 function noStore(res) {
   res.set('Cache-Control', 'no-store');
 }
@@ -95,7 +106,7 @@ router.get('/api/v1/eoi/dashboard', requireActor, async (req, res) => {
   }
 });
 
-router.post('/api/v1/eoi/plan', requireActor, async (req, res) => {
+router.post('/api/v1/eoi/plan', requireActor, denyPilotOutbound, async (req, res) => {
   try {
     const tenantId = actorTenantId(req);
     if (tenantId == null) {
@@ -114,7 +125,7 @@ router.post('/api/v1/eoi/plan', requireActor, async (req, res) => {
   }
 });
 
-router.post('/api/v1/eoi/plans/:id/approve', requireActor, async (req, res) => {
+router.post('/api/v1/eoi/plans/:id/approve', requireActor, denyPilotOutbound, async (req, res) => {
   try {
     const tenantId = actorTenantId(req);
     if (tenantId == null) {
@@ -141,7 +152,7 @@ router.post('/api/v1/eoi/plans/:id/approve', requireActor, async (req, res) => {
   }
 });
 
-router.post('/api/v1/eoi/plans/:id/acknowledge', requireActor, async (req, res) => {
+router.post('/api/v1/eoi/plans/:id/acknowledge', requireActor, denyPilotOutbound, async (req, res) => {
   try {
     const ack = await acknowledgeHalt(req.params.id, actorFrom(req), req.body?.note, {
       tenantId: actorTenantId(req),

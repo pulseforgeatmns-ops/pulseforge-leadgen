@@ -6,12 +6,9 @@ Production database access is **unavailable** (the Render Postgres IP allowlist 
 
 ## 1. PR #1159 — CI and review
 
-* Head `f94228e`; this report's commit follows. Base: `migration/render-current-main` (`2e5cc34`). No merge conflicts.
-* CI at the time of writing:
-  * **14 checks success**, among them `levi-scout`, `identity-workflow`, `portal`, Global startup smoke, Revenue PostgreSQL, Anchor canonical outbound recovery, Walkthrough notification safety and Signal V1 core.
-  * 1 skipped by the planner (Max orchestration).
-  * 1 still running (Anchor governed outbound safety).
-* Reviews and comments: none yet.
+* Head `bc2936c`: **all 15 checks pass**, including the PR CI gate (16 runs; Max orchestration was skipped by the planner).
+* No merge conflicts, no reviews and no comments yet.
+* Merge and deploy are pending approval.
 
 ## 2. R8 production impact query — UNVERIFIED
 
@@ -51,31 +48,54 @@ New evidence: `test/leviTenant21ClientAccessPostgres.test.js`, run against dispo
 | Outbound | A client *can* call `POST /api/v1/tenant-outreach/schedules/authorize` and the EOI plan endpoints. Scheduling requires a sending identity owned by tenant 21; without one it is refused (`sending_identity_tenant_mismatch`, returned as HTTP 500 — a cosmetic mapping bug). The executor also refuses any review-held prospect, and all tenant-21 rows are held. Brevo, Emmett, Sam and the governed paths already honour the hold for every tenant. | new test; `tenantOutreachScheduler.js` at 724–727 |
 | Max / missions | Max is locked for a client unless the Blueprint is approved **and** the AIM is published (`pilotOnboarding.maxAcquisitionReply`). If unlocked, a client acts as operator on its own missions and can approve plan and discovery (`/api/v1/amo/*`). | code review |
 
-## 5. Blockers for a secure invite this week
+## 5. Pilot policy (branch `fix/levi-pilot-policy`, stacked on #1159) — closes the paid-provider and execution blocker
 
-1. **Levi could trigger paid Scout discovery himself.** This was found by code review and is not proven end to end.
-   * The research-provider pause (`utils/anchorResearchProviderPause.js`) applies only to tenant 10.
-   * No `enabled_agents` check was found on the mission discovery path.
-   * So if tenant 21's AIM is published, Levi, as a client, could approve a discovery stage and cause Places/SerpAPI/Prospeo calls. That would violate "no paid providers / no Scout without approval".
-   * Proposed fix, which needs approval: extend the provider pause to an explicit tenant list including 21, or enforce a research-only authorization constraint on tenant-21 missions. Then add a disposable test proving that a client-approved discovery makes no provider call.
-2. **Production pre-invite facts are unverified.** Run `docs/audits/levi-pilot-preinvite.sql` (read only). It must show:
-   * `clients.active = true`, with `enabled_agents` limited to `max`;
-   * **no legacy PIN** on tenant 21. The `/client/:id` 4-digit PIN portal has no rate limit and would be a weak parallel path to tenant-21 prospect data;
-   * no tenant-21 sending identity, scheduled sends, outbound items or send plans;
-   * 29 prospects, all held, 0 setter-visible, 0 contacted;
-   * exactly one claim for `levi-week-2026-11-23`;
-   * the existing tenant-21 accounts by role (to avoid duplicates).
+`utils/tenantPilotPolicy.js` declares tenant 21 prospecting-only.
+* The list is a code constant. It reads no database, AIM, `enabled_agents`, request parameter or session, so publishing an AIM or editing client config cannot lift it.
+* The environment can only *add* pilot tenants.
+* Unknown capabilities fail closed.
 
-Not blockers, but should be fixed or decided:
-* There is no login throttling or lockout platform-wide. This predates this work and affects every account. Mitigate with a long generated temporary passphrase and a forced change at first login.
-* The minimum password length is 8.
-* The scheduled-send tenant-mismatch error returns 500 instead of 4xx.
+| Capability | Tenant 21 | Enforced at |
+|---|---|---|
+| View prospects, evidence, pipeline | allowed | unchanged read routes (tenant-pinned) |
+| Free research (Levi Scout, public SODA) | allowed | its own operator-only cron and weekly clock; untouched |
+| Paid research (Places, SerpAPI, Prospeo, Hunter, Apollo, phone enrichment, Scout) | **denied** | `assertResearchProviderAllowed` / `withResearchProviderScope` (now independent of the Anchor pause), `placesApi.guardedPlacesCall`, `lib/serpapi`, `enrichProspects`. `leadgen.run` is refused at its first line. |
+| Outbound (email, SMS, calls, scheduled sends, EOI) | **denied** | `callEligibility.withCallAuthorization` / `assertCallAllowed` (shared by Brevo `sendEmail`, Sam, Cal and Cal Batch), `dbClient.checkDNC`, tenant outreach scheduler (authorize and execute eligibility), EOI plan/approve/acknowledge routes |
+| Agent dispatch | `max` only | `isAgentEnabledForClient`, used by `/api/run/:agent` and `/cron/:agent`. Applies whatever `enabled_agents` says. Each refusal is audited as `dispatch_blocked`. |
+| Mission execution | only clarify/cancel/edit/apply-edits/clarity review | `routeExecutionRequest`, checking request, context and the mission's own tenant; plus TME refuses Scout, Paige and Emmett stages |
+
+Evidence (disposable PostgreSQL; every outbound HTTP, `fetch`, axios and socket recorded and refused):
+* `tenantPilotPolicyPostgres` (5 tests) and `tenantPilotPolicyDispatchPostgres` (1):
+  * decisions for tenant 21 versus tenants 1, 2, 5 and 10;
+  * env cannot remove the pilot;
+  * every paid-provider and sender chokepoint refuses tenant 21 with **zero network attempts**;
+  * other tenants pass the gates;
+  * router and TME refuse all dispatching intents, including when a tenant-21 mission is referenced under another tenant's request;
+  * with `enabled_agents = {scout,emmett,sam,cal,…}` for tenant 21, dispatch and cron are still refused and audited;
+  * `leadgen.run({client_id:21})` is refused;
+  * `/cron/scout_levi` is not refused by the policy.
+* `leviTenant21ClientAccessPostgres`: prospects stay visible; EOI and scheduling return `403 tenant_pilot_policy_denied`.
+* The Levi suite, including the real free-research cycle for tenant 21: **121/121**.
+* Every existing test touching the changed modules (91 files, 1,860 tests) has no new failures against the baseline. The remaining 6 failing tests (15 counting subtests) fail identically on `bc2936c`: Anchor fresh mission audit, SPEC-071, SPEC-186, SPEC-118 Max Ask, Anchor Pilot 0 route wiring, and the setter pre-migration DNC check.
+* Sandboxed guard tests that pin import lists still hold. The policy reaches `callEligibility` through `anchorOutreachReview`, and the provider gate loads it lazily.
+
+Not exercised end to end: the Max chat surface. It dispatches only through the router, which is covered. The smoke test (step 7) observes it in production.
+
+## 6. Remaining blockers for a secure invite this week
+
+1. Approve, merge and deploy #1159 and `fix/levi-pilot-policy`.
+2. Run the production pre-invite SQL (`docs/audits/levi-pilot-preinvite.sql`). It must pass, including `legacy_pin_set = false`.
+3. Create the account and run the login smoke test (`docs/audits/LEVI-PILOT-LOGIN-SMOKE-TEST.md`), with the passphrase delivered out of band.
+
+Residual risks, not blockers:
+* There is no platform-wide login throttling.
+* The minimum password length is 8; mitigate with a generated passphrase of 20 or more characters.
+* The R8 impact query has not been run.
 
 ## Recommendations
 
-* **Reliability release (R1, R2 code, R8): GO, conditional.**
-  * Conditions: the last CI job passes, and the R8 impact query is run and accepted before deploy.
-  * The R2 index migration remains a separate approval, after the precheck.
-* **Levi prospecting-only pilot: NO-GO this week as things stand.**
-  * It becomes GO when blocker 1 is fixed (or tenant 21's AIM is confirmed unpublished, so Max and missions stay locked) and the pre-invite SQL passes, with a strong temporary passphrase delivered out of band.
-  * No code-level tenant-isolation or outbound defect was found.
+* **Reliability release (#1159): GO, conditional.**
+  * Conditions: the R8 impact query is run and accepted before deploy.
+  * CI is green.
+  * The R2 index migration is a separate approval.
+* **Levi prospecting-only pilot: GO once `fix/levi-pilot-policy` is deployed and the pre-invite SQL and smoke test pass.** NO-GO before the policy is deployed.

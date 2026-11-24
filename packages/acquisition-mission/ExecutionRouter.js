@@ -435,10 +435,30 @@ async function maybeChainAutonomousDiscovery(request, context, dispatched, handl
  * @param {object} [context]
  * @returns {Promise<object>}
  */
+function assertTenantPilotPolicy(request, mission, context = {}) {
+  const policy = require('../../utils/tenantPilotPolicy');
+  const tenants = [request.tenantId, request.metadata && request.metadata.tenantId, context.tenantId,
+    mission && (mission.tenantId ?? mission.clientId)];
+  for (const tenant of tenants) {
+    const decision = policy.decide(tenant, policy.CAPABILITY.MISSION_EXECUTION, { intent: request.intent });
+    if (!decision.allowed) {
+      recordRouterAudit({ requestId: request.id, source: request.source, intent: request.intent,
+        operatorId: request.operatorId, runtimeOwner: 'tenant_pilot_policy', specialist: 'none',
+        action: 'execution_denied', outcome: policy.CODE, request });
+      throw cerError(policy.CODE, 'This workspace is a prospecting-only pilot: mission execution is not permitted.', {
+        requestId: request.id, intent: request.intent, tenantId: decision.tenantId, statusCode: 403,
+      });
+    }
+  }
+}
+
 async function routeExecutionRequest(request, context = {}) {
   assertRequest(request);
   assertPermissions(request);
   assertExecutionPolicy(request);
+  // Prospecting-only pilot tenants: no specialist-dispatching intent runs,
+  // whichever surface (Max, workspace button, REST, autonomy) produced it.
+  assertTenantPilotPolicy(request, null, context);
 
   // PF-CLARITY-001: a review-only resource intent, never a synthetic mission.
   // This fixed handler cannot dispatch specialists, TME, publishing or deployment.
@@ -455,6 +475,7 @@ async function routeExecutionRequest(request, context = {}) {
   }
 
   const mission = resolveMission(request, context);
+  assertTenantPilotPolicy(request, mission, context);
   const runtimeOwner = assertRuntimeOwnership(request, mission);
   const handlers = context.handlers || defaultHandlers();
   const specialist = specialistForIntent(request.intent);
