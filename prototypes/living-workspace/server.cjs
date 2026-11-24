@@ -3,7 +3,7 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const localFiles = ['index.html', 'app.mjs', 'store.mjs', 'fixtures.mjs', 'workspace.css', 'spatial-field.mjs', 'layout.mjs', 'max-sim.mjs'];
+const localFiles = ['index.html', 'app.mjs', 'store.mjs', 'fixtures.mjs', 'workspace.css', 'spatial-field.mjs', 'layout.mjs', 'max-sim.mjs', 'tools.mjs', 'surfaces.mjs'];
 const files = new Map(localFiles.map(name => ['/' + name, path.join(__dirname, name)]));
 files.set('/', path.join(__dirname, 'index.html'));
 const mime = { '.html': 'text/html', '.mjs': 'text/javascript', '.js': 'text/javascript', '.css': 'text/css' };

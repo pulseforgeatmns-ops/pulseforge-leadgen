@@ -12,7 +12,7 @@ test('tenant switch clears all records, investigations, panels, history and conv
   command(store, 'toggle_max');
   const oldScope = store.scope();
   store.switchTenant('cedar');
-  assert.deepEqual(store.getState(), { tenantId: 'cedar', generation: 2, selected: null, trail: [], panels: [], focused: null, history: [], messages: [], maxOpen: false, fieldMode: 'docked', fieldDock: 'top', fieldRatio: .48, savedLayouts: {}, canUndo: false, canRedo: false, storageWarning: false, fieldView: { x: 0, y: 0, zoom: 1 }, fieldFocus: null, layoutCheckpoint: null });
+  assert.deepEqual(store.getState(), { tenantId: 'cedar', generation: 2, selected: null, trail: [], panels: [], focused: null, history: [], messages: [], maxOpen: false, fieldMode: 'docked', fieldDock: 'top', fieldRatio: .48, savedLayouts: {}, canUndo: false, canRedo: false, storageWarning: false, fieldView: { x: 0, y: 0, zoom: 1 }, fieldFocus: null, layoutCheckpoint: null, canBack: false, canForward: false, hasPreference: false });
   assert.equal(store.dispatch({ ...oldScope, type: 'open_tool', source: 'max', recordId: 'harbor-content', toolId: 'domain' }), false);
   assert.equal(command(store, 'select_entity', { recordId: 'harbor-content' }), false);
   store.switchTenant('harbor');
@@ -157,4 +157,70 @@ test('batches are atomic single undo steps; Max checkpoints restore the prior la
   command(w, 'undo_layout'); assert.deepEqual(w.getState().panels, before.panels);
   w.switchTenant('cedar'); assert.equal(w.getState().layoutCheckpoint, null);
   assert.equal(command(w, 'message', { text: 'ok', receipt: ['a'.repeat(121)] }, 'max'), false);
+});
+
+test('layout undo never leaves a following panel on a record other than the shared selection', () => {
+  const w = make();
+  command(w, 'batch', { commands: [{ type: 'select_entity', recordId: 'harbor-acquisition-1' },
+    { type: 'open_tool', toolId: 'domain', recordId: 'harbor-acquisition-1' }, { type: 'dock_panel', panelId: 'domain:harbor-acquisition-1', dock: 'left' },
+    { type: 'open_tool', toolId: 'investigation', recordId: 'harbor-acquisition-1' }, { type: 'dock_panel', panelId: 'investigation:harbor-acquisition-1', dock: 'right' }] });
+  command(w, 'dock_panel', { panelId: 'investigation:harbor-acquisition-1', dock: 'top' }); // layout change
+  // Navigation: selecting another prospect retargets both following panels; no layout undo step.
+  const undoDepth = w.getState().canUndo;
+  command(w, 'select_entity', { recordId: 'harbor-acquisition-2' });
+  assert.deepEqual(w.getState().panels.map(p => p.recordId), ['harbor-acquisition-2', 'harbor-acquisition-2']);
+  assert.equal(w.getState().canUndo, undoDepth);
+  // Undo restores geometry only; panels still agree with the selection.
+  command(w, 'undo_layout');
+  let s = w.getState();
+  assert.equal(s.panels.find(p => p.toolId === 'investigation').dock, 'right');
+  assert.equal(s.selected, 'harbor-acquisition-2');
+  assert.ok(s.panels.every(p => !p.follow || p.recordId === s.selected));
+  // Undo further (closing panels), then redo: reopened panels align with the current selection.
+  while (w.getState().canUndo) command(w, 'undo_layout');
+  assert.equal(w.getState().panels.length, 0);
+  command(w, 'redo_layout');
+  s = w.getState(); assert.ok(s.panels.length && s.panels.every(p => p.recordId === 'harbor-acquisition-2'));
+  // A pinned panel keeps its record explicitly.
+  command(w, 'pin_panel', { panelId: s.panels[0].id, pinned: true });
+  command(w, 'select_entity', { recordId: 'harbor-acquisition-3' });
+  s = w.getState(); assert.equal(s.panels[0].recordId, 'harbor-acquisition-2'); assert.equal(s.panels[0].follow, false);
+  command(w, 'pin_panel', { panelId: s.panels[0].id, pinned: false });
+  assert.equal(w.getState().panels[0].recordId, 'harbor-acquisition-3');
+});
+test('navigation history is separate from layout history', () => {
+  const w = make();
+  command(w, 'batch', { commands: [{ type: 'focus_domain', domainId: 'acquisition' }, { type: 'select_entity', recordId: 'harbor-acquisition' }] });
+  command(w, 'select_entity', { recordId: 'harbor-acquisition-1' });
+  command(w, 'set_field_mode', { mode: 'expanded' });
+  assert.equal(w.getState().canUndo, true); assert.equal(w.getState().canBack, true);
+  command(w, 'navigate_back');
+  assert.equal(w.getState().selected, 'harbor-acquisition'); assert.equal(w.getState().fieldMode, 'expanded', 'back does not touch layout');
+  command(w, 'navigate_back'); assert.equal(w.getState().fieldFocus, null);
+  assert.equal(command(w, 'navigate_back'), false);
+  command(w, 'navigate_forward'); command(w, 'navigate_forward');
+  assert.equal(w.getState().selected, 'harbor-acquisition-1');
+  command(w, 'undo_layout'); assert.equal(w.getState().fieldMode, 'docked'); assert.equal(w.getState().selected, 'harbor-acquisition-1', 'undo does not touch selection');
+  assert.equal(command(w, 'batch', { commands: [{ type: 'navigate_back' }] }), false);
+  const stale = w.scope(); w.switchTenant('cedar');
+  assert.equal(w.dispatch({ ...stale, type: 'navigate_back', source: 'human' }), false);
+  assert.equal(w.getState().canBack, false);
+});
+test('the current composition persists per tenant, record-free, and initialize applies it without history', () => {
+  const data = new Map(); const storage = { getItem: k => data.get(k), setItem: (k, v) => data.set(k, v), removeItem: k => data.delete(k) };
+  const w = createWorkspace(fixtures, 'harbor', { storage });
+  const seed = [{ type: 'select_entity', recordId: 'harbor-acquisition' }, { type: 'open_tool', toolId: 'domain', recordId: 'harbor-acquisition' }, { type: 'dock_panel', panelId: 'domain:harbor-acquisition', dock: 'left' }];
+  assert.equal(w.initialize(seed), true);
+  assert.equal(w.getState().canUndo, false); assert.equal(w.getState().history.length, 0); assert.equal(w.getState().canBack, false);
+  command(w, 'arrange_layout', { preset: 'field' });
+  assert.equal(w.getState().fieldMode, 'expanded');
+  const stored = data.get('pulseforge.fixture.workspace.v1.harbor');
+  assert.ok(stored && !stored.includes('harbor-acquisition'));
+  const again = createWorkspace(fixtures, 'harbor', { storage });
+  assert.equal(again.getState().hasPreference, true);
+  again.initialize(seed);
+  assert.equal(again.getState().fieldMode, 'expanded'); assert.equal(again.getState().selected, 'harbor-acquisition');
+  again.switchTenant('cedar'); assert.equal(again.getState().hasPreference, false);
+  again.switchTenant('harbor'); again.forgetPreference();
+  assert.equal(data.has('pulseforge.fixture.workspace.v1.harbor'), false);
 });

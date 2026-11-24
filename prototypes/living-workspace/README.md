@@ -20,20 +20,42 @@ The **Layouts** menu offers Spatial first, Research, and Review presets, field d
 
 The translucent golden Max sphere opens an explicitly simulated conversation. Try **investigate acquisition**, **investigate content**, **arrange research**, **arrange spatial-first**, **arrange review**, **undo**, **redo**, **save layout My research**, **load layout My research**, **minimize panels**, or **close panels**. Commands only change presentation. There is no natural-language model or production Max connection.
 
-## Orbital spatial field
+## V0.6 — Living Business Field
 
-The field is a solar-system-inspired environment. The champagne **sun** is the active fixture tenant; **Acquisition, Content, Clients and Campaigns** are softly lit planets on tilted elliptical orbits. Fixture priority only chooses the orbit (elevated/urgent sit on the inner, gold-tinted ring and wear a faint planetary ring); nothing is recomputed. Small moon hints show how many business objects each domain holds.
+The solar-system visuals (sun, planets, moons, rings, orbital tracks) are gone. The field is now a quiet spatial environment:
 
-- **Select a planet** to bring it into focus: the camera recentres it, the sun recedes to the left edge (click it to return), sibling planets recede to the right edge, and the domain's fictional business objects (prospects, drafts, clients, campaigns) appear as moons on their own orbit. The Details panel retargets to the domain.
-- **Select a moon** to update the shared selection; the Details and Investigation panels retarget in place (one undoable step each, geometry kept) instead of opening new panels.
-- **Breadcrumbs** (`Tenant › Domain › Object`), the **Overview** button, the sun, or **Escape** inside the field return up a level. Zoom with +/−, the mouse wheel (one undo step once the wheel settles), or reset; drag/arrow keys pan. Focus changes reset the camera.
-- **List view** mirrors the same hierarchy for screen readers and small screens. Planet, moon and sun targets are at least 44 px for touch.
-- Motion is ambient and never moves an idle target: slow orbit-path drift, a 3 px planet float, a breathing corona and starfield, and eased camera transitions on navigation. `prefers-reduced-motion` removes all of it.
-- Max stays the separate translucent golden sphere in the upper-right; it understands `explore acquisition`, `investigate Northgate`, and `overview` through the same dispatcher.
+- **Context core.** The selected tenant is a small glass card at the centre of the overview: name, domain count and record count. It is not a light source. In a focused domain it recedes to a compact "‹ Tenant" chip that returns to the overview.
+- **Domain nodes.** Acquisition, Content, Clients and Campaigns are glass cards with fine borders and a layered edge for depth. Each shows its record count, a status dot (needs attention / on track / new) and a one-line operational note. Prominence comes from fixture priority (elevated gets a champagne hairline and a slightly larger card), status, relevance and selection.
+- **Connections that mean something.** Core ↔ domain links, plus the domain relationships the fixtures declare (prospects become campaign audiences; client stories feed content; campaigns reactivate clients). Selecting an object draws its declared relationships, labelled: to sibling objects as an arc beside the cluster, and to receded domains, which brighten as related.
+- **Gravitational navigation.** Focusing a domain brings it forward, gathers its business objects into a cluster on a gentle arc, and lets the other domains recede to an edge column without disappearing. Targets settle and stay put. Transitions run only when the context changes; nothing animates while idle. Reduced motion removes the transitions as well.
+- Progressive exploration, breadcrumbs, zoom (now in the field header), pan, list fallback, Escape-to-overview and tenant isolation are preserved.
 
-New store commands: `focus_domain { domainId | null }` and `retarget_panel { panelId, recordId }`. Both are layout commands (undoable); orbital focus resets on tenant switch and is never saved in named layouts.
+**Composition.** The default is still the field above two panels.
+- Field height is adjustable with the splitter.
+- The current composition is remembered per tenant (`pulseforge.fixture.workspace.v1.<tenant>`, record-free) and re-applied on return. Layouts → **Reset to default** forgets it.
+- **Field focus** is a preset, and the expanded field can be saved and restored like any composition. Selecting records in the expanded field keeps it expanded and shows a compact selection card with **Show in panels**.
+- The bottom field bar is gone (zoom moved into the header) and the workspace bar is slimmer.
+- Panels keep their 300×220 minimum. Overflow is stacked into the dock.
+- The ⋯ title-bar menu now also offers **Pin to this record / Follow the selection**.
 
-**Minimum panel sizes.** Docked panels never render below 300×220. When another panel would push a region under that, top/bottom rows fold into the side columns, two too-narrow columns merge, and any panels that still do not fit are stacked into the workspace dock (marked ⧉, with a "stacked to keep panels usable" note). The focused panel, then the most recently opened, stay visible; selecting a stacked tab brings it forward.
+**Max presence.**
+- Closed, Max is a translucent golden energy sphere: glass body, warm internal glow, fine organic filaments, a soft boundary. The only ambient motion is an 18-second filament brightness drift.
+- **Engaged** (open) shows a steady ring.
+- **Attention** shows a small static gold notch. It appears when the selected record has open questions that Max hasn't been opened on yet, and the accessible name says how many.
+- In the conversation, the technical context ("Max sees") is a collapsed summary line, and the messages dominate. Suggestions, the composer and verified receipts remain. On wide screens the workspace reflows beside the conversation instead of sitting under it.
+
+**Working surfaces.** `tools.mjs` registers a renderer per store tool. Renderers compose reusable pieces from `surfaces.mjs` (header, section, status chip, stage track, signal meter, fact grid, record rows, next actions, evidence with provenance, findings, timeline, questions, metric row). Renderers never dispatch: they call a narrow api (`select`, `investigate`, `runAction`).
+- **Details** for a prospect shows stage track, qualification signals, profile, relationships (clickable), suggested next actions and siblings. Proposals are labelled "Proposal · not executed".
+- **Investigation** shows evidence (source, observed date, confidence), research findings, outstanding questions and the activity timeline.
+- Domain records get a summary surface.
+- Future agent tools register the same way.
+
+**History consistency.**
+- *Layout history* (Undo/Redo) holds geometry, docking, field mode/size and saved layouts. Focus, pan/zoom and domain focus are no longer undo steps.
+- *Navigation history* (‹ › in the field header, Alt+←/→) holds selection and domain focus.
+- Panels **follow** the shared selection or are explicitly **pinned** (labelled "Pinned"). After every command, batch, undo, redo and navigation step, the store reconciles following panels to the authoritative selection. Undo can therefore never leave a panel showing a different record, and restoring a saved composition never changes the selection.
+- The first composition of a session is a system step (no undo entry).
+- Max's arrangement replies now report actual on-screen placement. If minimum sizes prevent stacking, Max says so. It shrinks the field first when that is enough room.
 
 ## V0.5 — Max collaborative workspace
 
@@ -57,6 +79,7 @@ New store commands: `batch { commands }`, `checkpoint_layout` (Max only), `resto
 - `layout.mjs`: pure responsive geometry for field anchoring, four panel docking regions, floating windows, and focus.
 - `spatial-field.mjs`: prototype-only orbital renderer (sun, planets, moons, orbit paths), domain focus camera, pan/zoom, accessible list view, and shared selection.
 - `index.html` / `workspace.css`: isolated desktop shell, touch fallback, golden Max presence, and reduced-motion treatment.
+- `tools.mjs` / `surfaces.mjs`: registered tool renderers and the reusable surface components they compose.
 - `max-sim.mjs`: simulated Max — context description, phrase → command planning, verified reporting, suggestions.
 - `server.cjs`: dependency-free static server with an explicit asset allowlist, no application routes, and CSP `connect-src 'none'`.
 
@@ -95,7 +118,7 @@ NODE_PATH=/tmp/pulseforge-browser/node_modules CHROMIUM_PATH=/usr/bin/chromium n
 
 Adjust `CHROMIUM_PATH` to your installation, or omit it when Puppeteer has a downloaded browser. Tests launch headless Chromium with `--no-sandbox`, following the existing local browser harness convention. Only loopback fixtures/intercepted requests are used. Tests cover tenant reset and stale scopes, command validation, shared context, mouse move/resize, dock/focus/restore, simulated commands, touch resize, keyboard controls, reduced motion, no API requests, and server isolation.
 
-`acceptance.browser.test.cjs` runs the full V0.5 scenario on desktop (1440×900, mouse and keyboard) and tablet landscape (1180×820 and 1024×768, touch). The steps are overview → open Max → show Northgate Bakery → verify orbit, breadcrumbs and both panels → evidence beside details → manual field resize → restore previous layout → selection still Northgate → tenant switch isolation. It also covers the remaining Max commands, honest replies, and keyboard operation of the title-bar menu. `max-sim.test.mjs` covers planning, verification and isolation without a browser. With `WORKSPACE_SCREENSHOTS` set, it writes `v05-<desktop|tablet|tablet-small>-<1..6>-*.png`.
+`v06.browser.test.cjs` runs the V0.6 acceptance scenario on desktop (mouse and keyboard) and tablet landscape 1180×820 / 1024×768 (touch): overview → focus Acquisition → select Northgate Bakery → Details/Investigation/breadcrumbs/Max context agree → Max rearranges → manual field resize → save and restore a composition → layout undo stays consistent → expanded field → per-tenant persistence → tenant isolation. A keyboard and reduced-motion test covers field navigation, pinning and the list fallback. With `WORKSPACE_SCREENSHOTS` set, it writes `v06-<desktop|tablet|tablet-small>-<1..5>-*.png`. `acceptance.browser.test.cjs` runs the earlier V0.5 scenario on desktop (1440×900, mouse and keyboard) and tablet landscape (1180×820 and 1024×768, touch). The steps are overview → open Max → show Northgate Bakery → verify orbit, breadcrumbs and both panels → evidence beside details → manual field resize → restore previous layout → selection still Northgate → tenant switch isolation. It also covers the remaining Max commands, honest replies, and keyboard operation of the title-bar menu. `max-sim.test.mjs` covers planning, verification and isolation without a browser. With `WORKSPACE_SCREENSHOTS` set, it writes `v05-<desktop|tablet|tablet-small>-<1..6>-*.png`.
 
 ## Screenshot capture and verification
 

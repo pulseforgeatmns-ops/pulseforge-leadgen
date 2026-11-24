@@ -59,7 +59,7 @@ async function scenario(t, { name, viewport, touch }) {
   // 4. Orbit, breadcrumbs, Details and Investigation all reflect Max's selection; Max reports verified facts.
   s = await state(page);
   assert.equal(s.selected, 'harbor-acquisition-1'); assert.equal(s.fieldFocus, 'acquisition');
-  assert.equal(await page.$eval('.moon[data-object-id="harbor-acquisition-1"]', n => n.classList.contains('selected') && n.getAttribute('aria-pressed')), 'true');
+  assert.equal(await page.$eval('.object-node[data-object-id="harbor-acquisition-1"]', n => n.classList.contains('selected') && n.getAttribute('aria-pressed')), 'true');
   assert.deepEqual(await crumbs(page), ['Harbor Works', 'Acquisition', 'Northgate Bakery']);
   for (const id of ['domain:harbor-acquisition-1', 'investigation:harbor-acquisition-1']) {
     const panel = `.panel[data-panel-id="${id}"]`;
@@ -124,7 +124,7 @@ async function scenario(t, { name, viewport, touch }) {
   // 8. Selection is still Northgate Bakery everywhere.
   assert.equal(s.selected, 'harbor-acquisition-1');
   assert.deepEqual(await crumbs(page), ['Harbor Works', 'Acquisition', 'Northgate Bakery']);
-  assert.equal(await page.$eval('.moon[data-object-id="harbor-acquisition-1"]', n => n.classList.contains('selected')), true);
+  assert.equal(await page.$eval('.object-node[data-object-id="harbor-acquisition-1"]', n => n.classList.contains('selected')), true);
   assert.equal(await page.$eval('#selection', n => n.textContent), 'Shared selection · Northgate Bakery');
   await capture('5-restored');
   // Undo is still a separate, working path for the operator.
@@ -174,7 +174,7 @@ test('Max commands: investigation, expand field, back to Acquisition, and honest
   let s = await state(page);
   assert.equal(s.fieldFocus, 'acquisition'); assert.equal(s.selected, 'harbor-acquisition');
   assert.deepEqual(await crumbs(page), ['Harbor Works', 'Acquisition']);
-  assert.match(r.text, /^Back in Acquisition: 3 prospects in orbit\./);
+  assert.match(r.text, /^Back in Acquisition: 3 prospects\. Details and Investigation now show the domain\./);
   r = await ask('Restore my previous layout.');
   assert.equal((await state(page)).fieldMode, 'docked');
   r = await ask('Restore my previous layout.');
@@ -187,7 +187,7 @@ test('Max commands: investigation, expand field, back to Acquisition, and honest
   await page.evaluate(() => { const w = window.livingWorkspace; w.dispatch({ ...w.scope(), type: 'select_entity', source: 'human', recordId: 'harbor-acquisition-3' }); });
   await page.click('#close-max'); await page.click('#max-orb');
   const chips = await page.$$eval('#max-suggestions button', n => n.map(b => b.textContent));
-  assert.ok(chips.includes('Open the investigation') && chips.includes('Restore my previous layout'), chips.join(' | '));
+  assert.ok(chips.includes('Restore my previous layout') && chips.includes('Take me back to Acquisition'), chips.join(' | ')); // panels follow the selection, so the investigation is already open
   // The workspace reflows beside the conversation: no panel sits underneath Max.
   const covered = await page.evaluate(() => { const c = document.getElementById('conversation').getBoundingClientRect(); return [...document.querySelectorAll('.panel:not([hidden]), #field')].some(n => n.getBoundingClientRect().right > c.left + 1); });
   assert.equal(covered, false);
@@ -221,8 +221,8 @@ test('title-bar menu is keyboard operable and returns focus', async t => {
   await page.mouse.click(10, 790); assert.equal(await page.$('#panel-menu'), null, 'outside click closes');
   // Sphere has no resting text and only the slow halo is animated.
   assert.equal(await page.$eval('#max-orb', n => n.textContent.trim()), '');
-  assert.deepEqual(await page.$$eval('#max-orb *', ns => [...new Set(ns.map(n => getComputedStyle(n).animationName).filter(a => a !== 'none'))]), ['orb-breathe']);
+  assert.deepEqual(await page.$$eval('#max-orb *', ns => [...new Set(ns.map(n => getComputedStyle(n).animationName).filter(a => a !== 'none'))]), ['orb-drift']);
   await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
-  assert.equal(await page.$eval('#max-orb .orb-halo', n => getComputedStyle(n).animationName), 'none');
+  assert.equal(await page.$eval('#max-orb .filaments', n => getComputedStyle(n).animationName), 'none');
   assert.deepEqual(errors, []);
 });

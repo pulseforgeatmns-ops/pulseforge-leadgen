@@ -22,7 +22,7 @@ export function describeContext(state, fixture) {
   const record = id => fixture.records.find(r => r.id === id);
   const domain = fixture.overview.domains.find(d => d.id === state.fieldFocus) || null;
   const selected = record(state.selected) || null;
-  const panels = state.panels.map(p => ({ id: p.id, toolId: p.toolId, title: toolTitle(p.toolId), dock: p.dock, minimized: p.minimized, maximized: p.maximized, record: record(p.recordId) }));
+  const panels = state.panels.map(p => ({ id: p.id, toolId: p.toolId, title: toolTitle(p.toolId), dock: p.dock, minimized: p.minimized, maximized: p.maximized, pinned: p.follow === false, record: record(p.recordId) }));
   const path = [fixture.name, domain?.label, selected?.kind === 'object' ? selected.name : null].filter(Boolean);
   const visible = panels.filter(p => !p.minimized);
   const panelText = visible.length ? visible.map(p => `${p.title} (${p.dock}) — ${p.record.name}`).join('; ') : 'no panels open';
@@ -89,6 +89,11 @@ export function planMaxTurn(utterance, state, fixture, env = {}) {
     return say('context', `You’re in ${ctx.path.join(' › ')}. ${sel ? `Selected: ${sel.name}${sel.kind === 'object' ? ` (${sel.type}, ${sel.stage})` : ''}.` : 'Nothing is selected.'} Open: ${ctx.visible.length ? ctx.visible.map(p => `${p.title} ${DOCK_WORD[p.dock]} showing ${p.record.name}`).join('; ') : 'no panels'}. The spatial field is ${ctx.field}.`);
   }
 
+  if (/\b(outstanding|open questions?|unanswered|still (open|unknown|missing))\b/.test(text)) {
+    if (!sel) return say('questions', 'Select a business first and I’ll list its open questions.');
+    const own = sel.kind === 'object' ? sel.questions.map(q => q) : fixture.records.filter(r => r.kind === 'object' && r.domain === sel.domain).flatMap(o => o.questions.map(q => `${o.name}: ${q}`));
+    return say('questions', own.length ? `Open questions on ${sel.name}: ${own.map((q, i) => `(${i + 1}) ${q}`).join(' ')} These come from fixture research notes; nothing has been asked of anyone.` : `There are no open questions recorded for ${sel.name}.`);
+  }
   if (/\b(restore|revert|bring back|go back to|return to)\b.*\b(previous|last|earlier|prior|old|original)\b.*\blayout\b|\bundo your (layout|change)/.test(text)) {
     if (!state.layoutCheckpoint) return say('restore', `There’s no earlier layout of yours waiting to be restored: I keep the one from before my most recent layout change, and it has already been restored or I haven’t changed anything.${state.canUndo ? ' Undo steps back through layout changes one at a time.' : ''}`);
     const before = describeContext(state, fixture);
@@ -125,7 +130,10 @@ export function planMaxTurn(utterance, state, fixture, env = {}) {
   if (evidence && arrangement && /\b(details|prospect|profile|record)\b/.test(text)) {
     if (!sel) return say('arrange', 'Select a business first. Then I can put its evidence beside its details.');
     const [detailsDock, evidenceDock] = { side: ['left', 'right'], below: ['top', 'bottom'], above: ['bottom', 'top'] }[arrangement];
-    const steps = layoutChange([
+    // Stacking needs room for two usable rows: make the field smaller if that is enough.
+    const fit = arrangement !== 'side' && state.fieldMode === 'docked' && ['top', 'bottom'].includes(state.fieldDock) && env.fitRatioForRows ? env.fitRatioForRows(2) : null;
+    const resize = fit !== null && fit >= 0.3 && fit < state.fieldRatio ? [{ type: 'set_field_dock', dock: state.fieldDock, ratio: Math.round(fit * 1000) / 1000 }] : [];
+    const steps = layoutChange([...resize,
       ...panelSteps(state, 'domain', sel.id, detailsDock), ...panelSteps(state, 'investigation', sel.id, evidenceDock),
       { type: 'dock_panel', panelId: `domain:${sel.id}`, dock: detailsDock }, { type: 'dock_panel', panelId: `investigation:${sel.id}`, dock: evidenceDock },
       ...(state.fieldMode === 'docked' ? [] : [{ type: 'set_field_mode', mode: 'docked' }]),
@@ -133,7 +141,15 @@ export function planMaxTurn(utterance, state, fixture, env = {}) {
     return plan('arrange', steps, after => {
       const d = panelFor(after, 'domain', sel.id), e = panelFor(after, 'investigation', sel.id);
       if (!d || !e || d.dock !== detailsDock || e.dock !== evidenceDock) return 'I tried to arrange the panels, but they didn’t end up where I intended. Check the layout, or use Undo.';
-      return `Done. Details is ${DOCK_WORD[d.dock]} and the evidence is ${DOCK_WORD[e.dock]}, both for ${sel.name}. Say “restore my previous layout” to go back.`;
+      // Report what is on screen, not just the dock setting: minimum sizes can reflow panels.
+      const seen = env.relation ? env.relation(after, d.id, e.id) : null;
+      const wanted = { side: 'beside', below: 'below', above: 'above' }[arrangement];
+      const resized = resize.length ? ` I made the field smaller (${Math.round(after.fieldRatio * 100)}%) to make room.` : '';
+      if (seen && seen !== wanted) {
+        const actual = seen === 'beside' ? 'side by side' : seen === 'stacked' ? 'with the evidence stacked in the dock' : seen;
+        return `I docked Details ${DOCK_WORD[d.dock]} and the evidence ${DOCK_WORD[e.dock]}, but there isn’t room to show both ${wanted} at a usable size here, so they’re ${actual} for now. They’ll ${wanted === 'beside' ? 'sit side by side' : 'stack'} when there’s space. Both show ${sel.name}.`;
+      }
+      return `Done. Details is ${DOCK_WORD[d.dock]} and the evidence is ${DOCK_WORD[e.dock]}, both for ${sel.name}.${resized} Say “restore my previous layout” to go back.`;
     });
   }
   if (evidence && /\b(close|hide|dismiss)\b/.test(text)) {
@@ -153,19 +169,21 @@ export function planMaxTurn(utterance, state, fixture, env = {}) {
 
   if (/\b(overview|zoom out|all domains|whole system)\b|\bback to (the )?(sun|start|top)\b/.test(text)) {
     return plan('overview', [{ type: 'focus_domain', domainId: null }], after => after.fieldFocus === null
-      ? `Back at the ${ctx.tenant} overview: four domains in orbit.${after.selected ? ` ${describeContext(after, fixture).selected.name} stays selected.` : ''}` : 'I couldn’t return to the overview.');
+      ? `Back at the ${ctx.tenant} overview: four domains.${after.selected ? ` ${describeContext(after, fixture).selected.name} stays selected.` : ''}` : 'I couldn’t return to the overview.');
   }
 
   const object = findObject(text, fixture);
   if (object) {
     const steps = [{ type: 'focus_domain', domainId: object.domain }, { type: 'select_entity', recordId: object.id },
       ...panelSteps(state, 'domain', object.id, 'left'), ...panelSteps(state, 'investigation', object.id, 'right'),
-      ...(state.fieldMode === 'docked' ? [] : [{ type: 'set_field_mode', mode: 'docked' }])];
+      ...(state.fieldMode === 'minimized' ? [{ type: 'set_field_mode', mode: 'docked' }] : [])];
     return plan('select', steps, (after, a) => {
       const d = panelFor(after, 'domain', object.id), e = panelFor(after, 'investigation', object.id);
       if (after.selected !== object.id || after.fieldFocus !== object.domain) return `I tried to select ${object.name}, but the selection is ${a.selected?.name || 'empty'}.`;
       const domain = fixture.overview.domains.find(dd => dd.id === object.domain);
-      return `Here’s ${object.name}, a ${object.type.toLowerCase()} in ${domain.label} (${object.stage}). It’s highlighted in orbit${d && e ? `; Details is ${where(d)} and the evidence is ${where(e)}` : ''}.`;
+      const placement = after.fieldMode === 'expanded' ? '; the field is expanded, so Details and Investigation are ready in the dock (say “dock the field” to show them)' : d && e ? `; Details is ${where(d)} and the evidence is ${where(e)}` : '';
+      const qs = object.questions.length ? ` ${object.questions.length} open question${object.questions.length > 1 ? 's' : ''} recorded.` : '';
+      return `Here’s ${object.name}, a ${object.type.toLowerCase()} in ${domain.label} (${object.stage}). It’s highlighted in the field${placement}.${qs}`;
     });
   }
 
@@ -178,9 +196,9 @@ export function planMaxTurn(utterance, state, fixture, env = {}) {
     return plan('domain', steps, after => {
       if (after.fieldFocus !== domain.id) return `I couldn’t bring ${domain.label} into focus.`;
       const count = fixture.records.filter(r => r.kind === 'object' && r.domain === domain.id).length;
-      const evidencePanel = after.panels.find(p => p.toolId === 'investigation');
-      const evidenceNote = investigate ? ' Details and evidence are open for the domain.' : evidencePanel ? ` The evidence panel still shows ${fixture.records.find(r => r.id === evidencePanel.recordId).name}.` : '';
-      return `${/\bback\b/.test(text) ? 'Back in' : 'Now in'} ${domain.label}: ${count} ${domain.objectPlural} in orbit. Details shows the domain.${evidenceNote}`;
+      const showing = after.panels.filter(p => p.recordId === rec.id).map(p => toolTitle(p.toolId));
+      const pinned = after.panels.filter(p => p.follow === false && p.recordId !== rec.id).map(p => `${toolTitle(p.toolId)} stays pinned to ${fixture.records.find(r => r.id === p.recordId).name}`);
+      return `${/\bback\b/.test(text) ? 'Back in' : 'Now in'} ${domain.label}: ${count} ${domain.objectPlural}. ${showing.length ? `${showing.join(' and ')} ${showing.length > 1 ? 'now show' : 'now shows'} the domain.` : 'No panel shows the domain yet.'}${pinned.length ? ` ${pinned.join('; ')}.` : ''}`;
     });
   }
 

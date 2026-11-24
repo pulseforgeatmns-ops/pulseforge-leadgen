@@ -28,8 +28,8 @@ async function panelAction(page, action, panel = '.panel') {
 test('desktop field, mouse move/resize, docking, focus, Max commands and tenant reset', async t => {
   const { page, url, errors, requests } = await setup(t);
   assert.equal(await page.$$eval('#cdSpatialOrbit button[data-domain-id]', nodes => nodes.length), 4);
-  assert.equal(await page.$$eval('#cdIntelConnections .orbit-path', nodes => nodes.length), 3);
-  assert.equal(await page.$$eval('#cdSpatialOrbit .sun', nodes => nodes.length), 1);
+  assert.equal(await page.$$eval('#cdIntelConnections .core-link', nodes => nodes.length), 4);
+  assert.equal(await page.$$eval('#cdSpatialOrbit .context-core', nodes => nodes.length), 1);
   await page.evaluate(() => { const w = window.livingWorkspace; for (const p of w.getState().panels) w.dispatch({ ...w.scope(), type: 'close_panel', source: 'human', panelId: p.id }); });
   await page.click('#cdSpatialOrbit button[data-domain-id="acquisition"]');
   await page.waitForSelector('.panel');
@@ -103,7 +103,7 @@ test('desktop and tablet: field and two panels fit viewport, layout transitions 
       return { boxes, width: innerWidth, height: innerHeight, scrollHeight: document.documentElement.scrollHeight, scrollWidth: document.documentElement.scrollWidth };
     });
     assert.equal(layout.scrollHeight, height); assert.equal(layout.scrollWidth, width);
-    for (const box of layout.boxes) { assert.ok(box.x >= 0 && box.y >= 0 && box.right <= width + 1 && box.bottom <= height + 1); assert.ok(box.width > 250 && box.height > 200); }
+    for (const box of layout.boxes) { assert.ok(box.x >= 0 && box.y >= 0 && box.right <= width + 1 && box.bottom <= height + 1, JSON.stringify([width, height, box])); assert.ok(box.width > 250 && box.height > 200, JSON.stringify([width, height, box])); }
     assert.ok(layout.boxes[0].bottom <= layout.boxes[1].y);
     assert.ok(layout.boxes[1].right <= layout.boxes[2].x);
     for (const mode of ['expanded', 'minimized', 'docked']) {
@@ -128,6 +128,7 @@ test('desktop and tablet: field and two panels fit viewport, layout transitions 
       await page.screenshot({ path: `${process.env.WORKSPACE_SCREENSHOTS}/workspace-${width}x${height}.png` });
       await page.click('[data-field-mode="expanded"]');
       await page.screenshot({ path: `${process.env.WORKSPACE_SCREENSHOTS}/expanded-${width}x${height}.png` });
+      await page.click('[data-field-mode="docked"]'); // the composition is remembered across reloads
     }
   }
   assert.deepEqual(errors, []);
@@ -181,30 +182,30 @@ test('orbital navigation: overview, domain focus, object selection, breadcrumbs,
   await page.reload(); await page.waitForFunction(() => window.livingWorkspace?.getState().panels.length === 2);
   const settle = () => new Promise(r => setTimeout(r, 900));
   await settle();
-  // Overview: sun centred, four planets, no interactive moons, two panels underneath.
+  // Overview: context core centred, four domains, no interactive objects, two panels underneath.
   let s = await state(page);
   assert.equal(s.fieldFocus, null);
   assert.equal(await page.$eval('#cdSpatialCanvas', n => n.dataset.level), 'overview');
-  assert.equal(await page.$$eval('.moon:not([inert])', n => n.length), 0);
+  assert.equal(await page.$$eval('.object-node:not([inert])', n => n.length), 0);
   assert.deepEqual(await page.$$eval('#field-crumbs li', n => n.map(x => x.textContent)), ['Harbor Works']);
   const inField = await page.evaluate(() => {
     const f = document.getElementById('cdSpatialCanvas').getBoundingClientRect();
-    return [...document.querySelectorAll('.planet, .sun')].every(n => { const r = n.getBoundingClientRect(); return r.left >= f.left && r.right <= f.right && r.top >= f.top && r.bottom <= f.bottom; });
+    return [...document.querySelectorAll('.domain-node, .context-core')].every(n => { const r = n.getBoundingClientRect(); return r.left >= f.left && r.right <= f.right && r.top >= f.top && r.bottom <= f.bottom; });
   });
-  assert.ok(inField, 'sun and planets fit inside the field');
+  assert.ok(inField, 'core and domains fit inside the field');
   await capture('orbital-overview-1440x900');
   // Acquisition exploration.
-  await page.click('.planet[data-domain-id="acquisition"]'); await settle();
+  await page.click('.domain-node[data-domain-id="acquisition"]'); await settle();
   s = await state(page);
   assert.equal(s.fieldFocus, 'acquisition'); assert.equal(s.selected, 'harbor-acquisition');
   assert.equal(await page.$eval('#cdSpatialCanvas', n => n.dataset.level), 'domain');
-  assert.equal(await page.$$eval('.moon:not([inert])', n => n.length), 3);
+  assert.equal(await page.$$eval('.object-node:not([inert])', n => n.length), 3);
   assert.equal(s.panels.length, 2, 'focusing a domain reuses the existing panels');
   assert.deepEqual(await page.$$eval('#field-crumbs li', n => n.map(x => x.textContent)), ['Harbor Works', 'Acquisition']);
   assert.equal(await page.$eval('#return-overview', n => n.hidden), false);
   await capture('orbital-acquisition-1440x900');
   // Selecting a prospect updates shared context and both investigation panels in place.
-  await page.click('.moon[data-object-id="harbor-acquisition-1"]'); await settle();
+  await page.click('.object-node[data-object-id="harbor-acquisition-1"]'); await settle();
   s = await state(page);
   assert.equal(s.selected, 'harbor-acquisition-1');
   assert.deepEqual(s.panels.map(p => [p.id, p.dock]), [['domain:harbor-acquisition-1', 'left'], ['investigation:harbor-acquisition-1', 'right']]);
@@ -213,7 +214,7 @@ test('orbital navigation: overview, domain focus, object selection, breadcrumbs,
   assert.equal(await page.$eval('#selection', n => n.textContent), 'Shared selection · Northgate Bakery');
   await capture('orbital-selected-prospect-1440x900');
   // Sibling switching from the details panel; undo reverts the panel retarget only.
-  await page.click('.panel[data-panel-id="domain:harbor-acquisition-1"] .orbit-list button:nth-of-type(2)');
+  await page.click('.panel[data-panel-id="domain:harbor-acquisition-1"]  section:last-of-type .record-row:nth-of-type(2)');
   assert.equal((await state(page)).selected, 'harbor-acquisition-2');
   // Zoom: buttons and wheel, then breadcrumbs return to the domain and the overview.
   await page.click('#zoom-in'); assert.ok((await state(page)).fieldView.zoom > 1);
@@ -225,12 +226,12 @@ test('orbital navigation: overview, domain focus, object selection, breadcrumbs,
   await page.click('#field-crumbs li:first-child button');
   s = await state(page); assert.equal(s.fieldFocus, null); assert.deepEqual(s.fieldView, { x: 0, y: 0, zoom: 1 });
   assert.equal(s.selected, 'harbor-acquisition', 'returning to overview keeps the shared selection');
-  // Keyboard: Escape from inside a focused domain returns to overview and restores focus to its planet.
-  await page.focus('.planet[data-domain-id="clients"]'); await page.keyboard.press('Enter');
+  // Keyboard: Escape from inside a focused domain returns to overview and restores focus to its domain node.
+  await page.focus('.domain-node[data-domain-id="clients"]'); await page.keyboard.press('Enter');
   assert.equal((await state(page)).fieldFocus, 'clients');
-  await page.focus('.moon[data-object-id="harbor-clients-1"]'); await page.keyboard.press('Escape');
+  await page.focus('.object-node[data-object-id="harbor-clients-1"]'); await page.keyboard.press('Escape');
   assert.equal((await state(page)).fieldFocus, null);
-  assert.equal(await page.$eval('.planet[data-domain-id="clients"]', n => n === document.activeElement), true);
+  assert.equal(await page.$eval('.domain-node[data-domain-id="clients"]', n => n === document.activeElement), true);
   // Max navigates through the same dispatcher.
   await page.click('#max-orb'); await page.type('#question', 'investigate Tidewater'); await page.click('#ask button');
   s = await state(page); assert.equal(s.selected, 'harbor-acquisition-2'); assert.equal(s.fieldFocus, 'acquisition');
@@ -247,27 +248,27 @@ test('orbital navigation: overview, domain focus, object selection, breadcrumbs,
   assert.equal(await page.$eval(`.panel[data-panel-id="${focused}"]`, n => n.hidden), false, 'a stacked panel comes forward when selected');
   // Reduced motion keeps navigation but removes ambient animation and camera transitions.
   await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
-  assert.equal(await page.$eval('.planet-body', n => getComputedStyle(n).animationName), 'none');
-  assert.equal(await page.$eval('.planet', n => getComputedStyle(n).transitionDuration), '0s');
+  assert.equal(await page.$eval('.domain-node', n => getComputedStyle(n).animationName), 'none');
+  assert.equal(await page.$eval('.domain-node', n => getComputedStyle(n).transitionDuration), '0s');
   // Tenant switch resets orbital focus.
   await page.select('#tenant', 'cedar');
   assert.equal((await state(page)).fieldFocus, null);
-  assert.equal(await page.$eval('.sun', n => n.textContent.includes('Cedar Studio')), true);
+  assert.equal(await page.$eval('.context-core', n => n.textContent.includes('Cedar Studio')), true);
   assert.ok(requests.every(r => r.startsWith(url + '/') || r.startsWith('data:')));
   assert.deepEqual(errors, []);
 });
 
-test('touch: tapping planets and moons navigates without panning', async t => {
+test('touch: tapping domain and object nodes navigates without panning', async t => {
   const { page, errors } = await setup(t, true);
   await page.setViewport({ width: 1024, height: 768, isMobile: true, hasTouch: true });
   await page.reload(); await page.waitForFunction(() => window.livingWorkspace?.getState().panels.length === 2);
-  await page.tap('.planet[data-domain-id="campaigns"]');
+  await page.tap('.domain-node[data-domain-id="campaigns"]');
   assert.equal((await state(page)).fieldFocus, 'campaigns');
   await new Promise(r => setTimeout(r, 900));
-  await page.tap('.moon[data-object-id="harbor-campaigns-1"]');
+  await page.tap('.object-node[data-object-id="harbor-campaigns-1"]');
   const s = await state(page);
   assert.equal(s.selected, 'harbor-campaigns-1'); assert.deepEqual(s.fieldView, { x: 0, y: 0, zoom: 1 });
-  const targets = await page.$$eval('.planet, .moon:not([inert]), .sun', n => n.map(x => Math.min(x.offsetWidth, x.offsetHeight)));
+  const targets = await page.$$eval('.domain-node, .object-node:not([inert]), .context-core', n => n.map(x => Math.min(x.offsetWidth, x.offsetHeight)));
   assert.ok(targets.every(size => size >= 44), 'touch targets are at least 44px');
   assert.deepEqual(errors, []);
 });

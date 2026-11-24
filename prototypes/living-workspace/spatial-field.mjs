@@ -1,20 +1,19 @@
-// Prototype-only orbital presentation. The sun is the active tenant context;
-// domains are planets on orbital paths; business objects orbit a focused
-// domain. Domain priorities are fixture inputs, never recomputed: they only
-// choose the orbit (elevated/urgent sit closer to the sun). Every interaction
-// is a presentation command through the shared dispatcher.
-const svgNS = 'http://www.w3.org/2000/svg';
+// Prototype-only Living Business Field. The tenant is the conceptual centre (a
+// quiet context core, not a light source); domains are glass nodes connected by
+// the relationships the fixtures declare; a focused domain draws its business
+// objects forward and lets the rest recede. Prominence comes from priority,
+// status, relevance and selection. Nothing moves while idle: transitions run only
+// when the business context changes. Every interaction is a dispatcher command.
 const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
-const RINGS = [0.58, 0.8, 1];
-const ringFor = priority => ({ urgent: 0, elevated: 0, normal: 1, monitored: 2 })[priority] ?? 1;
-// Fixed, asymmetric angles (degrees, 0 = right, 90 = down) so the system reads as composed, not a grid.
-const ANGLES = { acquisition: 165, content: 245, clients: 15, campaigns: 310 };
-const GLYPHS = { content: '✧', acquisition: '⌖', clients: '◉', campaigns: '◇' };
-
+const svgNS = 'http://www.w3.org/2000/svg';
+// Overview anchors (fractions of the field), asymmetric so the composition reads as designed.
+const ANCHORS = { acquisition: [0.25, 0.68], content: [0.34, 0.25], campaigns: [0.68, 0.26], clients: [0.76, 0.7] };
+const COMPACT = { acquisition: [0.27, 0.74], content: [0.27, 0.26], campaigns: [0.73, 0.26], clients: [0.73, 0.74] };
+const GLYPHS = { content: '¶', acquisition: '◎', clients: '◇', campaigns: '↗' };
 export function createSpatialField({ host, orbit, connections, list, dispatch, scope, onFocusDomain, onSelectObject, onOverview }) {
   let current = null, tenant = '', view = { x: 0, y: 0, zoom: 1 }, start = null, wheelTimer = null, listSignature = '';
   host.tabIndex = 0;
-  host.setAttribute('aria-label', 'Orbital exploration field. Drag the background or use arrow keys to pan; use the mouse wheel or the zoom buttons to zoom; Escape returns to the overview.');
+  host.setAttribute('aria-label', 'Business field. Drag the background or use arrow keys to pan; use the mouse wheel or the zoom buttons to zoom; Escape returns to the overview.');
   const change = (next, token = scope()) => dispatch({ type: 'set_field_view', source: 'human', ...next, ...token });
   const applyView = v => { orbit.style.transform = `translate(${v.x}px, ${v.y}px) scale(${v.zoom})`; };
 
@@ -48,7 +47,7 @@ export function createSpatialField({ host, orbit, connections, list, dispatch, s
   host.addEventListener('keydown', e => {
     if (e.key === 'Escape' && current?.state.fieldFocus && !current.state.maxOpen) {
       e.preventDefault(); const domainId = current.state.fieldFocus; onOverview();
-      orbit.querySelector(`.planet[data-domain-id="${domainId}"]`)?.focus({ preventScroll: true });
+      orbit.querySelector(`.domain-node[data-domain-id="${domainId}"]`)?.focus({ preventScroll: true });
       return;
     }
     if (e.target !== host) return;
@@ -62,133 +61,156 @@ export function createSpatialField({ host, orbit, connections, list, dispatch, s
     if (text) el.textContent = text;
     return el;
   }
-  function svg(tag, attrs) {
-    const el = document.createElementNS(svgNS, tag);
-    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
-    return el;
+  function link(cls, data) {
+    const path = document.createElementNS(svgNS, 'path');
+    path.setAttribute('class', `link ${cls}`);
+    for (const [k, v] of Object.entries(data)) path.dataset[k] = v;
+    connections.append(path); return path;
   }
   function build(fixture) {
     tenant = fixture.id; start = null;
-    orbit.querySelectorAll('.sun, .planet, .moon, .moon-hint').forEach(n => n.remove());
+    orbit.querySelectorAll('.context-core, .domain-node, .object-node').forEach(n => n.remove());
     connections.replaceChildren(); list.replaceChildren(); listSignature = '';
-    RINGS.forEach((_, i) => connections.append(svg('ellipse', { class: 'orbit-path', 'data-ring': i })));
-    connections.append(svg('path', { class: 'tether' }), svg('ellipse', { class: 'object-orbit' }));
-    const sun = make('button', 'sun'); sun.type = 'button'; sun.dataset.sun = fixture.id;
-    sun.setAttribute('aria-label', `${fixture.name}: workspace context. Return to overview`);
-    const corona = make('span', 'sun-body'); corona.setAttribute('aria-hidden', 'true');
-    const sunLabel = make('span', 'body-label');
-    sunLabel.append(make('small', '', 'WORKSPACE CONTEXT'), make('strong', '', fixture.name));
-    sun.append(corona, sunLabel); sun.addEventListener('click', () => onOverview());
-    orbit.append(sun);
+    const objects = fixture.records.filter(r => r.kind === 'object');
+    const core = make('button', 'context-core'); core.type = 'button'; core.dataset.core = fixture.id;
+    core.setAttribute('aria-label', `${fixture.name}: workspace context. Return to overview`);
+    core.append(make('small', '', 'WORKSPACE'), make('strong', '', fixture.name), make('span', 'core-meta', `${fixture.overview.domains.length} domains · ${objects.length} records`));
+    core.addEventListener('click', () => onOverview());
+    orbit.append(core);
+    for (const domain of fixture.overview.domains) link('core-link', { domain: domain.id });
+    for (const l of fixture.overview.links) link('domain-link', { from: l.from, to: l.to });
     for (const domain of fixture.overview.domains) {
-      const objects = fixture.records.filter(r => r.kind === 'object' && r.domain === domain.id);
+      const own = objects.filter(o => o.domain === domain.id);
       const record = fixture.records.find(r => r.kind === 'domain' && r.domain === domain.id);
-      const planet = make('button', `planet priority-${domain.priority}`); planet.type = 'button';
-      planet.dataset.domainId = domain.id;
-      planet.setAttribute('aria-label', `${domain.label}, ${domain.priority} priority, ${objects.length} ${domain.objectPlural} in orbit. ${record.summary}`);
-      const body = make('span', 'planet-body'); body.setAttribute('aria-hidden', 'true');
-      body.append(make('span', 'planet-glyph', GLYPHS[domain.id]));
-      const label = make('span', 'body-label');
-      label.append(make('strong', '', domain.label), make('small', '', domain.priority === 'elevated' || domain.priority === 'urgent'
-        ? `↑ ${domain.priority.toUpperCase()} · ${objects.length} ${domain.objectPlural}` : `${objects.length} ${domain.objectPlural}`));
-      planet.append(body, label); planet.addEventListener('click', () => onFocusDomain(domain.id));
-      orbit.append(planet);
-      objects.forEach((obj, i) => {
-        const hint = make('span', 'moon-hint'); hint.dataset.parentDomain = domain.id; hint.dataset.index = i;
-        hint.setAttribute('aria-hidden', 'true'); orbit.append(hint);
-        const moon = make('button', 'moon'); moon.type = 'button';
-        moon.dataset.objectId = obj.id; moon.dataset.parentDomain = domain.id;
-        moon.setAttribute('aria-label', `${obj.type}: ${obj.name}. ${obj.stage}. ${obj.summary}`);
-        const moonBody = make('span', 'moon-body'); moonBody.setAttribute('aria-hidden', 'true');
-        const moonLabel = make('span', 'body-label');
-        moonLabel.append(make('strong', '', obj.name), make('small', '', `${obj.type} · ${obj.stage}`));
-        moon.append(moonBody, moonLabel); moon.addEventListener('click', () => onSelectObject(obj));
-        orbit.append(moon);
-      });
+      const node = make('button', `domain-node priority-${domain.priority} status-${domain.status}`); node.type = 'button';
+      node.dataset.domainId = domain.id;
+      node.setAttribute('aria-label', `${domain.label}, ${domain.priority} priority, ${domain.note}. ${own.length} ${domain.objectPlural}. ${record.summary}`);
+      const top = make('span', 'node-top');
+      top.append(make('span', 'node-glyph', GLYPHS[domain.id]), make('strong', '', domain.label), make('i', 'status-dot'));
+      const meta = make('span', 'node-meta', `${own.length} ${domain.objectPlural}${domain.priority === 'elevated' || domain.priority === 'urgent' ? ` · ${domain.priority}` : ''}`);
+      node.append(top, meta, make('span', 'node-note', domain.note));
+      node.addEventListener('click', () => onFocusDomain(domain.id));
+      orbit.append(node);
+      for (const obj of own) {
+        link('object-link', { object: obj.id, domain: domain.id });
+        const o = make('button', `object-node status-${obj.status}`); o.type = 'button';
+        o.dataset.objectId = obj.id; o.dataset.parentDomain = domain.id;
+        o.setAttribute('aria-label', `${obj.type}: ${obj.name}. ${obj.stage}. ${obj.summary}`);
+        const row = make('span', 'node-top'); row.append(make('i', 'status-dot'), make('strong', '', obj.name));
+        o.append(row, make('span', 'node-meta', `${obj.type} · ${obj.stage}`));
+        o.addEventListener('click', () => onSelectObject(obj));
+        orbit.append(o);
+      }
     }
   }
-  function place(node, x, y, size, extra = {}) {
-    node.style.left = `${x}px`; node.style.top = `${y}px`;
-    node.style.setProperty('--size', `${size}px`);
-    for (const [k, v] of Object.entries(extra)) node.style.setProperty(k, v);
-  }
-  // Highlight faces the light source, so every body reads as lit by the sun (or its planet).
-  const light = (x, y, lx, ly) => {
-    const d = Math.hypot(lx - x, ly - y) || 1;
-    return { '--lx': `${50 + 26 * (lx - x) / d}%`, '--ly': `${50 + 26 * (ly - y) / d}%` };
+  const curve = (a, b, bend = 0) => {
+    const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+    const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy) || 1;
+    const cx = mx - dy / len * bend, cy = my + dx / len * bend;
+    return `M${a[0].toFixed(1)} ${a[1].toFixed(1)} Q${cx.toFixed(1)} ${cy.toFixed(1)} ${b[0].toFixed(1)} ${b[1].toFixed(1)}`;
   };
+  function setPath(path, d, visible) {
+    path.setAttribute('d', d); path.style.d = `path("${d}")`;
+    path.dataset.visible = String(visible);
+  }
+  function place(node, x, y, width, extra = {}) {
+    node.style.left = `${x}px`; node.style.top = `${y}px`; node.style.width = `${width}px`;
+    for (const [k, v] of Object.entries(extra)) node.dataset[k] = v;
+  }
   function position() {
     if (!current) return;
     const { fixture, state } = current;
     const w = host.clientWidth, h = host.clientHeight;
     if (!w || !h) return;
     connections.setAttribute('viewBox', `0 0 ${w} ${h}`);
-    const cx = w / 2, cy = h / 2, focus = state.fieldFocus;
-    const compact = w < 560;
+    const focus = state.fieldFocus, compact = w < 560;
     host.dataset.level = focus ? 'domain' : 'overview';
     host.classList.toggle('compact-field', compact);
-    host.classList.toggle('narrow-field', w < 900);
-    const rx = Math.min(w * 0.42, h * 2.3), ry = Math.min(h * 0.36, rx * 0.72);
-    connections.querySelectorAll('.orbit-path').forEach((ring, i) => {
-      const scale = RINGS[i] * (focus ? 1.25 : 1);
-      ring.setAttribute('cx', focus ? clamp(w * 0.07, 30, 90) : cx); ring.setAttribute('cy', cy);
-      ring.setAttribute('rx', rx * scale); ring.setAttribute('ry', ry * scale);
-    });
-    const sun = orbit.querySelector('.sun');
-    const sunPos = focus ? [clamp(w * 0.07, 30, 90), cy, 30] : [cx, cy, clamp(h * 0.26, 44, 96)];
-    place(sun, ...sunPos);
-    sun.dataset.state = focus ? 'distant' : 'center';
+    const selected = fixture.records.find(r => r.id === state.selected);
+    const pos = {};
+    // Context core
+    const core = orbit.querySelector('.context-core');
+    const coreW = clamp(w * 0.14, 140, 196);
+    pos.core = focus ? [Math.min(coreW * 0.42, 86) + 12, 24] : [w / 2, h / 2];
+    place(core, ...pos.core, focus ? Math.min(coreW * 0.84, 172) : coreW, { state: focus ? 'distant' : 'center' });
+    // Domains
+    const cardW = compact ? clamp(w * 0.38, 118, 168) : clamp(w * 0.15, 150, 214);
     const others = fixture.overview.domains.filter(d => d.id !== focus);
-    const planetPos = {};
-    fixture.overview.domains.forEach(domain => {
-      const node = orbit.querySelector(`.planet[data-domain-id="${domain.id}"]`);
-      let x, y, size, depth = 1;
+    for (const domain of fixture.overview.domains) {
+      const node = orbit.querySelector(`.domain-node[data-domain-id="${domain.id}"]`);
+      let x, y, width = cardW, stateName;
       if (!focus) {
-        const a = ANGLES[domain.id] * Math.PI / 180, r = RINGS[ringFor(domain.priority)];
-        x = cx + rx * r * Math.cos(a); y = cy + ry * r * Math.sin(a);
-        depth = 0.86 + 0.14 * (Math.sin(a) + 1) / 2; // nearer (lower) bodies read larger
-        size = clamp(h * 0.2, 44, 76) * depth;
-        node.dataset.state = 'orbit';
+        const [fx, fy] = (compact ? COMPACT : ANCHORS)[domain.id];
+        x = w * fx; y = h * fy; stateName = 'overview';
+        if (domain.priority === 'elevated' || domain.priority === 'urgent') width = cardW * 1.08;
       } else if (domain.id === focus) {
-        x = cx; y = cy; size = clamp(h * 0.34, 62, 124);
-        node.dataset.state = 'focus';
+        x = compact ? w * 0.27 : clamp(w * 0.2, cardW * 0.6 + 14, w * 0.3); y = h * 0.5; width = cardW * 1.12; stateName = 'focus';
       } else {
-        const i = others.indexOf(domain);
-        x = w - clamp(w * 0.05, 28, 58); y = h * (0.22 + i * 0.28); size = 26;
-        node.dataset.state = 'recede';
+        const i = others.indexOf(domain), rw = clamp(w * 0.11, 96, 140);
+        x = w - rw / 2 - 12; y = h * (0.22 + i * 0.28); width = rw; stateName = 'recede';
       }
-      planetPos[domain.id] = [x, y, size];
-      node.style.zIndex = String(node.dataset.state === 'focus' ? 30 : Math.round(10 + y / 10));
-      node.style.setProperty('--depth', depth.toFixed(3));
-      node.dataset.labelSide = node.dataset.state === 'recede' ? 'left' : 'below';
-      place(node, x, y, size, light(x, y, sunPos[0], sunPos[1]));
-    });
-    const tether = connections.querySelector('.tether'), objectOrbit = connections.querySelector('.object-orbit');
-    const orx = clamp(Math.min(w * 0.3, h * 1.6, w / 2 - 130), 90, 440), ory = Math.min(h * 0.37, orx * 0.6);
-    if (focus) {
-      const [px, py] = planetPos[focus];
-      tether.setAttribute('d', `M${sunPos[0]} ${sunPos[1]} Q${(sunPos[0] + px) / 2} ${py - h * 0.18} ${px} ${py}`);
-      Object.entries({ cx: px, cy: py, rx: orx, ry: ory }).forEach(([k, v]) => objectOrbit.setAttribute(k, v));
+      pos[domain.id] = [x, y, width];
+      place(node, x, y, width, { state: stateName });
+      node.dataset.related = String(!!(selected?.related?.some(r => fixture.records.find(x2 => x2.id === r.recordId)?.domain === domain.id) && domain.id !== focus));
     }
-    orbit.querySelectorAll('.moon').forEach(moon => {
-      const domainId = moon.dataset.parentDomain;
-      const siblings = [...orbit.querySelectorAll(`.moon[data-parent-domain="${domainId}"]`)];
-      const i = siblings.indexOf(moon), n = siblings.length;
-      const [px, py, psize] = planetPos[domainId];
-      const visible = focus === domainId;
-      moon.inert = !visible; moon.dataset.visible = String(visible);
-      if (visible) {
-        const a = (160 + i * 360 / n) * Math.PI / 180; // keeps the planet label (below) and tether (above-left) clear
-        const x = px + orx * Math.cos(a), y = py + ory * Math.sin(a);
-        moon.dataset.labelSide = w < 900 ? (Math.sin(a) < 0 ? 'above' : 'below') : Math.cos(a) >= 0 ? 'right' : 'left';
-        moon.style.zIndex = String(Math.sin(a) > 0 ? 40 : 20);
-        place(moon, x, y, 30, light(x, y, px, py));
-      } else place(moon, px, py, 8, light(px, py, sunPos[0], sunPos[1]));
-      const hint = orbit.querySelector(`.moon-hint[data-parent-domain="${domainId}"][data-index="${i}"]`);
-      const ha = (-60 + i * 50) * Math.PI / 180, hr = psize * 0.78;
-      hint.dataset.visible = String(!focus);
-      place(hint, px + hr * Math.cos(ha), py + hr * 0.55 * Math.sin(ha), 5);
+    // Objects of the focused domain gather to its right on a gentle arc.
+    const chipW = compact ? clamp(w * 0.36, 118, 170) : clamp(w * 0.19, 150, 232);
+    for (const domain of fixture.overview.domains) {
+      const nodes = [...orbit.querySelectorAll(`.object-node[data-parent-domain="${domain.id}"]`)];
+      const n = nodes.length, visible = focus === domain.id;
+      const spread = Math.min(h * 0.36, (n - 1) * 34);
+      nodes.forEach((node, i) => {
+        const t = n === 1 ? 0 : (i / (n - 1)) * 2 - 1;
+        const [dx, dy] = pos[domain.id];
+        const x = visible ? (compact ? w * 0.68 : Math.min(w * 0.52, w - 170 - chipW / 2)) + (1 - Math.abs(t)) * (compact ? 8 : w * 0.035) : dx;
+        const y = visible ? h * 0.5 + t * spread : dy;
+        pos[node.dataset.objectId] = [x, y, chipW];
+        node.inert = !visible;
+        place(node, x, y, visible ? chipW : chipW * 0.6, { visible: String(visible) });
+        node.classList.toggle('selected', node.dataset.objectId === state.selected);
+        node.setAttribute('aria-pressed', String(node.dataset.objectId === state.selected));
+      });
+    }
+    // Links: core ↔ domains, declared domain relationships, domain ↔ objects, selection relationships.
+    const edge = (id, toward) => { const [x, y, wd] = pos[id]; return [x + Math.sign(toward[0] - x) * Math.min(wd / 2, Math.abs(toward[0] - x) / 2), y]; };
+    connections.querySelectorAll('.core-link').forEach(p => {
+      const d = p.dataset.domain;
+      setPath(p, curve(pos.core, pos[d], focus ? 0 : (pos[d][1] < h / 2 ? -18 : 18)), !focus || d === focus);
+      p.dataset.strength = fixture.overview.domains.find(x => x.id === d).priority;
     });
+    connections.querySelectorAll('.domain-link').forEach(p => {
+      const a = pos[p.dataset.from], b = pos[p.dataset.to];
+      setPath(p, curve(a, b, focus ? 0 : 36), !focus);
+    });
+    connections.querySelectorAll('.relation-link, .relation-label').forEach(n => n.remove());
+    connections.querySelectorAll('.object-link').forEach(p => {
+      const visible = focus === p.dataset.domain;
+      const a = edge(p.dataset.domain, pos[p.dataset.object]), b = pos[p.dataset.object];
+      setPath(p, curve(a, [b[0] - (visible ? b[2] / 2 : 0), b[1]], 0), visible);
+      p.dataset.selected = String(p.dataset.object === state.selected);
+    });
+    if (focus && selected?.kind === 'object' && selected.domain === focus) {
+      for (const rel of selected.related || []) {
+        const target = fixture.records.find(r => r.id === rel.recordId); if (!target) continue;
+        const toId = target.domain === focus ? target.id : target.domain;
+        if (!pos[toId] || toId === selected.id) continue;
+        const a = pos[selected.id], b = pos[toId], p = link('relation-link', { to: toId });
+        const label = document.createElementNS(svgNS, 'text');
+        label.setAttribute('class', 'relation-label'); label.textContent = rel.relation.toLowerCase();
+        if (target.domain === focus) {
+          // Sibling relation: arc out to the right of the cluster, label at the apex.
+          const from = [a[0] + a[2] / 2, a[1]], to = [b[0] + b[2] / 2, b[1]], apex = Math.max(from[0], to[0]) + 54;
+          const d = `M${from[0].toFixed(1)} ${from[1].toFixed(1)} C${apex.toFixed(1)} ${from[1].toFixed(1)} ${apex.toFixed(1)} ${to[1].toFixed(1)} ${to[0].toFixed(1)} ${to[1].toFixed(1)}`;
+          setPath(p, d, true);
+          label.setAttribute('x', (apex - 8).toFixed(1)); label.setAttribute('y', ((from[1] + to[1]) / 2 + 3).toFixed(1)); label.setAttribute('text-anchor', 'start');
+        } else {
+          const from = [a[0] + (b[0] > a[0] ? a[2] / 2 : -a[2] / 2), a[1]], to = [b[0] - (b[0] > a[0] ? b[2] / 2 : -b[2] / 2), b[1]];
+          setPath(p, curve(from, to, -24), true);
+          label.setAttribute('x', ((from[0] + to[0]) / 2).toFixed(1)); label.setAttribute('y', ((from[1] + to[1]) / 2 - 8).toFixed(1)); label.setAttribute('text-anchor', 'middle');
+        }
+        connections.append(label);
+      }
+    }
   }
   new ResizeObserver(position).observe(host);
 
@@ -229,11 +251,7 @@ export function createSpatialField({ host, orbit, connections, list, dispatch, s
     // A newly built system appears in place; camera transitions apply to navigation only.
     if (fresh) requestAnimationFrame(() => requestAnimationFrame(() => host.classList.remove('settling')));
     const selected = fixture.records.find(r => r.id === state.selected);
-    orbit.querySelectorAll('.planet').forEach(n => n.classList.toggle('selected', n.dataset.domainId === selected?.domain));
-    orbit.querySelectorAll('.moon').forEach(n => {
-      const on = n.dataset.objectId === state.selected;
-      n.classList.toggle('selected', on); n.setAttribute('aria-pressed', String(on));
-    });
+    orbit.querySelectorAll('.domain-node').forEach(n => n.classList.toggle('selected', n.dataset.domainId === selected?.domain));
     list.querySelectorAll('[data-domain-id]').forEach(n => n.setAttribute('aria-pressed', String(!state.fieldFocus && n.dataset.domainId === selected?.domain)));
     list.querySelectorAll('[data-object-id]').forEach(n => n.setAttribute('aria-pressed', String(n.dataset.objectId === state.selected)));
   }

@@ -3,6 +3,8 @@ import { panelSteps, planMaxTurn, describeContext, suggestions } from './max-sim
 import { createSpatialField } from './spatial-field.mjs';
 import { fixtures } from './fixtures.mjs';
 import { createWorkspace, tools } from './store.mjs';
+import { renderTool } from './tools.mjs';
+import { statusChip, chip } from './surfaces.mjs';
 
 let layoutStorage = null;
 try { layoutStorage = window.localStorage; } catch { /* in-memory fallback */ }
@@ -39,56 +41,29 @@ function openRecord(record, source = 'human', scope = workspace.scope()) {
   focusDomain(record.domain, source, scope);
   send('set_field_mode', { mode: 'docked' }, source, scope);
 }
-// Selecting an orbiting business object updates shared context and both working panels.
+// Selecting a business object in the field updates shared context and both working panels.
 function selectObject(record, source = 'human', scope = workspace.scope()) {
   const state = workspace.getState();
   return batch([{ type: 'focus_domain', domainId: record.domain }, { type: 'select_entity', recordId: record.id },
     ...panelSteps(state, 'domain', record.id, 'left'), ...panelSteps(state, 'investigation', record.id, 'right'),
-    ...(state.fieldMode === 'docked' ? [] : [{ type: 'set_field_mode', mode: 'docked' }])], source, scope);
+    ...(state.fieldMode === 'minimized' ? [{ type: 'set_field_mode', mode: 'docked' }] : [])], source, scope);
 }
 function returnToOverview(source = 'human', scope = workspace.scope()) {
   send('focus_domain', { domainId: null }, source, scope);
 }
-function facts(rows) {
-  const dl = element('dl', '', 'record-facts');
-  for (const [label, value] of rows) dl.append(element('dt', label), element('dd', value));
-  return dl;
-}
-function orbitList(heading, records, current) {
-  const wrap = element('div', '', 'orbit-list');
-  wrap.append(element('p', heading, 'eyebrow'));
-  for (const obj of records) {
-    const b = button(`${obj.name} · ${obj.stage}`, `Select ${obj.type} ${obj.name}`, () => selectObject(obj));
-    if (obj.id === current) b.setAttribute('aria-current', 'true');
-    wrap.append(b);
-  }
-  return wrap;
-}
-const renderers = {
-  domain(body, record) {
-    const investigate = button('Investigate →', `Investigate ${record.name}`, () => {
-      send('select_entity', { recordId: record.id });
-      openInvestigation(record);
-    });
-    if (record.kind === 'object') {
-      body.append(element('p', `${record.type.toUpperCase()} · ${domainLabel(record.domain).toUpperCase()}`, 'eyebrow'), element('h2', record.name), element('p', record.summary));
-      body.append(facts([['Stage', record.stage], ...record.facts, ['Source', 'Local fixture']]), investigate);
-      const siblings = objectsOf(record.domain);
-      if (siblings.length > 1) body.append(orbitList(`ALSO ORBITING ${domainLabel(record.domain).toUpperCase()}`, siblings, record.id));
-      return;
-    }
-    body.append(element('p', `DOMAIN · ${record.domain.toUpperCase()}`, 'eyebrow'), element('h2', record.name), element('p', record.summary));
-    body.append(investigate, facts([['Record', record.id], ['Status', 'Awaiting review'], ['Source', 'Local fixture']]));
-    body.append(orbitList('IN ORBIT', objectsOf(record.domain), null));
+// Narrow api handed to registered tool renderers.
+const toolApi = () => ({
+  fixture: fixtures[workspace.getState().tenantId], recordFor,
+  select: record => (record.kind === 'object' ? selectObject(record) : focusDomain(record.domain)),
+  investigate: record => openInvestigation(record),
+  runAction(record, a) {
+    if (a.kind === 'max') { if (!workspace.getState().maxOpen) toggleMax(); return askMax('What is still outstanding?'); }
+    const compare = a.label.match(/^Compare with (.+)$/);
+    const other = compare && fixtures[workspace.getState().tenantId].records.find(r => r.name === compare[1]);
+    if (other) return selectObject(other);
+    return openInvestigation(record);
   },
-  investigation(body, record) {
-    body.append(element('p', record.kind === 'object' ? `EVIDENCE · ${record.type.toUpperCase()} · FIXTURE` : 'EVIDENCE · FIXTURE', 'eyebrow'), element('h2', record.name));
-    if (record.kind === 'object') body.append(element('p', `${record.stage} · ${record.summary}`, 'investigation-lede'));
-    const list = element('ol', '', 'evidence-list'); record.evidence.forEach(text => list.append(element('li', text)));
-    body.append(list, element('p', 'This investigation is shared with the simulated Max conversation. Nothing here contacts anyone or runs anything.'));
-    body.append(button('Select this record', `Select ${record.name}`, () => send('select_entity', { recordId: record.id })));
-  },
-};
+});
 
 function gesture(handle, node, panelId, resize) {
   handle.addEventListener('pointerdown', event => {
@@ -130,7 +105,7 @@ function makePanel(panel) {
   node.tabIndex = -1; node.setAttribute('aria-label', `${tool.title}: ${record.name}`);
   const header = element('header');
   const grip = button('', `Move ${tool.title}; drag or use arrow keys`, () => send('focus_panel', { panelId: panel.id }));
-  grip.className = 'grip'; grip.append(element('span', tool.title, 'grip-title'), element('span', record.name, 'grip-record'));
+  grip.className = 'grip'; grip.append(element('span', tool.title, 'grip-title'), element('span', record.name, 'grip-record'), element('span', 'Pinned', 'pin-badge'));
   grip.addEventListener('keydown', event => {
     const delta = { ArrowLeft: [-20, 0], ArrowRight: [20, 0], ArrowUp: [0, -20], ArrowDown: [0, 20] }[event.key];
     if (!delta) return; event.preventDefault();
@@ -142,7 +117,7 @@ function makePanel(panel) {
   menuButton.className = 'panel-menu-button'; menuButton.setAttribute('aria-haspopup', 'menu'); menuButton.setAttribute('aria-expanded', 'false');
   menuButton.addEventListener('keydown', e => { if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); openPanelMenu(panel.id, menuButton, e.key === 'ArrowUp'); } });
   header.append(grip, menuButton, button('−', 'Minimize panel', () => send('minimize_panel', { panelId: panel.id })), button('×', 'Close panel', () => closePanel(panel.id)));
-  const body = element('div', '', 'panel-body'); renderers[panel.toolId](body, record);
+  const body = element('div', '', 'panel-body'); renderTool(panel.toolId, body, record, toolApi());
   const trail = element('p', '', 'trail'); body.append(trail);
   const resize = button('◢', 'Resize panel; arrow keys resize', () => {}); resize.className = 'resize';
   resize.addEventListener('keydown', event => {
@@ -194,6 +169,8 @@ function openPanelMenu(panelId, anchor, focusLast = false) {
   heading('Size');
   item(p.maximized ? 'Restore size' : 'Focus (fill workspace)', () => send('maximize_panel', { panelId }), { id: 'maximize' });
   for (const [label, dw, dh, id] of [['Wider', 40, 0, 'wider'], ['Narrower', -40, 0, 'narrower'], ['Taller', 0, 40, 'taller'], ['Shorter', 0, -40, 'shorter']]) item(`${label} (floats)`, () => resizeBy(panelId, node, dw, dh), { id });
+  heading('Context');
+  item(p.follow ? 'Pin to this record' : 'Follow the selection', () => send('pin_panel', { panelId, pinned: !!p.follow }), { id: 'pin' });
   heading('Panel');
   item('Minimize', () => send('minimize_panel', { panelId }), { id: 'minimize' });
   item('Close', () => closePanel(panelId), { id: 'close' });
@@ -243,9 +220,13 @@ function render(state) {
   spatial.render(fixture, state);
   renderCrumbs(state, fixture);
   $('return-overview').hidden = !state.fieldFocus;
+  $('nav-back').disabled = !state.canBack; $('nav-forward').disabled = !state.canForward;
+  renderSelectionCard(state, fixture);
+  renderMaxPresence(state, fixture);
+  $('pref-status').textContent = state.hasPreference ? 'Your current composition is remembered for this tenant.' : 'Using the default composition.';
   $('field-summary').textContent = state.fieldFocus
-    ? `${domainLabel(state.fieldFocus)} · ${objectsOf(state.fieldFocus).length} ${fixture.overview.domains.find(d => d.id === state.fieldFocus).objectPlural} in orbit`
-    : `${fixture.overview.domains.length} domains · Priority sets the orbit`;
+    ? `${domainLabel(state.fieldFocus)} · ${objectsOf(state.fieldFocus).length} ${fixture.overview.domains.find(d => d.id === state.fieldFocus).objectPlural}`
+    : `${fixture.overview.domains.length} domains · ${fixture.records.filter(r => r.kind === 'object').length} records`;
   $('zoom-level').textContent = `${Math.round(state.fieldView.zoom * 100)}%`;
   for (const [id, node] of panelNodes) if (!state.panels.some(p => p.id === id)) { node.remove(); panelNodes.delete(id); }
   const area = $('work-area').getBoundingClientRect();
@@ -266,6 +247,7 @@ function render(state) {
     let node = panelNodes.get(panel.id);
     if (!node) { node = makePanel(panel); panelNodes.set(panel.id, node); $('panels').append(node); }
     node.dataset.focused = String(state.focused === panel.id);
+    node.dataset.pinned = String(!panel.follow);
     node.dataset.dock = panel.dock; node.dataset.maximized = String(panel.maximized);
     const compact = innerWidth <= 700;
     let { x, y, width, height } = layout.panels[panel.id] || { x: 0, y: 0, width: panel.width, height: panel.height };
@@ -352,6 +334,42 @@ $('max-orb').addEventListener('click', toggleMax); $('close-max').addEventListen
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && workspace.getState().maxOpen) { event.preventDefault(); toggleMax(); }
 });
+// Expanded field is a first-class layout: the selection stays visible in the field itself.
+function renderSelectionCard(state, fixture) {
+  const card = $('field-selection'), record = recordFor(state.selected);
+  const show = state.fieldMode === 'expanded' && !!record;
+  card.hidden = !show; if (!show) return;
+  const signature = `${state.tenantId}|${record.id}`;
+  if (card.dataset.signature === signature) return;
+  card.dataset.signature = signature;
+  const title = element('div', '', 'sel-title');
+  title.append(element('span', record.kind === 'object' ? `${record.type} · ${domainLabel(record.domain)}` : 'Domain', 'eyebrow'), element('strong', record.name));
+  const row = element('div', '', 'chip-row');
+  if (record.kind === 'object') row.append(chip(record.stage, 'stage'), statusChip(record.status));
+  card.replaceChildren(title, row, element('p', record.summary), button('Show in panels', `Show ${record.name} in the working panels`, () => send('set_field_mode', { mode: 'docked' })));
+}
+// Max presence: engaged while open; attention when the selection carries open questions Max hasn't been shown.
+const maxSeen = new Set();
+function renderMaxPresence(state) {
+  const record = recordFor(state.selected);
+  const key = `${state.tenantId}|${state.selected}`;
+  if (state.maxOpen) maxSeen.add(key);
+  const questions = record?.questions?.length || 0;
+  const attention = !state.maxOpen && questions > 0 && !maxSeen.has(key);
+  $('max-orb').dataset.attention = String(attention);
+  $('max-orb').setAttribute('aria-label', attention ? `Talk to Max (simulation) — ${questions} open question${questions > 1 ? 's' : ''} on ${record.name}` : 'Talk to Max (simulation)');
+}
+$('nav-back').addEventListener('click', () => send('navigate_back'));
+$('nav-forward').addEventListener('click', () => send('navigate_forward'));
+document.addEventListener('keydown', e => {
+  if (!e.altKey || e.target.closest('input, textarea, select')) return;
+  if (e.key === 'ArrowLeft') { e.preventDefault(); send('navigate_back'); }
+  if (e.key === 'ArrowRight') { e.preventDefault(); send('navigate_forward'); }
+});
+$('reset-composition').addEventListener('click', () => {
+  workspace.forgetPreference(); send('arrange_layout', { preset: 'spatial-first' });
+  $('layout-status').textContent = 'Default composition restored for this tenant.';
+});
 // What Max sees, shown to the operator so the shared context is never hidden.
 function renderMaxContext(state, fixture) {
   const ctx = describeContext(state, fixture);
@@ -359,9 +377,10 @@ function renderMaxContext(state, fixture) {
   if ($('max-context').dataset.signature === signature) return;
   $('max-context').dataset.signature = signature;
   const rows = [['Workspace', ctx.path.join(' › ')], ['Selected', ctx.selected ? `${ctx.selected.name}${ctx.selected.kind === 'object' ? ` · ${ctx.selected.type}` : ''}` : 'Nothing'],
-    ['Panels', ctx.visible.length ? ctx.visible.map(p => `${p.title} (${p.dock}) · ${p.record.name}`).join(' / ') : 'None open'], ['Field', ctx.field]];
+    ['Panels', ctx.visible.length ? ctx.visible.map(p => `${p.title} (${p.dock}${p.pinned ? ', pinned' : ''}) · ${p.record.name}`).join(' / ') : 'None open'], ['Field', ctx.field]];
   const dl = element('dl'); rows.forEach(([k, v]) => dl.append(element('dt', k), element('dd', v)));
   $('max-context').replaceChildren(dl);
+  $('max-context-line').textContent = `${ctx.path.join(' › ')} · ${ctx.visible.length} panel${ctx.visible.length === 1 ? '' : 's'}`;
   $('max-suggestions').replaceChildren(...suggestions(state, fixture).map(text => button(text, `Ask Max: ${text}`, () => askMax(text))));
 }
 const maxFieldRatio = (dock = workspace.getState().fieldDock) => {
@@ -369,12 +388,27 @@ const maxFieldRatio = (dock = workspace.getState().fieldDock) => {
   const size = horizontal ? area.height : area.width, min = horizontal ? MIN_PANEL.height : MIN_PANEL.width;
   return workspace.getState().panels.some(p => !p.minimized) && size ? Math.max(0.3, Math.min(0.65, (size - 8 - min) / size)) : 0.65;
 };
+// Geometry facts for Max, from the same pure layout function the workspace renders with.
+function fitRatioForRows(rows) {
+  const h = $('work-area').getBoundingClientRect().height;
+  return h ? (h - 8 - rows * MIN_PANEL.height - 8 * (rows - 1)) / h : 0;
+}
+function panelRelation(st, a, b) {
+  const area = $('work-area').getBoundingClientRect();
+  const g = workspaceGeometry(st, area.width, area.height);
+  if (st.fieldMode === 'expanded') return 'hidden';
+  if (g.stacked.includes(a) || g.stacked.includes(b)) return 'stacked';
+  const A = g.panels[a], B = g.panels[b]; if (!A || !B) return 'hidden';
+  if (B.y >= A.y + A.height - 1) return 'below';
+  if (A.y >= B.y + B.height - 1) return 'above';
+  return 'beside';
+}
 // One Max turn: plan from current context → dispatch as one batch → reply from the verified result.
 function askMax(text) {
   const scope = workspace.scope();
   if (!send('message', { text })) return;
   const before = workspace.getState();
-  const plan = planMaxTurn(text, before, fixtures[before.tenantId], { maxFieldRatio: maxFieldRatio() });
+  const plan = planMaxTurn(text, before, fixtures[before.tenantId], { maxFieldRatio: maxFieldRatio(), fitRatioForRows, relation: panelRelation });
   let ok = true;
   if (plan.undo) ok = send(plan.undo, {}, 'max', scope);
   else if (plan.steps.length) ok = send('batch', { commands: plan.steps }, 'max', scope);
@@ -458,11 +492,13 @@ function setFieldRatio(ratio, scope = workspace.scope()) {
     else if (e.key === 'End') { e.preventDefault(); setFieldRatio(0.65); }
   });
 }
-// Opening composition: the orbital overview on top, acquisition details and evidence underneath.
+// Opening composition: the business field overview on top, acquisition details and evidence underneath.
 function openDemonstration() {
   const record = domainRecord('acquisition'), state = workspace.getState();
-  batch([{ type: 'select_entity', recordId: record.id }, ...panelSteps(state, 'domain', record.id, 'left'),
-    ...panelSteps(state, 'investigation', record.id, 'right'), { type: 'set_field_mode', mode: 'docked' }]);
+  const commands = [{ type: 'select_entity', recordId: record.id }, ...panelSteps(state, 'domain', record.id, 'left'),
+    ...panelSteps(state, 'investigation', record.id, 'right'), { type: 'set_field_mode', mode: 'docked' }];
+  // First composition of a fresh session is a system step (no undo entry); later requests are operator actions.
+  if (!workspace.getState().panels.length && !workspace.getState().history.length) workspace.initialize(commands); else batch(commands);
 }
 $('undo-layout').addEventListener('click', () => send('undo_layout'));
 $('redo-layout').addEventListener('click', () => send('redo_layout'));
@@ -473,7 +509,7 @@ $('save-layout-form').addEventListener('submit', e => {
   e.preventDefault(); const name = $('layout-name').value.trim();
   const ok = send('save_layout', { name });
   $('layout-status').textContent = ok ? (workspace.getState().storageWarning ? 'Saved for this session; device storage unavailable.' : `Saved “${name}” for this tenant.`) : 'Use a name up to 40 characters; at most 12 layouts per tenant.';
-  if (ok) $('saved-layouts').value = name;
+  if (ok) { $('saved-layouts').value = name; $('layout-name').value = ''; }
 });
 $('load-layout').addEventListener('click', () => { send('load_layout', { name: $('saved-layouts').value }); $('layout-menu').open = false; });
 $('delete-layout').addEventListener('click', () => send('delete_layout', { name: $('saved-layouts').value }));
