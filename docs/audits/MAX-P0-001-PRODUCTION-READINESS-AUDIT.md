@@ -5,6 +5,8 @@
 **Deployed baseline:** Render service `pulseforge-api-migration` (`srv-dbtgtp3bc2fs73f5ukr0`), deploy `dep-dc2p9obm8hqs7386utd0`, commit `357e747` (PR #1159 merge), live since 2026-11-24 13:46:13Z. Deploy branch: `migration/render-current-main`, auto-deploy **off**, manual trigger.
 **Repository `main`:** `76a1059`. It is 18 commits **behind** the deployed branch (and 2 commits ahead, both migration-only).
 
+**Record correction (2026-11-24):** the commit that added this audit (`5f26c0d`) carries the trailer `Claude-Session: …/session_01WVeSoTsedqgJC9epZVU4RD`, which is wrong (copied from an earlier commit). The session that produced this audit is `https://claude.ai/code/session_01WVeSoVdPwRaWomyMo2zihK`. History was not rewritten to fix the trailer; this note is the correction of record.
+
 **Evidence sources used:** repository at the deployed commit (read-only worktree); Render service, deploy, event, log and metric APIs (read only); GitHub Actions run history and job logs; local test runs (offline harness, no `DATABASE_URL`, no model key); one disposable local PostgreSQL 16 proof.
 
 **Not reachable:** the production database (the Render Postgres IP allowlist is empty, so read-only SQL is refused), Render environment-variable values, Render HTTP request logs (only `app` and `build` log types are exposed), and any interactive Max session. Every capability that depends on these is marked **UNVERIFIED**.
