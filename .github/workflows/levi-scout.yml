@@ -31,6 +31,8 @@ on:
       - 'test/leviScoutP0Reliability.test.js'
       - 'migrations/2026-11-24-levi-scout-cycle-claim-unique*.sql'
       - 'utils/setterVisibility.js'
+      - 'utils/anchorOutreachReview.js'
+      - 'test/setterVisibilityReviewHoldPostgres.test.js'
       - 'packages/max/workspace/LeviScoutReviewContext.js'
       - 'services/reviewOnlyProspectImportService.js'
       - 'routes/reviewOnlyProspectImport.js'

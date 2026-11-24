@@ -253,21 +253,25 @@ function evaluate(sections, { expectDatabase = null, criteria = null, criteriaSt
     icpScoreAtLeast70: all.filter(row => Number(row.icp_score) >= 70).length,
     setterStatusNotNew: all.filter(row => (row.setter_status || 'new') !== 'new').length,
   }));
-  // Mirrors utils/setterVisibility.recomputeSetterVisibility (reason 'handoff'):
-  // the review-only hard exclusion applies to tenant 10 only, so for tenant 21
-  // a handoff/recompute would expose any non-terminal, non-DNC row with
-  // icp_score >= threshold and a service area.
-  const exposed = all.filter(row => !['dead', 'disqualified', 'bounced', 'do_not_email'].includes(String(row.status || ''))
+  // R8 invariant (utils/setterVisibility outreachReviewHeld): a row that still
+  // requires outreach review is never setter-visible. FAIL if any held row is
+  // visible now. Also report held rows the pre-fix gate (tenant-10-only hold)
+  // would expose on a setter_handoff recompute, i.e. the risk while the old
+  // code is deployed.
+  const held = all.filter(row => row.ao_outreach_review_required === true);
+  const heldVisible = held.filter(row => row.setter_visible === true);
+  const preFixExposed = held.filter(row => !['dead', 'disqualified', 'bounced', 'do_not_email'].includes(String(row.status || ''))
     && row.do_not_contact !== true
     && Number(row.icp_score || 0) >= SETTER_VISIBILITY_THRESHOLD
     && String(row.service_area_match || '').trim().length > 0);
-  checks.push(check('gates.recompute_exposure', exposed.length === 0 ? 'PASS' : 'FAIL', {
-    wouldBecomeSetterVisibleOnHandoffRecompute: exposed.length,
-    bySource: countBy(exposed, row => row.source || 'null'),
-    byReviewState: countBy(exposed, row => metadataOf(row).reviewState || 'null'),
+  checks.push(check('gates.review_hold_never_visible', heldVisible.length === 0 ? 'PASS' : 'FAIL', {
+    heldRows: held.length,
+    heldRowsSetterVisible: heldVisible.length,
+    heldRowsExposedUnderPreFixGate: preFixExposed.length,
+    preFixExposureBySource: countBy(preFixExposed, row => row.source || 'null'),
+    preFixExposureByReviewState: countBy(preFixExposed, row => metadataOf(row).reviewState || 'null'),
     threshold: SETTER_VISIBILITY_THRESHOLD,
-  }, 'Latent: only if setter_handoff runs for client 21. Review-only status does not exclude tenant 21 in the shared setter gate.'));
-
+  }, 'heldRowsExposedUnderPreFixGate > 0 is a live risk until the R8 gate is deployed; do not run setter_handoff for this tenant before then.'));
   // 6. Outreach prevention and deduplication
   const contacted = all.filter(row => row.last_contacted_at);
   const tp = Array.isArray(sections.touchpoints) ? sections.touchpoints : null;

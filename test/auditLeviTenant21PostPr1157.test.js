@@ -97,7 +97,7 @@ test('each violation is reported as FAIL', () => {
     'cycle.no_later_cycle_claimed': s => { s.agentLog.push({ action: 'research_cycle_claim', cycle_id: 'levi-week-2026-11-30', rows: 1 }); return s; },
     'cycle.claim_race_protection': s => ({ ...s, claimIndex: [{ unique_claim_indexes: 0 }] }),
     'outreach.none': s => ({ ...s, emailEvents: [{ event_type: 'sent', rows: 3 }] }),
-    'gates.recompute_exposure': s => { Object.assign(s.prospects[13], { icp_score: 80, service_area_match: 'Example', status: 'cold' }); return s; },
+    'gates.review_hold_never_visible': s => { Object.assign(s.prospects[0], { setter_visible: true }); s.prospects[0].acquisition_metadata.outreachAuthorized = false; return s; },
     'gates.qualified_contacts': s => { s.prospects[5].acquisition_metadata.bucket = 'qualified_prospect'; return s; },
     'dedup.no_duplicate_identities': s => { s.prospects[20].first_name = 'P0'; s.prospects[20].company_name = 'Co0'; return s; },
     'inventory.checkpoint': s => { s.prospects.pop(); return s; },
@@ -202,7 +202,7 @@ test('real research path on disposable PostgreSQL, then read-only audit', async 
   for (const id of ['target.read_only_transaction', 'inventory.tenant_scope', 'inventory.checkpoint',
     'city.no_city_invented_from_conflict', 'city.conflicts_recorded', 'soda.request_budget',
     'soda.incomplete_not_zero_match', 'soda.evidence_present', 'soda.no_fabrication_or_paid', 'research_only.classification',
-    'gates.qualified_contacts', 'gates.setter_visibility', 'gates.recompute_exposure', 'outreach.none', 'dedup.no_duplicate_identities',
+    'gates.qualified_contacts', 'gates.setter_visibility', 'gates.review_hold_never_visible', 'outreach.none', 'dedup.no_duplicate_identities',
     'cycle.claimed_once', 'cycle.no_double_claim', 'cycle.single_diagnostic', 'cycle.no_outreach_or_paid_in_diagnostics']) {
     assert.equal(status(report, id), 'PASS', `${id}: ${JSON.stringify(report.checks.find(c => c.id === id))}`);
   }

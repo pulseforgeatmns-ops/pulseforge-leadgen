@@ -280,10 +280,9 @@ test('R2 migration: precheck is read-only, duplicates abort the build without de
   assert.equal((await db.query(`SELECT count(*)::int AS n FROM pg_indexes WHERE indexname = 'agent_log_scout_levi_cycle_claim_uniq'`)).rows[0].n, 0);
 });
 
-test('R8 (open, not fixed here): setter handoff recompute must not expose tenant-21 review-only contact_now rows',
-  { todo: 'shared setter gate exempts only tenant 10 from review-only exclusion; needs an approved gate change' }, async t => {
+test('R8: setter handoff recompute does not expose tenant-21 review-only contact_now rows', async t => {
     const { db } = await freshDatabase(t, 'levi-r8-');
-    await db.query(`ALTER TABLE prospects ADD COLUMN setter_updated_at TIMESTAMPTZ`);
+    await db.query(`ALTER TABLE prospects ADD COLUMN setter_updated_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS setter_visibility_reason TEXT`);
     const { importReviewOnlyContacts } = require('../services/reviewOnlyProspectImportService');
     await importReviewOnlyContacts([{ name: 'Review Only Person', company: 'Review Co', reviewState: 'contact_now',
       market: 'Example County', sourceUrl: 'https://example.invalid/1' }], { clientId: 21, db, actorId: 'test' });

@@ -87,17 +87,17 @@ SELECT count(*) FILTER (WHERE setter_visible IS TRUE)                           
        count(*) FILTER (WHERE acquisition_metadata->>'bucket' = 'qualified_prospect') AS qualified_bucket,
        count(*) FILTER (WHERE coalesce(setter_status, 'new') <> 'new')                AS setter_status_not_new
   FROM prospects WHERE client_id = 21;
--- Q5b Recompute exposure (expect 0). Mirrors utils/setterVisibility.recomputeSetterVisibility:
--- the review-only hard exclusion applies to tenant 10 only, so a setter_handoff run for
--- client 21 would set setter_visible on these rows (icp_score >= 70 + service area).
-SELECT source, coalesce(acquisition_metadata->>'reviewState', 'null') AS review_state, count(*) AS would_become_setter_visible
-  FROM prospects
- WHERE client_id = 21
-   AND coalesce(status, '') NOT IN ('dead', 'disqualified', 'bounced', 'do_not_email')
-   AND coalesce(do_not_contact, false) = false
-   AND coalesce(icp_score, 0) >= 70
-   AND nullif(btrim(coalesce(service_area_match, '')), '') IS NOT NULL
- GROUP BY 1, 2;
+-- Q5b R8 review-hold invariant. held_setter_visible must be 0.
+-- held_exposed_under_pre_fix_gate counts held rows the pre-R8 gate (tenant-10-only hold)
+-- would expose on a setter_handoff recompute: a live risk until the R8 gate is deployed.
+SELECT count(*) FILTER (WHERE ao_outreach_review_required IS TRUE)                          AS held_rows,
+       count(*) FILTER (WHERE ao_outreach_review_required IS TRUE AND setter_visible IS TRUE) AS held_setter_visible,
+       count(*) FILTER (WHERE ao_outreach_review_required IS TRUE
+                          AND coalesce(status, '') NOT IN ('dead', 'disqualified', 'bounced', 'do_not_email')
+                          AND coalesce(do_not_contact, false) = false
+                          AND coalesce(icp_score, 0) >= 70
+                          AND nullif(btrim(coalesce(service_area_match, '')), '') IS NOT NULL) AS held_exposed_under_pre_fix_gate
+  FROM prospects WHERE client_id = 21;
 -- Q5c Qualification inputs. evaluateProspect (services/leviScoutProductionContract.js) qualifies a row only
 -- when review state = contact_now AND an APPROVED Blueprint financing range exists AND no blocker applies.
 -- Review state comes from acquisition_metadata.reviewState, else the notes line "Review state: ...".

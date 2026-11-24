@@ -46,8 +46,12 @@ Not merged, not deployed. The migration has not been applied. Nothing in product
 
 ## Evidence (all local, disposable PostgreSQL 16, no production)
 
-`npm run test:scout:levi`, run as an unprivileged user so `initdb` works: **109 tests, 108 pass, 0 fail, 0 skipped, 1 todo** (R8, below).
-Also run: `maxInvestigationAcceptancePostgres` (3/3) and `p0ReviewOnlyAmendment/OutreachLiftPostgres` (2/2) pass.
+`npm run test:scout:levi`, run as an unprivileged user so `initdb` works: **114 tests, 114 pass, 0 fail, 0 skipped, 0 todo** (after R8).
+Shared setter, outreach and Anchor tests: 25 files run with the disposable-PG gates enabled (`MAX_SMOKE_DISPOSABLE_PG`, `WALKTHROUGH_NOTIFICATION_TEST_POSTGRES`, `ANCHOR_PHONE_SETTER_TEST_POSTGRES`): **163 tests, 161 pass, 2 fail, 0 skipped**. Both failures reproduce identically on unmodified `migration/render-current-main` (`2e5cc34`), so they predate this work:
+* `walkthroughRoutes` "Anchor homepage ads contract → clickable phone/email": site copy;
+* `setterPreMigrationCompat` "DNC checks fail closed on the pre-migration schema".
+
+Other setter-visibility suites (`anchorAccountHoldAdmission`, `anchorOutreachReviewPostgres`, `anchorResearchProviderPauseOperators`): 32/32 pass. `scripts/testSetterVisibility.js` passes.
 
 `test/leviScoutP0Reliability.test.js`:
 
@@ -78,7 +82,7 @@ Corrections made against the real schema and application logic:
 | Outbound queues | not checked | `acquisition_outbound_items`, `tenant_outreach_scheduled_sends`, `emmett_send_plans` (tenant `'21'`). A missing table reports UNVERIFIED, never PASS. |
 | `setter_status` | counted non-null, but the column defaults to `'new'` | counts `<> 'new'` |
 | Qualification | `evaluateProspect` with no criteria | the same criteria source as the runner: `loadTenantUnderstanding` → `fromUnderstanding`, through `readOnlyQueryable`. Status is reported. A stored `qualified_prospect` must match recomputation. |
-| Setter exposure | not checked | new `gates.recompute_exposure`, which mirrors `recomputeSetterVisibility` |
+| Setter exposure | not checked | `gates.review_hold_never_visible`: FAIL if any held row is visible; also reports held rows the pre-fix gate would expose |
 | Claim index | any UNIQUE index | the named index, plus a duplicate-group count |
 | Parameter typing | `tenant_id = $1::text OR client_id = $1` failed (inconsistent types); caught as UNVERIFIED by the test | `$1::int::text` / `$1::int` |
 
@@ -88,13 +92,51 @@ PR #1158's `scripts/auditLeviTenant21ReadOnly.js` does not reflect Levi's actual
 
 Its output is therefore safe but uninformative. `scripts/auditLeviTenant21PostPr1157.js` supersedes it; I did not change #1158's file.
 
-## New finding R8 (not fixed — needs a decision)
+## R8 — global review-hold setter invariant (fixed)
 
-`utils/setterVisibility.recomputeSetterVisibility` applies the review-only hard exclusion only to tenant 10 (`anchorOutreachReviewSql`). A review-only `contact_now` import gets `icp_score = 80` and a market. So `setter_handoff` run for client 21 (via `/cron/setter_handoff?client_id=21` or a dashboard run) **sets it setter-visible**. This was demonstrated on disposable PostgreSQL; see the todo test.
+**Invariant.** A prospect with `ao_outreach_review_required = true` is never setter-visible. This holds for every tenant, score, review state and visibility reason, including `scout`, `handoff`, `recompute`, `manual`, `engagement` and `stage_change`.
 
-The Levi research rows (`qualify_first`, score 65) are not exposed. The audit now measures this as `gates.recompute_exposure`.
+**Change.** Made in the shared gate only, `utils/setterVisibility.js`; there is no tenant-specific code.
+* `outreachReviewHeld(row)` = `row.ao_outreach_review_required === true` OR the existing tenant-10 rule. Tenant 10 still treats an unknown flag and a held same-company sibling as held.
+* `isHardExcluded` uses `outreachReviewHeld`, so the per-row path (`setSetterVisibility` / `computeSetterVisible`) is covered.
+* `recomputeSetterVisibility` uses its SQL twin, `outreachReviewHeldSql`, in both CASE branches, so bulk handoff, recompute and global (`clientId` null) runs are covered. A held row is hidden even when it carries a manual or engagement override, and its reason is stored as `hard_exclusion`.
+* Rows without the hold behave exactly as before:
+  * score ≥ 70 plus a service area is promoted;
+  * manual and engagement overrides work;
+  * outside tenant 10, a NULL flag is not a hold.
 
-Proposed fix, for separate approval: treat `ao_outreach_review_required = true` as a hard exclusion for every tenant, or at least tenant 21. This touches a shared gate, so it was left out of this targeted patch.
+**Bypass review.**
+* Every write that sets visibility goes through `setSetterVisibility` or `recomputeSetterVisibility`. Those writers are: `leadgen.js` (scout), `setterHandoffAgent.js` (handoff), `routes/setter.js` (stage change and booked), `routes/api.js` (assign setter, manual), `routes/webhooks.js` (reply, engagement), `lib/walkthroughCapture.js` (engagement), and `scripts/importAnchor*` (manual).
+* The only direct writes are:
+  * the synthetic setter-test insert in `routes/setter.js`, with a false flag and `do_not_contact = true`;
+  * `studioSubstralScoutPersistence`, which only sets visibility to false.
+* Read-side setter queries filter on `setter_visible`, so they inherit the gate.
+* Outbound paths already applied the hold for every tenant before this change: `dbClient.checkDNC` and its variant, `samAgent`, `emmettAutosend`, `emmettOutboundSnapshot`, `governedOutboundStore`, `maxOutboundControlLoop`, `maxAgent`, `aoFieldService`, `aoBriefingService` and `sendingReadiness`. Setter visibility was the only tenant-10-only gate.
+
+**Clearing the hold is explicit, never incidental.**
+* No application code changes the flag from true to false.
+* The only code that writes `false` is Anchor scoped resume (`services/anchorScopedResumeControl.js`). It is tenant 10 only and moves NULL to false, never true to false. It requires an approved manifest admission with an `approvalReference`, an identity fingerprint compare-and-set, the quarantine check and `do_not_contact = false`.
+* The review-only "outreach lift" is a mission-level authorization amendment and does not touch the flag.
+* The flag is set to true by review-only imports, by Max spreadsheet proposals when an email or phone changes or an account is created, and by the column default for new rows (false).
+* The tests assert that no setter path changes the flag.
+
+**Evidence: disposable PostgreSQL** (`test/setterVisibilityReviewHoldPostgres.test.js`, 5 tests).
+* Pure gate: tenants 21, 10, 1, 5 and 2 × reasons scout, handoff, recompute, manual, engagement and stage_change all give hidden for a held row. Unheld behaviour is unchanged.
+* Recompute and handoff for tenants 21, 10 and 1, plus a global recompute:
+  * held rows, including previously visible manual and engagement rows, end up hidden with `hard_exclusion`, and the flag stays true;
+  * an unheld qualified row stays visible; below threshold and blank area stay hidden;
+  * an unheld manual override is preserved.
+* Tenant 10 stricter rules: an unknown flag is held and a held sibling holds the company. A tenant-1 unknown flag is not a hold, which is unchanged.
+* Per-row scout, handoff, manual, engagement and stage_change cannot expose a held row in tenants 21, 10 or 1. Unheld manual and scout promotion still work.
+* Review-only `contact_now` imports (icp 80) for tenants 21 and 1 stay hidden after handoff.
+* The former R8 todo in `test/leviScoutP0Reliability.test.js` now passes.
+
+**Affected tenant workflows (compatibility).** Tenant 10 is unchanged: it already applied the hold. For every other tenant:
+1. **Held rows already setter-visible** (legacy manual, engagement or score promotion) leave the setter queue at their next stage change, handoff, scout or recompute. They stay visible until one of those runs, because there is no backfill. Count them per tenant with `docs/audits/setter-review-hold-impact.sql` before deploying.
+2. **Admin "assign to setter"** (`POST` in `routes/api.js`) on a held prospect still records the assignment and touchpoint, but returns `setter_visible: false`. Tenant 10 already worked this way.
+3. **Reply or engagement promotion** (Brevo webhook) no longer exposes held prospects. Outbound to held prospects was already blocked, so this mainly affects inbound replies.
+4. **Review-only `contact_now` imports** (LA Endeavors / Levi tenant 21 and any other tenant using the review-only import) can no longer reach the setter queue through handoff. An operator must clear the review hold first. There is currently no non-Anchor clearing path, and that is intended.
+5. **Max spreadsheet proposals** set the hold when an email or phone is edited. In any non-Anchor tenant using them, those accounts now leave the setter queue until reviewed.
 
 ## Remaining risks
 
@@ -123,4 +165,5 @@ Proposed fix, for separate approval: treat `ao_outreach_review_required = true` 
 4. Run the read-only audit with `--expect-database=pulseforge_production` and confirm the checkpoint: 29/10, 0 qualified, 0 setter-visible, 0 outreach, 1 claim.
 5. Run the migration precheck, then apply the migration (plan above), then re-run the audit.
 6. Complete all of the above before **Mon 2026-11-30 00:15Z**, when `levi-week-2026-11-30` is claimed by the GitHub weekly job or the next startup.
-7. Decide R8 separately, before any `setter_handoff` run for client 21.
+7. Before deploying, run `docs/audits/setter-review-hold-impact.sql` (read only) and review per-tenant `held_visible_now` and `held_in_setter_pipeline`. Those rows leave setter queues at their next visibility evaluation.
+8. Until the R8 gate is deployed, do not run `setter_handoff` for any tenant with `held_pre_fix_exposed > 0`.
