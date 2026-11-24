@@ -597,6 +597,7 @@ async function authorizeScheduledOutreachSend(input = {}, opts = {}) {
   const store = opts.scheduleStore || new PostgresScheduleStore(opts.pool || defaultPool);
   const tenantId = tenantKey(input.tenantId);
   if (!tenantId) throw schedulerError('tenant_required', 'tenantId is required.');
+  require('../utils/tenantPilotPolicy').assertTenantAllows(tenantId, 'outbound', { channel: 'scheduled_email' });
   if (!input.prospectId) throw schedulerError('prospect_required', 'prospectId is required.');
   if (!input.outreachAssetId) throw schedulerError('outreach_asset_required', 'outreachAssetId is required.');
   if (!input.sendingIdentityId) throw schedulerError('sending_identity_required', 'sendingIdentityId is required.');
@@ -694,6 +695,10 @@ const BLOCKED_SEQUENCE_STATES = new Set([
 async function evaluateSchedulingEligibility(schedule, opts = {}) {
   const store = opts.scheduleStore;
   const mailboxStore = opts.mailboxStore;
+
+  if (require('../utils/tenantPilotPolicy').isPilotTenant(schedule && schedule.tenantId)) {
+    return { eligible: false, action: 'reject', reason: 'tenant_pilot_policy_denied' };
+  }
 
   if (!schedule.scheduledFor) {
     return { eligible: false, action: 'reject', reason: 'scheduled_for_required' };

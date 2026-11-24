@@ -45,7 +45,7 @@ describe('Max semantic generalization evaluation', { concurrency: false }, () =>
     const scenarios = new Set(engineRun.grades.map((g) => String(g.scenario).replace(/^E\//, '')));
     for (const s of ['A', 'B', 'C', 'D', 'F']) assert.ok(scenarios.has(s), `scenario ${s} missing`);
     assert.ok(engineRun.grades.some((g) => String(g.scenario).startsWith('E/')), 'cross-tenant scenarios missing');
-    assert.deepEqual([...new Set(engineRun.grades.map((g) => g.tenant))].sort(), ['10', '21', '33']);
+    assert.deepEqual([...new Set(engineRun.grades.map((g) => g.tenant))].sort(), ['10', '27', '33']);
     assert.ok(engineRun.grades.length >= 45, `only ${engineRun.grades.length} graded turns`);
   });
 

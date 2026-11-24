@@ -1,7 +1,8 @@
 'use strict';
 
 const { createHash } = require('node:crypto');
-const { evaluateProspect, approvedCriteria, TENANT_ID } = require('./leviScoutProductionContract');
+const { evaluateProspect, authorityCriteria, TENANT_ID } = require('./leviScoutProductionContract');
+const { composeRecordReview } = require('./leviScoutMaxReview');
 
 const VERSION = 1;
 const MAX_CANDIDATES = 20;
@@ -22,7 +23,7 @@ function validateAuthority(input) {
     || input.version !== VERSION || input.kind !== 'levi_scout_research_only' || input.tenantId !== String(TENANT_ID)
     || !/^[a-zA-Z0-9_.:-]{1,120}$/.test(input.cycleId || '')
     || !/^[a-zA-Z0-9_.:-]{1,120}$/.test(input.approvalRef || '')
-    || !approvedCriteria(input.criteria)
+    || !authorityCriteria(input.criteria)
     || !input.limits || !Number.isSafeInteger(input.limits.maxCandidates) || input.limits.maxCandidates < 1
     || input.limits.maxCandidates > MAX_CANDIDATES
     || !Number.isSafeInteger(input.limits.maxProviderRequests) || input.limits.maxProviderRequests < 0
@@ -41,7 +42,20 @@ function assertEnvironment(authority, env = process.env) {
   }
 }
 
+function metadataOf(row) {
+  const value = row && row.acquisition_metadata;
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try { return JSON.parse(value); } catch (_) { return {}; }
+}
+
 function identityKey(row) {
+  const metadata = metadataOf(row);
+  // Property-record signals stay entity-keyed so later public phones do not
+  // create a second identity and a duplicate persist.
+  if (metadata.sourceType === 'property_record_signal') {
+    return `entity:${String(row.name || row.company || '').trim().toLowerCase()}|${String(row.service_area_match || row.location || '').trim().toLowerCase()}`;
+  }
   const email = String(row.email || '').trim().toLowerCase();
   if (email) return `email:${email}`;
   const phone = String(row.phone || '').replace(/\D/g, '');
@@ -76,8 +90,14 @@ async function runResearchOnlyCycle({ authority: raw, env = process.env, deps })
       const duplicate = existing.has(key) || seen.has(key);
       seen.add(key);
       const evaluation = evaluateProspect({ ...row, duplicate_of: duplicate ? 'existing' : null }, { criteria: authority.criteria });
+      const review = composeRecordReview({
+        candidate: row,
+        evaluation,
+        criteria: authority.criteria,
+      });
       return Object.freeze({ candidate: row, identityKey: key, classification: evaluation.classification,
         qualified: evaluation.qualified, blockers: Object.freeze([...evaluation.blockers]),
+        review, bucket: review.bucket,
         outreachAuthorized: false, campaignEnrollmentAuthorized: false, setterVisible: false,
         aoOutreachReviewRequired: true, source: 'scout_research_only' });
     });
@@ -85,13 +105,17 @@ async function runResearchOnlyCycle({ authority: raw, env = process.env, deps })
       authorityHash, records: Object.freeze(records) });
     diagnostic = { status: 'completed', tenantId: String(TENANT_ID), cycleId: authority.cycleId,
       discovered: discovered.length, persisted: Number(saved?.persisted || 0),
+      mergedSameIdentity: Number(saved?.merged || 0), skippedExisting: Number(saved?.skipped || 0),
       qualified: records.filter(row => row.qualified).length,
       classifications: records.reduce((out, row) => ({ ...out, [row.classification]: (out[row.classification] || 0) + 1 }), {}),
       duplicateBlocked: records.filter(row => row.blockers.includes('duplicate')).length,
-      outreachAttempted: false };
+      researchCandidates: records.filter(row => row.bucket === 'research_candidate').length,
+      qualifiedProspects: records.filter(row => row.bucket === 'qualified_prospect').length,
+      verifiableBusinessContacts: records.filter(row => row.review && row.review.verifiableBusinessContact).length,
+      outreachAttempted: false, paidProvidersUsed: false };
   } catch (error) {
     diagnostic = { status: 'failed', tenantId: String(TENANT_ID), cycleId: authority.cycleId,
-      reason: error.code || 'levi_research_cycle_failed', outreachAttempted: false };
+      reason: error.code || 'levi_research_cycle_failed', outreachAttempted: false, paidProvidersUsed: false };
   }
   await deps.recordDiagnostic(diagnostic);
   if (diagnostic.status === 'failed') fail(diagnostic.reason);

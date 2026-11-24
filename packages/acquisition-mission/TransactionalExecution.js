@@ -183,6 +183,16 @@ async function executeMissionStage(input = {}) {
   const tenantId = input.tenantId;
   const specialist = asText(input.specialist) || null;
   const stage = asText(input.stage) || null;
+  // Defense in depth behind the router: a prospecting-only pilot tenant never
+  // commits a Scout, Paige or Emmett stage, whichever caller reaches TME.
+  if (['scout', 'paige', 'emmett'].includes(String(specialist || '').toLowerCase())) {
+    const policy = require('../../utils/tenantPilotPolicy');
+    if (policy.isPilotTenant(tenantId)) {
+      throw Object.assign(planningError(policy.CODE,
+        'This workspace is a prospecting-only pilot: specialist execution is not permitted.'),
+      { tenantId: policy.normalizeTenant(tenantId), specialist, stage, statusCode: 403 });
+    }
+  }
   const transactionId = asText(input.transactionId) || newId('tme');
   const startedAt = Date.now();
   const store = engine.store;

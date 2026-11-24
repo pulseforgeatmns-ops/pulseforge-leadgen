@@ -5,6 +5,7 @@ const { extractDealClaims } = require('../packages/max/workspace/ProspectDealCla
 const TENANT_ID = 21;
 const PROPOSED_MIN_AMOUNT = 5000;
 const PROPOSED_MAX_AMOUNT = 20000;
+const RESEARCH_SOURCE = 'scout_research_only';
 
 function metadataOf(row) {
   const value = row && row.acquisition_metadata;
@@ -41,6 +42,18 @@ function approvedCriteria(input) {
   return { minAmount: input.minAmount, maxAmount: input.maxAmount };
 }
 
+function unverifiedBlueprintCriteria(input) {
+  if (!input || input.approved !== false || input.source !== 'approved_blueprint') return null;
+  if (Object.prototype.hasOwnProperty.call(input, 'minAmount') || Object.prototype.hasOwnProperty.call(input, 'maxAmount')) return null;
+  const keys = Object.keys(input);
+  if (keys.length !== 2 || !keys.includes('approved') || !keys.includes('source')) return null;
+  return { approved: false, source: 'approved_blueprint' };
+}
+
+function authorityCriteria(input) {
+  return approvedCriteria(input) ? input : unverifiedBlueprintCriteria(input);
+}
+
 function amountInRange(claim, criteria) {
   if (!claim || !criteria) return false;
   if (Number.isFinite(claim.amount)) return claim.amount >= criteria.minAmount && claim.amount <= criteria.maxAmount;
@@ -56,7 +69,8 @@ function evaluateProspect(row = {}, options = {}) {
   const sources = sourceReferences(row, metadata);
   const blockers = [];
   const category = String(metadata.category || row.category || row.job_title || '').toLowerCase();
-  const contactPath = Boolean(row.email || row.phone || row.linkedin_url || metadata.profileUrl);
+  const publicContact = Boolean(metadata.contactResearch && metadata.contactResearch.verifiable);
+  const contactPath = Boolean(row.email || row.phone || row.linkedin_url || metadata.profileUrl || publicContact);
   const location = Boolean(row.service_area_match || row.company_location || metadata.projectLocation);
   const duplicateClear = !row.duplicate_of && metadata.duplicate !== true && metadata.duplicateOf == null;
   const suppressed = row.do_not_contact === true || metadata.suppressed === true;
@@ -96,6 +110,9 @@ function evaluateProspect(row = {}, options = {}) {
       evidencePublishedAt: metadata.evidenceDate || null,
       evidenceImportedAt: metadata.importedAt || row.created_at || null,
       sourceType,
+      permitDoesNotEstablishIntent: sourceType === 'property_record_signal' || metadata.permitDoesNotEstablishIntent === true,
+      verifiableBusinessContact: publicContact,
+      signalLayers: Array.isArray(metadata.signals) ? metadata.signals.map(item => item && item.layer).filter(Boolean) : [],
       duplicateClear,
       suppressionClear: !suppressed,
       securityKnown: Boolean(claims.claims.security),
@@ -128,4 +145,4 @@ function weeklyProduction(rows = [], now = new Date(), options = {}) {
   return [...weeks.values()].sort((a, b) => b.weekOf.localeCompare(a.weekOf));
 }
 
-module.exports = { TENANT_ID, PROPOSED_MIN_AMOUNT, PROPOSED_MAX_AMOUNT, approvedCriteria, evaluateProspect, weeklyProduction };
+module.exports = { TENANT_ID, PROPOSED_MIN_AMOUNT, PROPOSED_MAX_AMOUNT, RESEARCH_SOURCE, approvedCriteria, unverifiedBlueprintCriteria, authorityCriteria, evaluateProspect, weeklyProduction };

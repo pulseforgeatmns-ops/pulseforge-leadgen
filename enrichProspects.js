@@ -129,6 +129,8 @@ async function hunterDomainSearch(domain) {
 }
 
 async function enrichProspectRow(row, clientId) {
+  // Pilot tenants (utils/tenantPilotPolicy) never reach Hunter.
+  require('./utils/anchorResearchProviderPause').assertPilotPaidResearchAllowed('hunter', clientId);
   const prospectId = row.prospect_id;
   const companyName = row.company_name || 'Unknown';
   const domain = normalizeDomain(row.domain || row.website);

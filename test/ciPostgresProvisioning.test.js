@@ -153,8 +153,17 @@ test('on a host with a real PostgreSQL install, the runner-image path is taken',
 const workflows = () => fs.readdirSync(WORKFLOWS).filter(f => /\.ya?ml$/.test(f))
   .map(f => [f, fs.readFileSync(path.join(WORKFLOWS, f), 'utf8')]);
 
+// One-shot Railway→Render cutover installs postgresql-client-18 from PGDG so
+// pg_dump matches production 18. It is not application CI; the shared action
+// still owns provisioning for every normal workflow.
+const DIRECT_APT_POSTGRES_EXEMPT = new Set(['railway-final-export.yml']);
+
 test('no workflow installs PostgreSQL with apt directly; the shared action owns provisioning', () => {
   for (const [file, text] of workflows()) {
+    if (DIRECT_APT_POSTGRES_EXEMPT.has(file)) {
+      assert.match(text, /apt-get\s+install[^\n]*\bpostgresql\b/, file);
+      continue;
+    }
     assert.doesNotMatch(text, /apt-get\s+install[^\n]*\bpostgresql\b/, file);
   }
   const action = fs.readFileSync(path.join(ROOT, '.github/actions/setup-postgres-environment/action.yml'), 'utf8');

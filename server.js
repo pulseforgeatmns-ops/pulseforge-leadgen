@@ -59,6 +59,7 @@ const { ensureAnchorPortalSchema } = require('./utils/anchorPortalSchema');
 const {
   applyLaEndeavorsWorkspaceCorrection,
 } = require('./utils/laEndeavorsWorkspaceCorrection');
+const { startLeviScoutWeeklyClock } = require('./services/leviScoutSchedule');
 const stripeWebhookRouter = require('./routes/stripeWebhook');
 const { ensureSignalSchema } = require('./packages/signal-v1');
 
@@ -1055,6 +1056,23 @@ try {
         }
       })
       .catch(e => console.error('[startup] LA Endeavors workspace correction error:', e.message));
+    // Tenant-21 research-only Scout is independently gated by
+    // SCOUT_LEVI_RESEARCH_ONLY_ENABLED. It must keep its weekly clock even
+    // when PF_DISABLE_BACKGROUND_WORKERS=1 leaves Signal/Mira/outbound off.
+    startLeviScoutWeeklyClock({
+      run: ({ cycleId, now, env }) => require('./services/leviScoutProductionRunner').runLeviScoutProductionCycle({
+        db: pool, env, now, cycleId,
+      }),
+    })
+      .then(result => {
+        if (!result || !result.started) return;
+        if (result.armed) {
+          console.log('[startup] Levi Scout weekly research clock started (independent of background workers).');
+        } else {
+          console.log('[startup] Levi Scout weekly research clock scheduled (research-only flag off; independent of background workers).');
+        }
+      })
+      .catch(e => console.error('[startup] Levi Scout weekly clock error:', e.message));
     console.log(`\n🔷 Pulseforge Lead Engine Server`);
     console.log(`─────────────────────────────────`);
     console.log(`   http://localhost:${PORT}`);

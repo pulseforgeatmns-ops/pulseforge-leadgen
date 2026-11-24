@@ -1,6 +1,6 @@
 'use strict';
 const { loadRecoveryState, assertRecoveryLeaf } = require('../services/anchorEmailRecovery');
-const { anchorOutreachReviewRequired, assertAnchorOutreachReviewCleared } = require('./anchorOutreachReview');
+const { anchorOutreachReviewRequired, assertAnchorOutreachReviewCleared, assertTenantOutreachPermitted } = require('./anchorOutreachReview');
 
 // Channel-specific restriction. Never use this guard for email eligibility or
 // clear it when a prospect changes stage, phone number, owner, or import source.
@@ -18,6 +18,7 @@ function callSuppressionError() {
 // Re-read tenant-scoped state immediately before dispatch; a queued snapshot is
 // not authorization. Missing identity, missing records and read errors fail shut.
 async function assertCallAllowed(db, prospectId, clientId, { channel = 'call' } = {}) {
+  assertTenantOutreachPermitted(clientId, { channel, prospectId });
   if (!prospectId || !Number.isInteger(Number(clientId)) || Number(clientId) <= 0) {
     throw callSuppressionError();
   }
@@ -44,6 +45,8 @@ function callLockKey(prospectId, clientId) {
 // suppression wins and prevents dispatch, or provider handoff finishes before
 // suppression commits. Calls already handed to a provider are not recalled.
 async function withCallAuthorization(pool, identities, dispatch, { channel = 'call', context, command } = {}) {
+  // Prospecting-only pilot tenants never reach an email, SMS or call provider.
+  for (const identity of identities || []) assertTenantOutreachPermitted(identity && identity.clientId, { channel });
   const ordered = [...new Map(identities.map(({ prospectId, clientId }) => [
     callLockKey(prospectId, clientId), { prospectId, clientId },
   ])).entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);

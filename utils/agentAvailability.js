@@ -3,6 +3,8 @@ const pool = require('../db');
 const AGENT_ALIASES = {
   scout: 'scout',
   scout_agent: 'scout',
+  scout_levi: 'scout_levi',
+  scoutlevi: 'scout_levi',
   email: 'emmett',
   email_agent: 'emmett',
   emmett: 'emmett',

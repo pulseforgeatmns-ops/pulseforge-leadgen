@@ -23,11 +23,27 @@ function normalizeReason(reason) {
   return reason;
 }
 
+// P0 safety invariant (all tenants): a prospect that still requires a separate
+// outreach review is never setter-visible, whatever its score, review state or
+// visibility reason (manual and engagement included). Tenant 10 additionally
+// treats an unknown flag or a held same-company sibling as held.
+function outreachReviewHeld(row) {
+  return row?.ao_outreach_review_required === true || anchorOutreachReviewRequired(row);
+}
+
+// SQL twin of outreachReviewHeld for the bulk recompute. to_jsonb keeps it
+// valid on schemas that predate the column.
+function outreachReviewHeldSql(alias) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(alias)) throw new Error('Invalid prospect SQL alias');
+  return `(COALESCE((to_jsonb(${alias})->>'ao_outreach_review_required')::boolean, false) = true
+            OR NOT ${anchorOutreachReviewSql(alias)})`;
+}
+
 function isHardExcluded(row, { stageStatus } = {}) {
   const status = String(row?.status || '').trim().toLowerCase();
   return TERMINAL_PROSPECT_STATUSES.has(status) ||
     Boolean(row?.do_not_contact) ||
-    anchorOutreachReviewRequired(row) ||
+    outreachReviewHeld(row) ||
     (stageStatus != null && String(stageStatus).trim().toLowerCase() === 'dead');
 }
 
@@ -133,7 +149,7 @@ async function recomputeSetterVisibility(db, {
         CASE
           WHEN COALESCE(status, '') IN ('dead', 'disqualified', 'bounced', 'do_not_email')
             OR COALESCE(do_not_contact, false) = true
-            OR NOT ${anchorOutreachReviewSql('prospects')}
+            OR ${outreachReviewHeldSql('prospects')}
             THEN false
           WHEN $2::boolean = true
             AND COALESCE(setter_visible, false) = true
@@ -145,7 +161,7 @@ async function recomputeSetterVisibility(db, {
         CASE
           WHEN COALESCE(status, '') IN ('dead', 'disqualified', 'bounced', 'do_not_email')
             OR COALESCE(do_not_contact, false) = true
-            OR NOT ${anchorOutreachReviewSql('prospects')}
+            OR ${outreachReviewHeldSql('prospects')}
             THEN 'hard_exclusion'
           WHEN $2::boolean = true
             AND COALESCE(setter_visible, false) = true
@@ -188,5 +204,7 @@ module.exports = {
   isHardExcluded,
   passesSoftGate,
   recomputeSetterVisibility,
+  outreachReviewHeld,
+  outreachReviewHeldSql,
   setSetterVisibility,
 };

@@ -6,6 +6,7 @@
  */
 
 const scoutAcquisition = require('../../../services/scoutAcquisitionIntelligence');
+const { maybeHandleLeviScoutReviewTurn } = require('./LeviScoutReviewContext');
 const { classifyCognitiveMode } = require('../specialistDelegation/CognitiveMode');
 const { mayEnterSpecialistPath } = require('../specialistDelegation/RetrievalGate');
 const { buildStructuredResponse } = require('./WorkspaceTypes');
@@ -53,6 +54,12 @@ function shouldHandleScoutAcquisition(input = {}) {
   } catch (_) {
     /* classifier unavailable — fall through */
   }
+  try {
+    const { isOperationalReadRequest } = require('./OperationalReadIntent');
+    if (isOperationalReadRequest(question, { session: input.session })) return false;
+  } catch (_) {
+    /* classifier unavailable — fall through */
+  }
   const context = {
     ...(input.session && input.session.context),
     ...(input.context || {}),
@@ -66,21 +73,32 @@ function shouldHandleScoutAcquisition(input = {}) {
     scoutAcquisition.looksLikeFollowUp(question) ||
     scoutAcquisition.looksLikeExplainPriority(question) ||
     scoutAcquisition.looksLikeInvestigationInspection(question);
+  const tenantId = resolveTenantId(input);
+  // Tenant 21 may enter Scout without the words "levi scout", but only for
+  // discovery of new borrowers/prospects — never for reads of records already
+  // in the workspace (P0 #1110: "Brief me on my prospects").
+  const leviIntent = String(tenantId) === '21'
+    && /\b(?:find|discover(?:y|ed|ing)?|search\s+for|look\s+for|locate|source|prospect\s+for)\b/i.test(question)
+    && /\b(?:prospects?|borrowers?|leads?)\b/i.test(question);
   if (
     !mayEnterSpecialistPath(mode, {
       question,
       session: input.session,
       context,
     }) &&
-    !reusePriorWork
+    !reusePriorWork &&
+    !leviIntent
   ) {
     return false;
   }
   const enabled = context.enabledAgents || context.enabled_agents;
-  if (Array.isArray(enabled) && !enabled.map(String).includes('scout')) {
-    return false;
+  if (Array.isArray(enabled) && String(tenantId) !== '21') {
+    const names = enabled.map(String);
+    if (!names.includes('scout') && !names.includes('scout_levi')) {
+      return false;
+    }
   }
-  return scoutAcquisition.looksLikeAcquisitionQuestion(question, context);
+  return scoutAcquisition.looksLikeAcquisitionQuestion(question, context) || leviIntent;
 }
 
 /**
@@ -94,6 +112,12 @@ async function maybeHandleScoutAcquisitionTurn(input = {}) {
 
   const tenantId = resolveTenantId(input);
   if (!tenantId) return null;
+
+  if (String(tenantId) === '21') {
+    const review = await maybeHandleLeviScoutReviewTurn({ ...input, forceLeviReview: true });
+    if (review) return review;
+    return null;
+  }
 
   const session = input.session || null;
   const sessionCtx =
