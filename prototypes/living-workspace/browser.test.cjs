@@ -21,9 +21,10 @@ async function setup(t, touch = false) {
 const state = page => page.evaluate(() => window.livingWorkspace.getState());
 test('desktop field, mouse move/resize, docking, focus, Max commands and tenant reset', async t => {
   const { page, url, errors, requests } = await setup(t);
-  assert.equal(await page.$$eval('#cdSpatialOrbit [data-domain-id]', nodes => nodes.length), 4);
-  assert.equal(await page.$$eval('#cdIntelConnections path', nodes => nodes.length), 4);
-  await page.click('#cdSpatialOrbit [data-domain-id="acquisition"]');
+  assert.equal(await page.$$eval('#cdSpatialOrbit button[data-domain-id]', nodes => nodes.length), 4);
+  assert.equal(await page.$$eval('#cdIntelConnections .domain-link', nodes => nodes.length), 4);
+  await page.evaluate(() => { const w = window.livingWorkspace; for (const p of w.getState().panels) w.dispatch({ ...w.scope(), type: 'close_panel', source: 'human', panelId: p.id }); });
+  await page.click('#cdSpatialOrbit button[data-domain-id="acquisition"]');
   await page.waitForSelector('.panel');
   const panel = '.panel';
   const grip = await page.$(`${panel} .grip`), box = await grip.boundingBox();
@@ -32,7 +33,7 @@ test('desktop field, mouse move/resize, docking, focus, Max commands and tenant 
   const resize = await page.$(`${panel} .resize`), rb = await resize.boundingBox();
   await page.mouse.move(rb.x + 15, rb.y + 15); await page.mouse.down(); await page.mouse.move(rb.x + 95, rb.y + 65, { steps: 5 }); await page.mouse.up();
   assert.ok((await state(page)).panels[0].width > 400);
-  await page.click('[aria-label="Dock right"]'); assert.equal((await state(page)).panels[0].dock, 'right');
+  await page.click('[aria-label="Dock secondary slot"]'); assert.equal((await state(page)).panels[0].dock, 'right');
   await page.click('.maximize'); assert.equal((await state(page)).panels[0].maximized, true);
   await page.click('.maximize'); assert.equal((await state(page)).panels[0].maximized, false);
   await page.click('#max-orb'); await page.type('#question', 'investigate acquisition'); await page.click('#ask button');
@@ -51,6 +52,8 @@ test('desktop field, mouse move/resize, docking, focus, Max commands and tenant 
 test('touch list selection, keyboard resize, panel switching and reduced motion', async t => {
   const { page, errors } = await setup(t, true);
   await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
+  await page.evaluate(() => { const w = window.livingWorkspace; for (const p of w.getState().panels) w.dispatch({ ...w.scope(), type: 'close_panel', source: 'human', panelId: p.id }); });
+  await page.tap('#cdViewToggle');
   await page.tap('#cdSpatialList [data-domain-id="content"]');
   assert.equal((await state(page)).selected, 'harbor-content');
   await page.tap('.panel-body button'); assert.equal((await state(page)).panels.length, 2);
@@ -67,7 +70,7 @@ test('touch list selection, keyboard resize, panel switching and reduced motion'
   assert.ok((await state(page)).panels[1].height > beforeTouch);
   await page.tap('.panel-tabs button');
   await page.waitForFunction(() => window.livingWorkspace.getState().focused === 'domain:harbor-content');
-  assert.equal(await page.$eval('#max-orb', n => getComputedStyle(n).animationName), 'none');
+  assert.equal(await page.$eval('#max-orb .filaments', n => getComputedStyle(n).animationName), 'none');
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   assert.deepEqual(errors, []);
 });
@@ -76,4 +79,48 @@ test('server rejects APIs, non-GET methods, repository paths, and blocks connect
   for (const path of ['/api/v1/command-deck', '/server.js', '/store.test.mjs', '/.env', '/%2e%2e/server.js']) assert.equal((await fetch(url + path)).status, 404);
   assert.equal((await fetch(url + '/', { method: 'POST' })).status, 405);
   assert.match((await fetch(url)).headers.get('content-security-policy'), /connect-src 'none'/);
+});
+
+test('desktop and tablet: field and two panels fit viewport, layout transitions preserve context', async t => {
+  const { page, errors } = await setup(t);
+  for (const [width, height] of [[1440, 900], [1180, 820], [1024, 768], [1280, 800]]) {
+    await page.setViewport({ width, height });
+    await page.reload();
+    await page.waitForFunction(() => window.livingWorkspace?.getState().panels.length === 2);
+    const before = await state(page);
+    const layout = await page.evaluate(() => {
+      const boxes = [document.getElementById('field'), ...document.querySelectorAll('.panel')].map(n => {
+        const r = n.getBoundingClientRect(); return { x: r.x, y: r.y, right: r.right, bottom: r.bottom, width: r.width, height: r.height };
+      });
+      return { boxes, width: innerWidth, height: innerHeight, scrollHeight: document.documentElement.scrollHeight, scrollWidth: document.documentElement.scrollWidth };
+    });
+    assert.equal(layout.scrollHeight, height); assert.equal(layout.scrollWidth, width);
+    for (const box of layout.boxes) { assert.ok(box.x >= 0 && box.y >= 0 && box.right <= width + 1 && box.bottom <= height + 1); assert.ok(box.width > 250 && box.height > 200); }
+    assert.ok(layout.boxes[0].right <= layout.boxes[1].x);
+    assert.ok(layout.boxes[1].bottom <= layout.boxes[2].y);
+    for (const mode of ['expanded', 'minimized', 'docked']) {
+      await page.click(`[data-field-mode="${mode}"]`);
+      const after = await state(page);
+      assert.equal(after.fieldMode, mode); assert.equal(after.selected, before.selected);
+      assert.deepEqual(after.trail, before.trail); assert.deepEqual(after.panels, before.panels);
+    }
+    await page.click('#zoom-in'); assert.ok((await state(page)).fieldView.zoom > 1);
+    await page.click('#reset-field'); assert.equal((await state(page)).fieldView.zoom, 1);
+    await page.focus('#cdSpatialCanvas'); await page.keyboard.press('ArrowRight');
+    assert.equal((await state(page)).fieldView.x, 25);
+    await page.click('#reset-field');
+    const fieldBox = await (await page.$('#cdSpatialCanvas')).boundingBox();
+    await page.mouse.move(fieldBox.x + fieldBox.width / 2, fieldBox.y + 20);
+    await page.mouse.down(); await page.mouse.move(fieldBox.x + fieldBox.width / 2 + 35, fieldBox.y + 45); await page.mouse.up();
+    assert.equal((await state(page)).fieldView.x, 35);
+    await page.click('#reset-field');
+    assert.equal(await page.$eval('#max-orb', n => n.textContent.trim()), '');
+    if (process.env.WORKSPACE_SCREENSHOTS) {
+      const fs = require('node:fs'); fs.mkdirSync(process.env.WORKSPACE_SCREENSHOTS, { recursive: true });
+      await page.screenshot({ path: `${process.env.WORKSPACE_SCREENSHOTS}/workspace-${width}x${height}.png` });
+      await page.click('[data-field-mode="expanded"]');
+      await page.screenshot({ path: `${process.env.WORKSPACE_SCREENSHOTS}/expanded-${width}x${height}.png` });
+    }
+  }
+  assert.deepEqual(errors, []);
 });

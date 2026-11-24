@@ -3,12 +3,9 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const localFiles = ['index.html', 'app.mjs', 'store.mjs', 'fixtures.mjs', 'workspace.css'];
+const localFiles = ['index.html', 'app.mjs', 'store.mjs', 'fixtures.mjs', 'workspace.css', 'spatial-field.mjs'];
 const files = new Map(localFiles.map(name => ['/' + name, path.join(__dirname, name)]));
 files.set('/', path.join(__dirname, 'index.html'));
-for (const name of ['command-deck/spatial-deck.js', 'command-deck/command-deck.css', 'shared/tokens.css']) {
-  files.set('/' + name, path.join(__dirname, '../../public', name));
-}
 const mime = { '.html': 'text/html', '.mjs': 'text/javascript', '.js': 'text/javascript', '.css': 'text/css' };
 function createServer() {
   return http.createServer((req, res) => {

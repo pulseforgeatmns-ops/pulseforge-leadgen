@@ -1,3 +1,4 @@
+import { createSpatialField } from './spatial-field.mjs';
 import { fixtures } from './fixtures.mjs';
 import { createWorkspace, tools } from './store.mjs';
 
@@ -20,18 +21,23 @@ function button(text, label, action) {
 function openRecord(record, source = 'human', scope = workspace.scope()) {
   send('select_entity', { recordId: record.id }, source, scope);
   send('open_tool', { toolId: 'domain', recordId: record.id }, source, scope);
+  send('dock_panel', { panelId: `domain:${record.id}`, dock: 'left' }, source, scope);
+  send('set_field_mode', { mode: 'docked' }, source, scope);
 }
 const renderers = {
   domain(body, record) {
     body.append(element('p', record.domain.toUpperCase(), 'eyebrow'), element('h2', record.name), element('p', record.summary));
+    const facts = element('dl', '', 'record-facts');
+    for (const [label, value] of [['Record', record.id], ['Status', 'Awaiting review'], ['Source', 'Local fixture']]) { facts.append(element('dt', label), element('dd', value)); }
+    body.append(facts);
     body.append(button('Investigate →', `Investigate ${record.name}`, () => {
       send('select_entity', { recordId: record.id });
-      send('open_tool', { toolId: 'investigation', recordId: record.id });
+      openInvestigation(record);
     }));
   },
   investigation(body, record) {
     body.append(element('p', 'EVIDENCE · FIXTURE', 'eyebrow'), element('h2', record.name));
-    const list = element('ol'); record.evidence.forEach(text => list.append(element('li', text)));
+    const list = element('ol', '', 'evidence-list'); record.evidence.forEach(text => list.append(element('li', text)));
     body.append(list, element('p', 'This investigation is shared with the simulated Max conversation.'));
     body.append(button('Select this record', `Select ${record.name}`, () => send('select_entity', { recordId: record.id })));
   },
@@ -45,7 +51,7 @@ function gesture(handle, node, panelId, resize) {
     send('focus_panel', { panelId });
     const area = $('work-area').getBoundingClientRect();
     const rect = node.getBoundingClientRect();
-    const fromRight = resize && node.dataset.dock === 'right' && innerWidth > 700;
+    const fromRight = false;
     const start = { x: event.clientX, y: event.clientY, left: rect.left - area.left, top: rect.top - area.top };
     let final = null;
     handle.setPointerCapture(event.pointerId);
@@ -65,7 +71,10 @@ function gesture(handle, node, panelId, resize) {
       if (e.pointerId !== event.pointerId) return;
       handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', finish); handle.removeEventListener('pointercancel', finish);
       if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
-      if (final && e.type !== 'pointercancel') send(resize ? 'resize_panel' : 'move_panel', { panelId, ...final }, 'human', scope);
+      if (final && e.type !== 'pointercancel') {
+        if (resize) send('move_panel', { panelId, x: start.left, y: start.top }, 'human', scope);
+        send(resize ? 'resize_panel' : 'move_panel', { panelId, ...final }, 'human', scope);
+      }
       render(workspace.getState());
     }
     handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', finish); handle.addEventListener('pointercancel', finish);
@@ -89,7 +98,7 @@ function makePanel(panel) {
     if (focused) panelNodes.get(focused)?.focus(); else $('cdViewToggle').focus();
   }));
   const controls = element('nav', '', 'panel-controls'); controls.setAttribute('aria-label', 'Panel layout');
-  for (const dock of ['left', 'right', 'floating']) controls.append(button(dock === 'floating' ? 'Float' : `Dock ${dock}`, `Dock ${dock}`, () => send('dock_panel', { panelId: panel.id, dock })));
+  for (const dock of ['left', 'right', 'floating']) controls.append(button(dock === 'floating' ? 'Float' : dock === 'left' ? 'Primary' : 'Secondary', dock === 'floating' ? 'Dock floating' : `Dock ${dock === 'left' ? 'primary' : 'secondary'} slot`, () => send('dock_panel', { panelId: panel.id, dock })));
   const maximize = button('Focus', 'Focus or restore panel', () => send('maximize_panel', { panelId: panel.id }));
   maximize.className = 'maximize'; controls.append(maximize);
   const body = element('div', '', 'panel-body'); renderers[panel.toolId](body, recordFor(panel.recordId));
@@ -99,6 +108,8 @@ function makePanel(panel) {
     const delta = { ArrowLeft: [-20, 0], ArrowRight: [20, 0], ArrowUp: [0, -20], ArrowDown: [0, 20] }[event.key];
     if (!delta) return; event.preventDefault();
     const rect = node.getBoundingClientRect();
+    const area = $('work-area').getBoundingClientRect();
+    send('move_panel', { panelId: panel.id, x: rect.left - area.left, y: rect.top - area.top });
     send('resize_panel', { panelId: panel.id, width: rect.width + delta[0], height: rect.height + delta[1] });
   });
   node.append(header, controls, body, resize);
@@ -107,9 +118,20 @@ function makePanel(panel) {
   gesture(grip, node, panel.id, false); gesture(resize, node, panel.id, true);
   return node;
 }
-const tabs = element('nav', '', 'panel-tabs'); tabs.setAttribute('aria-label', 'Open panels'); $('work-area').before(tabs);
+function openInvestigation(record) {
+  send('select_entity', { recordId: record.id });
+  send('open_tool', { toolId: 'investigation', recordId: record.id });
+  send('dock_panel', { panelId: `investigation:${record.id}`, dock: 'right' });
+  send('set_field_mode', { mode: 'docked' });
+}
+const tabs = element('nav', '', 'panel-tabs'); tabs.setAttribute('aria-label', 'Open panels'); $('work-area').after(tabs);
 function render(state) {
   const fixture = fixtures[state.tenantId];
+  $('work-area').dataset.fieldMode = state.fieldMode;
+  $('empty-tools').hidden = state.panels.length > 0 || state.fieldMode !== 'docked';
+  document.querySelectorAll('[data-field-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.fieldMode === state.fieldMode)));
+  spatial.render(fixture, state);
+  $('zoom-level').textContent = `${Math.round(state.fieldView.zoom * 100)}%`;
   for (const [id, node] of panelNodes) if (!state.panels.some(p => p.id === id)) { node.remove(); panelNodes.delete(id); }
   const area = $('work-area').getBoundingClientRect();
   for (const panel of state.panels) {
@@ -117,10 +139,26 @@ function render(state) {
     if (!node) { node = makePanel(panel); panelNodes.set(panel.id, node); $('panels').append(node); }
     node.dataset.focused = String(state.focused === panel.id);
     node.dataset.dock = panel.dock; node.dataset.maximized = String(panel.maximized);
-    const width = Math.min(panel.maximized ? area.width : panel.width, area.width);
-    const height = Math.min(panel.maximized ? area.height : panel.height, area.height);
-    const x = panel.maximized || panel.dock === 'left' ? 0 : panel.dock === 'right' ? area.width - width : Math.min(panel.x, area.width - width);
-    const y = panel.maximized || panel.dock !== 'floating' ? 0 : Math.min(panel.y, area.height - height);
+    const compact = innerWidth <= 700;
+    const split = state.fieldMode === 'minimized' ? 0 : Math.round(area.width * .57) + 10;
+    const docked = panel.dock !== 'floating' && !panel.maximized;
+    const slots = ['left', 'right'].filter(dock => state.panels.some(p => p.dock === dock));
+    const index = slots.indexOf(panel.dock);
+    const two = slots.length > 1;
+    let width = Math.min(panel.width, area.width), height = Math.min(panel.height, area.height);
+    let x = Math.min(panel.x, area.width - width), y = Math.min(panel.y, area.height - height);
+    if (docked && !compact) {
+      if (state.fieldMode === 'minimized') {
+        width = two ? (area.width - 10) / 2 : area.width; height = area.height - 48;
+        x = index * (width + 10); y = 48;
+      } else {
+        width = area.width - split; height = two ? (area.height - 10) / 2 : area.height;
+        x = split; y = index * (height + 10);
+      }
+    }
+    if (compact) { width = area.width; x = 0; y = 0; }
+    if (panel.maximized) { width = area.width; height = area.height; x = 0; y = 0; }
+    node.hidden = state.fieldMode === 'expanded' || (compact && state.focused !== panel.id);
     Object.assign(node.style, { width: `${width}px`, height: `${height}px`, left: `${x}px`, top: `${y}px`, right: 'auto', zIndex: state.focused === panel.id ? '20' : '10' });
     node.querySelector('.maximize').textContent = panel.maximized ? 'Restore' : 'Focus';
     node.querySelector('.maximize').setAttribute('aria-pressed', String(panel.maximized));
@@ -132,6 +170,7 @@ function render(state) {
     tabs.dataset.signature = signature;
     tabs.replaceChildren(...state.panels.map(p => {
       const selectPanel = () => {
+        if (workspace.getState().fieldMode === 'expanded') send('set_field_mode', { mode: 'docked' });
         if (workspace.getState().focused !== p.id) send('focus_panel', { panelId: p.id });
         panelNodes.get(p.id)?.focus({ preventScroll: true });
       };
@@ -160,24 +199,21 @@ function render(state) {
   }
   $('history').replaceChildren(...state.history.slice(-12).reverse().map(h => element('li', `${h.source === 'max' ? 'Max' : 'You'} · ${h.type.replaceAll('_', ' ')}${h.recordId ? ' · ' + recordFor(h.recordId).name : ''}`)));
 }
-function renderField() {
-  const overview = structuredClone(fixtures[workspace.getState().tenantId].overview);
-  overview.listFallback = overview.domains.map(d => ({ ...d, summary: d.summary.compressed, intelligence: d.intelligence.active }));
-  window.SpatialDeck.render(overview);
-}
-window.SpatialDeck.init({ escapeHtml: text => String(text).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]), prefersReducedMotion: () => matchMedia('(prefers-reduced-motion: reduce)').matches });
-$('field').addEventListener('click', event => {
-  const target = event.target.closest('[data-domain-id]');
-  if (!target) return;
-  event.stopImmediatePropagation();
-  const record = fixtures[workspace.getState().tenantId].records.find(r => r.domain === target.dataset.domainId);
-  if (record) openRecord(record);
-}, true);
+const spatial = createSpatialField({ host: $('cdSpatialCanvas'), orbit: $('cdSpatialOrbit'), connections: $('cdIntelConnections'), list: $('cdSpatialList'), dispatch: workspace.dispatch, scope: workspace.scope, onOpen: openRecord, onInvestigate: openInvestigation });
+$('cdViewToggle').addEventListener('click', () => {
+  const list = !$('cdSpatialCanvas').hidden;
+  $('cdSpatialCanvas').hidden = list; $('cdSpatialList').hidden = !list;
+  $('cdViewToggle').textContent = list ? 'Spatial view' : 'List view';
+  $('cdViewToggle').setAttribute('aria-pressed', String(list));
+});
+document.querySelectorAll('[data-field-mode]').forEach(b => b.addEventListener('click', () => send('set_field_mode', { mode: b.dataset.fieldMode })));
+for (const [id, delta] of [['zoom-in', .1], ['zoom-out', -.1]]) $(id).addEventListener('click', () => send('set_field_view', { ...workspace.getState().fieldView, zoom: workspace.getState().fieldView.zoom + delta }));
+$('reset-field').addEventListener('click', () => send('set_field_view', { x: 0, y: 0, zoom: 1 }));
+$('open-context').addEventListener('click', () => openDemonstration());
 $('tenant').addEventListener('change', () => {
-  window.SpatialDeck.clear();
   $('question').value = '';
   workspace.switchTenant($('tenant').value);
-  renderField(); render(workspace.getState());
+  render(workspace.getState());
   $('status').textContent = `Switched to ${fixtures[$('tenant').value].name}. Previous context cleared.`;
 });
 function toggleMax() { send('toggle_max'); if (workspace.getState().maxOpen) $('question').focus(); else $('max-orb').focus(); }
@@ -207,7 +243,12 @@ $('ask').addEventListener('submit', event => {
   } else reply = 'I can simulate opening a domain and its investigation. Try “investigate acquisition”, “arrange”, or “close panels”.';
   send('message', { text: reply }, 'max', scope);
 });
-workspace.subscribe(render); renderField(); render(workspace.getState());
+function openDemonstration() {
+  const record = fixtures[workspace.getState().tenantId].records.find(r => r.domain === 'acquisition');
+  openRecord(record); openInvestigation(record);
+}
+workspace.subscribe(render); render(workspace.getState());
+openDemonstration();
 new ResizeObserver(() => render(workspace.getState())).observe($('work-area'));
 // Explicit prototype inspection seam for deterministic tests, not a production API.
 window.livingWorkspace = workspace;

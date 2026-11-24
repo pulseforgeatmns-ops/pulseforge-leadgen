@@ -14,7 +14,7 @@ export function createWorkspace(fixtures, initialTenant = Object.keys(fixtures)[
     if (!Object.hasOwn(fixtures, tenantId)) throw new Error('Unknown fixture tenant');
     generation++;
     state = { tenantId, generation, selected: null, trail: [], panels: [], focused: null,
-      history: [], messages: [], maxOpen: false };
+      history: [], messages: [], maxOpen: false, fieldMode: 'docked', fieldView: { x: 0, y: 0, zoom: 1 } };
     emit();
   }
   switchTenant(initialTenant);
@@ -25,6 +25,14 @@ export function createWorkspace(fixtures, initialTenant = Object.keys(fixtures)[
     const record = fixtures[state.tenantId].records.find(r => r.id === command.recordId);
     const panel = next.panels.find(p => p.id === command.panelId);
     switch (command.type) {
+      case 'set_field_mode':
+        if (!['expanded', 'docked', 'minimized'].includes(command.mode)) return false;
+        next.fieldMode = command.mode;
+        break;
+      case 'set_field_view':
+        if (![command.x, command.y, command.zoom].every(Number.isFinite)) return false;
+        next.fieldView = { x: clamp(command.x, -500, 500), y: clamp(command.y, -500, 500), zoom: clamp(command.zoom, .7, 1.6) };
+        break;
       case 'select_entity':
         if (!record) return false;
         next.selected = record.id;
