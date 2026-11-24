@@ -1,6 +1,11 @@
 const express = require('express');
 const Anthropic = require('../utils/meteredAnthropic').forAgent('cron_summary');
 const router = express.Router();
+// MAX-P0-002: legacy shared-secret routes fail closed when CRON_SECRET is unset/empty.
+// Loaded lazily and given this module's process.env (route harnesses inject both).
+function legacyCronSecretValid(secret) {
+  return require('../utils/cronAuth').legacyCronSecretValid(secret, process.env);
+}
 // PF-CLARITY-001: bearer-authenticated POST only, two flags + tenant grant fail closed.
 router.post('/cron/clarity-weekly-review', (req,res) => require('../services/clarityJobs').createClarityCronHandler()(req,res));
 // No missing-secret bypass and no GET mutation. These stay separate from legacy
@@ -327,7 +332,7 @@ async function handlePennyDailyReviewCron(req, res) {
 
 async function handleExecuteAnchorOneOutboundCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
@@ -353,7 +358,7 @@ async function handleExecuteAnchorOneOutboundCron(req, res) {
 
 async function handleInspectAnchorCanonicalOutboundCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
@@ -371,7 +376,7 @@ async function handleInspectAnchorCanonicalOutboundCron(req, res) {
 
 async function handleContinueAnchorStrScoutInvestigationCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
@@ -399,7 +404,7 @@ async function handleContinueAnchorStrScoutInvestigationCron(req, res) {
 
 async function handleRecoverAnchorCanonicalOutboundCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   const recover = ['1', 'true', 'yes'].includes(
@@ -424,7 +429,7 @@ async function handleRecoverAnchorCanonicalOutboundCron(req, res) {
 
 async function handleSeedDirectMailAoCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   const apply = ['1', 'true', 'yes'].includes(String(req.query.apply || req.body?.apply || '').toLowerCase());
@@ -444,7 +449,7 @@ async function handleSeedDirectMailAoCron(req, res) {
 
 async function handleScoutExpansionCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   const clientId = normalizeClientId(req.query.client_id || req.query.clientId);
@@ -477,7 +482,7 @@ function parsePulseHealthJson(text) {
 
 async function handlePulseHealthCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
@@ -655,7 +660,7 @@ Respond with valid JSON only:
 
 async function handleScoutPlacesDiagnostic(req, res) {
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
@@ -793,7 +798,7 @@ router.get('/cron/continue-anchor-str-scout-investigation', handleContinueAnchor
 
 async function handleTenantOutreachExecutorCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
@@ -814,7 +819,7 @@ router.get('/cron/tenant-outreach-executor', handleTenantOutreachExecutorCron);
 
 async function handleTenantMailboxPollCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
@@ -834,7 +839,7 @@ router.get('/cron/tenant-mailbox-poll', handleTenantMailboxPollCron);
 
 async function handleSignalShadowCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   if (!process.env.DATABASE_URL) {
@@ -924,7 +929,7 @@ router.post('/cron/:agent', async (req, res) => {
     return handleLeviScoutCron(req, res);
   }
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   await runCronAgent(agent, res, { ...req.query, ...(req.body || {}) });
@@ -939,7 +944,7 @@ router.get('/cron/:agent', async (req, res) => {
     return handleLeviScoutCron(req, res);
   }
   const secret = req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   await runCronAgent(agent, res, req.query);
