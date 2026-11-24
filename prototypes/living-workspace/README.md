@@ -20,13 +20,28 @@ The **Layouts** menu offers Spatial first, Research, and Review presets, field d
 
 The translucent golden Max sphere opens an explicitly simulated conversation. Try **investigate acquisition**, **investigate content**, **arrange research**, **arrange spatial-first**, **arrange review**, **undo**, **redo**, **save layout My research**, **load layout My research**, **minimize panels**, or **close panels**. Commands only change presentation. There is no natural-language model or production Max connection.
 
+## Orbital spatial field
+
+The field is a solar-system-inspired environment. The champagne **sun** is the active fixture tenant; **Acquisition, Content, Clients and Campaigns** are softly lit planets on tilted elliptical orbits. Fixture priority only chooses the orbit (elevated/urgent sit on the inner, gold-tinted ring and wear a faint planetary ring); nothing is recomputed. Small moon hints show how many business objects each domain holds.
+
+- **Select a planet** to bring it into focus: the camera recentres it, the sun recedes to the left edge (click it to return), sibling planets recede to the right edge, and the domain's fictional business objects (prospects, drafts, clients, campaigns) appear as moons on their own orbit. The Details panel retargets to the domain.
+- **Select a moon** to update the shared selection; the Details and Investigation panels retarget in place (one undoable step each, geometry kept) instead of opening new panels.
+- **Breadcrumbs** (`Tenant › Domain › Object`), the **Overview** button, the sun, or **Escape** inside the field return up a level. Zoom with +/−, the mouse wheel (one undo step once the wheel settles), or reset; drag/arrow keys pan. Focus changes reset the camera.
+- **List view** mirrors the same hierarchy for screen readers and small screens. Planet, moon and sun targets are at least 44 px for touch.
+- Motion is ambient and never moves an idle target: slow orbit-path drift, a 3 px planet float, a breathing corona and starfield, and eased camera transitions on navigation. `prefers-reduced-motion` removes all of it.
+- Max stays the separate translucent golden sphere in the upper-right; it understands `explore acquisition`, `investigate Northgate`, and `overview` through the same dispatcher.
+
+New store commands: `focus_domain { domainId | null }` and `retarget_panel { panelId, recordId }`. Both are layout commands (undoable); orbital focus resets on tenant switch and is never saved in named layouts.
+
+**Minimum panel sizes.** Docked panels never render below 300×220. When another panel would push a region under that, top/bottom rows fold into the side columns, two too-narrow columns merge, and any panels that still do not fit are stacked into the workspace dock (marked ⧉, with a "stacked to keep panels usable" note). The focused panel, then the most recently opened, stay visible; selecting a stacked tab brings it forward.
+
 ## Architecture and scope
 
-- `fixtures.mjs`: two fictional tenants with disjoint record IDs and the existing four-domain overview shape.
+- `fixtures.mjs`: two fictional tenants with disjoint record IDs, the four-domain overview shape, and fictional business objects (`kind: 'object'`) orbiting each domain.
 - `store.mjs`: shared state, registered tool metadata, and a validated command dispatcher. Human controls and simulated Max use the same dispatcher.
 - `app.mjs`: retained tool renderers, pointer/keyboard panel controls, responsive docking, and deterministic simulated conversation.
 - `layout.mjs`: pure responsive geometry for field anchoring, four panel docking regions, floating windows, and focus.
-- `spatial-field.mjs`: prototype-only asymmetric exploration renderer, domain/record connections, pan/zoom, accessible list view, and shared selection.
+- `spatial-field.mjs`: prototype-only orbital renderer (sun, planets, moons, orbit paths), domain focus camera, pan/zoom, accessible list view, and shared selection.
 - `index.html` / `workspace.css`: isolated desktop shell, touch fallback, golden Max presence, and reduced-motion treatment.
 - `server.cjs`: dependency-free static server with an explicit asset allowlist, no application routes, and CSP `connect-src 'none'`.
 
@@ -67,6 +82,6 @@ Adjust `CHROMIUM_PATH` to your installation, or omit it when Puppeteer has a dow
 
 ## Screenshot capture and verification
 
-Set `WORKSPACE_SCREENSHOTS` to an output directory when running `browser.test.cjs` to capture the opening field-plus-two-panels view and expanded field at 1440×900, 1180×820, 1024×768, and 1280×800. It also captures `default-1180x820.png`, `customized-1180x820.png`, and `max-rearranged-1180x820.png` through real UI interactions and a simulated Max command. The test verifies page bounds, non-overlap, selection/trail/panel preservation across all three field modes, pan/zoom, and an unlabeled accessible Max sphere. No screenshots are served by the fixture server.
+Set `WORKSPACE_SCREENSHOTS` to an output directory when running `browser.test.cjs` to capture `orbital-overview-1440x900.png`, `orbital-acquisition-1440x900.png` and `orbital-selected-prospect-1440x900.png` (at 2× scale), plus the opening field-plus-two-panels view and expanded field at 1440×900, 1180×820, 1024×768, and 1280×800. It also captures `default-1180x820.png`, `customized-1180x820.png`, and `max-rearranged-1180x820.png` through real UI interactions and a simulated Max command. The test verifies page bounds, non-overlap, selection/trail/panel preservation across all three field modes, pan/zoom, and an unlabeled accessible Max sphere. No screenshots are served by the fixture server.
 
 This is an interpretation of the supplied visual requirements, not a pixel match to the prior conversation's V0.3 artifact. Remaining limits: fictional records, scripted Max responses, local-device named layouts, in-memory active sessions, and no live collaboration. Docking uses four regions rather than arbitrary nested split trees.

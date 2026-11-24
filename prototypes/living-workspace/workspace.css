@@ -265,14 +265,7 @@ main {
 #cdSpatialCanvas:active {
   cursor:grabbing
 }
-.field-grid {
-  position:absolute;
-  inset:0;
-  pointer-events:none;
-  background-image:radial-gradient(#8b9fb135 .65px,transparent .65px);
-  background-size:24px 24px;
-  mask-image:radial-gradient(ellipse,#0008,transparent 75%)
-}
+
 #cdSpatialOrbit {
   position:absolute;
   inset:0;
@@ -287,130 +280,26 @@ main {
   overflow:visible;
   pointer-events:none
 }
-.domain-link {
-  fill:none;
-  stroke:#8b9fb1;
-  stroke-width:1;
-  vector-effect:non-scaling-stroke;
-  opacity:.6
-}
-.domain-link.selected {
-  stroke:#d5c5a2;
-  stroke-width:1.4;
-  opacity:.9
-}
-.record-link {
-  fill:none;
-  stroke:#8b9fb1;
-  stroke-width:1;
-  stroke-dasharray:2 4;
-  vector-effect:non-scaling-stroke;
-  opacity:.5
-}
-.field-origin {
-  position:absolute;
-  left:48%;
-  top:51%;
-  transform:translate(-50%,-50%);
-  text-align:center;
-  pointer-events:none;
-  white-space:nowrap
-}
-.field-origin i {
-  display:block;
-  margin:0 auto 10px;
-  width:10px;
-  height:10px;
-  transform:rotate(45deg);
-  border:1px solid #d8caa9;
-  box-shadow:0 0 18px #e0d5bb55;
-  background:#e0d5bb1a
-}
-.field-origin span {
-  display:block;
-  font-size:7px;
-  letter-spacing:.17em;
-  color:#8b9fb1
-}
-.field-origin strong {
-  display:block;
-  font-size:12px;
-  font-weight:400;
-  margin-top:5px;
-  color:#ddd0b4
-}
-.spatial-node {
-  position:absolute;
-  transform:translate(-50%,-50%);
-  width:24%;
-  max-width:176px;
-  min-width:108px;
-  padding:13px 12px;
-  text-align:left;
-  border:1px solid #243e60;
-  border-radius:10px;
-  background:linear-gradient(130deg,#16263bee,#0e1826ee);
-  box-shadow:0 10px 35px #0004;
-  transition:background .2s,border-color .2s
-}
-.spatial-node .node-symbol {
-  font-size:24px;
-  color:#d6c7a4;
-  display:block;
-  line-height:1.1;
-  margin-bottom:7px
-}
-.spatial-node small {
-  display:block;
-  font-size:7px;
-  letter-spacing:.1em;
-  color:#8b9fb2;
-  white-space:nowrap
-}
-.spatial-node strong {
-  display:block;
-  font-size:14px;
-  font-weight:500;
-  margin:5px 0
-}
-.node-summary {
-  display:block;
-  font-size:10px;
-  color:#8b9fb1
-}
-.spatial-node.priority-elevated {
-  border-color:#81705b;
-  background:linear-gradient(135deg,#1a2c45,#101c2c);
-  box-shadow:0 8px 35px #d8bf7a0c
-}
-.priority-elevated .node-symbol,.priority-elevated small {
+
+
+
+
+
+
+
+
+
+
+
+
+
+.priority-elevated small {
   color:var(--gold)
 }
-.spatial-node.priority-urgent {
-  border-color:var(--gold);
-  box-shadow:0 0 30px #dec58f20
-}
-.spatial-node.selected {
-  outline:1px solid #ddd0b3;
-  outline-offset:4px;
-  border-color:#c8b384
-}
-.spatial-node:hover {
-  background:#1d324d;
-  box-shadow:0 12px 40px #0005
-}
-.record-satellite {
-  position:absolute;
-  transform:translate(-50%,-50%);
-  font-size:9px;
-  padding:4px 8px;
-  min-height:25px;
-  color:#98aaba;
-  border-color:#213a5b;
-  background:#0e1724db;
-  white-space:nowrap;
-  border-radius:4px
-}
+
+
+
+
 #cdSpatialList {
   height:100%;
   overflow:auto;
@@ -759,15 +648,9 @@ footer summary {
   .field-header {
   padding:10px
 }
-.spatial-node {
-  padding:10px
-}
-.spatial-node strong {
-  font-size:12px
-}
-.node-summary {
-  font-size:9px
-}
+
+
+
 .field-bottom>span {
   max-width:130px
 }
@@ -786,19 +669,10 @@ footer summary {
   .field-header p {
   display:none
 }
-.spatial-node {
-  padding:8px
-}
-.spatial-node .node-symbol {
-  font-size:18px;
-  margin-bottom:2px
-}
-.node-summary {
-  display:none
-}
-.record-satellite {
-  font-size:8px
-}
+
+
+
+
 .panel-body h2 {
   font-size:14px
 }
@@ -877,24 +751,11 @@ main {
 #empty-tools {
   display:none
 }
-.record-satellite {
-  font-size:8px;
-  max-width:110px;
-  overflow:hidden
-}
-.spatial-node {
-  width:27%;
-  min-width:95px
-}
-.spatial-node small {
-  font-size:6px
-}
-.field-origin strong {
-  font-size:10px
-}
-.field-origin span {
-  font-size:6px
-}
+
+
+
+
+
 
 }
 @media(prefers-reduced-motion:reduce) {
@@ -906,49 +767,37 @@ main {
 
 }
 
-.field-origin {
-  transform:translate(-50%,-5px)
-}
-.spatial-node[data-domain-id=content] {
-  width:22%
-}
-.spatial-node[data-domain-id=campaigns] {
-  width:21%;
-  background:linear-gradient(130deg,#132133,#0d1622)
-}
-.spatial-node[data-domain-id=acquisition] {
-  width:27%;
-  max-width:190px
-}
-.spatial-node[data-domain-id=clients] {
-  width:23%
-}
+
+
+
+
+
 /* Navy/gold application system and configurable layout controls. */
 :root { --bg:#091727; --surface:#102337; --border:#34485c; --text:#eee9df; --muted:#a6b6c5; --accent:#dec99e; --gold:#ead5aa; }
 body { background:var(--bg); color:var(--text); }
 .topbar { background:#0b1a2b; border-color:#314357; }
 .brand { color:#f1eadc; }
-button, select { color:#e9e5dc; background:#142b40; border-color:#3c5265; }
+button,select { color:#e9e5dc; background:#142b40; border-color:#3c5265; }
 button:hover { background:#223e52; border-color:#aa9773; }
 button[aria-pressed=true] { color:#f0dbad; background:#3a352c; border-color:#a58d61; }
 button:disabled { opacity:.45; cursor:default; }
 .panel { background:#102235; border-color:#3c5062; }
 .panel[data-focused=true] { border-color:#b59b70; }
 .panel header { background:#152b40; border-color:#354a5c; }
-.panel-body, .node-summary { color:#b6c3cf; }
-.panel-body h2, .spatial-node strong { color:#f0e9dc; }
-.panel-body .eyebrow, .eyebrow { color:#dfc99b; }
+.panel-body { color:#b6c3cf; }
+.panel-body h2 { color:#f0e9dc; }
+.panel-body .eyebrow,.eyebrow { color:#dfc99b; }
 #field { background:radial-gradient(ellipse at 55% 50%,#31577730,transparent 65%),#0b1b2e; border-color:#344a5f; }
-.spatial-node { background:linear-gradient(130deg,#1d364d,#102235); border-color:#466076; }
-.spatial-node[data-domain-id=campaigns] { background:linear-gradient(130deg,#183148,#102135); }
-.spatial-node.priority-elevated { background:linear-gradient(135deg,#353a3b,#182d40); border-color:#aa9068; }
-.spatial-node.selected { outline-color:#cdb27f; border-color:#cdb27f; }
-.spatial-node small { color:#b8c6d3; }
-.priority-elevated small, .priority-elevated .node-symbol { color:#edd6a6; }
-.domain-link { stroke:#829fb5; }.domain-link.selected { stroke:#dfc491; }
-.record-satellite { color:#c3cfda; background:#13293d; border-color:#435c70; }
+
+
+
+
+
+.priority-elevated small { color:#edd6a6; }
+
+
 .field-bottom { background:#0f2235; color:#b0becd; border-color:#31485e; }
-.field-header p, footer, .trail { color:#b0bdcb; }
+.field-header p,footer,.trail { color:#b0bdcb; }
 .panel-body button { background:#393629; border-color:#89764f; color:#efdbb0; }
 .panel-controls { position:relative; overflow:visible; align-items:center; }
 .panel-controls select { font-size:10px; min-height:26px; padding:2px 6px; max-width:115px; }
@@ -957,7 +806,7 @@ button:disabled { opacity:.45; cursor:default; }
 .adjust-pad { display:flex; flex-wrap:wrap; gap:3px; max-width:240px; padding:4px 0; }
 .adjust-pad button { min-width:36px; min-height:30px; }
 .layout-actions { display:flex; align-items:center; gap:4px; margin-left:auto; }
-.layout-actions>button, #layout-menu>summary { font-size:10px; min-height:27px; }
+.layout-actions>button,#layout-menu>summary { font-size:10px; min-height:27px; }
 #layout-menu>summary { cursor:pointer; background:#172d41; border:1px solid #3b5063; border-radius:5px; padding:4px 9px; }
 .layout-popover { position:absolute; right:12px; top:97px; width:320px; max-height:calc(100dvh - 140px); overflow:auto; z-index:150; background:#102336; border:1px solid #9a835d; border-radius:8px; padding:16px; box-shadow:0 16px 50px #0009; display:grid; gap:12px; }
 .layout-popover label { display:flex; gap:8px; align-items:center; color:#c8d2dd; font-size:11px; justify-content:space-between; }
@@ -968,13 +817,128 @@ button:disabled { opacity:.45; cursor:default; }
 #layout-status { color:#b4c4d2; font-size:10px; margin:0; }
 .presets { display:flex; gap:4px; }
 .presets button { font-size:10px; }
-.wide-field .spatial-node { width:16%; max-width:170px; padding:7px 10px; border-radius:8px; }
-.wide-field .spatial-node .node-symbol { float:left; font-size:22px; margin-right:8px; margin-bottom:0; }
-.wide-field .spatial-node small { font-size:7px; }
-.wide-field .spatial-node strong { font-size:13px; margin:3px 0; }
-.wide-field .spatial-node .node-summary { font-size:9px; clear:both; }
-.wide-field .field-origin span, .wide-field .field-origin strong { display:none; }
-.wide-field .record-satellite { min-height:22px; padding:2px 8px; }
+
+
+
+
+
+
+
 #empty-tools { inset:55% 0 0; padding:12px; justify-content:flex-start; background:#102336; border-color:#53677c; }
 @media(max-width:1100px) { .workspace-bar .muted { display:none; } .workspace-bar { gap:5px; }.field-modes button { padding:3px 6px; }.panel-body h2 { font-size:15px; } }
-@media(max-width:700px) { .workspace-bar { height:92px; flex-wrap:wrap; }.layout-actions { margin-left:0; }.layout-popover { top:142px; right:8px; max-width:calc(100vw - 16px); }.panel-controls select { min-height:34px; }.adjust-pad button { min-height:36px; }.wide-field .spatial-node { min-width:90px; }.topbar select { max-width:125px; } }
+@media(max-width:700px) { .workspace-bar { height:92px; flex-wrap:wrap; }.layout-actions { margin-left:0; }.layout-popover { top:142px; right:8px; max-width:calc(100vw - 16px); }.panel-controls select { min-height:34px; }.adjust-pad button { min-height:36px; }.topbar select { max-width:125px; } }
+
+/* ── Orbital spatial field ───────────────────────────────────────────────
+   Deep navy space, restrained champagne light. Bodies are lit from the sun
+   (planets) or their planet (moons) via --lx/--ly. Motion is ambient only:
+   targets never travel while idle; reduced motion removes all of it. */
+#field { background:radial-gradient(ellipse at 50% 55%,#1b3552 0%,#0c1c2f 48%,#070f1b 100%); }
+.field-header { padding:8px 12px; align-items:center; gap:10px; }
+#field-crumbs ol { list-style:none; display:flex; align-items:center; gap:2px; margin:0; padding:0; min-width:0; flex-wrap:wrap; }
+#field-crumbs li { display:flex; align-items:center; font-size:11px; color:#d9c9a5; white-space:nowrap; }
+#field-crumbs li+li::before { content:'›'; color:#6f8499; margin:0 7px; }
+#field-crumbs button { background:transparent; border:0; padding:4px 2px; min-height:30px; color:#a9b9c8; letter-spacing:.02em; }
+#field-crumbs button:hover { color:#ecd8ad; background:transparent; text-decoration:underline; text-underline-offset:3px; }
+#field-crumbs [aria-current] { color:#efdcb2; }
+#field-crumbs li:first-child>*::before { content:'☉ '; color:#e5c98f; }
+.field-header-actions { display:flex; gap:4px; flex-shrink:0; }
+.field-header-actions button { font-size:10px; }
+#return-overview { color:#ecd8ad; border-color:#7d6a4a; background:#1b2a36; }
+.work-area[data-field-mode=minimized] #return-overview, .work-area[data-field-mode=minimized] #field-crumbs li:not(:first-child) { display:none; }
+#cdSpatialCanvas { background:none; }
+.field-stars, .field-atmosphere { position:absolute; inset:0; pointer-events:none; }
+.field-stars { opacity:.75; background-image:
+  radial-gradient(1px 1px at 7% 18%,#e9e3d4cc,transparent 60%), radial-gradient(1px 1px at 19% 72%,#c7d3e0aa,transparent 60%),
+  radial-gradient(1.2px 1.2px at 31% 34%,#f3e2bccc,transparent 60%), radial-gradient(1px 1px at 44% 86%,#c7d3e099,transparent 60%),
+  radial-gradient(1px 1px at 57% 12%,#e9e3d4aa,transparent 60%), radial-gradient(1.3px 1.3px at 68% 63%,#f3e2bcbb,transparent 60%),
+  radial-gradient(1px 1px at 79% 27%,#c7d3e0aa,transparent 60%), radial-gradient(1px 1px at 91% 78%,#e9e3d4aa,transparent 60%),
+  radial-gradient(1px 1px at 3% 92%,#c7d3e088,transparent 60%), radial-gradient(1px 1px at 96% 8%,#e9e3d499,transparent 60%),
+  radial-gradient(.8px .8px at 26% 8%,#ffffff88,transparent 60%), radial-gradient(.8px .8px at 85% 48%,#ffffff77,transparent 60%),
+  radial-gradient(.8px .8px at 49% 47%,#ffffff55,transparent 60%), radial-gradient(.8px .8px at 12% 45%,#ffffff66,transparent 60%);
+  animation:star-breathe 14s ease-in-out infinite alternate; }
+.field-atmosphere { background:radial-gradient(ellipse 38% 46% at 50% 52%,#e6c98f14,transparent 70%),radial-gradient(ellipse 60% 40% at 18% 80%,#2a5a7a18,transparent 70%),radial-gradient(ellipse 45% 35% at 85% 20%,#3b4f7a14,transparent 70%); transition:background .8s; }
+[data-level=domain]>.field-atmosphere { background:radial-gradient(ellipse 30% 50% at 50% 52%,#9fb6cf12,transparent 70%),radial-gradient(ellipse 18% 40% at 4% 50%,#e6c98f14,transparent 70%); }
+@keyframes star-breathe { to { opacity:.45; } }
+#cdSpatialOrbit { transform-origin:50% 50%; }
+#cdIntelConnections { position:absolute; inset:0; width:100%; height:100%; overflow:visible; pointer-events:none; }
+.orbit-path { fill:none; stroke:#9fb3c8; stroke-opacity:.2; stroke-width:1; stroke-dasharray:1 7; stroke-linecap:round; animation:orbit-drift 60s linear infinite; transition:stroke-opacity .6s; }
+.orbit-path[data-ring="0"] { stroke:#e2c890; stroke-opacity:.34; }
+[data-level=domain] .orbit-path { stroke-opacity:.08; }
+@keyframes orbit-drift { to { stroke-dashoffset:-160; } }
+.tether, .object-orbit { fill:none; opacity:0; transition:opacity .6s; }
+.tether { stroke:#e2c890; stroke-width:1; stroke-dasharray:2 5; }
+.object-orbit { stroke:#e2c890; stroke-opacity:.45; stroke-width:1; }
+[data-level=domain] .tether { opacity:.35; }
+[data-level=domain] .object-orbit { opacity:1; }
+.sun, .planet, .moon { position:absolute; transform:translate(-50%,-50%); width:max(44px,var(--size)); height:max(44px,var(--size)); padding:0; min-height:0; border:0; border-radius:50%; background:transparent; color:inherit;
+  transition:left .75s cubic-bezier(.22,.8,.26,1),top .75s cubic-bezier(.22,.8,.26,1),width .75s cubic-bezier(.22,.8,.26,1),height .75s cubic-bezier(.22,.8,.26,1),opacity .5s; }
+.sun:hover, .planet:hover, .moon:hover { background:transparent; }
+.sun-body, .planet-body, .moon-body { position:absolute; left:50%; top:50%; width:var(--size); height:var(--size); transform:translate(-50%,-50%); border-radius:50%; transition:width .75s cubic-bezier(.22,.8,.26,1),height .75s cubic-bezier(.22,.8,.26,1),box-shadow .3s,filter .3s; }
+.body-label { position:absolute; left:50%; top:calc(50% + var(--size) / 2 + 7px); transform:translateX(-50%); pointer-events:none; white-space:nowrap; text-align:center; line-height:1.25; }
+.body-label strong { display:block; font-weight:500; font-size:12px; color:#efe8da; text-shadow:0 1px 6px #050b14; }
+.body-label small { display:block; margin-top:2px; font-size:8px; letter-spacing:.12em; color:#9fb1c2; text-transform:uppercase; }
+/* Sun: the active tenant. */
+.sun { z-index:5; }
+.sun-body { background:radial-gradient(circle at 44% 40%,#fff8e6 0%,#f6e3b7 24%,#d9b276 56%,#8a6431 86%,#4a3418 100%);
+  box-shadow:0 0 calc(var(--size) * .45) #edd29b55,0 0 calc(var(--size) * 1.1) #e6c58a24,inset -6px -8px 18px #5a3d1a66; }
+.sun-body::before { content:''; position:absolute; inset:-55%; border-radius:50%; background:radial-gradient(circle,#f1d9a330 0%,#f1d9a314 38%,transparent 68%); animation:corona 7s ease-in-out infinite alternate; }
+@keyframes corona { to { transform:scale(1.08); opacity:.7; } }
+.sun .body-label small { color:#c9b58d; }
+.sun[data-state=distant] .body-label { top:calc(50% + var(--size) / 2 + 5px); }
+.sun[data-state=distant] .body-label small { display:none; }
+.sun[data-state=distant] .body-label strong { font-size:10px; color:#d9c9a5; }
+.sun[data-state=distant] .sun-body::before { inset:-35%; }
+/* Planets: business domains, each with a restrained tint. */
+.planet { --hi:#c7d3df; --mid:#4d6782; --lo:#14263a; --halo:#9fb6cf; }
+.planet[data-domain-id=acquisition] { --hi:#f3e2bd; --mid:#a68a5c; --lo:#2c2a26; --halo:#e2c890; }
+.planet[data-domain-id=content] { --hi:#cfdcef; --mid:#5d7899; --lo:#16263b; --halo:#9cb5d6; }
+.planet[data-domain-id=clients] { --hi:#c9e1df; --mid:#4f7f84; --lo:#11272c; --halo:#8dbcbc; }
+.planet[data-domain-id=campaigns] { --hi:#dad3ea; --mid:#6d6890; --lo:#1b1a30; --halo:#ada6cf; }
+.planet-body { background:radial-gradient(circle at var(--lx,40%) var(--ly,40%),var(--hi) 0%,var(--mid) 30%,var(--lo) 68%,#050b14 100%);
+  box-shadow:0 0 calc(var(--size) * .4) color-mix(in srgb,var(--halo) 22%,transparent),inset 0 0 0 1px color-mix(in srgb,var(--hi) 18%,transparent);
+  animation:float 9s ease-in-out infinite alternate; }
+.planet[data-domain-id=content] .planet-body { animation-delay:-2s; } .planet[data-domain-id=clients] .planet-body { animation-delay:-5s; } .planet[data-domain-id=campaigns] .planet-body { animation-delay:-7s; }
+@keyframes float { to { transform:translate(-50%,calc(-50% - 3px)); } }
+.planet-glyph { position:absolute; inset:0; display:grid; place-items:center; font-size:calc(var(--size) * .3); color:#fff4dccc; text-shadow:0 0 8px #0008; opacity:.75; }
+/* Elevated/urgent priority wears a faint champagne ring: closer orbit, quiet emphasis. */
+.planet.priority-elevated .planet-body::after, .planet.priority-urgent .planet-body::after { content:''; position:absolute; left:50%; top:50%; width:175%; height:44%; transform:translate(-50%,-50%) rotate(-14deg); border-radius:50%; border:1px solid #e8cf9c66; border-top-color:#e8cf9c22; box-shadow:0 0 10px #e8cf9c1c; pointer-events:none; }
+.planet:hover .planet-body { filter:brightness(1.14); box-shadow:0 0 calc(var(--size) * .6) color-mix(in srgb,var(--halo) 38%,transparent),inset 0 0 0 1px color-mix(in srgb,var(--hi) 30%,transparent); }
+.planet:hover .body-label strong { color:#f3dfb4; }
+.planet.selected .planet-body { box-shadow:0 0 calc(var(--size) * .55) color-mix(in srgb,var(--halo) 34%,transparent),0 0 0 2px #0b1b2e,0 0 0 3px #e3c992aa; }
+.planet[data-state=focus] .body-label strong { font-size:15px; }
+.planet[data-state=recede] { opacity:.62; }
+.planet[data-state=recede]:hover, .planet[data-state=recede]:focus-visible { opacity:1; }
+.planet[data-state=recede] .planet-glyph { display:none; }
+.planet[data-label-side=left] .body-label { left:auto; right:calc(50% + var(--size) / 2 + 9px); top:50%; transform:translateY(-50%); text-align:right; }
+.planet[data-label-side=left] .body-label strong { font-size:10px; color:#c5d0da; }
+.planet[data-label-side=left] .body-label small { display:none; }
+.moon-hint { position:absolute; width:var(--size); height:var(--size); transform:translate(-50%,-50%); border-radius:50%; background:#ecd9b0; box-shadow:0 0 6px #ecd9b088; opacity:.7; pointer-events:none; transition:left .75s,top .75s,opacity .4s; }
+.moon-hint[data-visible=false] { opacity:0; }
+/* Moons: business objects orbiting the focused domain. */
+.moon { z-index:20; }
+.moon-body { background:radial-gradient(circle at var(--lx,40%) var(--ly,40%),#fbf1da 0%,#c9b38a 34%,#4b4a4a 74%,#0b121c 100%); box-shadow:0 0 14px #e6cd9a26; animation:float 7s ease-in-out infinite alternate; }
+.moon:nth-of-type(2n) .moon-body { animation-delay:-3s; }
+.moon[data-visible=false] { opacity:0; pointer-events:none; visibility:hidden; transition:left .5s,top .5s,width .5s,height .5s,opacity .35s,visibility 0s linear .5s; }
+.moon[data-visible=true] { transition-delay:.12s; }
+.moon[data-label-side=right] .body-label { left:calc(50% + var(--size) / 2 + 9px); top:50%; transform:translateY(-50%); text-align:left; }
+.moon[data-label-side=left] .body-label { left:auto; right:calc(50% + var(--size) / 2 + 9px); top:50%; transform:translateY(-50%); text-align:right; }
+.moon .body-label strong { font-size:12px; }
+.moon:hover .moon-body { filter:brightness(1.15); box-shadow:0 0 20px #e6cd9a55; }
+.moon:hover .body-label strong { color:#f3dfb4; }
+.moon.selected .moon-body { box-shadow:0 0 22px #ecd29d77,0 0 0 2px #0b1b2e,0 0 0 3.5px #e8cf9c; }
+.moon.selected .body-label strong { color:#f1dcae; }
+.moon.selected .body-label small { color:#d8c39a; }
+.compact-field .body-label strong { font-size:10px; }
+.compact-field .body-label small { font-size:7px; }
+.compact-field .moon .body-label { max-width:110px; overflow:hidden; text-overflow:ellipsis; }
+#field-summary { letter-spacing:.04em; }
+/* Working panels: orbit lists and stacked-panel note. */
+.orbit-list { display:grid; gap:5px; margin-top:12px; }
+.orbit-list .eyebrow { margin:0 0 2px; }
+.panel-body .orbit-list button { display:block; width:100%; text-align:left; margin:0; background:#132a3e; border-color:#3a5064; color:#d9e1e8; }
+.panel-body .orbit-list button[aria-current] { border-color:#c9ad78; color:#f0dcb0; background:#2a2c2a; }
+.investigation-lede { color:#d8c7a2; }
+.panel-tabs[data-stacked-note]:not([data-stacked-note=""])::after { content:attr(data-stacked-note); font-size:9px; color:#c9b58d; margin-left:6px; white-space:nowrap; }
+#cdSpatialList [data-object-id] { padding-left:22px; }
+#cdSpatialList [data-list-back] { color:#ecd8ad; }
+.settling .sun, .settling .planet, .settling .moon, .settling .moon-hint, .settling .sun-body, .settling .planet-body, .settling .moon-body { transition:none!important; }

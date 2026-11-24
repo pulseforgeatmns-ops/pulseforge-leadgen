@@ -1,6 +1,6 @@
 // Presentation state only. Neither this registry nor commands grant business authority.
 export const tools = Object.freeze({
-  domain: Object.freeze({ title: 'Domain details' }),
+  domain: Object.freeze({ title: 'Details' }),
   investigation: Object.freeze({ title: 'Investigation' }),
 });
 const clone = value => structuredClone(value);
@@ -9,9 +9,9 @@ export function createWorkspace(fixtures, initialTenant = Object.keys(fixtures)[
   let generation = 0;
   let state;
   let past = [], future = [];
-  const layoutKeys = ['panels', 'focused', 'fieldMode', 'fieldView', 'fieldDock', 'fieldRatio', 'savedLayouts'];
+  const layoutKeys = ['panels', 'focused', 'fieldMode', 'fieldView', 'fieldFocus', 'fieldDock', 'fieldRatio', 'savedLayouts'];
   const capture = () => Object.fromEntries(layoutKeys.map(key => [key, clone(state[key])]));
-  const layoutCommands = new Set(['open_tool', 'dock_panel', 'resize_panel', 'move_panel', 'focus_panel', 'maximize_panel', 'close_panel', 'minimize_panel', 'restore_panel', 'set_field_mode', 'set_field_view', 'set_field_dock', 'arrange_layout', 'save_layout', 'load_layout', 'delete_layout']);
+  const layoutCommands = new Set(['open_tool', 'dock_panel', 'resize_panel', 'move_panel', 'focus_panel', 'maximize_panel', 'close_panel', 'minimize_panel', 'restore_panel', 'set_field_mode', 'set_field_view', 'focus_domain', 'retarget_panel', 'set_field_dock', 'arrange_layout', 'save_layout', 'load_layout', 'delete_layout']);
   const storageKey = id => `pulseforge.fixture.layouts.v1.${id}`;
   function validTemplate(t) {
     return t && ['docked', 'expanded', 'minimized'].includes(t.fieldMode)
@@ -39,7 +39,7 @@ export function createWorkspace(fixtures, initialTenant = Object.keys(fixtures)[
     if (!Object.hasOwn(fixtures, tenantId)) throw new Error('Unknown fixture tenant');
     generation++; past = []; future = [];
     state = { tenantId, generation, selected: null, trail: [], panels: [], focused: null,
-      history: [], messages: [], maxOpen: false, fieldMode: 'docked', fieldDock: 'top', fieldRatio: .48, savedLayouts: readLayouts(tenantId), canUndo: false, canRedo: false, storageWarning: false, fieldView: { x: 0, y: 0, zoom: 1 } };
+      history: [], messages: [], maxOpen: false, fieldMode: 'docked', fieldDock: 'top', fieldRatio: .48, savedLayouts: readLayouts(tenantId), canUndo: false, canRedo: false, storageWarning: false, fieldView: { x: 0, y: 0, zoom: 1 }, fieldFocus: null };
     emit();
   }
   switchTenant(initialTenant);
@@ -111,6 +111,24 @@ export function createWorkspace(fixtures, initialTenant = Object.keys(fixtures)[
         if (![command.x, command.y, command.zoom].every(Number.isFinite)) return false;
         next.fieldView = { x: clamp(command.x, -500, 500), y: clamp(command.y, -500, 500), zoom: clamp(command.zoom, .7, 1.6) };
         break;
+      case 'focus_domain': {
+        // Orbital navigation: null returns to the overview. Focus changes recentre the camera.
+        const domainIds = fixtures[state.tenantId].overview.domains.map(d => d.id);
+        if (command.domainId !== null && !domainIds.includes(command.domainId)) return false;
+        if (next.fieldFocus !== command.domainId) next.fieldView = { x: 0, y: 0, zoom: 1 };
+        next.fieldFocus = command.domainId;
+        break;
+      }
+      case 'retarget_panel': {
+        // Point an open tool at another record in place, keeping its geometry and dock.
+        if (!panel || !record) return false;
+        const id = `${panel.toolId}:${record.id}`;
+        if (id === panel.id) { next.focused = id; break; }
+        if (next.panels.some(p => p.id === id)) return false;
+        panel.id = id; panel.recordId = record.id; panel.minimized = false;
+        if (next.focused === command.panelId) next.focused = id;
+        break;
+      }
       case 'select_entity':
         if (!record) return false;
         next.selected = record.id;

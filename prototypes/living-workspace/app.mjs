@@ -21,27 +21,86 @@ function button(text, label, action) {
   const el = element('button', text); el.type = 'button'; el.setAttribute('aria-label', label);
   el.addEventListener('click', action); return el;
 }
-function openRecord(record, source = 'human', scope = workspace.scope()) {
+const domainRecord = (domainId, tenantId = workspace.getState().tenantId) => fixtures[tenantId].records.find(r => r.kind === 'domain' && r.domain === domainId);
+const objectsOf = domainId => fixtures[workspace.getState().tenantId].records.filter(r => r.kind === 'object' && r.domain === domainId);
+const domainLabel = domainId => fixtures[workspace.getState().tenantId].overview.domains.find(d => d.id === domainId)?.label || domainId;
+// Show a record in a tool. An existing docked panel of that tool is retargeted in
+// place (one undoable step, geometry kept) so selection updates the two working
+// panels instead of piling up new ones.
+function showInPanel(toolId, record, dock, source = 'human', scope = workspace.scope()) {
+  const state = workspace.getState();
+  const target = `${toolId}:${record.id}`;
+  if (state.panels.some(p => p.id === target)) {
+    const p = state.panels.find(panel => panel.id === target);
+    if (p.minimized) send('restore_panel', { panelId: target }, source, scope);
+    return send('focus_panel', { panelId: target }, source, scope);
+  }
+  const candidates = state.panels.filter(p => p.toolId === toolId);
+  const reuse = candidates.find(p => p.id === state.focused) || candidates.filter(p => p.dock !== 'floating').at(-1) || candidates.at(-1);
+  if (reuse) return send('retarget_panel', { panelId: reuse.id, recordId: record.id }, source, scope);
+  send('open_tool', { toolId, recordId: record.id }, source, scope);
+  return send('dock_panel', { panelId: target, dock }, source, scope);
+}
+// Bring a domain planet into focus, select its record and show its details.
+function focusDomain(domainId, source = 'human', scope = workspace.scope()) {
+  const record = domainRecord(domainId, scope.tenantId);
+  send('focus_domain', { domainId }, source, scope);
   send('select_entity', { recordId: record.id }, source, scope);
-  send('open_tool', { toolId: 'domain', recordId: record.id }, source, scope);
-  send('dock_panel', { panelId: `domain:${record.id}`, dock: 'left' }, source, scope);
+  showInPanel('domain', record, 'left', source, scope);
+}
+function openRecord(record, source = 'human', scope = workspace.scope()) {
+  if (record.kind === 'object') return selectObject(record, source, scope);
+  focusDomain(record.domain, source, scope);
   send('set_field_mode', { mode: 'docked' }, source, scope);
+}
+// Selecting an orbiting business object updates shared context and both working panels.
+function selectObject(record, source = 'human', scope = workspace.scope()) {
+  send('focus_domain', { domainId: record.domain }, source, scope);
+  send('select_entity', { recordId: record.id }, source, scope);
+  showInPanel('domain', record, 'left', source, scope);
+  showInPanel('investigation', record, 'right', source, scope);
+  if (workspace.getState().fieldMode !== 'docked') send('set_field_mode', { mode: 'docked' }, source, scope);
+}
+function returnToOverview(source = 'human', scope = workspace.scope()) {
+  send('focus_domain', { domainId: null }, source, scope);
+}
+function facts(rows) {
+  const dl = element('dl', '', 'record-facts');
+  for (const [label, value] of rows) dl.append(element('dt', label), element('dd', value));
+  return dl;
+}
+function orbitList(heading, records, current) {
+  const wrap = element('div', '', 'orbit-list');
+  wrap.append(element('p', heading, 'eyebrow'));
+  for (const obj of records) {
+    const b = button(`${obj.name} · ${obj.stage}`, `Select ${obj.type} ${obj.name}`, () => selectObject(obj));
+    if (obj.id === current) b.setAttribute('aria-current', 'true');
+    wrap.append(b);
+  }
+  return wrap;
 }
 const renderers = {
   domain(body, record) {
-    body.append(element('p', record.domain.toUpperCase(), 'eyebrow'), element('h2', record.name), element('p', record.summary));
-    const facts = element('dl', '', 'record-facts');
-    for (const [label, value] of [['Record', record.id], ['Status', 'Awaiting review'], ['Source', 'Local fixture']]) { facts.append(element('dt', label), element('dd', value)); }
-    body.append(facts);
-    body.append(button('Investigate →', `Investigate ${record.name}`, () => {
+    const investigate = button('Investigate →', `Investigate ${record.name}`, () => {
       send('select_entity', { recordId: record.id });
       openInvestigation(record);
-    }));
+    });
+    if (record.kind === 'object') {
+      body.append(element('p', `${record.type.toUpperCase()} · ${domainLabel(record.domain).toUpperCase()}`, 'eyebrow'), element('h2', record.name), element('p', record.summary));
+      body.append(facts([['Stage', record.stage], ...record.facts, ['Source', 'Local fixture']]), investigate);
+      const siblings = objectsOf(record.domain);
+      if (siblings.length > 1) body.append(orbitList(`ALSO ORBITING ${domainLabel(record.domain).toUpperCase()}`, siblings, record.id));
+      return;
+    }
+    body.append(element('p', `DOMAIN · ${record.domain.toUpperCase()}`, 'eyebrow'), element('h2', record.name), element('p', record.summary));
+    body.append(investigate, facts([['Record', record.id], ['Status', 'Awaiting review'], ['Source', 'Local fixture']]));
+    body.append(orbitList('IN ORBIT', objectsOf(record.domain), null));
   },
   investigation(body, record) {
-    body.append(element('p', 'EVIDENCE · FIXTURE', 'eyebrow'), element('h2', record.name));
+    body.append(element('p', record.kind === 'object' ? `EVIDENCE · ${record.type.toUpperCase()} · FIXTURE` : 'EVIDENCE · FIXTURE', 'eyebrow'), element('h2', record.name));
+    if (record.kind === 'object') body.append(element('p', `${record.stage} · ${record.summary}`, 'investigation-lede'));
     const list = element('ol', '', 'evidence-list'); record.evidence.forEach(text => list.append(element('li', text)));
-    body.append(list, element('p', 'This investigation is shared with the simulated Max conversation.'));
+    body.append(list, element('p', 'This investigation is shared with the simulated Max conversation. Nothing here contacts anyone or runs anything.'));
     body.append(button('Select this record', `Select ${record.name}`, () => send('select_entity', { recordId: record.id })));
   },
 };
@@ -131,11 +190,27 @@ function makePanel(panel) {
   gesture(grip, node, panel.id, false); gesture(resize, node, panel.id, true);
   return node;
 }
-function openInvestigation(record) {
-  send('select_entity', { recordId: record.id });
-  send('open_tool', { toolId: 'investigation', recordId: record.id });
-  send('dock_panel', { panelId: `investigation:${record.id}`, dock: 'right' });
-  send('set_field_mode', { mode: 'docked' });
+function openInvestigation(record, source = 'human', scope = workspace.scope()) {
+  send('select_entity', { recordId: record.id }, source, scope);
+  showInPanel('investigation', record, 'right', source, scope);
+  send('set_field_mode', { mode: 'docked' }, source, scope);
+}
+function renderCrumbs(state, fixture) {
+  const selected = recordFor(state.selected);
+  const signature = `${state.tenantId}|${state.fieldFocus}|${state.selected}`;
+  const nav = $('field-crumbs');
+  if (nav.dataset.signature === signature) return;
+  nav.dataset.signature = signature;
+  const items = [];
+  const crumb = (text, label, action) => { const li = element('li'); li.append(action ? button(text, label, action) : element('span', text)); items.push(li); return li; };
+  crumb(fixture.name, `${fixture.name} overview`, state.fieldFocus ? () => returnToOverview() : null);
+  if (state.fieldFocus) {
+    const objectInFocus = selected?.kind === 'object' && selected.domain === state.fieldFocus;
+    crumb(domainLabel(state.fieldFocus), `${domainLabel(state.fieldFocus)} domain`, objectInFocus ? () => focusDomain(state.fieldFocus) : null);
+    if (objectInFocus) crumb(selected.name);
+  }
+  items.at(-1).firstChild.setAttribute('aria-current', 'location');
+  nav.querySelector('ol').replaceChildren(...items);
 }
 const tabs = element('nav', '', 'panel-tabs'); tabs.setAttribute('aria-label', 'Open panels'); $('work-area').after(tabs);
 function render(state) {
@@ -144,6 +219,11 @@ function render(state) {
   $('empty-tools').hidden = state.panels.length > 0 || state.fieldMode !== 'docked';
   document.querySelectorAll('[data-field-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.fieldMode === state.fieldMode)));
   spatial.render(fixture, state);
+  renderCrumbs(state, fixture);
+  $('return-overview').hidden = !state.fieldFocus;
+  $('field-summary').textContent = state.fieldFocus
+    ? `${domainLabel(state.fieldFocus)} · ${objectsOf(state.fieldFocus).length} ${fixture.overview.domains.find(d => d.id === state.fieldFocus).objectPlural} in orbit`
+    : `${fixture.overview.domains.length} domains · Priority sets the orbit`;
   $('zoom-level').textContent = `${Math.round(state.fieldView.zoom * 100)}%`;
   for (const [id, node] of panelNodes) if (!state.panels.some(p => p.id === id)) { node.remove(); panelNodes.delete(id); }
   const area = $('work-area').getBoundingClientRect();
@@ -168,7 +248,9 @@ function render(state) {
     let { x, y, width, height } = layout.panels[panel.id] || { x: 0, y: 0, width: panel.width, height: panel.height };
     if (compact) { width = area.width; height = Math.min(panel.height, area.height); x = 0; y = 0; }
     if (panel.maximized) { width = area.width; height = area.height; x = 0; y = 0; }
-    node.hidden = panel.minimized || state.fieldMode === 'expanded' || (compact && state.focused !== panel.id);
+    const stacked = !compact && layout.stacked.includes(panel.id);
+    node.dataset.stacked = String(stacked);
+    node.hidden = panel.minimized || stacked || state.fieldMode === 'expanded' || (compact && state.focused !== panel.id);
     node.querySelector('[aria-label="Dock panel region"]').value = panel.dock;
     Object.assign(node.style, { width: `${width}px`, height: `${height}px`, left: `${x}px`, top: `${y}px`, right: 'auto', zIndex: state.focused === panel.id ? '20' : '10' });
     node.querySelector('.maximize').textContent = panel.maximized ? 'Restore' : 'Focus';
@@ -176,7 +258,7 @@ function render(state) {
     node.querySelector('.trail').textContent = `Shared trail: ${state.trail.map(id => fixture.records.find(r => r.id === id).name).join(' → ') || 'No selection'}`;
   }
   // Keep buttons stable during focus and pointer interactions.
-  const signature = state.panels.map(p => `${p.id}:${p.minimized}`).join('|');
+  const signature = state.panels.map(p => `${p.id}:${p.minimized}:${layout.stacked.includes(p.id)}`).join('|');
   if (tabs.dataset.signature !== signature) {
     tabs.dataset.signature = signature;
     tabs.replaceChildren(...state.panels.map(p => {
@@ -186,7 +268,9 @@ function render(state) {
         if (workspace.getState().focused !== p.id) send('focus_panel', { panelId: p.id });
         panelNodes.get(p.id)?.focus({ preventScroll: true });
       };
-      const tab = button(`${p.minimized ? '▱ ' : ''}${tools[p.toolId].title} · ${recordFor(p.recordId).domain}`, `Show ${p.id}`, selectPanel);
+      const stacked = layout.stacked.includes(p.id);
+      const tab = button(`${p.minimized ? '▱ ' : stacked ? '⧉ ' : ''}${tools[p.toolId].title} · ${recordFor(p.recordId).name}`, `Show ${p.id}`, selectPanel);
+      if (stacked) tab.title = 'Stacked to keep open panels at a usable size. Select to bring forward.';
       // A completed tap selects immediately, even when the browser suppresses
       // a compatibility click after a resize gesture. Scrolling is not a tap.
       let start = null;
@@ -201,6 +285,8 @@ function render(state) {
   }
   tabs.querySelectorAll('button').forEach((b, i) => b.setAttribute('aria-pressed', String(state.panels[i].id === state.focused)));
   $('selection').textContent = state.selected ? `Shared selection · ${recordFor(state.selected).name}` : 'No selection · choose a domain';
+  const stackedCount = innerWidth > 700 ? layout.stacked.length : 0;
+  tabs.dataset.stackedNote = stackedCount ? `${stackedCount} stacked to keep panels usable` : '';
   document.querySelectorAll('[data-domain-id]').forEach(n => n.classList.toggle('selected', n.dataset.domainId === recordFor(state.selected)?.domain));
   $('conversation').hidden = !state.maxOpen; $('max-orb').setAttribute('aria-expanded', String(state.maxOpen));
   const messageSignature = JSON.stringify(state.messages);
@@ -211,7 +297,9 @@ function render(state) {
   }
   $('history').replaceChildren(...state.history.slice(-12).reverse().map(h => element('li', `${h.source === 'max' ? 'Max' : 'You'} · ${h.type.replaceAll('_', ' ')}${h.recordId ? ' · ' + recordFor(h.recordId).name : ''}`)));
 }
-const spatial = createSpatialField({ host: $('cdSpatialCanvas'), orbit: $('cdSpatialOrbit'), connections: $('cdIntelConnections'), list: $('cdSpatialList'), dispatch: workspace.dispatch, scope: workspace.scope, onOpen: openRecord, onInvestigate: openInvestigation });
+const spatial = createSpatialField({ host: $('cdSpatialCanvas'), orbit: $('cdSpatialOrbit'), connections: $('cdIntelConnections'), list: $('cdSpatialList'), dispatch: workspace.dispatch, scope: workspace.scope,
+  onFocusDomain: domainId => focusDomain(domainId), onSelectObject: record => selectObject(record), onOverview: () => returnToOverview() });
+$('return-overview').addEventListener('click', () => { returnToOverview(); $('cdSpatialCanvas').focus({ preventScroll: true }); });
 $('cdViewToggle').addEventListener('click', () => {
   const list = !$('cdSpatialCanvas').hidden;
   $('cdSpatialCanvas').hidden = list; $('cdSpatialList').hidden = !list;
@@ -239,9 +327,15 @@ $('ask').addEventListener('submit', event => {
   const scope = workspace.scope();
   send('message', { text }); $('question').value = '';
   const state = workspace.getState();
-  const record = fixtures[state.tenantId].records.find(r => text.toLowerCase().includes(r.domain)) || recordFor(state.selected);
+  const lower = text.toLowerCase();
+  const records = fixtures[state.tenantId].records;
+  const object = records.find(r => r.kind === 'object' && (lower.includes(r.name.toLowerCase()) || lower.includes(r.name.split(' ')[0].toLowerCase())));
+  const domain = records.find(r => r.kind === 'domain' && lower.includes(r.domain));
+  const record = domain || recordFor(state.selected);
   let reply;
-  if (/^undo$/i.test(text) || /^redo$/i.test(text)) {
+  if (/^(overview|return to overview|back to overview|zoom out)\.?$/i.test(text)) {
+    returnToOverview('max', scope); reply = 'Back to the overview. Your selection and panels are unchanged.';
+  } else if (/^undo$/i.test(text) || /^redo$/i.test(text)) {
     const action = text.toLowerCase();
     reply = send(`${action}_layout`, {}, 'max', scope) ? `Layout ${action} complete. Your context is unchanged.` : `No layout change to ${action}.`;
   } else if (/^(save|load) layout /i.test(text)) {
@@ -255,18 +349,27 @@ $('ask').addEventListener('submit', event => {
     const preset = /spatial|default|top/i.test(text) ? 'spatial-first' : /review/i.test(text) ? 'review' : 'research';
     send('arrange_layout', { preset }, 'max', scope);
     reply = `Applied ${preset}. Your selection and investigation are unchanged. Undo restores the previous layout.`;
+  } else if (object) {
+    selectObject(object, 'max', scope);
+    reply = `Focused ${domainLabel(object.domain)} and selected ${object.name}. Details and evidence are open, using our shared selection.`;
+  } else if (domain && /^(explore|focus|show|open)\b/i.test(text)) {
+    focusDomain(domain.domain, 'max', scope);
+    reply = `${domainLabel(domain.domain)} is in focus with ${objectsOf(domain.domain).length} ${fixtures[state.tenantId].overview.domains.find(d => d.id === domain.domain).objectPlural} in orbit. Choose one to investigate.`;
   } else if (record) {
     openRecord(record, 'max', scope);
     send('dock_panel', { panelId: `domain:${record.id}`, dock: 'left' }, 'max', scope);
-    send('open_tool', { toolId: 'investigation', recordId: record.id }, 'max', scope);
-    send('dock_panel', { panelId: `investigation:${record.id}`, dock: 'right' }, 'max', scope);
+    openInvestigation(record, 'max', scope);
     reply = `We’re investigating ${record.name}. I opened its details and evidence, using our shared selection.`;
-  } else reply = 'I can simulate opening a domain and its investigation. Try “investigate acquisition”, “arrange”, or “close panels”.';
+  } else reply = 'I can simulate navigating the field and opening investigations. Try “explore acquisition”, “investigate Northgate”, “overview”, “arrange”, or “close panels”.';
   send('message', { text: reply }, 'max', scope);
 });
+// Opening composition: the orbital overview on top, acquisition details and evidence underneath.
 function openDemonstration() {
-  const record = fixtures[workspace.getState().tenantId].records.find(r => r.domain === 'acquisition');
-  openRecord(record); openInvestigation(record);
+  const record = domainRecord('acquisition');
+  send('select_entity', { recordId: record.id });
+  showInPanel('domain', record, 'left');
+  showInPanel('investigation', record, 'right');
+  send('set_field_mode', { mode: 'docked' });
 }
 $('undo-layout').addEventListener('click', () => send('undo_layout'));
 $('redo-layout').addEventListener('click', () => send('redo_layout'));
