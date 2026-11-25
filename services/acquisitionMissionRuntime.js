@@ -17,6 +17,10 @@ const {
   persistOutcomeLearning,
   persistStageCommit,
   loadTenantMissions,
+  ensureAcquisitionMissionSchema,
+  missionFingerprint,
+  expectedFingerprintFor,
+  recordDurableBaseline,
   deleteAllAmoData,
   clearAmoSessionBindings,
 } = require('./acquisitionMissionPersistence');
@@ -174,7 +178,15 @@ function createAcquisitionMissionRuntime(opts = {}) {
         // Contributions must hydrate before missions: putMission runs SPEC-136
         // consistency checks (e.g. execution_approval requires Paige + Emmett rows).
         for (const row of loaded.contributions) if (row) state.engine.store.addContribution(row);
+        // MAX-P0-003 — remember the durable revision of every mission read, so a
+        // later write from this engine can be refused if another writer won.
+        if (!(state.engine.durableBaseline instanceof Map)) state.engine.durableBaseline = new Map();
         for (const mission of loaded.missions) {
+          if (mission && mission.id) {
+            const durable = loaded.missionFingerprints && loaded.missionFingerprints.get(mission.id);
+            if (durable) state.engine.durableBaseline.set(mission.id, durable);
+            else state.engine.durableBaseline.delete(mission.id);
+          }
           try {
             state.engine.store.putMission(mission);
           } catch (putErr) {
@@ -285,15 +297,30 @@ function createAcquisitionMissionRuntime(opts = {}) {
 
       let lockHeld = false;
       try {
-        const lockResult = await acquireMissionDurableLock(missionId, effectivePool, { tryOnly: true });
+        const lockResult = await acquireMissionDurableLock(missionId, effectivePool, {
+          tryOnly: true,
+          tenantId: mission.tenantId,
+          correlationId: sideOpts.correlationId,
+        });
         lockHeld = lockResult.acquired === true && lockResult.reentrant !== true;
+        // MAX-P0-003 — with a lease, the mission bundle is written in the lease
+        // transaction and committed with it; the lock ends with that commit.
+        // Tenant-level learning rows below are idempotent upserts written on the
+        // pool afterwards (as before): their schema helpers may ALTER tables the
+        // lease has written, which from a second connection would self-deadlock.
+        const lease = lockHeld ? lockResult.lease : null;
+        await ensureAcquisitionMissionSchema(effectivePool);
         await persistStageCommit({
           mission,
           events: state.engine.store.listEvents(missionId),
           contributions: state.engine.store.listContributions(missionId),
           observations: state.engine.store.listObservations(missionId),
           outcomes: state.engine.store.listOutcomes(missionId),
-        }, effectivePool, { skipGlobalLock: true });
+        }, effectivePool, lease
+          ? { lease, expectedFingerprint: expectedFingerprintFor(state.engine, missionId) }
+          : { skipGlobalLock: true, expectedFingerprint: expectedFingerprintFor(state.engine, missionId) });
+        if (lease) await lease.commit();
+        recordDurableBaseline(state.engine, mission);
         for (const row of state.engine.store.listLearning(mission.tenantId)) {
           await persistLearning(row, effectivePool);
         }
@@ -311,7 +338,7 @@ function createAcquisitionMissionRuntime(opts = {}) {
         throw err;
       } finally {
         if (lockHeld) {
-          await releaseMissionDurableLock(missionId, effectivePool);
+          await releaseMissionDurableLock(missionId);
         }
       }
     },

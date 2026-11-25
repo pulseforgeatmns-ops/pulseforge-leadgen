@@ -57,6 +57,20 @@ function createAmoMemoryPool() {
   async function query(sql, params = []) {
     const trimmed = sql.trim();
     if (/^CREATE TABLE|^CREATE INDEX/i.test(trimmed)) return { rows: [] };
+    // MAX-P0-003 — transaction-scoped lease protocol: the xact lock is held
+    // until COMMIT/ROLLBACK of the (single, shared) fake connection.
+    if (/^SET LOCAL/i.test(trimmed)) return { rows: [] };
+    if (/^(SAVEPOINT|RELEASE SAVEPOINT|ROLLBACK TO SAVEPOINT)/i.test(trimmed)) return { rows: [] };
+    if (/pg_try_advisory_xact_lock/i.test(trimmed)) {
+      const key = `xact:${params[0]}`;
+      if (advisoryLocks.has(key)) return { rows: [{ locked: false }] };
+      advisoryLocks.set(key, { key1: params[0], key2: null });
+      return { rows: [{ locked: true }] };
+    }
+    if (/SELECT tenant_id FROM acquisition_missions WHERE id = \$1/i.test(trimmed)) {
+      const row = tables.acquisition_missions.get(params[0]);
+      return { rows: row ? [{ tenant_id: row.tenant_id }] : [] };
+    }
     if (/pg_try_advisory_lock/i.test(trimmed)) {
       const key = `${params[0]}:${params[1]}`;
       if (advisoryLocks.has(key)) return { rows: [{ locked: false }] };
@@ -82,11 +96,13 @@ function createAmoMemoryPool() {
     }
     if (trimmed === 'COMMIT') {
       txnBackup = null;
+      for (const key of [...advisoryLocks.keys()]) if (key.startsWith('xact:')) advisoryLocks.delete(key);
       return { rows: [] };
     }
     if (trimmed === 'ROLLBACK') {
       if (txnBackup) restoreTables(txnBackup);
       txnBackup = null;
+      for (const key of [...advisoryLocks.keys()]) if (key.startsWith('xact:')) advisoryLocks.delete(key);
       return { rows: [] };
     }
 

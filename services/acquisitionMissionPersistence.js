@@ -39,6 +39,39 @@ function assertExclusiveMissionWriter(fnName) {
   }
 }
 
+/**
+ * MAX-P0-003 — durable mission fingerprint used for optimistic concurrency.
+ * `version` is bumped by every TME stage; `updatedAt` changes on every
+ * mutation, so the pair identifies the exact durable revision a writer read.
+ */
+function missionFingerprint(mission) {
+  if (!mission) return null;
+  // JSON round-trip first: the durable payload is JSON, so a Date updatedAt is
+  // compared as its ISO string, exactly as PostgreSQL stores it.
+  return fingerprintFromPayload(JSON.parse(JSON.stringify({ version: mission.version, updatedAt: mission.updatedAt })));
+}
+
+/**
+ * Mirror of MISSION_FINGERPRINT_SQL over a stored JSON payload. Both sides of
+ * the compare-and-set MUST use the payload (never the updated_at column, which
+ * missionFromRow prefers and which is a timestamptz, not the written string).
+ */
+function fingerprintFromPayload(payload) {
+  const p = payload && typeof payload === 'object' ? payload : {};
+  const rawVersion = p.version == null ? null : (typeof p.version === 'string' ? p.version : JSON.stringify(p.version));
+  const version = rawVersion != null && /^-?[0-9]+$/.test(rawVersion) ? String(BigInt(rawVersion)) : '0';
+  const updatedAt = p.updatedAt == null ? '' : (typeof p.updatedAt === 'string' ? p.updatedAt : JSON.stringify(p.updatedAt));
+  return `${version}|${updatedAt}`;
+}
+
+function MISSION_VERSION_SQL(col) {
+  return `(CASE WHEN (${col}->>'version') ~ '^-?[0-9]+$' THEN (${col}->>'version')::bigint ELSE 0 END)`;
+}
+
+function MISSION_FINGERPRINT_SQL(col) {
+  return `(${MISSION_VERSION_SQL(col)}::text || '|' || COALESCE(${col}->>'updatedAt', ''))`;
+}
+
 async function ensureAcquisitionMissionSchema(pool = defaultPool()) {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS acquisition_missions (
@@ -289,7 +322,7 @@ async function persistMission(mission, pool = defaultPool(), opts = {}) {
   if (!mission?.id) return null;
   if (opts.internalStageCommit !== true) assertExclusiveMissionWriter('persistMission');
   if (opts.skipEnsure !== true) await ensureAcquisitionMissionSchema(pool);
-  await pool.query(
+  const result = await pool.query(
     `INSERT INTO acquisition_missions (
        id, tenant_id, client_id, stage, status, objective, target_segment, campaign,
        title, priority, confidence, owner, created_by, orchestration_mission_id, payload, created_at, updated_at
@@ -305,7 +338,10 @@ async function persistMission(mission, pool = defaultPool(), opts = {}) {
        confidence = EXCLUDED.confidence,
        owner = EXCLUDED.owner,
        payload = EXCLUDED.payload,
-       updated_at = EXCLUDED.updated_at`,
+       updated_at = EXCLUDED.updated_at
+     WHERE acquisition_missions.tenant_id = EXCLUDED.tenant_id
+       AND ${MISSION_VERSION_SQL('acquisition_missions.payload')} <= ${MISSION_VERSION_SQL('EXCLUDED.payload')}
+       AND ($18::text IS NULL OR ${MISSION_FINGERPRINT_SQL('acquisition_missions.payload')} = $18::text)`,
     [
       mission.id,
       String(mission.tenantId),
@@ -324,9 +360,43 @@ async function persistMission(mission, pool = defaultPool(), opts = {}) {
       mission,
       mission.createdAt || new Date().toISOString(),
       mission.updatedAt || new Date().toISOString(),
+      opts.expectedFingerprint != null ? String(opts.expectedFingerprint) : null,
     ]
   );
+  // MAX-P0-003 — the conditional upsert affected no row: the durable mission
+  // belongs to another tenant, is newer than this writer's copy, or changed
+  // since this writer read it. Never overwrite it (lost update).
+  if (result && result.rowCount === 0) {
+    throw await missionWriteConflict(mission, pool, opts.expectedFingerprint);
+  }
   return mission;
+}
+
+async function missionWriteConflict(mission, pool, expectedFingerprint) {
+  let current = null;
+  try {
+    current = (await pool.query(
+      `SELECT tenant_id, ${MISSION_FINGERPRINT_SQL('payload')} AS fingerprint FROM acquisition_missions WHERE id = $1`,
+      [mission.id]
+    )).rows[0] || null;
+  } catch (_) { /* diagnosis is best-effort; the write was refused either way */ }
+  const tenantMismatch = current && String(current.tenant_id) !== String(mission.tenantId);
+  const err = new Error(tenantMismatch
+    ? 'Mission does not belong to the active tenant.'
+    : `Mission ${mission.id} changed since it was read; refusing to overwrite a newer durable version.`);
+  err.code = tenantMismatch ? 'mission_tenant_mismatch' : 'mission_version_conflict';
+  err.spec = 'MAX-P0-003';
+  err.missionId = mission.id;
+  err.recoverable = !tenantMismatch;
+  if (!tenantMismatch) {
+    err.details = {
+      expectedFingerprint: expectedFingerprint != null ? String(expectedFingerprint) : null,
+      writerFingerprint: missionFingerprint(mission),
+      durableFingerprint: current ? current.fingerprint : null,
+      recovery: 'rehydrate_and_retry_decision',
+    };
+  }
+  return err;
 }
 
 async function persistEvent(event, tenantId, pool = defaultPool(), opts = {}) {
@@ -929,8 +999,56 @@ async function persistExecutionAudit(row, pool = defaultPool(), opts = {}) {
   return row;
 }
 
+/** Write every row of a stage bundle on one transactional client. */
+async function writeStageBundle(bundle, mission, client, expectedFingerprint) {
+  const writeOpts = { skipEnsure: true, internalStageCommit: true };
+  await persistMission(mission, client, { ...writeOpts, expectedFingerprint });
+  for (const event of bundle.events || []) {
+    await persistEvent(event, mission.tenantId, client, writeOpts);
+  }
+  for (const row of bundle.contributions || []) {
+    await persistContribution(row, mission.tenantId, client, writeOpts);
+  }
+  for (const row of bundle.observations || []) {
+    await persistObservation(row, mission.tenantId, client, writeOpts);
+  }
+  for (const row of bundle.outcomes || []) {
+    await persistOutcome(row, client, writeOpts);
+  }
+  for (const row of bundle.executionRecords || []) {
+    await persistOutboundExecution(row, client, { skipEnsure: true });
+  }
+  if (bundle.audit) {
+    await persistExecutionAudit(bundle.audit, client, writeOpts);
+  }
+  if ((bundle.outcomes || []).length || mission.stage === 'learn' || mission.stage === 'improve') {
+    await persistLearningCandidatesForStageCommit(bundle, client, writeOpts);
+  }
+}
+
+function wrapStageCommitError(err) {
+  if (err && err.code === 'tme_persistence' && err.cause) return err;
+  const wrapped = new Error((err && err.message) || 'Persistence failure.');
+  const passthrough = ['tme_transaction_overlap', 'mission_version_conflict', 'mission_tenant_mismatch',
+    'mission_lock_timeout', 'mission_lease_lost'];
+  wrapped.code = err && passthrough.includes(err.code) ? err.code : 'tme_persistence';
+  wrapped.cause = err;
+  if (err && err.details) wrapped.details = err.details;
+  if (err && err.recoverable != null) wrapped.recoverable = err.recoverable;
+  return wrapped;
+}
+
 /**
  * SPEC-131 — persist mission + events + contributions + commit audit in one SQL transaction.
+ *
+ * MAX-P0-003 — three modes:
+ *   - opts.lease: write inside the caller's mission lease transaction (inside a
+ *     SAVEPOINT). The caller commits the lease; nothing is durable until then.
+ *   - default: take a mission lease, write, commit, release (lock and write
+ *     share one transaction on one connection).
+ *   - opts.skipGlobalLock: legacy, unlocked single transaction. Still guarded
+ *     by the tenant + version compare-and-set in persistMission.
+ * opts.expectedFingerprint pins the durable revision the writer read.
  */
 async function persistStageCommit(bundle = {}, pool = defaultPool(), opts = {}) {
   const mission = bundle.mission;
@@ -945,45 +1063,66 @@ async function persistStageCommit(bundle = {}, pool = defaultPool(), opts = {}) 
     await ensureOutboundExecutionSchema(pool);
     await ensureAcquisitionKnowledgeSchema(pool);
   }
+  const expectedFingerprint = opts.expectedFingerprint != null ? opts.expectedFingerprint : null;
+
+  if (opts.lease) {
+    const lease = opts.lease;
+    if (!lease.isOpen()) {
+      const err = new Error('Mission lease is not open; refusing an unlocked stage write.');
+      err.code = 'mission_lease_lost';
+      throw wrapStageCommitError(err);
+    }
+    stageCommitDepth += 1;
+    try {
+      await lease.client.query('SAVEPOINT amo_stage_commit');
+      try {
+        await writeStageBundle(bundle, mission, lease.client, expectedFingerprint);
+        await lease.client.query('RELEASE SAVEPOINT amo_stage_commit');
+      } catch (err) {
+        await lease.client.query('ROLLBACK TO SAVEPOINT amo_stage_commit').catch(() => {});
+        throw err;
+      }
+    } catch (err) {
+      throw wrapStageCommitError(err);
+    } finally {
+      stageCommitDepth -= 1;
+    }
+    return mission;
+  }
 
   const lockPool = opts.lockPool || pool;
-  let lockHeldHere = false;
   if (opts.skipGlobalLock !== true && !isGlobalLockHeld(mission.id)) {
-    const lockResult = await acquireMissionDurableLock(mission.id, lockPool, {
-      tryOnly: opts.tryLock !== false,
-    });
-    lockHeldHere = lockResult.acquired === true;
+    let lockResult;
+    try {
+      lockResult = await acquireMissionDurableLock(mission.id, lockPool, {
+        tryOnly: opts.tryLock !== false,
+        tenantId: mission.tenantId,
+        lockTimeoutMs: opts.lockTimeoutMs,
+        correlationId: opts.correlationId,
+      });
+    } catch (err) {
+      throw wrapStageCommitError(err);
+    }
+    if (lockResult.acquired === true && lockResult.lease) {
+      try {
+        await persistStageCommit(bundle, pool, { ...opts, skipEnsure: true, lease: lockResult.lease });
+        await lockResult.lease.commit();
+      } catch (err) {
+        throw wrapStageCommitError(err);
+      } finally {
+        await releaseMissionDurableLock(mission.id);
+      }
+      return mission;
+    }
   }
 
   const client = typeof pool.connect === 'function' ? await pool.connect() : pool;
   const ownsClient = client !== pool && typeof client.release === 'function';
-  const writeOpts = { skipEnsure: true, internalStageCommit: true };
 
   stageCommitDepth += 1;
   try {
     await client.query('BEGIN');
-    await persistMission(mission, client, writeOpts);
-    for (const event of bundle.events || []) {
-      await persistEvent(event, mission.tenantId, client, writeOpts);
-    }
-    for (const row of bundle.contributions || []) {
-      await persistContribution(row, mission.tenantId, client, writeOpts);
-    }
-    for (const row of bundle.observations || []) {
-      await persistObservation(row, mission.tenantId, client, writeOpts);
-    }
-    for (const row of bundle.outcomes || []) {
-      await persistOutcome(row, client, writeOpts);
-    }
-    for (const row of bundle.executionRecords || []) {
-      await persistOutboundExecution(row, client, { skipEnsure: true });
-    }
-    if (bundle.audit) {
-      await persistExecutionAudit(bundle.audit, client, writeOpts);
-    }
-    if ((bundle.outcomes || []).length || mission.stage === 'learn' || mission.stage === 'improve') {
-      await persistLearningCandidatesForStageCommit(bundle, client, writeOpts);
-    }
+    await writeStageBundle(bundle, mission, client, expectedFingerprint);
     await client.query('COMMIT');
   } catch (err) {
     try {
@@ -991,18 +1130,10 @@ async function persistStageCommit(bundle = {}, pool = defaultPool(), opts = {}) 
     } catch (_) {
       /* rollback best-effort */
     }
-    const wrapped = new Error(err.message || 'Persistence failure.');
-    wrapped.code = err.code === 'tme_transaction_overlap'
-      ? 'tme_transaction_overlap'
-      : 'tme_persistence';
-    wrapped.cause = err;
-    throw wrapped;
+    throw wrapStageCommitError(err);
   } finally {
     stageCommitDepth -= 1;
     if (ownsClient) client.release();
-    if (lockHeldHere) {
-      await releaseMissionDurableLock(mission.id, lockPool);
-    }
   }
   return mission;
 }
@@ -1087,7 +1218,8 @@ function bindStagePersistDurable(input = {}, engine, tenantId) {
   if (input.persist === false || !input.pool || !engine) return null;
   return async (ctx) => {
     const missionId = ctx.missionId;
-    await persistStageCommit({
+    const skipEnsure = input.preinitializedSchema === true;
+    const bundle = {
       mission: engine.get(missionId, tenantId),
       events: engine.store.listEvents(missionId),
       contributions: engine.store.listContributions(missionId),
@@ -1097,18 +1229,61 @@ function bindStagePersistDurable(input = {}, engine, tenantId) {
         ? engine.store.listExecutionRecords(missionId)
         : [],
       audit: ctx.audit,
-    }, input.pool, { skipGlobalLock: true, skipEnsure: input.preinitializedSchema === true });
-    await assertPersistedMatchesEngine(engine, missionId, tenantId, input.pool, { skipEnsure: input.preinitializedSchema === true });
+    };
+    const expectedFingerprint = expectedFingerprintFor(engine, missionId, ctx);
+    const lease = ctx.lease && typeof ctx.lease.isOpen === 'function' ? ctx.lease : null;
+    if (lease) {
+      // MAX-P0-003 — write, verify and commit in the lease transaction: the
+      // stage either becomes durable under the lock or not at all. A failed
+      // verification rolls the durable write back instead of leaving it behind.
+      if (!skipEnsure) {
+        await ensureAcquisitionMissionSchema(input.pool);
+        await ensureExecutionAuditSchema(input.pool);
+        await ensureOutboundExecutionSchema(input.pool);
+        await ensureAcquisitionKnowledgeSchema(input.pool);
+      }
+      await persistStageCommit(bundle, input.pool, { skipEnsure: true, lease, expectedFingerprint });
+      await assertPersistedMatchesEngine(engine, missionId, tenantId, lease.client, { skipEnsure: true });
+      await lease.commit();
+      recordDurableBaseline(engine, bundle.mission);
+      return;
+    }
+    await persistStageCommit(bundle, input.pool, { skipGlobalLock: true, skipEnsure, expectedFingerprint });
+    recordDurableBaseline(engine, bundle.mission);
+    await assertPersistedMatchesEngine(engine, missionId, tenantId, input.pool, { skipEnsure });
   };
+}
+
+/**
+ * MAX-P0-003 — the durable revision this engine last read for a mission.
+ * The runtime records it at hydrate and after every successful write
+ * (engine.durableBaseline). TME supplies ctx.priorFingerprint as a fallback.
+ */
+function expectedFingerprintFor(engine, missionId, ctx = {}) {
+  const baseline = engine && engine.durableBaseline;
+  if (baseline && typeof baseline.get === 'function' && baseline.has(missionId)) {
+    return baseline.get(missionId);
+  }
+  return ctx.priorFingerprint != null ? ctx.priorFingerprint : null;
+}
+
+function recordDurableBaseline(engine, mission) {
+  const baseline = engine && engine.durableBaseline;
+  if (mission && baseline && typeof baseline.set === 'function') {
+    baseline.set(mission.id, missionFingerprint(mission));
+  }
 }
 
 async function loadTenantMissions(tenantId, pool = defaultPool(), opts = {}) {
   if (opts.skipEnsure !== true) await ensureAcquisitionMissionSchema(pool);
   const key = String(tenantId);
-  const missions = (await pool.query(
+  const missionRows = (await pool.query(
     `SELECT * FROM acquisition_missions WHERE tenant_id = $1 ORDER BY updated_at DESC`,
     [key]
-  )).rows.map(missionFromRow);
+  )).rows;
+  const missions = missionRows.map(missionFromRow);
+  // MAX-P0-003 — durable revision of each mission as read, from the raw payload.
+  const missionFingerprints = new Map(missionRows.map((row) => [row.id, fingerprintFromPayload(row.payload)]));
   const events = (await pool.query(
     `SELECT payload, id, mission_id, kind, specialist, label, at FROM acquisition_mission_events WHERE tenant_id = $1`,
     [key]
@@ -1172,6 +1347,7 @@ async function loadTenantMissions(tenantId, pool = defaultPool(), opts = {}) {
 
   return {
     missions,
+    missionFingerprints,
     events,
     contributions,
     observations,
@@ -1334,6 +1510,10 @@ module.exports = {
   diffCanonicalMissionProjections,
   assertPersistedMatchesEngine,
   bindStagePersistDurable,
+  missionFingerprint,
+  fingerprintFromPayload,
+  expectedFingerprintFor,
+  recordDurableBaseline,
   loadTenantMissions,
   countAmoRows,
   deleteAllAmoData,
