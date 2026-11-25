@@ -60,6 +60,8 @@ const BLOCK_CODES = Object.freeze({
   IN_PROGRESS: 'external_action_in_progress',
   OUTCOME_UNKNOWN: 'external_action_outcome_unknown',
   SUBJECT_ALREADY_DISPATCHED: 'outreach_intent_already_dispatched',
+  /** MAX-P0-004: the key belongs to a durable task; only a task-fenced caller may reclaim it. */
+  TASK_LINKED: 'external_action_task_linked',
 });
 
 const REPLAYABLE = new Set([STATES.PROVIDER_ACKNOWLEDGED, STATES.VERIFIED]);
@@ -229,6 +231,12 @@ function createExternalActionLedger(pool, options = {}) {
     }
     if (existing.state === STATES.CLAIMED) {
       return { outcome: CLAIM_OUTCOMES.BLOCKED, code: BLOCK_CODES.IN_PROGRESS, receipt: receiptFromRow(existing) };
+    }
+    if (RECLAIMABLE.has(existing.state) && existing.task_id && !input.taskId) {
+      // MAX-P0-004: never let an untasked caller reuse a task-linked claim;
+      // the send would bypass the task fence and be attributed to that task.
+      await audit(existing, 'claim_rejected_task_linked', existing.state, existing.state);
+      return { outcome: CLAIM_OUTCOMES.BLOCKED, code: BLOCK_CODES.TASK_LINKED, receipt: receiptFromRow(existing) };
     }
     if (RECLAIMABLE.has(existing.state)) {
       // Compare-and-set on the observed state + attempt: two concurrent re-claims

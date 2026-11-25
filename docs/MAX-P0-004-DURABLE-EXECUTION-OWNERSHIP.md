@@ -72,6 +72,8 @@ State vocabulary differs from the proposal (`queued` ≈ `admitted`, `escalated`
 
 - Conservative escalation: a task whose only action is `claimed` (never dispatched) is escalated on lease expiry; an operator must release it. This favours no-replay over availability.
 - A replayed action (same idempotency key already acknowledged under an earlier task) returns the original receipt; the successor task has no linked claim of its own, so its verification evidence must cite that receipt.
+- Terminal rows are final: an `escalated` task stays escalated after an operator reconciles its action in the ledger. Closing an intervention is a later recovery-CLI step (new task or explicit resolution record), not an in-place update.
+- A task-linked, never-delivered claim can only be reclaimed by a task-fenced caller; an untasked caller is blocked with `external_action_task_linked`.
 - `claim()` returns `null` if it loses the one-active-per-mission race in that round, even if another mission has claimable work; the caller retries.
 - A fence refusal mid-bundle aborts the bundle with `durable_task_fenced` (earlier sends are already recorded and ledger-protected), matching P0-003's handling of provider exceptions.
 

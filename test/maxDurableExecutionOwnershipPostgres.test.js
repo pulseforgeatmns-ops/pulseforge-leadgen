@@ -305,6 +305,12 @@ test('review regressions: reclaim re-attributes never-delivered claims; completi
     dispatch: async () => { calls += 1; return { success: true, providerMessageId: 'pm-b' }; } });
   assert.equal(sent.outcome, 'dispatched'); assert.equal(calls, 1);
   assert.equal((await pool.query('SELECT task_id FROM max_external_action_claims WHERE tenant_id=$1 AND idempotency_key=$2', [tenantId, key])).rows[0].task_id, b.id);
+  // An untasked caller cannot reclaim a task-linked, never-delivered claim.
+  const k2 = `linked-${sequence}`;
+  await assert.rejects(guardedDispatch({ ledger, claim: { tenantId, taskId: b.id, idempotencyKey: k2, actionKind: 'test', requestFingerprint: fp }, taskFence: { taskId: b.id, ownershipToken: 'rb', fenceEpoch: cb.fenceEpoch },
+    beforeDispatch: async () => { throw Object.assign(new Error('guard'), { code: 'guard_refused' }); }, dispatch: async () => {} }), { code: 'guard_refused' });
+  const untasked = await guardedDispatch({ ledger, claim: { tenantId, idempotencyKey: k2, actionKind: 'test', requestFingerprint: fp }, dispatch: async () => { calls += 1; } });
+  assert.equal(untasked.outcome, 'blocked'); assert.equal(untasked.code, 'external_action_task_linked'); assert.equal(calls, 1);
   // A delivered claim can never be re-attributed, even by direct SQL.
   await assert.rejects(pool.query('UPDATE max_external_action_claims SET task_id=$1 WHERE tenant_id=$2 AND idempotency_key=$3', [a.id, tenantId, key]), { code: '23514' });
 
