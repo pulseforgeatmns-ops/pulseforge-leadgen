@@ -10,6 +10,18 @@ let layoutStorage = null;
 try { layoutStorage = window.localStorage; } catch { /* in-memory fallback */ }
 const workspace = createWorkspace(fixtures, 'harbor', { storage: layoutStorage });
 const $ = id => document.getElementById(id);
+// V0.7 controls are created here so the fixture HTML stays compatible with V0.6 embeds.
+const lockControl = document.createElement('button');
+lockControl.id = 'layout-lock'; lockControl.type = 'button'; lockControl.setAttribute('aria-pressed', 'false');
+document.querySelector('.layout-actions').insertBefore(lockControl, $('layout-menu'));
+const lensControl = document.createElement('nav');
+lensControl.className = 'lens-control'; lensControl.setAttribute('aria-label', 'Workspace lens');
+for (const lens of ['operations', 'entities', 'objectives']) { const b = document.createElement('button'); b.type = 'button'; b.dataset.lens = lens; b.textContent = lens[0].toUpperCase() + lens.slice(1); lensControl.append(b); }
+$('field').querySelector('.field-header').append(lensControl);
+const entitySearch = document.createElement('input'); entitySearch.id = 'entity-search'; entitySearch.type = 'search'; entitySearch.placeholder = 'Search entities'; entitySearch.setAttribute('aria-label', 'Search entities'); entitySearch.hidden = true;
+const entityDomain = document.createElement('select'); entityDomain.id = 'entity-domain'; entityDomain.setAttribute('aria-label', 'Filter entities by domain'); entityDomain.hidden = true;
+entityDomain.innerHTML = '<option value="all">All domains</option><option value="acquisition">Acquisition</option><option value="clients">Clients</option><option value="campaigns">Campaigns</option><option value="content">Content</option>';
+$('field').querySelector('.field-header').append(entitySearch, entityDomain);
 const panelNodes = new Map();
 const send = (type, data = {}, source = 'human', scope = workspace.scope()) =>
   workspace.dispatch({ ...data, type, source, ...scope });
@@ -67,6 +79,7 @@ const toolApi = () => ({
 
 function gesture(handle, node, panelId, resize) {
   handle.addEventListener('pointerdown', event => {
+    if (workspace.getState().layoutLocked) { event.preventDefault(); $('status').textContent = 'Layout is locked. Unlock this tenant composition before moving panels.'; return; }
     if (event.button !== 0) return;
     handle.focus();
     const scope = workspace.scope();
@@ -235,6 +248,11 @@ function render(state) {
   Object.assign($('field').style, { left: `${field.x}px`, top: `${field.y}px`, width: `${field.width}px`, height: `${field.height}px` });
   placeSplitter(state, field, area);
   $('undo-layout').disabled = !state.canUndo; $('redo-layout').disabled = !state.canRedo;
+  lockControl.textContent = state.layoutLocked ? 'Unlock layout' : 'Lock layout';
+  lockControl.setAttribute('aria-pressed', String(state.layoutLocked));
+  lockControl.setAttribute('aria-label', state.layoutLocked ? 'Unlock workspace layout' : 'Lock workspace layout');
+  document.querySelectorAll('[data-lens]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.lens === state.lens)));
+  entitySearch.hidden = entityDomain.hidden = state.lens !== 'entities'; entitySearch.value = state.entityQuery; entityDomain.value = state.entityDomain;
   $('field-dock').value = state.fieldDock; $('field-ratio').value = Math.round(state.fieldRatio * 100); $('field-size').textContent = `${Math.round(state.fieldRatio * 100)}%`;
   const savedSignature = `${state.tenantId}:${Object.keys(state.savedLayouts).join('|')}`;
   if ($('saved-layouts').dataset.signature !== savedSignature) {
@@ -320,6 +338,16 @@ $('cdViewToggle').addEventListener('click', () => {
   $('cdViewToggle').setAttribute('aria-pressed', String(list));
 });
 document.querySelectorAll('[data-field-mode]').forEach(b => b.addEventListener('click', () => send('set_field_mode', { mode: b.dataset.fieldMode })));
+document.querySelectorAll('[data-lens]').forEach(b => b.addEventListener('click', () => send('set_lens', { lens: b.dataset.lens })));
+let entitySearchTimer;
+entitySearch.addEventListener('input', () => { clearTimeout(entitySearchTimer); entitySearchTimer = setTimeout(() => send('set_entity_filter', { query: entitySearch.value, domain: entityDomain.value }), 120); });
+entityDomain.addEventListener('change', () => send('set_entity_filter', { query: entitySearch.value, domain: entityDomain.value }));
+lockControl.addEventListener('click', () => {
+  const state = workspace.getState();
+  if (!state.layoutLocked) send('lock_layout');
+  else if (confirm(`Unlock the ${fixtures[state.tenantId].name} layout at revision ${state.compositionRevision}?`)) send('unlock_layout', { revision: state.compositionRevision, confirm: true });
+  const result = workspace.getLastResult(); if (!result.ok) $('status').textContent = `Layout change blocked: ${result.reason.replaceAll('_', ' ')}.`;
+});
 for (const [id, delta] of [['zoom-in', .1], ['zoom-out', -.1]]) $(id).addEventListener('click', () => send('set_field_view', { ...workspace.getState().fieldView, zoom: workspace.getState().fieldView.zoom + delta }));
 $('reset-field').addEventListener('click', () => send('set_field_view', { x: 0, y: 0, zoom: 1 }));
 $('open-context').addEventListener('click', () => openDemonstration());
@@ -436,7 +464,7 @@ $('ask').addEventListener('submit', event => {
 // Field splitter: drag (mouse/touch), or keyboard as an ARIA separator. Previews live; commits one undo step.
 function placeSplitter(state, field, area) {
   const splitter = $('field-splitter');
-  const show = state.fieldMode === 'docked' && innerWidth > 700;
+  const show = state.fieldMode === 'docked' && innerWidth > 700 && !state.layoutLocked;
   splitter.hidden = !show; if (!show) return;
   const horizontal = ['top', 'bottom'].includes(state.fieldDock);
   splitter.dataset.orientation = horizontal ? 'horizontal' : 'vertical';
@@ -464,6 +492,7 @@ function setFieldRatio(ratio, scope = workspace.scope()) {
   };
   let drag = null;
   splitter.addEventListener('pointerdown', e => {
+    if (workspace.getState().layoutLocked) return;
     if (e.button !== 0) return;
     e.preventDefault(); splitter.focus({ preventScroll: true });
     drag = { id: e.pointerId, scope: workspace.scope(), ratio: workspace.getState().fieldRatio };

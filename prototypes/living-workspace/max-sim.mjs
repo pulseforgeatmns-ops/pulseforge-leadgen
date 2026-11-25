@@ -77,7 +77,9 @@ export function planMaxTurn(utterance, state, fixture, env = {}) {
   const sel = ctx.selected;
   const plan = (kind, steps, verify) => ({ kind, steps, report(after, ok) {
     const receipt = ok ? steps.map(s => label(s, fixture)) : [];
-    if (steps.length && !ok) return { text: failed, receipt };
+    if (steps.length && !ok) return { text: after.layoutLocked
+      ? 'Your layout is locked, so I left it unchanged. You can keep the lock, create a temporary copy, or explicitly unlock this tenant composition.'
+      : failed, receipt };
     return { text: verify(after, describeContext(after, fixture)), receipt };
   } });
   const say = (kind, message) => plan(kind, [], () => message);

@@ -17,8 +17,8 @@ export function createWorkspace(fixtures, initialTenant = Object.keys(fixtures)[
   let state;
   let past = [], future = [];
   const layoutKeys = ['panels', 'focused', 'fieldMode', 'fieldDock', 'fieldRatio', 'savedLayouts'];
-  const navKeys = ['selected', 'fieldFocus'];
-  let navPast = [], navFuture = [], preference = null;
+  const navKeys = ['selected', 'fieldFocus', 'lens', 'entityQuery', 'entityDomain'];
+  let navPast = [], navFuture = [], preference = null, lastResult = { ok: true };
   const capture = () => Object.fromEntries(layoutKeys.map(key => [key, clone(state[key])]));
   const layoutCommands = new Set(['open_tool', 'dock_panel', 'resize_panel', 'move_panel', 'maximize_panel', 'close_panel', 'minimize_panel', 'restore_panel', 'set_field_mode', 'restore_checkpoint', 'pin_panel', 'set_field_dock', 'arrange_layout', 'save_layout', 'load_layout', 'delete_layout']);
   const storageKey = id => `pulseforge.fixture.layouts.v1.${id}`;
@@ -40,12 +40,22 @@ export function createWorkspace(fixtures, initialTenant = Object.keys(fixtures)[
     } catch { return {}; }
   }
   function readPreference(id) {
-    try { const t = JSON.parse(storage?.getItem(preferenceKey(id)) || 'null'); return validTemplate(t) ? t : null; } catch { return null; }
+    try {
+      const t = JSON.parse(storage?.getItem(preferenceKey(id)) || 'null');
+      if (!t) return null;
+      // V0.6 stored a bare template. V0.7 wraps it with lock metadata.
+      if (validTemplate(t)) return { template: t, locked: false, revision: 0 };
+      return validTemplate(t.template) && typeof t.locked === 'boolean' && Number.isInteger(t.revision) ? t : null;
+    } catch { return null; }
   }
   // The operator's current composition is remembered per tenant (record-free) and re-applied on return.
   function persistPreference() {
-    preference = templateOf(state); state.hasPreference = true;
-    try { storage?.setItem(preferenceKey(state.tenantId), JSON.stringify(preference)); } catch { state.storageWarning = true; }
+    const next = { template: templateOf(state), locked: state.layoutLocked, revision: state.compositionRevision };
+    try {
+      if (!storage) { state.storageWarning = true; preference = next; state.hasPreference = true; return true; }
+      storage.setItem(preferenceKey(state.tenantId), JSON.stringify(next));
+      preference = next; state.hasPreference = true; return true;
+    } catch { state.storageWarning = true; return false; }
   }
   function reconcile(s) {
     if (!s.selected) return;
@@ -59,8 +69,8 @@ export function createWorkspace(fixtures, initialTenant = Object.keys(fixtures)[
   }
   const prefSignature = s => JSON.stringify([s.panels.map(({ toolId, dock, x, y, width, height, minimized, maximized }) => [toolId, dock, x, y, width, height, minimized, maximized]), s.fieldMode, s.fieldDock, s.fieldRatio]);
   function persist() {
-    try { storage?.setItem(storageKey(state.tenantId), JSON.stringify(state.savedLayouts)); state.storageWarning = !storage; }
-    catch { state.storageWarning = true; }
+    try { if (!storage) { state.storageWarning = true; return true; } storage.setItem(storageKey(state.tenantId), JSON.stringify(state.savedLayouts)); return true; }
+    catch { state.storageWarning = true; return false; }
   }
   const listeners = new Set();
   const emit = () => listeners.forEach(fn => fn(clone(state)));
@@ -68,27 +78,62 @@ export function createWorkspace(fixtures, initialTenant = Object.keys(fixtures)[
     if (!Object.hasOwn(fixtures, tenantId)) throw new Error('Unknown fixture tenant');
     generation++; past = []; future = []; navPast = []; navFuture = []; preference = readPreference(tenantId);
     state = { tenantId, generation, selected: null, trail: [], panels: [], focused: null,
-      history: [], messages: [], maxOpen: false, fieldMode: 'docked', fieldDock: 'top', fieldRatio: .48, savedLayouts: readLayouts(tenantId), canUndo: false, canRedo: false, storageWarning: false, fieldView: { x: 0, y: 0, zoom: 1 }, fieldFocus: null, layoutCheckpoint: null, canBack: false, canForward: false, hasPreference: !!preference };
+      history: [], messages: [], maxOpen: false, fieldMode: 'docked', fieldDock: 'top', fieldRatio: .48, savedLayouts: readLayouts(tenantId), canUndo: false, canRedo: false, storageWarning: false, fieldView: { x: 0, y: 0, zoom: 1 }, fieldFocus: null, layoutCheckpoint: null, canBack: false, canForward: false, hasPreference: !!preference,
+      // Lens/context are navigation, never composition. Lock therefore never blocks them.
+      lens: 'operations', entityQuery: '', entityDomain: 'all', nodeBudget: 18,
+      layoutLocked: !!preference?.locked, compositionRevision: preference?.revision || 0 };
+    // Switching tenants restores protected logical field geometry immediately;
+    // panels are re-associated only when the normal startup/opening flow runs.
+    if (preference?.template) {
+      state.fieldMode = preference.template.fieldMode;
+      state.fieldDock = preference.template.fieldDock;
+      state.fieldRatio = preference.template.fieldRatio;
+    }
     emit();
   }
   switchTenant(initialTenant);
   function dispatch(command) {
-    if (!command || command.tenantId !== state.tenantId || command.generation !== generation) return false;
-    if (!['human', 'max'].includes(command.source)) return false;
+    const reject = reason => { lastResult = { ok: false, reason, tenantId: state.tenantId, revision: state.compositionRevision }; return false; };
+    if (!command || command.tenantId !== state.tenantId || command.generation !== generation) return reject('stale_scope');
+    if (!['human', 'max'].includes(command.source)) return reject('invalid_source');
+    if (command.type === 'lock_layout') {
+      if (state.layoutLocked) return reject('already_locked');
+      const prior = { locked: state.layoutLocked, revision: state.compositionRevision };
+      state.layoutLocked = true; state.compositionRevision++; if (!persistPreference()) { state.layoutLocked = prior.locked; state.compositionRevision = prior.revision; return reject('persistence_failed'); }
+      lastResult = { ok: true, action: 'locked', revision: state.compositionRevision }; emit(); return true;
+    }
+    if (command.type === 'unlock_layout') {
+      if (!state.layoutLocked) return reject('not_locked');
+      if (command.tenantId !== state.tenantId || command.revision !== state.compositionRevision || command.confirm !== true) return reject('unlock_confirmation_required');
+      const prior = { locked: state.layoutLocked, revision: state.compositionRevision };
+      state.layoutLocked = false; state.compositionRevision++; if (!persistPreference()) { state.layoutLocked = prior.locked; state.compositionRevision = prior.revision; return reject('persistence_failed'); }
+      lastResult = { ok: true, action: 'unlocked', revision: state.compositionRevision }; emit(); return true;
+    }
+    if (command.type === 'copy_locked_composition') {
+      if (!state.layoutLocked || command.confirm !== true || command.revision !== state.compositionRevision) return reject('copy_confirmation_required');
+      const name = `Temporary copy ${state.compositionRevision}`;
+      if (Object.keys(state.savedLayouts).length >= 12) return reject('saved_layout_limit');
+      const next = { ...state.savedLayouts, [name]: templateOf(state) };
+      const prior = state.savedLayouts; state.savedLayouts = next;
+      if (!persist()) { state.savedLayouts = prior; return reject('persistence_failed'); }
+      state.layoutLocked = false; state.compositionRevision++; if (!persistPreference()) { state.layoutLocked = true; state.compositionRevision--; return reject('persistence_failed'); }
+      lastResult = { ok: true, action: 'temporary_copy', name, revision: state.compositionRevision }; emit(); return true;
+    }
     if (command.type === 'undo_layout' || command.type === 'redo_layout') {
       const from = command.type === 'undo_layout' ? past : future;
       const to = command.type === 'undo_layout' ? future : past;
-      if (!from.length) return false;
+      if (!from.length) return reject('empty_layout_history');
+      if (state.layoutLocked) return reject('layout_locked');
       const prefBefore = prefSignature(state);
       to.push(capture()); Object.assign(state, from.pop()); reconcile(state);
       state.canUndo = past.length > 0; state.canRedo = future.length > 0;
       state.history = [...state.history, { type: command.type, source: command.source, recordId: null }].slice(-60);
-      persist(); if (prefSignature(state) !== prefBefore) persistPreference(); emit(); return true;
+      persist(); if (prefSignature(state) !== prefBefore) persistPreference(); state.compositionRevision++; lastResult = { ok: true }; emit(); return true;
     }
     if (command.type === 'navigate_back' || command.type === 'navigate_forward') {
       const from = command.type === 'navigate_back' ? navPast : navFuture;
       const to = command.type === 'navigate_back' ? navFuture : navPast;
-      if (!from.length) return false;
+      if (!from.length) return reject('empty_navigation_history');
       to.push(Object.fromEntries(navKeys.map(k => [k, state[k]])));
       const target = from.pop();
       state.selected = target.selected; state.fieldFocus = target.fieldFocus; state.fieldView = { x: 0, y: 0, zoom: 1 };
@@ -96,7 +141,7 @@ export function createWorkspace(fixtures, initialTenant = Object.keys(fixtures)[
       reconcile(state);
       state.canBack = navPast.length > 0; state.canForward = navFuture.length > 0;
       state.history = [...state.history, { type: command.type, source: command.source, recordId: state.selected }].slice(-60);
-      emit(); return true;
+      lastResult = { ok: true }; emit(); return true;
     }
     const before = capture();
     const next = clone(state);
@@ -104,10 +149,12 @@ export function createWorkspace(fixtures, initialTenant = Object.keys(fixtures)[
     // A batch applies registered commands in order to one draft: all or nothing,
     // one undo step. Max plans run this way so the operator never sees half a plan.
     const list = command.type === 'batch' ? command.commands : [command];
-    if (!Array.isArray(list) || !list.length || list.length > 24) return false;
+    if (!Array.isArray(list) || !list.length || list.length > 24) return reject('invalid_batch');
+    // Gate the whole plan before applying its first step. This includes Max plans.
+    if (state.layoutLocked && list.some(step => layoutCommands.has(step?.type) || step?.type === 'checkpoint_layout')) return reject('layout_locked');
     for (const step of list) {
-      if (!step || typeof step !== 'object' || ['batch', 'undo_layout', 'redo_layout', 'navigate_back', 'navigate_forward'].includes(step.type)) return false;
-      if (!applyCommand(next, { ...step, source: command.source })) return false;
+      if (!step || typeof step !== 'object' || ['batch', 'undo_layout', 'redo_layout', 'navigate_back', 'navigate_forward', 'lock_layout', 'unlock_layout'].includes(step.type)) return reject('invalid_batch_step');
+      if (!applyCommand(next, { ...step, source: command.source })) return reject('invalid_command');
       next.history.push({ type: step.type, source: command.source, recordId: step.recordId || next.panels.find(p => p.id === step.panelId)?.recordId || null });
       if (layoutCommands.has(step.type)) changedLayout = true;
       if (['save_layout', 'delete_layout'].includes(step.type)) touchedSaved = true;
@@ -124,16 +171,17 @@ export function createWorkspace(fixtures, initialTenant = Object.keys(fixtures)[
     next.canUndo = past.length > 0; next.canRedo = future.length > 0;
     const prefChanged = prefSignature(next) !== prefSignature(state);
     state = next;
-    if (touchedSaved) persist();
-    if (prefChanged) persistPreference();
-    emit(); return true;
+    if (changedLayout) state.compositionRevision++;
+    if (touchedSaved && !persist()) return reject('persistence_failed');
+    if (prefChanged && !persistPreference()) return reject('persistence_failed');
+    lastResult = { ok: true }; emit(); return true;
   }
   // Startup composition (system, not an operator action): no undo, navigation or history
   // entries. The tenant's remembered composition, if any, is then applied to the opened tools.
   function initialize(commands) {
     const next = clone(state);
     for (const step of commands) if (!applyCommand(next, { ...step, source: 'system' })) return false;
-    if (preference) applyTemplate(next, preference);
+    if (preference) { applyTemplate(next, preference.template); next.layoutLocked = preference.locked; next.compositionRevision = preference.revision; }
     reconcile(next);
     state = next; emit(); return true;
   }
@@ -216,6 +264,12 @@ export function createWorkspace(fixtures, initialTenant = Object.keys(fixtures)[
         next.fieldFocus = command.domainId;
         break;
       }
+      case 'set_lens':
+        if (!['operations', 'entities', 'objectives'].includes(command.lens)) return false;
+        next.lens = command.lens; break;
+      case 'set_entity_filter':
+        if (typeof command.query !== 'string' || command.query.length > 80 || !['all', ...fixtures[next.tenantId].overview.domains.map(d => d.id)].includes(command.domain)) return false;
+        next.entityQuery = command.query; next.entityDomain = command.domain; break;
       case 'retarget_panel': {
         // Point an open tool at another record in place, keeping its geometry and dock.
         if (!panel || !record) return false;
@@ -286,6 +340,6 @@ export function createWorkspace(fixtures, initialTenant = Object.keys(fixtures)[
     }
     return true;
   }
-  return { getState: () => clone(state), scope: () => ({ tenantId: state.tenantId, generation }),
+  return { getState: () => clone(state), getLastResult: () => clone(lastResult), scope: () => ({ tenantId: state.tenantId, generation }),
     dispatch, switchTenant, initialize, forgetPreference, subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); } };
 }

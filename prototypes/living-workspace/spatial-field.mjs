@@ -67,11 +67,21 @@ export function createSpatialField({ host, orbit, connections, list, dispatch, s
     for (const [k, v] of Object.entries(data)) path.dataset[k] = v;
     connections.append(path); return path;
   }
-  function build(fixture) {
+  function workingObjects(fixture, state) {
+    const objects = fixture.records.filter(r => r.kind === 'object');
+    if (state.lens !== 'entities') return objects.filter(r => r.domain === state.fieldFocus);
+    const q = state.entityQuery.trim().toLowerCase();
+    return objects.filter(r => (state.entityDomain === 'all' || r.domain === state.entityDomain)
+      && (!q || `${r.name} ${r.type} ${r.stage} ${r.summary}`.toLowerCase().includes(q)));
+  }
+  function build(fixture, state) {
     tenant = fixture.id; start = null;
     orbit.querySelectorAll('.context-core, .domain-node, .object-node').forEach(n => n.remove());
     connections.replaceChildren(); list.replaceChildren(); listSignature = '';
     const objects = fixture.records.filter(r => r.kind === 'object');
+    // A field is a working set, never a portfolio dump. Rendering is bounded even
+    // when a fixture is scaled to thousands of companies/contacts.
+    const visibleObjects = workingObjects(fixture, state).slice(0, state.nodeBudget);
     const core = make('button', 'context-core'); core.type = 'button'; core.dataset.core = fixture.id;
     core.setAttribute('aria-label', `${fixture.name}: workspace context. Return to overview`);
     core.append(make('small', '', 'WORKSPACE'), make('strong', '', fixture.name), make('span', 'core-meta', `${fixture.overview.domains.length} domains · ${objects.length} records`));
@@ -91,7 +101,7 @@ export function createSpatialField({ host, orbit, connections, list, dispatch, s
       node.append(top, meta, make('span', 'node-note', domain.note));
       node.addEventListener('click', () => onFocusDomain(domain.id));
       orbit.append(node);
-      for (const obj of own) {
+      for (const obj of own.filter(obj => visibleObjects.some(v => v.id === obj.id))) {
         link('object-link', { object: obj.id, domain: domain.id });
         const o = make('button', `object-node status-${obj.status}`); o.type = 'button';
         o.dataset.objectId = obj.id; o.dataset.parentDomain = domain.id;
@@ -215,7 +225,7 @@ export function createSpatialField({ host, orbit, connections, list, dispatch, s
   new ResizeObserver(position).observe(host);
 
   function renderList(fixture, state) {
-    const signature = `${fixture.id}|${state.fieldFocus}|${state.selected}`;
+    const signature = `${fixture.id}|${state.lens}|${state.entityQuery}|${state.entityDomain}|${state.fieldFocus}|${state.selected}`;
     if (signature === listSignature) return;
     listSignature = signature;
     const rows = [];
@@ -223,7 +233,14 @@ export function createSpatialField({ host, orbit, connections, list, dispatch, s
       const b = make('button', '', text); b.type = 'button';
       Object.assign(b.dataset, data); b.addEventListener('click', onClick); rows.push(b); return b;
     };
-    if (!state.fieldFocus) {
+    if (state.lens === 'objectives') {
+      for (const domain of fixture.overview.domains) row(`${domain.label} objective · ${domain.note} · owner: Fixture operator`, () => onFocusDomain(domain.id), { domainId: domain.id });
+    } else if (state.lens === 'entities') {
+      const matches = workingObjects(fixture, state), visible = matches.slice(0, state.nodeBudget);
+      row(`${matches.length} matching entities · showing ${visible.length} in the working set`, () => {}, { aggregate: '' });
+      for (const obj of visible) row(`${obj.type} · ${obj.name} — ${obj.stage}. ${obj.summary}`, () => onSelectObject(obj), { objectId: obj.id });
+      if (matches.length > visible.length) row(`+ ${matches.length - visible.length} more matches — refine search or filter`, () => {}, { overflow: '' });
+    } else if (!state.fieldFocus) {
       for (const domain of fixture.overview.domains) {
         const record = fixture.records.find(r => r.kind === 'domain' && r.domain === domain.id);
         const count = fixture.records.filter(r => r.kind === 'object' && r.domain === domain.id).length;
@@ -242,7 +259,7 @@ export function createSpatialField({ host, orbit, connections, list, dispatch, s
 
   function render(fixture, state) {
     const fresh = tenant !== fixture.id;
-    if (fresh) { build(fixture); host.classList.add('settling'); }
+    if (fresh || current?.state.lens !== state.lens || current?.state.entityQuery !== state.entityQuery || current?.state.entityDomain !== state.entityDomain) { build(fixture, state); host.classList.add('settling'); }
     current = { fixture, state };
     view = state.fieldView;
     if (!start && !pending) applyView(view);

@@ -12,7 +12,7 @@ test('tenant switch clears all records, investigations, panels, history and conv
   command(store, 'toggle_max');
   const oldScope = store.scope();
   store.switchTenant('cedar');
-  assert.deepEqual(store.getState(), { tenantId: 'cedar', generation: 2, selected: null, trail: [], panels: [], focused: null, history: [], messages: [], maxOpen: false, fieldMode: 'docked', fieldDock: 'top', fieldRatio: .48, savedLayouts: {}, canUndo: false, canRedo: false, storageWarning: false, fieldView: { x: 0, y: 0, zoom: 1 }, fieldFocus: null, layoutCheckpoint: null, canBack: false, canForward: false, hasPreference: false });
+  assert.deepEqual(store.getState(), { tenantId: 'cedar', generation: 2, selected: null, trail: [], panels: [], focused: null, history: [], messages: [], maxOpen: false, fieldMode: 'docked', fieldDock: 'top', fieldRatio: .48, savedLayouts: {}, canUndo: false, canRedo: false, storageWarning: false, fieldView: { x: 0, y: 0, zoom: 1 }, fieldFocus: null, canBack: false, canForward: false, hasPreference: false, layoutCheckpoint: null, layoutLocked: false, compositionRevision: 0, lens: 'operations', entityQuery: '', entityDomain: 'all', nodeBudget: 18 });
   assert.equal(store.dispatch({ ...oldScope, type: 'open_tool', source: 'max', recordId: 'harbor-content', toolId: 'domain' }), false);
   assert.equal(command(store, 'select_entity', { recordId: 'harbor-content' }), false);
   store.switchTenant('harbor');
