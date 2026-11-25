@@ -313,3 +313,22 @@ Baseline `origin/main` @ `3bc3360` vs PR #1163 @ `4a6052b`. Later commits re-ran
 ### 7.5 Deploy prerequisites added by this PR
 1. Apply `2026-11-25-max-p0-003-reliability-core.sql` **before** deploying code that contains #1162/#1163 (separate approval). Until then, all AMO outbound sends **and every PostgreSQL-backed tenant-mailbox send (scheduler sends, governed replies, mailbox verification)** are refused with `reliability_schema_missing` (fail closed), and keyed `/execute` returns 503.
 2. API clients of `/execute` must send `Idempotency-Key` for external-effect, intent-less, continuation or `executionMode` requests (428 otherwise). The Mission Workspace UI does.
+
+### 7.6 Second independent review (`4a6052b..96ad575`)
+Bottom line: **no duplicate-send hole.** The R2.1 fix was confirmed against nodemailer 8.0.10's real error shapes, and the R7 guard blocks the revised-artifact bypass on every traced path.
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| R7 false block: an abandoned claim (marker write failed) or a claim reconciled to `failed_definitive` left a ledger-era `ATTEMPTED` record that blocked a legitimate revision | medium (safe direction) | **Fixed**: ledger-marked `ATTEMPTED` records are decided by their claim. Test added. |
+| R7: the check and the claim were two steps; exclusion relied on the mission lease | low | **Fixed in the database**: partial unique index `max_external_action_claims_one_outbound_per_subject` on (tenant, `amo_outbound_email`, mission, subject) over live states. The ledger maps the violation to `outreach_intent_already_dispatched`. Mailbox sequence steps are unconstrained. Concurrent two-pool test added. |
+| R7: a record without an execution identity was ignored | low | **Fixed**: treated as another revision (blocks). Test added. |
+| R7: governed refill `candidate_id` vs prospect id could diverge | uncertain | **Open.** Not confirmed for tenant 10. Recorded in the handoff. |
+| R7: a stale `claimed` row blocks revisions until recovery | expected | Documented here: run `recover.cjs --apply` (abandons stale claims). |
+| UI: any HTTP response cleared the key, including 409 in-progress and 502/503/504 | medium | **Fixed**: the key is kept for 409/502/503/504 and network errors. |
+| Failure receipts stored raw `err.message` permanently | low | **Fixed**: the failure receipt keeps the machine code and correlation id only. |
+| Receipts drop `rollbackReason`/`blockReason` | low | Accepted (free text). The replay carries `rolledBack`, `executionOutcome` and `errorClass`. |
+| ETLS / "Greeting never received" now classed unknown | low (safe direction) | Accepted. A misconfigured-TLS mailbox yields `outcome_unknown` for manual reconciliation. |
+| Content-generation intents (`GENERATE_VARIANTS`, …) stay keyless | low | Accepted by policy: LLM spend, no irreversible external effect (pinned in the policy test). |
+| The receipt test used its own `receiptOf` | gap | **Fixed**: the policy test composes `executeCanonicalResponse` → `executeReceipt`. |
+
+After these fixes: `test:max:reliability-core` **51/51**; review-only + recovery approval + CI plan **71/71**; `test:anchor-outbound` **877/877**; mailbox/scheduler suites 224/225 (1 skip), identical to `main`.

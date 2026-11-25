@@ -443,7 +443,9 @@ function claimInput(tenantId, key, extra = {}) {
   return {
     tenantId, idempotencyKey: key, actionKind: 'amo_outbound_email',
     requestFingerprint: requestFingerprint({ key, to: 'owner@example.test', body: 'hello' }),
-    missionId: 'm-ledger', subjectRef: 'prospect:1', provider: 'brevo', ...extra,
+    // One logical target per key: R7's unique index allows one live AMO outbound
+    // claim per (tenant, mission, prospect).
+    missionId: 'm-ledger', subjectRef: `prospect:${key}`, provider: 'brevo', ...extra,
   };
 }
 
@@ -707,6 +709,33 @@ test('recovery apply requires an operator identity and audits the run', { timeou
   assert.equal(run.detail.actor, 'operator:jm');
   assert.equal(run.detail.abandoned, 1);
   assert.equal(rows.find((r) => r.event === 'recovery_abandoned_not_dispatched').detail.actor, 'operator:jm');
+});
+
+test('R7 is enforced by the database: concurrent revisions for one prospect cannot both claim', { timeout: 60000 }, async (t) => {
+  const { pool, pool2 } = await db(t);
+  const a = createExternalActionLedger(pool);
+  const b = createExternalActionLedger(pool2);
+  const base = { tenantId: '81', actionKind: 'amo_outbound_email', missionId: 'm-r7-db', subjectRef: 'prospect:42', provider: 'brevo' };
+  const results = await Promise.all([
+    a.claim({ ...base, idempotencyKey: 'rev-1-key', requestFingerprint: requestFingerprint({ rev: 1 }) }),
+    b.claim({ ...base, idempotencyKey: 'rev-2-key', requestFingerprint: requestFingerprint({ rev: 2 }) }),
+  ]);
+  assert.deepEqual(results.map((r) => r.outcome).sort(), ['blocked', 'claimed']);
+  assert.equal(results.find((r) => r.outcome === 'blocked').code, 'outreach_intent_already_dispatched');
+  // A definitively failed claim frees the target for a revision.
+  const winner = results.find((r) => r.outcome === 'claimed');
+  const winnerKey = winner.receipt.idempotencyKey;
+  await a.markDispatchAttempted({ tenantId: '81', idempotencyKey: winnerKey, ownerToken: winner.ownerToken });
+  await a.recordProviderResult({ tenantId: '81', idempotencyKey: winnerKey, ownerToken: winner.ownerToken },
+    { success: false, providerErrorCode: 'brevo_http_400', providerBoundaryCrossed: true });
+  const loserKey = winnerKey === 'rev-1-key' ? 'rev-2-key' : 'rev-1-key';
+  const retry = await b.claim({ ...base, idempotencyKey: loserKey, requestFingerprint: requestFingerprint({ rev: loserKey === 'rev-1-key' ? 1 : 2 }) });
+  assert.equal(retry.outcome, 'claimed');
+  // Mailbox sequence steps are distinct logical intents: not constrained.
+  const m1 = await a.claim({ ...base, actionKind: 'tenant_mailbox_smtp', idempotencyKey: 'step-1', requestFingerprint: requestFingerprint({ s: 1 }) });
+  const m2 = await a.claim({ ...base, actionKind: 'tenant_mailbox_smtp', idempotencyKey: 'step-2', requestFingerprint: requestFingerprint({ s: 2 }) });
+  assert.equal(m1.outcome, 'claimed');
+  assert.equal(m2.outcome, 'claimed');
 });
 
 test('durable barriers cannot be expired: claims/audit undeletable, only in_progress receipts releasable', { timeout: 60000 }, async (t) => {

@@ -575,3 +575,4 @@ router.post('/api/v1/amo/ask', requireActor, async (req, res) => {
 module.exports = router;
 module.exports.requiresIdempotencyKey = requiresIdempotencyKey;
 module.exports.executeReceipt = executeReceipt;
+module.exports.executeCanonicalResponse = executeCanonicalResponse;

@@ -619,9 +619,10 @@
       await loadOne(selected);
       setMsg('Executed ' + ((body.request && body.request.intent) || intent), 'ok');
     } catch (err) {
-      // api() throws with err.httpStatus for any HTTP response: the request was
-      // answered, so the next click is a new request. A network failure keeps the key.
-      if (err && err.httpStatus) pendingKey = null;
+      // A definitive application answer means the next click is a new request.
+      // No response (network), 409 (still in progress) or a gateway 502/503/504
+      // may mean the original is still running: keep the key so a retry replays.
+      if (err && err.httpStatus && ![409, 502, 503, 504].includes(err.httpStatus)) pendingKey = null;
       setMsg(err.message, 'err');
     } finally {
       executionInFlight = false;

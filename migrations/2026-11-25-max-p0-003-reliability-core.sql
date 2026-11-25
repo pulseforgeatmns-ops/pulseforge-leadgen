@@ -1,6 +1,6 @@
 -- MAX-P0-003 — Reliability Core (operator migration; never startup DDL).
 --
--- Additive only: three new tables plus delete/truncate guard triggers on them; no change to existing tables or rows.
+-- Additive only: three new tables plus indexes and delete/truncate guard triggers on them; no change to existing tables or rows.
 -- Idempotent (IF NOT EXISTS). Safe to run before the application deploy; the
 -- application fails closed (refuses external dispatch and keyed requests) until
 -- these tables exist.
@@ -49,6 +49,15 @@ CREATE INDEX IF NOT EXISTS max_external_action_claims_unresolved
 
 CREATE INDEX IF NOT EXISTS max_external_action_claims_mission
   ON max_external_action_claims (tenant_id, mission_id);
+
+-- R7: within one mission (the logical outreach intent) a prospect receives at
+-- most one AMO outbound action. Enforced in the database so concurrent revised
+-- artifacts cannot both claim. Mailbox sequence steps (tenant_mailbox_smtp) are
+-- distinct logical intents and are not constrained here.
+CREATE UNIQUE INDEX IF NOT EXISTS max_external_action_claims_one_outbound_per_subject
+  ON max_external_action_claims (tenant_id, action_kind, mission_id, subject_ref)
+  WHERE action_kind = 'amo_outbound_email' AND mission_id IS NOT NULL AND subject_ref IS NOT NULL
+    AND state IN ('claimed', 'dispatch_attempted', 'provider_acknowledged', 'verified', 'outcome_unknown');
 
 CREATE TABLE IF NOT EXISTS max_request_receipts (
   tenant_id            TEXT        NOT NULL,

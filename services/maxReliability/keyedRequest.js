@@ -88,7 +88,9 @@ async function runKeyedRequest(input = {}) {
         fromState: 'in_progress', toState: null, detail: { errorCode: failure.error } });
       return { status, body: { ...failure, retryable: true }, headers, error: err };
     }
-    await receipts.fail(handle, status, failure, failure.error);
+    // Failure receipts are permanent too: keep the machine code only, never the
+    // raw error text (it can carry data). The live response keeps the message.
+    await receipts.fail(handle, status, { error: failure.error, correlationId }, failure.error);
     return { status, body: failure, headers, error: err };
   }
   // Receipts are permanent (they cannot be deleted), so store only what a

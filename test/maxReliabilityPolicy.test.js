@@ -10,7 +10,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { requiresIdempotencyKey, executeReceipt } = require('../routes/acquisitionMissions');
+const { requiresIdempotencyKey, executeReceipt, executeCanonicalResponse } = require('../routes/acquisitionMissions');
 const { smtpFailureIsDefinitive } = require('../services/tenantMailbox');
 
 test('Idempotency-Key is required whenever a request can reach external effects or spend', () => {
@@ -63,4 +63,22 @@ test('SMTP failures are definitive only with proof of non-delivery (real nodemai
     e('connect ECONNREFUSED 192.0.2.1:465', { code: 'ESOCKET', command: 'CONN', syscall: 'connect' }),
     e('connect ENETUNREACH 192.0.2.1:465', { code: 'ESOCKET', command: 'CONN' }),
   ]) assert.equal(smtpFailureIsDefinitive(err), true, err.message);
+});
+
+test('the receipt is composed from the real execute response shape (executeCanonicalResponse → executeReceipt)', () => {
+  const routed = {
+    request: { id: 'cer_9', intent: 'APPROVE_DISCOVERY', source: 'approval_button', missionId: 'm9', question: 'free text 555-0199' },
+    action: 'discovery_approved', specialist: 'scout', runtimeOwner: 'amo', snapshot: { mission: { title: 'x' } },
+    execution: { state: 'committed_internal' },
+    executionResult: { alreadyExecuted: false, rolledBack: false, executionOutcome: 'committed', transactionId: 'tme_9',
+      error: { message: 'boom', tmeClass: 'specialist' } },
+  };
+  const live = executeCanonicalResponse(routed);
+  const receipt = executeReceipt(live);
+  assert.equal(receipt.request.intent, 'APPROVE_DISCOVERY');
+  assert.equal(receipt.executionResult.transactionId, 'tme_9');
+  assert.equal(receipt.executionResult.errorClass, 'specialist');
+  assert.equal(receipt.execution.state, 'committed_internal');
+  assert.equal(JSON.stringify(receipt).includes('555-0199'), false);
+  assert.equal(JSON.stringify(receipt).includes('boom'), false);
 });

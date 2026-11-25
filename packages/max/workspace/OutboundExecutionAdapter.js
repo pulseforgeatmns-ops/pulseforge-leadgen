@@ -57,8 +57,12 @@ function resolveExternalActionLedger(input = {}) {
 function findPriorDispatchForProspect(records = [], prospectId, executionIdentity) {
   return records.find((row) => row
     && String(row.prospectId) === String(prospectId)
-    && row.executionIdentity && row.executionIdentity !== executionIdentity
-    && (row.status === EXECUTION_RECORD_STATUS.SENT || row.status === EXECUTION_RECORD_STATUS.ATTEMPTED)) || null;
+    // A record without an identity is treated as a different revision (block).
+    && row.executionIdentity !== executionIdentity
+    && (row.status === EXECUTION_RECORD_STATUS.SENT
+      // A ledger-era ATTEMPTED record is decided by its claim (findBlockingForSubject):
+      // an abandoned or definitively failed claim must not block a revision.
+      || (row.status === EXECUTION_RECORD_STATUS.ATTEMPTED && !(row.payload && row.payload.externalActionLedger === true)))) || null;
 }
 
 function findUnresolvedLegacyAttempt(records = [], executionIdentity) {

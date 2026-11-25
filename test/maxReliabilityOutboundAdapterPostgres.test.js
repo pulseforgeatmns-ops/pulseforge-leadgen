@@ -186,3 +186,33 @@ test('R7: pre-ledger records — a SENT record under another revision blocks the
   assert.equal(result.records.find((r) => r.prospectId === 'p-1').providerErrorCode, 'outreach_intent_already_dispatched');
   assert.equal(calls, 1);
 });
+
+test('R7: an abandoned claim (marker write failed) leaves an ATTEMPTED record that does not block a revision', { timeout: 60000 }, async () => {
+  const real = createExternalActionLedger(fixture.pool);
+  let failMarker = true;
+  const ledger = { ...real, markDispatchAttempted: async (...a) => {
+    if (failMarker) { failMarker = false; throw Object.assign(new Error('marker write failed'), { code: 'ECONNRESET' }); }
+    return real.markDispatchAttempted(...a);
+  } };
+  currentBundle = bundleFor('m-r7-abandoned', 'rev-1');
+  const persisted = [];
+  let calls = 0;
+  await assert.rejects(run(ledger, async () => { calls += 1; return { success: true }; },
+    { persistExecutionRecord: async (r) => persisted.push(r) }), /marker write failed/);
+  assert.equal(calls, 0, 'nothing was sent');
+  assert.ok(persisted.some((r) => r.status === EXECUTION_RECORD_STATUS.ATTEMPTED && r.payload.externalActionLedger === true));
+  currentBundle = bundleFor('m-r7-abandoned', 'rev-2', ' (revised)');
+  const revised = await run(real, async () => { calls += 1; return { success: true, providerMessageId: `ab-${calls}` }; },
+    { existingRecords: persisted });
+  assert.equal(revised.records.find((r) => r.prospectId === 'p-1').status, EXECUTION_RECORD_STATUS.SENT,
+    'abandoned (never dispatched) does not block the revision');
+});
+
+test('R7: a SENT record with no execution identity blocks (treated as another revision)', { timeout: 60000 }, async () => {
+  currentBundle = bundleFor('m-r7-noid', 'rev-1');
+  const legacy = { prospectId: 'p-1', status: EXECUTION_RECORD_STATUS.SENT, executionIdentity: null, payload: {} };
+  let calls = 0;
+  const result = await run(null, async () => { calls += 1; return { success: true, providerMessageId: 'z' }; }, { existingRecords: [legacy] });
+  assert.equal(result.records.find((r) => r.prospectId === 'p-1').providerErrorCode, 'outreach_intent_already_dispatched');
+  assert.equal(calls, 1);
+});
