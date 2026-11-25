@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS max_durable_execution_tasks (
   tenant_id             TEXT NOT NULL,
   objective_id          TEXT,
   mission_id            TEXT,
-  parent_task_id        UUID REFERENCES max_durable_execution_tasks(id),
+  parent_task_id        UUID,
   logical_key           TEXT NOT NULL,
   input_fingerprint     TEXT NOT NULL CHECK (input_fingerprint ~ '^[0-9a-f]{64}$'),
   specialist            TEXT NOT NULL,
@@ -40,7 +40,9 @@ CREATE TABLE IF NOT EXISTS max_durable_execution_tasks (
   accepted_at           TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
   updated_at            TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
   completed_at          TIMESTAMPTZ,
-  UNIQUE (tenant_id, logical_key)
+  UNIQUE (tenant_id, logical_key),
+  UNIQUE (tenant_id, id),
+  FOREIGN KEY (tenant_id, parent_task_id) REFERENCES max_durable_execution_tasks(tenant_id, id)
 );
 
 CREATE INDEX IF NOT EXISTS max_durable_execution_tasks_recovery
