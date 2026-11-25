@@ -36,7 +36,7 @@ Build MAX-P0-004 on `main` after #1163 merges, or rebase onto it. #1163 changes 
 ## 3. Requirements MAX-P0-004 must preserve
 
 ### 3.1 Idempotency and ownership
-1. External-effect execution requests carry a client idempotency key. REST already returns 428 without one. When MAX-P0-004 adds chat/task identity, **chat must also carry a client message id** feeding the same receipt → task chain. Do not reintroduce keyless external-effect entry points.
+1. Execution requests that can reach external effects or spend carry a client idempotency key. REST returns 428 without one for: external action classes, an **absent intent** (the pending-decision fallback), `AUTONOMOUS_PROGRESSION` / `MISSION_CONTINUATION` / `CONTINUE_INVESTIGATION`, and any `executionMode` (because `APPROVE_PLAN` can chain into discovery). The policy lives in `routes/acquisitionMissions.js` `requiresIdempotencyKey(command)` and is pinned by `test/maxReliabilityPolicy.test.js`. When MAX-P0-004 adds chat/task identity, **chat must also carry a client message id** feeding the same receipt → task chain. Do not reintroduce keyless external-effect entry points.
 2. A receipt is permanent and maps 1:1 to the root task (proposal §3.7). A replay must return the original receipt plus live task state, and **never re-run**. `interrupted` receipts answer `request_outcome_unknown`.
 3. Permanent receipts store an **allowlisted summary** only (use `receiptOf`). Never store operator free text, payloads, snapshots or recipients in receipts, claims or audit rows.
 4. Mission mutual exclusion has one key: `missionLockText(id)`. Every mission-writing critical section — task owner commit, recovery, scripts — must contend on it: via `acquireMissionLease` (pool) or `MISSION_SESSION_LOCK_SQL` (dedicated connection). Never take a session lock through `pool.query`. Never revive the 750825 two-int key.
@@ -53,7 +53,7 @@ Build MAX-P0-004 on `main` after #1163 merges, or rebase onto it. #1163 changes 
 ### 3.3 Mailbox ledger integration (reuse this pattern for other transports)
 - Key `tenant-mailbox:<outboundIdempotencyKey(input)>`, action kind `tenant_mailbox_smtp`. Fingerprint: tenant, sending identity, sorted lowercased recipients, subject, text/body, html, In-Reply-To.
 - Order: **claim → `PENDING` row → (authorization wrapper) → marker committed inside the innermost `dispatch()` immediately before `sendMail` → result**. An authorization refusal or a failed `PENDING` write releases the claim (`abandoned_not_dispatched`) without a false dispatch.
-- `smtpFailureIsDefinitive(err)`: true for an SMTP reply ≥400, `EAUTH`/`EENVELOPE`/`EDNS`, `ECONNECTION` in the `CONN` phase, `syscall` connect/getaddrinfo, or a "connect E…" message. Everything else after the marker is unknown (row: `failure_code = external_action_outcome_unknown`, `metadata.providerAccepted = null`).
+- `smtpFailureIsDefinitive(err)`: true **only** for an SMTP reply ≥400, `EAUTH`/`EENVELOPE`/`EDNS`, socket-layer `syscall` connect/getaddrinfo, or a "connect/getaddrinfo E…" message. nodemailer 8.x tags socket errors, closes and timeouts with `command:'CONN'` at any stage, including after DATA, so `CONN`, `ECONNECTION`, `ESOCKET` and `ETIMEDOUT` are **never** proof of non-delivery. Any failure after `sendMail` returned is never definitive (`providerReturned`). Everything else after the marker is unknown (row: `failure_code = external_action_outcome_unknown`, `metadata.providerAccepted = null`). Reuse this rule for any SMTP-like transport.
 - Replay of an acknowledged claim restores the message row to `SENT` from `provider_ref`, with no SMTP call.
 - The in-memory store is a test transport and is not ledgered.
 
@@ -80,6 +80,11 @@ Build MAX-P0-004 on `main` after #1163 merges, or rebase onto it. #1163 changes 
 - `docs/MAX-P0-004-DURABLE-EXECUTION-OWNERSHIP.md`: this session's proposal (input only; the active MAX-P0-004 session owns the architecture).
 - `docs/reliability/durable-stage-scheduling.md`: the existing claim/start/fence/lease/quarantine pattern for governed outbound stages.
 - `CLAUDE.md` → "Reliability core (MAX-P0-003, Nov 2026)".
+
+### 3.7 Constraints from the independent review
+- Inside the Anchor recovery approval critical section, no mission write may obtain its own pool lease. It would be refused (`tme_transaction_overlap`) because the section holds the mission key on its dedicated connection. Pass `persistencePool` explicitly.
+- `withWorkerAdvisoryLock` holds one pooled connection for the run's duration. If MAX-P0-004 adds long-running owners, prefer database leases (claim/heartbeat) over held connections.
+- Deploy prerequisite: the reliability migration must precede any deploy of #1162/#1163. Without it, AMO outbound and **all PostgreSQL tenant-mailbox sends** fail closed.
 
 ## 5. Open items not in #1163
 - `max-context-cleanup-hourly` stays scheduled. It is verified internal maintenance: one bounded `DELETE` of expired `max_conversation_context` rows, no specialists or external calls.
