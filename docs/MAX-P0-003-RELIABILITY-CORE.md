@@ -1,5 +1,7 @@
 # MAX-P0-003 — Reliability Core
 
+> Review, defect repairs (R1–R6), lock audit, load-sensitive register and operator checklist: `docs/MAX-P0-003-REVIEW.md`.
+
 Status: **implemented on branch, not deployed.** P0 feature freeze respected: no new specialist capability, no tenant-authorization change, no schedule or worker enabled, no outbound sent.
 
 ## 1. Implementation summary
@@ -161,7 +163,7 @@ Test fixture update (no assertion weakened or removed): the `adr075Transactional
 
 **Access.** The Render database `pulseforge-production-migration` (`dpg-dbtgtloae00c73dd8040-a`, PostgreSQL 18, Ohio, 1c-2g, 10 GB, no HA, no replica) has an **empty IP allowlist**: it accepts no external connections, so the Render MCP read-only query tool cannot reach it. Adding an allowlist entry would expose it and is outside this authorisation. No in-network read path exists in this session (no SSH key for the service; the cutover's in-network component is a restore receiver, not a reporter). **The live schema report was therefore not executed.** `scripts/max-reliability/schemaReport.cjs` is ready: run it in **Render Shell** on `pulseforge-api-migration` (private network, existing `DATABASE_URL`); it uses one `REPEATABLE READ READ ONLY` transaction, a 20 s statement timeout, and emits counts/catalog only (verified locally: `transaction_read_only = on`).
 
-**Escalation — public pgAdmin.** (The MAX-P0-002 runbook already lists its suspension; as of this report it is still running.) Render service `pgAdmin-dpg-dbtgtloae00c73dd8040-a` (created 2026-11-24, `ipAllowList 0.0.0.0/0`, public URL) is attached to the production database. That is a public administrative path to production data, contrary to "do not expose PostgreSQL publicly". **Not modified** (no authority). Recommend suspending it or restricting its allowlist today.
+**Residual — public pgAdmin (deferred by the operator; not a deployment blocker).** Render service `pgAdmin-dpg-dbtgtloae00c73dd8040-a` is reachable from `0.0.0.0/0` and attached to the production database; its protection rests on pgAdmin authentication. No execution-integrity dependency was found. Re-escalate only on new evidence. Recorded in `docs/MAX-P0-003-REVIEW.md` §5.
 
 **Deployment branch.** Render `pulseforge-api-migration` deploys `migration/render-current-main` with auto-deploy **off**. It is **26 commits ahead of `main`** and `main` has nothing it lacks (Levi Scout research-only integration, tenant-21 pilot policy, MAX-P0-001/002 audits and containment, fail-closed cron auth, CI on the deploy candidate, `test:amo` ratchet). Reconciliation: a reviewed PR `migration/render-current-main → main` (pure fast-forward content). MAX-P0-003 has the candidate merged in, so after that PR merges its own PR diff is MAX-P0-003 only, and what CI validates equals what would deploy.
 
@@ -184,7 +186,7 @@ Test fixture update (no assertion weakened or removed): the `adr075Transactional
 
 ## 9. Proposed controlled deployment and verification plan
 
-Gate 0 (before any deploy): PR CI green; pgAdmin exposure resolved; schema report run in Render Shell and reviewed; MAX-P0-002 configuration items closed.
+Gate 0 (before any deploy): PR CI green; schema report run in Render Shell and reviewed (`docs/MAX-P0-003-REVIEW.md` §4); MAX-P0-002 configuration items closed.
 
 1. **Migration** (separate approval): in Render Shell, `psql "$DATABASE_URL" -f migrations/2026-11-25-max-p0-003-reliability-core.sql`; re-run `schemaReport.cjs` → `reliabilityCoreInstalled: true`, nothing else changed.
 2. **Branch**: merge PR to `main`; reviewed merge of `main` into `migration/render-current-main`; manual deploy (auto-deploy stays off) with `PF_DISABLE_BACKGROUND_WORKERS` unchanged, cron-job.org jobs still paused.
