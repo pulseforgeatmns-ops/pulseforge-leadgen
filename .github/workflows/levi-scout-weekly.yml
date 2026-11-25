@@ -3,10 +3,13 @@ name: Levi Scout research-only (weekly)
 # Independent of PF_DISABLE_BACKGROUND_WORKERS. Hits the existing Render web
 # service cron route. Does not start Signal, Mira, outbound, or paid providers.
 # The cycle itself still no-ops unless SCOUT_LEVI_RESEARCH_ONLY_ENABLED=true.
+#
+# Manual dispatch only (owner directive, infrastructure reconciliation
+# 2026-11-25): the weekly schedule trigger is removed so merging to the default
+# branch does not start a recurring production call. Restore
+# `schedule: - cron: '15 0 * * 1'` only under explicit Levi activation approval.
 
 on:
-  schedule:
-    - cron: '15 0 * * 1'
   workflow_dispatch:
 
 permissions:
