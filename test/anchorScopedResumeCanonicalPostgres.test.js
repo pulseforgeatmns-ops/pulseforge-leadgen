@@ -7,8 +7,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
-const { Pool } = require('pg');
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
+const { createTrackedPostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
 const { applyScopedSchema } = require('./helpers/anchorScopedResumePostgresFixture');
 const { scopedResumeFixture } = require('./helpers/anchorScopedResumeFixture');
 const { insert } = require('./helpers/anchorRecoveryPostgresFixture');
@@ -46,8 +46,8 @@ function scopedService(pool, f) {
 
 test('native scoped approval invokes actual canonical writer without bootstrap or dispatch', { timeout: 120000 }, async t => {
   const pg = await startDisposablePostgres('anchor-scoped-real-canonical-');
-  const pool = new Pool({ connectionString: pg.connectionString, max: 14 });
-  t.after(async () => { resetAcquisitionMissionRuntime(); await pool.end(); await pg.stop(); });
+  const pool = createTrackedPostgresPool({ connectionString: pg.connectionString, max: 14 });
+  t.after(async () => { resetAcquisitionMissionRuntime(); await closePostgresFixture(pool, pg); });
   const harness = existingPreparationHarness();
   const f = await harness.setup(pool);
   // The actual adapter intentionally rechecks runtime wall-clock authority.
