@@ -64,4 +64,32 @@ CREATE TABLE IF NOT EXISTS max_durable_execution_task_events (
 CREATE INDEX IF NOT EXISTS max_durable_execution_task_events_task
   ON max_durable_execution_task_events (tenant_id, task_id, id);
 
+-- Link the P0-003 external-action safety barrier to the durable task. The
+-- ledger is still authoritative for dispatch/reconciliation; this reference
+-- makes incomplete effects visible to recovery and verification.
+ALTER TABLE max_external_action_claims
+  ADD COLUMN IF NOT EXISTS task_id UUID;
+ALTER TABLE max_external_action_claims
+  DROP CONSTRAINT IF EXISTS max_external_action_claims_task_id_fkey;
+ALTER TABLE max_external_action_claims
+  ADD CONSTRAINT max_external_action_claims_task_id_fkey
+  FOREIGN KEY (task_id) REFERENCES max_durable_execution_tasks(id);
+CREATE INDEX IF NOT EXISTS max_external_action_claims_task
+  ON max_external_action_claims (tenant_id, task_id, state) WHERE task_id IS NOT NULL;
+
+-- Task state and event history are durable recovery evidence. P0-003 supplies
+-- this function and is a required predecessor migration.
+DROP TRIGGER IF EXISTS max_durable_execution_tasks_no_delete ON max_durable_execution_tasks;
+CREATE TRIGGER max_durable_execution_tasks_no_delete BEFORE DELETE ON max_durable_execution_tasks
+  FOR EACH ROW EXECUTE FUNCTION max_reliability_forbid_delete();
+DROP TRIGGER IF EXISTS max_durable_execution_tasks_no_truncate ON max_durable_execution_tasks;
+CREATE TRIGGER max_durable_execution_tasks_no_truncate BEFORE TRUNCATE ON max_durable_execution_tasks
+  FOR EACH STATEMENT EXECUTE FUNCTION max_reliability_forbid_delete();
+DROP TRIGGER IF EXISTS max_durable_execution_task_events_no_delete ON max_durable_execution_task_events;
+CREATE TRIGGER max_durable_execution_task_events_no_delete BEFORE DELETE ON max_durable_execution_task_events
+  FOR EACH ROW EXECUTE FUNCTION max_reliability_forbid_delete();
+DROP TRIGGER IF EXISTS max_durable_execution_task_events_no_truncate ON max_durable_execution_task_events;
+CREATE TRIGGER max_durable_execution_task_events_no_truncate BEFORE TRUNCATE ON max_durable_execution_task_events
+  FOR EACH STATEMENT EXECUTE FUNCTION max_reliability_forbid_delete();
+
 COMMIT;

@@ -420,6 +420,7 @@ async function executeOutboundBundle(input = {}) {
               sender: { email: explicitSender.email, name: explicitSender.name },
             }),
             missionId: bundle.missionId,
+            taskId: input.durableTaskOwnership && input.durableTaskOwnership.taskId,
             subjectRef: `prospect:${send.prospectId}`,
             provider: bundle.provider.provider,
             providerIdempotencyKey: identified.idempotencyKey,

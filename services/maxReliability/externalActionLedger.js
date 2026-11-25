@@ -102,6 +102,7 @@ function receiptFromRow(row) {
     state: row.state,
     attempt: Number(row.attempt),
     missionId: row.mission_id || null,
+    taskId: row.task_id || null,
     subjectRef: row.subject_ref || null,
     provider: row.provider || null,
     providerRef: row.provider_ref || null,
@@ -184,16 +185,24 @@ function createExternalActionLedger(pool, options = {}) {
       }
       throw err;
     };
+    // task_id is introduced by the additive P0-004 migration. Keep the
+    // P0-003-only path usable until that migration is explicitly applied.
+    const taskColumn = input.taskId ? ', task_id' : '';
+    const taskValue = input.taskId ? ',$6' : '';
+    const offset = input.taskId ? 1 : 0;
     const inserted = await pool.query(
       `INSERT INTO max_external_action_claims (
          tenant_id, idempotency_key, action_kind, request_fingerprint, attempt, state,
-         mission_id, subject_ref, provider, provider_idempotency_key, correlation_id, owner_token,
+         mission_id${taskColumn}, subject_ref, provider, provider_idempotency_key, correlation_id, owner_token,
          claimed_at, updated_at)
-       VALUES ($1,$2,$3,$4,1,'claimed',$5,$6,$7,$8,$9,$10,$11,$11)
+       VALUES ($1,$2,$3,$4,1,'claimed',$5${taskValue},$${6 + offset},$${7 + offset},$${8 + offset},$${9 + offset},$${10 + offset},$${11 + offset},$${11 + offset})
        ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
        RETURNING *`,
-      [tenantId, idempotencyKey, actionKind, fingerprint, input.missionId || null, input.subjectRef || null,
-        input.provider || null, input.providerIdempotencyKey || null, correlationId, ownerToken, now()]
+      input.taskId
+        ? [tenantId, idempotencyKey, actionKind, fingerprint, input.missionId || null, input.taskId, input.subjectRef || null,
+          input.provider || null, input.providerIdempotencyKey || null, correlationId, ownerToken, now()]
+        : [tenantId, idempotencyKey, actionKind, fingerprint, input.missionId || null, input.subjectRef || null,
+          input.provider || null, input.providerIdempotencyKey || null, correlationId, ownerToken, now()]
     ).catch((err) => ({ r7: r7Block(err) }));
     if (inserted.r7) return inserted.r7;
     if (inserted.rows[0]) {

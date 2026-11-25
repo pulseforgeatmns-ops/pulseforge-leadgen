@@ -74,6 +74,12 @@ test('dependency drift blocks recovery; cancellation fences further work; comple
   const awaiting = await store.reportCompletion({ ...owner(active, 'owner-v'), resultRef: { report: 'r1' }, evidenceRefs: [] }); assert.equal(awaiting.state, STATES.AWAITING_VERIFICATION);
   await assert.rejects(store.verify({ tenantId: secondInput.tenantId, taskId: second.task.id, evidenceRefs: [] }), { code: 'durable_task_invalid' });
   assert.equal((await store.verify({ tenantId: secondInput.tenantId, taskId: second.task.id, evidenceRefs: [{ uri: 'evidence://r1' }] })).state, STATES.COMPLETED);
+
+  const thirdInput = taskInput(); const third = await store.accept(thirdInput); const thirdOwner = await store.claim({ tenantId: thirdInput.tenantId, ownerToken: 'owner-claim', leaseMs: 1000 }); await store.start(owner(thirdOwner, 'owner-claim'));
+  const ledger = createExternalActionLedger(pool); const action = await ledger.claim({ tenantId: thirdInput.tenantId, taskId: third.task.id, idempotencyKey: `unresolved-${sequence}`, actionKind: 'test', requestFingerprint: requestFingerprint({ task: third.task.id }) });
+  await store.reportCompletion({ ...owner(thirdOwner, 'owner-claim'), resultRef: { report: 'r2' }, evidenceRefs: [{ uri: 'evidence://r2' }] });
+  await assert.rejects(store.verify({ tenantId: thirdInput.tenantId, taskId: third.task.id, evidenceRefs: [{ uri: 'evidence://r2' }] }), { code: 'durable_task_external_action_unresolved' });
+  await ledger.releaseUndispatched({ tenantId: thirdInput.tenantId, idempotencyKey: `unresolved-${sequence}`, ownerToken: action.ownerToken });
 });
 
 test('tenant scope and the P0-003 ledger prevent a stale task owner from reaching a provider', async () => {

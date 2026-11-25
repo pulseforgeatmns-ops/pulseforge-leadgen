@@ -1,6 +1,6 @@
 # MAX-P0-004 — Durable Execution Ownership
 
-Status: implemented on a development branch; not deployed. No worker, cron, provider, tenant policy, production migration, or frontend path is enabled by this change.
+Status: implemented on a development branch; not deployed. This document incorporates the MAX-P0-003 handoff and review at authoritative `main` `c51ce3c`. No worker, cron, provider, tenant policy, production migration, or frontend path is enabled by this change.
 
 ## Design
 
@@ -16,11 +16,13 @@ Claims atomically allocate a token, increment a monotonic fence epoch, and set a
 
 Recovery never replays blindly. An expired active lease becomes `recovery_required`, preserving the checkpoint. Revalidation compares persisted dependency references with supplied current references: drift becomes `blocked_dependency`; an exact match returns it to `queued`. Deadlines and retry budget exhaustion escalate instead of looping forever. Unknown provider outcomes remain in the P0-003 ledger and are reconciliation-only.
 
-`OutboundExecutionAdapter` accepts an optional `durableTaskOwnership` binding. Where supplied, it fails closed without the P0-003 ledger and invokes `requireOwner` immediately before the ledger dispatch marker. Thus an ownership transfer cannot produce a second logical send, and P0-004 does not create or bypass another action claim.
+`OutboundExecutionAdapter` accepts an optional `durableTaskOwnership` binding. Where supplied, it fails closed without the P0-003 ledger and invokes `requireOwner` immediately before the ledger dispatch marker. The P0-004 migration links the resulting ledger claim to `task_id`; verification rejects a task with a `claimed`, `dispatch_attempted`, or `outcome_unknown` claim. Thus an ownership transfer cannot produce a second logical send, and P0-004 does not create or bypass another action claim.
+
+P0-003's R7 mission/prospect uniqueness remains authoritative. This layer never synthesizes a new outreach intent: task ownership is an additional fence, not permission to resend after a revision. Mission writes must continue to use `missionLockText(id)` through the P0-003 lease/session-lock protocol; a future task-to-mission commit adapter must validate its fence inside that same lease transaction.
 
 ## Persistence and migration
 
-Apply `migrations/2026-11-25-max-p0-004-durable-execution-ownership.sql` only after P0-003 and only with separate production approval. It is additive: two new tables and indexes; no existing row/table/policy changes. Old code ignores them, so application rollback is a previous deploy while retaining the records. Do not drop them while unfinished tasks or action claims could require recovery.
+Apply `migrations/2026-11-25-max-p0-004-durable-execution-ownership.sql` only after P0-003 and only with separate production approval. It is additive: two task tables, indexes, a nullable `task_id` link on the existing ledger, and P0-003-style no-delete/no-truncate triggers for durable task evidence. It changes no existing rows or authorization policies. Old code ignores the new column and tables, so application rollback is a previous deploy while retaining the records. Do not drop them while unfinished tasks or action claims could require recovery.
 
 ## Acceptance evidence
 
@@ -33,6 +35,7 @@ The suite intentionally requires `initdb` and `pg_ctl`; it does not skip when Po
 - No production worker is supplied or enabled. A later worker integration must use `claim`, revalidate dependencies, recover only bounded eligible tasks, and maintain heartbeats.
 - The current dependency comparison is exact JSON reference equality. A domain adapter must persist canonical dependency versions; it must not silently reinterpret a dependency.
 - Cancellation preserves P0-003 unresolved external-action claims. Operators must reconcile those effects separately.
+- P0-004 recovery must extend `scripts/max-reliability/recover.cjs`, retain its tenant confirmation/operator attribution, and remain plan-only while workers are disabled; it must not create a second recovery command.
 - There is no new UI. Existing structured Max interfaces can expose the task row and event stream.
 
 ## Controlled release
