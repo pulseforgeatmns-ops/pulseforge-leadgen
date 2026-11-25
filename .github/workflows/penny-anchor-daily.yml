@@ -1,8 +1,9 @@
 name: Penny Anchor daily review
 
+# Manual dispatch only (owner directive, MAX-P0-003 final review, 2026-11-25):
+# the daily schedule is paused without invoking the workflow. Restore
+# `schedule: - cron: '0 12 * * *'` only under explicit Penny activation approval.
 on:
-  schedule:
-    - cron: '0 12 * * *'
   workflow_dispatch:
 
 permissions:

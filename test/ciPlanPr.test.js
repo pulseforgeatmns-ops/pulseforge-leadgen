@@ -20,6 +20,22 @@ it('Levi Scout weekly workflow is manual-dispatch-only', () => {
     'Levi recurring execution requires explicit activation approval');
 });
 
+it('Penny Anchor daily workflow is manual-dispatch-only (paused)', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const workflow = fs.readFileSync(
+    path.join(__dirname, '../.github/workflows/penny-anchor-daily.yml'),
+    'utf8',
+  );
+  const triggerBlock = workflow.match(/^on:\n([\s\S]*?)(?=^permissions:)/m);
+  assert.ok(triggerBlock, 'Penny workflow must declare its triggers');
+  assert.match(triggerBlock[0], /^  workflow_dispatch:\s*$/m);
+  assert.doesNotMatch(triggerBlock[0], /^  schedule:/m,
+    'Penny recurring execution requires explicit activation approval');
+  assert.doesNotMatch(triggerBlock[0], /^\s*-\s*cron:/m,
+    'Penny recurring execution requires explicit activation approval');
+});
+
 it('Max operational principal and tenant boundaries retain strict and full regression coverage', () => {
   for (const file of ['utils/maxOperationalAuthorization.js', 'utils/maxAttentionAuthorization.js',
     'routes/maxDecisionExecution.js', 'routes/maxStateIngestion.js', 'test/maxOperationalAuthorization.test.js']) {
