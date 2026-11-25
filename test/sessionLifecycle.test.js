@@ -284,3 +284,34 @@ test('the env-password fallback never matches an unset password', async () => {
   assert.equal(session.authenticated, undefined);
   assert.equal(session.regenerated, 0);
 });
+
+test('rotated session is not re-saved when express-session touch drifts originalMaxAge by milliseconds', async () => {
+  // express-session's Cookie.expires setter recomputes originalMaxAge as
+  // expires - Date.now(); touch() at writeHead can therefore move it by 1ms
+  // under load. That drift alone must not trigger a second store write.
+  const { Session, Cookie } = require('express-session');
+  const lifecycle = require('../utils/sessionLifecycle');
+  const realNow = Date.now; let clock = 1_800_000_000_000;
+  Date.now = () => clock++;
+  try {
+    let saves = 0; const req = { headers: {}, connection: {} };
+    const make = () => { const s = new Session(req); s.cookie = new Cookie({ maxAge: lifecycle.DEFAULT_MAX_AGE_MS }); return s; };
+    req.session = make();
+    Object.defineProperty(req.session, 'regenerate', { value(cb) {
+      req.session = make();
+      Object.defineProperty(req.session, 'save', { configurable: true, writable: true, value(cb2) { saves++; if (cb2) cb2(); return this; } });
+      cb();
+    } });
+    await lifecycle.rotateSession(req);
+    req.session.user = { id: 7 }; req.session.authenticated = true;
+    lifecycle.applyLoginPersistence(req, { id: 7, password_hash: 'synthetic-hash' }, false);
+    await new Promise((resolve, reject) => req.session.save(e => e ? reject(e) : resolve()));
+    req.session.touch(); // what express-session does at writeHead
+    await new Promise((resolve, reject) => req.session.save(e => e ? reject(e) : resolve()));
+    assert.equal(saves, 1);
+    // A real lifetime change is still written.
+    lifecycle.applyLoginPersistence(req, { id: 7, password_hash: 'synthetic-hash' }, true);
+    await new Promise((resolve, reject) => req.session.save(e => e ? reject(e) : resolve()));
+    assert.equal(saves, 2);
+  } finally { Date.now = realNow; }
+});

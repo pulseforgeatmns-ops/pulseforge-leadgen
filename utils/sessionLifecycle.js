@@ -69,7 +69,12 @@ function rotateSession(req) {
 function skipRepeatSave(session) {
   const save = session.save;
   if (typeof save !== 'function') return;
-  const content = sess => JSON.stringify({ ...sess, cookie: { originalMaxAge: sess.cookie?.originalMaxAge,
+  // express-session's Cookie recomputes originalMaxAge as expires - Date.now()
+  // whenever maxAge is reassigned (touch() at writeHead does so), so it can
+  // drift by a few milliseconds within one request. Compare the lifetime in
+  // whole minutes: 24h vs 30-day remember is still a change, drift is not.
+  const lifetime = ms => (typeof ms === 'number' ? Math.round(ms / 60000) : ms);
+  const content = sess => JSON.stringify({ ...sess, cookie: { originalMaxAge: lifetime(sess.cookie?.originalMaxAge),
     secure: sess.cookie?.secure } });
   let persisted = null;
   Object.defineProperty(session, 'save', { configurable: true, enumerable: false, writable: true, value(callback) {
