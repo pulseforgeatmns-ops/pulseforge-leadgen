@@ -43,6 +43,25 @@ function resolveExternalActionLedger(input = {}) {
 }
 
 /**
+ * MAX-P0-004: a durable task owner must still be current immediately before
+ * the P0-003 dispatch marker. The ledger remains the action de-duplication
+ * authority; this is deliberately an additional fence, never a second claim.
+ */
+async function assertDurableTaskOwnership(input = {}) {
+  const binding = input.durableTaskOwnership;
+  if (!binding) return;
+  if (!binding.store || typeof binding.store.requireOwner !== 'function') {
+    throw Object.assign(new Error('Durable task ownership binding is invalid.'), { code: 'durable_task_fenced' });
+  }
+  await binding.store.requireOwner({
+    tenantId: binding.tenantId || input.tenantId,
+    taskId: binding.taskId,
+    ownershipToken: binding.ownershipToken,
+    fenceEpoch: binding.fenceEpoch,
+  });
+}
+
+/**
  * MAX-P0-003 — a pre-ledger ATTEMPTED record with no later SENT/FAILED record
  * means the process stopped between dispatch and recording the result. The
  * message may have been delivered; it must not be sent again automatically.
@@ -333,6 +352,13 @@ async function executeOutboundBundle(input = {}) {
     // uncertain claims are rejected here, before the provider is reached; the
     // dispatch marker commits before the send (services/maxReliability/guardedDispatch).
     const ledger = resolveExternalActionLedger(input);
+    if (input.durableTaskOwnership && !ledger) {
+      const blocked = blockedFor('external_action_ledger_unavailable',
+        'Durable task execution requires the MAX-P0-003 external-action ledger; nothing was sent.');
+      records.push(blocked);
+      if (typeof persistExecutionRecord === 'function') await persistExecutionRecord(blocked);
+      continue;
+    }
     const attemptedAt = nowIso();
     const pendingRecord = buildExecutionRecord({
       missionId: bundle.missionId,
@@ -399,7 +425,10 @@ async function executeOutboundBundle(input = {}) {
             providerIdempotencyKey: identified.idempotencyKey,
             correlationId: input.correlationId || null,
           },
-          beforeDispatch: governedApproval ? () => sendEmail.beforeAttempt(command) : null,
+          beforeDispatch: async () => {
+            await assertDurableTaskOwnership(input);
+            if (governedApproval) await sendEmail.beforeAttempt(command);
+          },
           persistAttempt: persistPending,
           dispatch: () => sendEmail(command),
         });
@@ -492,5 +521,6 @@ module.exports = {
   findPriorDispatchForProspect,
   OUTBOUND_ACTION_KIND,
   resolveExecuteSender,
+  assertDurableTaskOwnership,
   bindGovernedRefillSend,
 };

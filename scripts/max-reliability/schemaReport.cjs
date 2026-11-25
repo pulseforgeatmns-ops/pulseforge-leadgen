@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * MAX-P0-003 §4 — read-only database schema and migration report.
+ * MAX-P0-003/P0-004 — read-only database schema and migration report.
  *
  * Run IN-NETWORK only (Render Shell on the API service, which already holds
  * DATABASE_URL on the private network). Never open the database to the
@@ -42,6 +42,7 @@ const MAX_CORE_TABLES = [
   'acquisition_mission_observations', 'acquisition_mission_outcomes', 'acquisition_mission_execution_audit',
   'acquisition_mission_outbound_executions', 'max_conversation_context',
   'max_external_action_claims', 'max_request_receipts', 'max_reliability_audit',
+  'max_durable_execution_tasks', 'max_durable_execution_task_events',
 ];
 
 async function main() {
@@ -99,7 +100,7 @@ async function main() {
     }
     await client.query('ROLLBACK');
     process.stdout.write(`${JSON.stringify({
-      kind: 'max_p0_003_schema_report',
+      kind: 'max_reliability_schema_report',
       server,
       catalog,
       tableCount: tables.length,
@@ -107,6 +108,7 @@ async function main() {
       missingFromMigrations,
       maxCore,
       reliabilityCoreInstalled: ['max_external_action_claims', 'max_request_receipts', 'max_reliability_audit'].every((t) => present.has(t)),
+      durableExecutionOwnershipInstalled: ['max_durable_execution_tasks', 'max_durable_execution_task_events'].every((t) => present.has(t)),
       otherSchemas: otherSchemas.map((r) => r.schema),
       signalTables,
       tenants,
