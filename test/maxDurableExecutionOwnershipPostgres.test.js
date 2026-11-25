@@ -23,7 +23,7 @@ async function db() {
   fixture = { instance, pool, pool2 }; return fixture;
 }
 test.after(async () => { if (fixture) { await fixture.pool2.end(); await closePostgresFixture(fixture.pool, fixture.instance); } });
-function taskInput(overrides = {}) { sequence += 1; return { tenantId: 'tenant-a', logicalKey: `task-${process.pid}-${sequence}`, specialist: 'research', immutableInput: { query: 'Manchester', n: sequence }, dependencyRefs: [{ id: 'mission', version: '1' }], retryBudget: 2, ...overrides }; }
+function taskInput(overrides = {}) { sequence += 1; return { tenantId: `tenant-a-${sequence}`, logicalKey: `task-${process.pid}-${sequence}`, specialist: 'research', immutableInput: { query: 'Manchester', n: sequence }, dependencyRefs: [{ id: 'mission', version: '1' }], retryBudget: 2, ...overrides }; }
 function owner(task, token) { return { tenantId: task.tenantId, taskId: task.id, ownershipToken: token, fenceEpoch: task.fenceEpoch }; }
 
 test('accepted delegation is durable, idempotent, and survives an originating request boundary', async () => {
