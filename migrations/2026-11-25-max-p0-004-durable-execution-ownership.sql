@@ -91,11 +91,15 @@ ALTER TABLE max_external_action_claims
   ADD CONSTRAINT max_external_action_claims_tenant_task_fkey
   FOREIGN KEY (tenant_id, task_id) REFERENCES max_durable_execution_tasks(tenant_id, id);
 -- Once an action is attributed to a task it stays attributed to that task, so
--- an unresolved effect cannot be detached to let verification pass.
+-- an unresolved or delivered effect cannot be detached to let verification pass.
 CREATE OR REPLACE FUNCTION max_external_action_claim_task_guard() RETURNS trigger
   LANGUAGE plpgsql AS $$
 BEGIN
-  IF OLD.task_id IS NOT NULL AND NEW.task_id IS DISTINCT FROM OLD.task_id THEN
+  -- A never-delivered claim (abandoned_not_dispatched / failed_definitive) may
+  -- be re-attributed only as part of a reclaim back to 'claimed'.
+  IF OLD.task_id IS NOT NULL AND NEW.task_id IS DISTINCT FROM OLD.task_id
+     AND NOT (NEW.task_id IS NOT NULL AND NEW.state = 'claimed'
+              AND OLD.state IN ('abandoned_not_dispatched','failed_definitive')) THEN
     RAISE EXCEPTION 'MAX-P0-004: an external action task link is immutable'
       USING ERRCODE = 'check_violation';
   END IF;
@@ -135,8 +139,13 @@ BEGIN
     RAISE EXCEPTION 'MAX-P0-004: fence epoch and recovery attempts never decrease'
       USING ERRCODE = 'check_violation';
   END IF;
-  IF OLD.state IN ('completed','failed','cancelled','escalated') AND NEW.state IS DISTINCT FROM OLD.state THEN
-    RAISE EXCEPTION 'MAX-P0-004: terminal task state is final'
+  IF NEW.ownership_token IS NOT NULL AND NEW.ownership_token IS DISTINCT FROM OLD.ownership_token
+     AND NEW.fence_epoch <= OLD.fence_epoch THEN
+    RAISE EXCEPTION 'MAX-P0-004: a new owner requires a new fence epoch'
+      USING ERRCODE = 'check_violation';
+  END IF;
+  IF OLD.state IN ('completed','failed','cancelled','escalated') THEN
+    RAISE EXCEPTION 'MAX-P0-004: terminal task rows are final'
       USING ERRCODE = 'check_violation';
   END IF;
   RETURN NEW;

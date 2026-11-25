@@ -14,7 +14,7 @@ State sequence: `requested → queued → claimed → running → awaiting_verif
 
 Claims atomically allocate a token, increment a monotonic fence epoch, and set a database-clock lease. Every ownership-bound write (start, heartbeat, checkpoint, completion) is one compare-and-set on tenant, task, token, epoch, active state, unexpired lease **and unexpired deadline**, committed together with its event row. A stale, superseded, cancelled or past-deadline owner cannot write a checkpoint/result or enter the provider path.
 
-Recovery never replays blindly. `recoverExpired` locks each due row and decides, in this order: an unresolved task-linked external action (`claimed`, `dispatch_attempted`, `outcome_unknown`) → `escalated` / `external_action_unresolved`; deadline passed → `escalated` / `deadline_exceeded`; recovery attempts ≥ retry budget → `escalated` / `retry_budget_exhausted`; otherwise `recovery_required` with the checkpoint preserved. `recovery_attempts` is incremented when a task *enters* recovery, so revalidation or requeueing can never reset the budget. Waiting tasks (`queued`, `recovery_required`, `blocked_dependency`) whose deadline passed are escalated by the same sweep and are never claimable. Revalidation compares persisted dependency references with supplied current references: drift becomes `blocked_dependency`; an exact match returns it to `queued`. Unknown provider outcomes remain in the P0-003 ledger and are reconciliation-only.
+Recovery never replays blindly. `recoverExpired` locks each due row and decides, in this order: an unresolved task-linked external action (`claimed`, `dispatch_attempted`, `outcome_unknown`) → `escalated` / `external_action_unresolved`; deadline passed → `escalated` / `deadline_exceeded`; recovery attempts ≥ retry budget → `escalated` / `retry_budget_exhausted`; otherwise `recovery_required` with the checkpoint preserved. `recovery_attempts` is incremented when a task *enters* recovery, so revalidation or requeueing can never reset the budget. Waiting tasks (`requested`, `queued`, `recovery_required`, `blocked_dependency`) whose deadline passed are escalated by the same sweep and are never claimable. `recovery_required` is not claimable: re-admission is explicit through `revalidateDependencies`, which compares persisted dependency references with supplied current references: drift becomes `blocked_dependency`; an exact match returns it to `queued`. A specialist completion reported while a task-linked action is still unresolved escalates in the same transaction (`external_action_unresolved`) instead of waiting indefinitely in `awaiting_verification`. Unknown provider outcomes remain in the P0-003 ledger and are reconciliation-only.
 
 Cancellation locks the task row. If any task-linked action may already have reached a provider (`dispatch_attempted`, `outcome_unknown`, `provider_acknowledged`, `verified`), the effect cannot be recalled: the task ends `escalated` / `cancelled_after_dispatch` with the claim states in the event. Otherwise it ends `cancelled`.
 
@@ -26,11 +26,11 @@ P0-003's R7 mission/prospect uniqueness remains authoritative. This layer never 
 
 ### Database-enforced invariants (direct callers included)
 
-- Tenant isolation by composite foreign keys: task parent `(tenant_id, parent_task_id)`, task events `(tenant_id, task_id)`, and ledger claims `(tenant_id, task_id)` all reference `max_durable_execution_tasks(tenant_id, id)`. A claim's task link is immutable once set.
+- Tenant isolation by composite foreign keys: task parent `(tenant_id, parent_task_id)`, task events `(tenant_id, task_id)`, and ledger claims `(tenant_id, task_id)` all reference `max_durable_execution_tasks(tenant_id, id)`. A claim's task link is immutable once set, except that a never-delivered claim (`abandoned_not_dispatched`/`failed_definitive`) is re-attributed when another task reclaims it (so a successor task can send exactly once).
 - No self-parent; `parent_task_id` is immutable, so the parent relation cannot form a cycle.
 - Owner and lease are present exactly while the task is `claimed`/`running` (CHECK).
 - At most one `claimed`/`running` task per `(tenant_id, mission_id)` (partial unique index); `claim` skips a busy mission.
-- Accepted identity, tenant, input, dependency snapshot, deadline and retry budget are immutable; fence epoch and recovery attempts never decrease; terminal states are final (trigger).
+- Accepted identity, tenant, input, dependency snapshot, deadline and retry budget are immutable; fence epoch and recovery attempts never decrease; a new owner token requires a new fence epoch; terminal rows are final (trigger).
 - Task rows and events cannot be deleted or truncated; events cannot be updated.
 
 ## Persistence and migration
@@ -57,8 +57,8 @@ The approved proposal (this file at `main` `c51ce3c`, §5) defined 13 criteria a
 | 3 | CAS on state/fence/owner/DB-time lease; fence enforced in the TME commit | **Partial**: all store transitions and the outbound dispatch marker are fenced; TME commit fence and mission-lease narrowing are P3 integration. |
 | 4 | At most one active task per mission per tenant, DB-enforced | **Met** (partial unique index) |
 | 5 | Explicit recoverable state after a crash at every boundary | **Partial**: store and dispatch boundaries (claim/start/lease/marker) are covered; router/TME/receipt boundaries arrive with P2. |
-| 6 | Deadline/stall never replays; external doubt → intervention | **Met** at store level (`escalated` is the intervention state) |
-| 7 | Recovery tenant-scoped, plan-by-default, operator-attributed, audited | **Partial**: `recoverExpired` is tenant-scoped and evented; `recover.cjs` extension (plan-by-default, `--operator`) not done. |
+| 6 | Deadline/stall never replays; external doubt → intervention | **Met** at store level for lease expiry, deadline, cancellation and completion (`escalated` is the intervention state). An `awaiting_verification` task whose action is attached later by a direct ledger caller is refused by `verify` but not swept. |
+| 7 | Recovery tenant-scoped, plan-by-default, operator-attributed, audited | **Partial**: `recoverExpired` is tenant-scoped and evented, and re-admission is explicit (`recovery_required` is only re-queued by revalidation); `recover.cjs` extension (plan-by-default, `--operator`) not done. |
 | 8 | Cycle-free dependencies, admission, failure propagation | **Partial**: parent tree cycle-free by DB; dependency drift blocks; no DAG admission/propagation. |
 | 9 | Cancel before dispatch → cancelled, after → intervention with claim states | **Met** |
 | 10 | Receipts, claims and tasks linked; task cannot complete with an unresolved claim | **Partial**: claims linked and enforced; receipts not linked. |
@@ -69,6 +69,11 @@ The approved proposal (this file at `main` `c51ce3c`, §5) defined 13 criteria a
 State vocabulary differs from the proposal (`queued` ≈ `admitted`, `escalated` ≈ `awaiting_intervention`, `recovery_required` ≈ `interrupted`, `completed` after evidence ≈ `verified`); a presentation layer must map it without claiming more.
 
 ## Known limits
+
+- Conservative escalation: a task whose only action is `claimed` (never dispatched) is escalated on lease expiry; an operator must release it. This favours no-replay over availability.
+- A replayed action (same idempotency key already acknowledged under an earlier task) returns the original receipt; the successor task has no linked claim of its own, so its verification evidence must cite that receipt.
+- `claim()` returns `null` if it loses the one-active-per-mission race in that round, even if another mission has claimable work; the caller retries.
+- A fence refusal mid-bundle aborts the bundle with `durable_task_fenced` (earlier sends are already recorded and ledger-protected), matching P0-003's handling of provider exceptions.
 
 - No production worker is supplied or enabled. A later worker integration must use `claim`, revalidate dependencies, recover only bounded eligible tasks, and maintain heartbeats.
 - The current dependency comparison is exact JSON reference equality. A domain adapter must persist canonical dependency versions; it must not silently reinterpret a dependency.

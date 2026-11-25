@@ -29,7 +29,9 @@ const STATES = Object.freeze({
   CANCELLED: 'cancelled', ESCALATED: 'escalated',
 });
 const ACTIVE = [STATES.CLAIMED, STATES.RUNNING];
-const CLAIMABLE = [STATES.QUEUED, STATES.RECOVERY_REQUIRED];
+// recovery_required is deliberately NOT claimable: re-admission is explicit,
+// through revalidateDependencies (drift → blocked_dependency, match → queued).
+const CLAIMABLE = [STATES.QUEUED];
 const WAITING = [STATES.REQUESTED, STATES.QUEUED, STATES.RECOVERY_REQUIRED, STATES.BLOCKED_DEPENDENCY];
 const TERMINAL = [STATES.COMPLETED, STATES.FAILED, STATES.CANCELLED, STATES.ESCALATED];
 /** Claim states whose external effect is undecided (never replay; reconcile). */
@@ -139,11 +141,13 @@ function createDurableExecutionOwnership(pool, options = {}) {
     return tx(async (db) => {
       const inserted = await db.query(`INSERT INTO max_durable_execution_tasks(id,tenant_id,objective_id,mission_id,parent_task_id,logical_key,input_fingerprint,specialist,execution_scope,immutable_input,dependency_refs,state,deadline_at,retry_budget)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,'queued',$12,$13)
-        ON CONFLICT(tenant_id,logical_key) DO NOTHING RETURNING *`, [taskId, tenantId, input.objectiveId || null, input.missionId || null, parentTaskId, logicalKey, fingerprint, specialist,
+        ON CONFLICT DO NOTHING RETURNING *`, [taskId, tenantId, input.objectiveId || null, input.missionId || null, parentTaskId, logicalKey, fingerprint, specialist,
         JSON.stringify(executionScope), JSON.stringify(immutableInput), JSON.stringify(dependencyRefs), deadlineAt, retryBudget]);
       if (inserted.rows[0]) { await event(db, inserted.rows[0], 'accepted', null, STATES.QUEUED); return { accepted: true, replay: false, task: row(inserted.rows[0]) }; }
       const existing = (await db.query('SELECT * FROM max_durable_execution_tasks WHERE tenant_id=$1 AND logical_key=$2', [tenantId, logicalKey])).rows[0];
-      if (!existing) throw error('durable_task_conflict', 'Task acceptance raced; retry with the same key.');
+      // No row for this key: either a concurrent writer, or a caller-supplied
+      // taskId that already exists (possibly in another tenant). Never say which.
+      if (!existing) throw error('durable_task_conflict', 'Task could not be accepted with this identity; retry with the same key or without a taskId.');
       if (existing.input_fingerprint !== fingerprint) throw error('durable_task_key_reused', 'logicalKey was already accepted with different immutable input.');
       return { accepted: true, replay: true, task: row(existing) };
     });
@@ -202,12 +206,29 @@ function createDurableExecutionOwnership(pool, options = {}) {
   function checkpoint(input = {}) {
     return ownedUpdate(input, { set: 'progress_checkpoint=$6::jsonb', params: [JSON.stringify(json(input.checkpoint, {}))], eventName: 'checkpointed', message: 'Checkpoint rejected for stale owner.' });
   }
-  function reportCompletion(input = {}) {
-    return ownedUpdate(input, {
-      set: "state='awaiting_verification', result_ref=$6::jsonb, evidence_refs=$7::jsonb, ownership_token=NULL, lease_expires_at=NULL",
-      params: [JSON.stringify(json(input.resultRef, {})), JSON.stringify(json(input.evidenceRefs, []))],
-      fromStates: [STATES.RUNNING], eventName: 'specialist_completed', toState: STATES.AWAITING_VERIFICATION,
-      message: 'Completion rejected for stale owner or a task that was never started.',
+  /**
+   * Specialist completion moves to awaiting_verification. If the task still
+   * has an unresolved external action, it cannot be verified and nobody owns
+   * it any more, so it is escalated in the same transaction instead of
+   * waiting indefinitely.
+   */
+  async function reportCompletion(input = {}) {
+    const o = validOwner(input);
+    return tx(async (db) => {
+      const r = await db.query(`WITH prior AS (SELECT id FROM max_durable_execution_tasks WHERE ${OWNER_PREDICATE} AND state='running' FOR UPDATE)
+        UPDATE max_durable_execution_tasks t SET state='awaiting_verification', result_ref=$5::jsonb, evidence_refs=$6::jsonb,
+               ownership_token=NULL, lease_expires_at=NULL, updated_at=clock_timestamp() FROM prior WHERE t.id=prior.id RETURNING t.*`,
+      [o.taskId, o.tenantId, o.ownershipToken, o.fenceEpoch, JSON.stringify(json(input.resultRef, {})), JSON.stringify(json(input.evidenceRefs, []))]);
+      let task = r.rows[0];
+      if (!task) throw error('durable_task_fenced', 'Completion rejected for stale owner or a task that was never started.');
+      await event(db, task, 'specialist_completed', STATES.RUNNING, STATES.AWAITING_VERIFICATION);
+      const actions = await actionStates(db, o.tenantId, o.taskId);
+      if (anyIn(actions, UNRESOLVED_ACTION_STATES)) {
+        task = (await db.query(`UPDATE max_durable_execution_tasks SET state='escalated', escalation_reason='external_action_unresolved', updated_at=clock_timestamp()
+          WHERE id=$1 AND tenant_id=$2 RETURNING *`, [o.taskId, o.tenantId])).rows[0];
+        await event(db, task, 'completion_escalated', STATES.AWAITING_VERIFICATION, STATES.ESCALATED, { reason: 'external_action_unresolved', actionStates: actions });
+      }
+      return row(task);
     });
   }
 

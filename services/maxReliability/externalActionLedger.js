@@ -233,14 +233,21 @@ function createExternalActionLedger(pool, options = {}) {
     if (RECLAIMABLE.has(existing.state)) {
       // Compare-and-set on the observed state + attempt: two concurrent re-claims
       // cannot both win.
+      // MAX-P0-004: a reclaim by a durable task re-attributes the never-delivered
+      // claim to that task (the migration allows this only from
+      // abandoned_not_dispatched/failed_definitive back to claimed), so the
+      // fenced dispatch marker can bind it to the reclaiming owner.
+      const reclaimTask = input.taskId ? ', task_id = $8' : '';
+      const reclaimParams = [tenantId, idempotencyKey, ownerToken, correlationId, now(), existing.state, existing.attempt];
+      if (input.taskId) reclaimParams.push(input.taskId);
       const reclaimed = await pool.query(
         `UPDATE max_external_action_claims
             SET state = 'claimed', attempt = attempt + 1, owner_token = $3, correlation_id = $4,
                 provider_ref = NULL, error_class = NULL, claimed_at = $5, dispatch_attempted_at = NULL,
-                acknowledged_at = NULL, verified_at = NULL, resolved_at = NULL, updated_at = $5
+                acknowledged_at = NULL, verified_at = NULL, resolved_at = NULL, updated_at = $5${reclaimTask}
           WHERE tenant_id = $1 AND idempotency_key = $2 AND state = $6 AND attempt = $7
         RETURNING *`,
-        [tenantId, idempotencyKey, ownerToken, correlationId, now(), existing.state, existing.attempt]
+        reclaimParams
       ).catch((err) => ({ r7: r7Block(err) }));
       if (reclaimed.r7) return reclaimed.r7;
       if (reclaimed.rows[0]) {
