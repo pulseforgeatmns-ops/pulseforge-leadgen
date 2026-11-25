@@ -1,0 +1,36 @@
+name: Levi Scout research-only (weekly)
+
+# Independent of PF_DISABLE_BACKGROUND_WORKERS. Hits the existing Render web
+# service cron route. Does not start Signal, Mira, outbound, or paid providers.
+# The cycle itself still no-ops unless SCOUT_LEVI_RESEARCH_ONLY_ENABLED=true.
+#
+# Manual dispatch only (owner directive, infrastructure reconciliation
+# 2026-11-25): the weekly schedule trigger is removed so merging to the default
+# branch does not start a recurring production call. Restore
+# `schedule: - cron: '15 0 * * 1'` only under explicit Levi activation approval.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: levi-scout-weekly
+  cancel-in-progress: false
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Run tenant-21 research-only cycle on Render
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          APP_URL: ${{ vars.PULSEFORGE_APP_URL || 'https://pulseforge-api-migration.onrender.com' }}
+        run: |
+          test -n "$CRON_SECRET"
+          curl --fail-with-body --silent --show-error --retry 2 --retry-all-errors \
+            --request POST --header "Authorization: Bearer ${CRON_SECRET}" \
+            --header "Content-Type: application/json" \
+            "${APP_URL%/}/cron/scout_levi"

@@ -1,0 +1,56 @@
+name: Render production release gate
+
+# MAX-P0-002: the only sanctioned path to deploy pulseforge-api-migration.
+# Refuses unless the candidate is the tip of migration/render-current-main and
+# its required push-triggered checks (full regression incl. the test:amo
+# ratchet) succeeded. Fails closed without RENDER_DEPLOY_HOOK_URL.
+#
+# Operator prerequisites (not configurable from the repository):
+#   - repository secret RENDER_DEPLOY_HOOK_URL (Render service > Settings > Deploy Hook);
+#   - keep Render auto-deploy OFF and stop deploying from the Render dashboard/API directly;
+#   - branch protection on migration/render-current-main requiring pull requests and
+#     the "PR CI gate" check.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full 40-character commit SHA to deploy (must be the branch tip)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: render-release-gate
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Verify candidate and deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify required checks for the candidate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CANDIDATE_SHA: ${{ inputs.sha }}
+          DEPLOY_BRANCH: migration/render-current-main
+        run: node scripts/ci/verifyReleaseCandidate.js
+      - name: Trigger Render deploy of exactly this commit
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+          CANDIDATE_SHA: ${{ inputs.sha }}
+        run: |
+          test -n "$RENDER_DEPLOY_HOOK_URL" || { echo "RENDER_DEPLOY_HOOK_URL is not configured; refusing to deploy."; exit 1; }
+          curl --fail-with-body --silent --show-error --request POST \
+            "${RENDER_DEPLOY_HOOK_URL}&ref=${CANDIDATE_SHA}"

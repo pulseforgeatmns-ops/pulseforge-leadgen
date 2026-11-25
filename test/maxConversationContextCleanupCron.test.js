@@ -27,6 +27,7 @@ async function withFixture(options, callback) {
     '../utils/clientContext': {},
     '../utils/agentDispatchPolicy': {},
     '../scoutExpansion': {},
+    '../utils/cronAuth': require('../utils/cronAuth'),
     '../utils/maxDecayCron': {
       createMaxDecayCronHandler: () => (_req, res) => res.sendStatus(404),
     },

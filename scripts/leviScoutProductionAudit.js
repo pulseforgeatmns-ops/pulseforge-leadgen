@@ -18,7 +18,7 @@ const QUERIES = {
     FROM cie_business_blueprints WHERE client_id=$1 ORDER BY updated_at DESC LIMIT 5`,
   runs: `SELECT agent_name,action,status,COALESCE(payload->>'reason',error_msg) AS reason,count(*)::int AS runs,
     max(ran_at) AS last_ran_at FROM agent_log WHERE client_id=$1 AND ran_at>=NOW()-INTERVAL '30 days'
-    AND agent_name IN ('scout','scout_unenriched_enrichment','setter_handoff','handoff_utility','max_outbound_control')
+    AND agent_name IN ('scout','scout_unenriched_enrichment','setter_handoff','handoff_utility','max_outbound_control','scout_levi')
     GROUP BY 1,2,3,4 ORDER BY last_ran_at DESC`,
   prospects: `SELECT p.id,p.created_at,p.source,p.status,p.job_title,p.email,p.phone,p.linkedin_url,p.notes,
     p.service_area_match,p.do_not_contact,p.acquisition_metadata,c.location AS company_location,

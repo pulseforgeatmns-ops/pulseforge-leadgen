@@ -64,6 +64,7 @@ async function withCronFixture(options, callback) {
     '../utils/clientContext': clientContext,
     '../utils/agentDispatchPolicy': {},
     '../scoutExpansion': {},
+    '../utils/cronAuth': require('../utils/cronAuth'),
     '../utils/maxDecayCron': { createMaxDecayCronHandler: () => (_req, res) => res.sendStatus(404) },
     '../services/scoutPlacesDiagnostic': {},
     '../utils/anchorResearchProviderPause': require('../utils/anchorResearchProviderPause'),

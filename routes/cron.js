@@ -1,6 +1,11 @@
 const express = require('express');
 const Anthropic = require('../utils/meteredAnthropic').forAgent('cron_summary');
 const router = express.Router();
+// MAX-P0-002: legacy shared-secret routes fail closed when CRON_SECRET is unset/empty.
+// Loaded lazily and given this module's process.env (route harnesses inject both).
+function legacyCronSecretValid(secret) {
+  return require('../utils/cronAuth').legacyCronSecretValid(secret, process.env);
+}
 // PF-CLARITY-001: bearer-authenticated POST only, two flags + tenant grant fail closed.
 router.post('/cron/clarity-weekly-review', (req,res) => require('../services/clarityJobs').createClarityCronHandler()(req,res));
 // No missing-secret bypass and no GET mutation. These stay separate from legacy
@@ -87,11 +92,48 @@ const anthropic = new Anthropic();
 const CRON_SPECIAL_HANDLERS = Object.freeze({
   'scout-places-diagnostic': 'scoutPlacesDiagnostic',
   scout_places_diagnostic: 'scoutPlacesDiagnostic',
+  scout_levi: 'scoutLevi',
+  'scout-levi': 'scoutLevi',
 });
 
 function isScoutPlacesDiagnosticAgent(agent) {
   const key = String(agent || '').trim();
   return CRON_SPECIAL_HANDLERS[key] === 'scoutPlacesDiagnostic';
+}
+
+function isLeviScoutAgent(agent) {
+  const key = String(agent || '').trim();
+  return CRON_SPECIAL_HANDLERS[key] === 'scoutLevi';
+}
+
+function leviCronAuthorized(req) {
+  return require('../services/leviScoutEnablement').cronSecretMatches(req, process.env);
+}
+
+async function handleLeviScoutCron(req, res) {
+  if (!leviCronAuthorized(req)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const result = await require('../services/leviScoutProductionRunner').runLeviScoutProductionCycle({
+      env: process.env,
+      db: pool,
+    });
+    return res.set('Cache-Control', 'no-store').json({
+      ...result,
+      outreachAttempted: false,
+      paidProvidersUsed: false,
+    });
+  } catch (err) {
+    const code = err.code || 'levi_scout_cron_failed';
+    return res.status(code === 'levi_research_disabled' ? 200 : 500).json({
+      ok: false,
+      skipped: code === 'levi_research_disabled',
+      reason: code,
+      outreachAttempted: false,
+      paidProvidersUsed: false,
+    });
+  }
 }
 
 const CRON_MODULES = {
@@ -290,7 +332,7 @@ async function handlePennyDailyReviewCron(req, res) {
 
 async function handleExecuteAnchorOneOutboundCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
@@ -316,7 +358,7 @@ async function handleExecuteAnchorOneOutboundCron(req, res) {
 
 async function handleInspectAnchorCanonicalOutboundCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
@@ -334,7 +376,7 @@ async function handleInspectAnchorCanonicalOutboundCron(req, res) {
 
 async function handleContinueAnchorStrScoutInvestigationCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
@@ -362,7 +404,7 @@ async function handleContinueAnchorStrScoutInvestigationCron(req, res) {
 
 async function handleRecoverAnchorCanonicalOutboundCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   const recover = ['1', 'true', 'yes'].includes(
@@ -387,7 +429,7 @@ async function handleRecoverAnchorCanonicalOutboundCron(req, res) {
 
 async function handleSeedDirectMailAoCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   const apply = ['1', 'true', 'yes'].includes(String(req.query.apply || req.body?.apply || '').toLowerCase());
@@ -407,7 +449,7 @@ async function handleSeedDirectMailAoCron(req, res) {
 
 async function handleScoutExpansionCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   const clientId = normalizeClientId(req.query.client_id || req.query.clientId);
@@ -440,7 +482,7 @@ function parsePulseHealthJson(text) {
 
 async function handlePulseHealthCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
@@ -618,7 +660,7 @@ Respond with valid JSON only:
 
 async function handleScoutPlacesDiagnostic(req, res) {
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
@@ -756,7 +798,7 @@ router.get('/cron/continue-anchor-str-scout-investigation', handleContinueAnchor
 
 async function handleTenantOutreachExecutorCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
@@ -777,7 +819,7 @@ router.get('/cron/tenant-outreach-executor', handleTenantOutreachExecutorCron);
 
 async function handleTenantMailboxPollCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
@@ -797,7 +839,7 @@ router.get('/cron/tenant-mailbox-poll', handleTenantMailboxPollCron);
 
 async function handleSignalShadowCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   if (!process.env.DATABASE_URL) {
@@ -883,8 +925,11 @@ router.post('/cron/:agent', async (req, res) => {
   if (isScoutPlacesDiagnosticAgent(agent)) {
     return handleScoutPlacesDiagnostic(req, res);
   }
+  if (isLeviScoutAgent(agent)) {
+    return handleLeviScoutCron(req, res);
+  }
   const secret = req.body?.secret || req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   await runCronAgent(agent, res, { ...req.query, ...(req.body || {}) });
@@ -895,8 +940,11 @@ router.get('/cron/:agent', async (req, res) => {
   if (isScoutPlacesDiagnosticAgent(agent)) {
     return handleScoutPlacesDiagnostic(req, res);
   }
+  if (isLeviScoutAgent(agent)) {
+    return handleLeviScoutCron(req, res);
+  }
   const secret = req.query.secret;
-  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+  if (!legacyCronSecretValid(secret)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   await runCronAgent(agent, res, req.query);
@@ -910,6 +958,9 @@ module.exports.handleExecuteAnchorOneOutboundCron = handleExecuteAnchorOneOutbou
 module.exports.handleInspectAnchorCanonicalOutboundCron = handleInspectAnchorCanonicalOutboundCron;
 module.exports.handleRecoverAnchorCanonicalOutboundCron = handleRecoverAnchorCanonicalOutboundCron;
 module.exports.isScoutPlacesDiagnosticAgent = isScoutPlacesDiagnosticAgent;
+module.exports.isLeviScoutAgent = isLeviScoutAgent;
+module.exports.handleLeviScoutCron = handleLeviScoutCron;
+module.exports.leviCronAuthorized = leviCronAuthorized;
 module.exports.CRON_SPECIAL_HANDLERS = CRON_SPECIAL_HANDLERS;
 
 module.exports.runCronAgent = runCronAgent;

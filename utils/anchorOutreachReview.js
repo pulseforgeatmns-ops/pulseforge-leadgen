@@ -6,6 +6,12 @@ function anchorOutreachReviewRequired(row, clientId = row?.client_id ?? row?.ten
   return String(clientId) === '10' && row?.ao_outreach_review_required !== false;
 }
 
+// Prospecting-only pilot tenants (utils/tenantPilotPolicy) prohibit outreach on
+// every channel. Exposed here so contact guards keep their reviewed imports.
+function assertTenantOutreachPermitted(clientId, detail = {}) {
+  require('./tenantPilotPolicy').assertTenantAllows(clientId, 'outbound', detail);
+}
+
 function anchorOutreachReviewSql(alias) {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(alias)) throw new Error('Invalid prospect SQL alias');
   return `(${alias}.client_id <> 10 OR ((to_jsonb(${alias})->>'ao_outreach_review_required')::boolean IS FALSE AND ${companyReviewClearSql(alias)}))`;
@@ -85,4 +91,4 @@ function reviewError() {
   });
 }
 
-module.exports = { anchorOutreachReviewRequired, anchorOutreachReviewSql, anchorOutreachReviewValueSql, assertAnchorOutreachReviewCleared, withAnchorOutreachReview };
+module.exports = { assertTenantOutreachPermitted, anchorOutreachReviewRequired, anchorOutreachReviewSql, anchorOutreachReviewValueSql, assertAnchorOutreachReviewCleared, withAnchorOutreachReview };

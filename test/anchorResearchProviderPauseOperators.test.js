@@ -200,7 +200,8 @@ function cronHandler(d) {
   const source = fs.readFileSync(path.join(root, 'routes/cron.js'), 'utf8');
   return vm.runInNewContext(source.slice(source.indexOf('async function handleScoutPlacesDiagnostic'),
     source.indexOf('function maxAttentionCronResult')) + '\nhandleScoutPlacesDiagnostic;',
-    { ...control, process, console: { error() {} }, diagnoseScoutPlaces: d.run });
+    { ...control, process, console: { error() {} }, diagnoseScoutPlaces: d.run,
+      legacyCronSecretValid: secret => require('../utils/cronAuth').legacyCronSecretValid(secret, process.env) });
 }
 test('actual special cron requires explicit valid client and preserves auth and non10 comparison', async () => {
   process.env.CRON_SECRET = 'synthetic-secret'; process.env.ANCHOR_RESEARCH_PROVIDERS_PAUSED = 'true';
@@ -215,10 +216,13 @@ test('actual special cron requires explicit valid client and preserves auth and 
   const unauthorized = response(); await handler({ query: { client_id: 11 }, body: {} }, unauthorized);
   assert.equal(unauthorized.statusCode, 401); assert.deepEqual(d.calls, ['legacy', 'new']);
 });
-test('actual special cron retains unscoped default-off behavior', async () => {
+// MAX-P0-002: this test previously asserted that an unset CRON_SECRET let an
+// unauthenticated caller run the diagnostic (HTTP 200). That was the fail-open
+// defect confirmed on Render production; an unset secret must now refuse.
+test('actual special cron fails closed when CRON_SECRET is unset', async () => {
   delete process.env.CRON_SECRET; delete process.env.ANCHOR_RESEARCH_PROVIDERS_PAUSED;
   const d = diagnostic(); const res = response(); await cronHandler(d)({ query: {}, body: {} }, res);
-  assert.equal(res.statusCode, 200); assert.deepEqual(d.calls, ['legacy', 'new']);
+  assert.equal(res.statusCode, 401); assert.deepEqual(d.calls, []);
 });
 
 function importer(post, query = async () => ({ rows: [] })) {
