@@ -23,6 +23,37 @@ const {
   normalizeCanonicalSender,
   evaluateCanonicalSenderReadiness,
 } = require('../../../utils/canonicalSenderIdentity');
+const {
+  createExternalActionLedger,
+  requestFingerprint,
+} = require('../../../services/maxReliability/externalActionLedger');
+const { guardedDispatch } = require('../../../services/maxReliability/guardedDispatch');
+
+const OUTBOUND_ACTION_KIND = 'amo_outbound_email';
+
+/**
+ * MAX-P0-003 — the durable external-action ledger for this execution.
+ * Explicit injection wins (tests, alternative stores); otherwise any database
+ * pool gets the PostgreSQL ledger, which fails closed when its schema is
+ * missing. Without a pool there is no durable state to protect.
+ */
+function resolveExternalActionLedger(input = {}) {
+  if (input.externalActionLedger !== undefined) return input.externalActionLedger;
+  return input.pool ? createExternalActionLedger(input.pool) : null;
+}
+
+/**
+ * MAX-P0-003 — a pre-ledger ATTEMPTED record with no later SENT/FAILED record
+ * means the process stopped between dispatch and recording the result. The
+ * message may have been delivered; it must not be sent again automatically.
+ */
+function findUnresolvedLegacyAttempt(records = [], executionIdentity) {
+  const forIdentity = records.filter((row) => row && row.executionIdentity === executionIdentity);
+  if (forIdentity.some((row) => row.status === EXECUTION_RECORD_STATUS.SENT
+    || row.status === EXECUTION_RECORD_STATUS.FAILED)) return null;
+  return forIdentity.find((row) => row.status === EXECUTION_RECORD_STATUS.ATTEMPTED
+    && !(row.payload && row.payload.externalActionLedger === true)) || null;
+}
 
 async function resolveExecuteSender(input = {}) {
   if (input.canonicalSender) {
@@ -240,13 +271,42 @@ async function executeOutboundBundle(input = {}) {
       continue;
     }
 
+    const blockedFor = (code, message, extra = {}) => buildExecutionRecord({
+      missionId: bundle.missionId,
+      tenantId: bundle.tenantId,
+      prospectId: send.prospectId,
+      preparedArtifactRevision: approvalMeta.preparedArtifactRevision,
+      executionApprovalContributionId: approvalMeta.contributionId,
+      provider: bundle.provider.provider,
+      status: EXECUTION_RECORD_STATUS.BLOCKED,
+      providerErrorCode: code,
+      providerErrorMessage: message,
+      executionRequestId,
+      transactionId,
+      executionIdentity: identified.executionIdentity,
+      idempotencyKey: identified.idempotencyKey,
+      payload: { blockReason: message, ...extra },
+    });
+
+    if (findUnresolvedLegacyAttempt([...existingRecords, ...records], identified.executionIdentity)) {
+      const blocked = blockedFor('external_action_outcome_unknown',
+        'A previous send attempt has no recorded outcome; it is not retried automatically.');
+      records.push(blocked);
+      if (typeof persistExecutionRecord === 'function') await persistExecutionRecord(blocked);
+      continue;
+    }
+
     const command = {
       outreachAuthorization: { prospectId: send.prospectId, clientId: input.clientId || bundle.tenantId, pool: input.pool },
       toEmail: send.email, toName: send.toName, subject: send.message.subject, body: send.message.body,
       tags: [`mission:${bundle.missionId}`, `prospect:${send.prospectId}`, `revision:${approvalMeta.preparedArtifactRevision}`],
       idempotencyKey: identified.idempotencyKey, sender: explicitSender, requireExplicitSender: true,
     };
-    if (governedApproval) await sendEmail.beforeAttempt(command);
+
+    // MAX-P0-003 — atomic claim before any provider invocation. Duplicate and
+    // uncertain claims are rejected here, before the provider is reached; the
+    // dispatch marker commits before the send (services/maxReliability/guardedDispatch).
+    const ledger = resolveExternalActionLedger(input);
     const attemptedAt = nowIso();
     const pendingRecord = buildExecutionRecord({
       missionId: bundle.missionId,
@@ -267,13 +327,82 @@ async function executeOutboundBundle(input = {}) {
         queuePosition: send.queuePosition,
         senderEmail: explicitSender.email,
         sendingDomain: bundle.provider.sendingDomain,
+        ...(ledger ? { externalActionLedger: true } : {}),
       },
     });
-    if (typeof persistExecutionRecord === 'function') {
-      await persistExecutionRecord(pendingRecord);
+    const persistPending = async () => {
+      if (typeof persistExecutionRecord === 'function') await persistExecutionRecord(pendingRecord);
+    };
+    let providerResult;
+    let externalActionState = null;
+    if (ledger) {
+      let guarded;
+      try {
+        guarded = await guardedDispatch({
+          ledger,
+          claim: {
+            tenantId: String(bundle.tenantId),
+            idempotencyKey: `amo-outbound:${identified.executionIdentity}`,
+            actionKind: OUTBOUND_ACTION_KIND,
+            requestFingerprint: requestFingerprint({
+              tenantId: String(bundle.tenantId),
+              missionId: bundle.missionId,
+              prospectId: String(send.prospectId),
+              revision: approvalMeta.preparedArtifactRevision,
+              toEmail: String(send.email || '').toLowerCase(),
+              subject: send.message.subject,
+              body: send.message.body,
+              sender: { email: explicitSender.email, name: explicitSender.name },
+            }),
+            missionId: bundle.missionId,
+            subjectRef: `prospect:${send.prospectId}`,
+            provider: bundle.provider.provider,
+            providerIdempotencyKey: identified.idempotencyKey,
+            correlationId: input.correlationId || null,
+          },
+          beforeDispatch: governedApproval ? () => sendEmail.beforeAttempt(command) : null,
+          persistAttempt: persistPending,
+          dispatch: () => sendEmail(command),
+        });
+      } catch (err) {
+        if (!/^reliability_schema_|^external_action_ledger_/.test(String(err && err.code))) throw err;
+        const blocked = blockedFor(err.code, 'Durable action claim unavailable; nothing was sent.');
+        records.push(blocked);
+        if (typeof persistExecutionRecord === 'function') await persistExecutionRecord(blocked);
+        continue;
+      }
+      if (guarded.outcome === 'replay') {
+        // Acknowledged earlier (the execution record was lost): restore it, never resend.
+        const replayed = buildExecutionRecord({
+          ...pendingRecord,
+          status: EXECUTION_RECORD_STATUS.SENT,
+          providerMessageId: guarded.receipt && guarded.receipt.providerRef,
+          sentAt: (guarded.receipt && guarded.receipt.acknowledgedAt) || nowIso(),
+          payload: { ...pendingRecord.payload, ledgerReplay: true, externalActionState: guarded.receipt && guarded.receipt.state },
+        });
+        records.push({ ...replayed, deduplicated: true });
+        if (typeof persistExecutionRecord === 'function') await persistExecutionRecord(replayed);
+        continue;
+      }
+      if (guarded.outcome === 'blocked') {
+        const blocked = blockedFor(guarded.code || 'external_action_blocked',
+          guarded.code === 'external_action_outcome_unknown'
+            ? 'A previous send attempt has an unknown outcome; it requires reconciliation and is not retried.'
+            : guarded.code === 'idempotency_key_reused'
+              ? 'This send identity was already used for different content; nothing was sent.'
+              : 'This send is already claimed by another execution; nothing was sent.',
+          { externalActionState: guarded.receipt && guarded.receipt.state });
+        records.push(blocked);
+        if (typeof persistExecutionRecord === 'function') await persistExecutionRecord(blocked);
+        continue;
+      }
+      providerResult = guarded.providerResult;
+      externalActionState = guarded.ledgerState;
+    } else {
+      if (governedApproval) await sendEmail.beforeAttempt(command);
+      await persistPending();
+      providerResult = await sendEmail(command);
     }
-
-    const providerResult = await sendEmail(command);
 
     const sentAt = nowIso();
     const finalRecord = buildExecutionRecord({
@@ -288,6 +417,7 @@ async function executeOutboundBundle(input = {}) {
       payload: {
         ...pendingRecord.payload,
         providerResponse: providerResult.brevoResponse || null,
+        ...(externalActionState ? { externalActionState } : {}),
       },
     });
     records.push(finalRecord);
@@ -318,6 +448,9 @@ function resolveProspectFilter(input = {}, executionRequest = null) {
 
 module.exports = {
   executeOutboundBundle,
+  resolveExternalActionLedger,
+  findUnresolvedLegacyAttempt,
+  OUTBOUND_ACTION_KIND,
   resolveExecuteSender,
   bindGovernedRefillSend,
 };

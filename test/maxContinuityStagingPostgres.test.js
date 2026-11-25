@@ -2,21 +2,30 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const { Pool } = require('pg');
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
+const { createTrackedPostgresPool, closePostgresPool } = require('./helpers/closePostgresPool');
 const { runIsolated } = require('../scripts/maxContinuity/run.cjs');
 
 test('isolated staging worker runs HTTP recovery and cleans only its schema on real PostgreSQL', { timeout: 110000 }, async t => {
   const pg = await startDisposablePostgres('max-staging-');
-  const admin = new Pool({ connectionString: pg.connectionString });
+  const admin = createTrackedPostgresPool({ connectionString: pg.connectionString });
   let db;
-  t.after(async () => { if (db) await db.end(); await admin.end(); await pg.stop(); });
+  t.after(async () => {
+    const errors = [];
+    if (db) {
+      try { await closePostgresPool(db); } catch (error) { errors.push(error); }
+    }
+    try { await closePostgresPool(admin); } catch (error) { errors.push(error); }
+    try { await pg.stop(); } catch (error) { errors.push(error); }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, 'PostgreSQL fixture shutdown failed');
+  });
   await admin.query("CREATE ROLE max_continuity_rehearsal LOGIN PASSWORD 'ci-fixture-only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS");
   await admin.query('CREATE DATABASE max_continuity_rehearsal OWNER max_continuity_rehearsal');
   const config = { connectionString: `postgresql://max_continuity_rehearsal:ci-fixture-only@127.0.0.1:${pg.port}/max_continuity_rehearsal`,
     host: '127.0.0.1', port: pg.port, requireRestrictedRole: true };
   const fixture = path.join(__dirname, 'helpers/maxContinuityWorkerFixture.cjs');
-  db = new Pool({ connectionString: config.connectionString });
+  db = createTrackedPostgresPool({ connectionString: config.connectionString });
   await db.query('CREATE TABLE public.cleanup_sentinel (value text)');
   await db.query("INSERT INTO public.cleanup_sentinel VALUES ('untouched')");
   const report = await runIsolated(config, fixture);

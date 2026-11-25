@@ -29,6 +29,8 @@ const { extractAuthorizationConstraints } = require('../packages/acquisition-mis
 const { isImpersonating } = require('../utils/requestIdentity');
 const { resolveActiveTenantId } = require('../packages/max/workspace/TenantContextResolver');
 const pool = require('../db');
+const { correlationIdFrom } = require('../services/maxReliability/correlation');
+const { runKeyedRequest } = require('../services/maxReliability/keyedRequest');
 const { observeOperatorHttp } = require('../packages/decision-service/httpObserver');
 const {
   createMission,
@@ -69,8 +71,20 @@ function actorFrom(req) {
 
 function fail(res, err, fallbackCode, fallbackStatus = 500) {
   const code = (err && err.code) || fallbackCode;
-  const status =
+  return res.status(failStatus(err, fallbackCode, fallbackStatus)).json({
+    error: code,
+    message: String((err && err.message) || err),
+  });
+}
+
+function failStatus(err, fallbackCode, fallbackStatus = 500) {
+  const code = (err && err.code) || fallbackCode;
+  return (
     code === 'amo_mission_not_found' ? 404
+      // MAX-P0-003 — a mission of another tenant is indistinguishable from a missing one.
+      : code === 'mission_tenant_mismatch' ? 404
+      : code === 'tme_transaction_overlap' || code === 'mission_lock_busy'
+        || code === 'mission_lock_timeout' || code === 'mission_version_conflict' ? 409
       : code === 'MISSION_STATE_INCONSISTENT' ? 409
       : code === 'cer_permission_denied' || code === 'cer_policy_blocked'
         || code === 'authorization_constraint_blocked'
@@ -102,11 +116,8 @@ function fail(res, err, fallbackCode, fallbackStatus = 500) {
         || code === 'MISSION_RUNTIME_BOUNDARY_VIOLATION'
         || code === 'no_tenant'
         ? 400
-        : fallbackStatus;
-  return res.status(status).json({
-    error: code,
-    message: String((err && err.message) || err),
-  });
+        : fallbackStatus
+  );
 }
 
 router.get('/acquisition-missions', requireActor, (_req, res) => {
@@ -348,7 +359,10 @@ router.post('/api/v1/amo/missions/:id/execute', requireActor, async (req, res) =
     observeOperatorHttp(req, res, {
       clientId: tenantId, missionId: req.params.id, source: 'amo_execute', routeHint: 'mission',
     });
-    const routed = await executeCanonical({
+    // MAX-P0-003 — correlation id on every execute; an Idempotency-Key makes the
+    // request durable-once (same key + same request → original receipt).
+    const correlationId = correlationIdFrom(req);
+    const command = {
       tenantId,
       missionId: req.params.id,
       intent: req.body?.intent,
@@ -360,9 +374,30 @@ router.post('/api/v1/amo/missions/:id/execute', requireActor, async (req, res) =
       payload: req.body?.payload,
       metadata: req.body?.metadata,
       allowFixtureFallback: req.body?.allowFixtureFallback === true,
-    }, { pool });
+    };
     noStore(res);
-    return res.json({
+    const keyed = await runKeyedRequest({
+      pool,
+      tenantId: String(tenantId),
+      scope: `amo_execute:${req.params.id}`,
+      idempotencyKey: req.get('idempotency-key') || undefined,
+      request: { ...command, tenantId: String(tenantId), operatorId: actor.id != null ? String(actor.id) : null },
+      correlationId,
+      volatileFields: ['snapshot'],
+      errorStatus: (err) => failStatus(err, 'amo_execute_failed'),
+      run: async () => executeCanonicalResponse(await executeCanonical({ ...command, correlationId }, { pool })),
+    });
+    if (keyed.error) console.error('[amo] execute', keyed.error);
+    for (const [name, value] of Object.entries(keyed.headers || {})) res.setHeader(name, value);
+    return res.status(keyed.status).json(keyed.body);
+  } catch (err) {
+    console.error('[amo] execute', err);
+    return fail(res, err, 'amo_execute_failed');
+  }
+});
+
+function executeCanonicalResponse(routed) {
+    return ({
       spec: 'SPEC-171',
       request: routed.request,
       action: routed.action,
@@ -386,11 +421,7 @@ router.post('/api/v1/amo/missions/:id/execute', requireActor, async (req, res) =
           null,
       },
     });
-  } catch (err) {
-    console.error('[amo] execute', err);
-    return fail(res, err, 'amo_execute_failed');
-  }
-});
+}
 
 /**
  * P0 — current mission authorization restrictions and the hash an amendment

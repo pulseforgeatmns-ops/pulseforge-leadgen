@@ -201,13 +201,18 @@ async function executeMissionStage(input = {}) {
 
   const lockPool = input.pool || input.lockPool || null;
   let globalLockHeld = false;
+  let lease = null;
   if (lockPool) {
     try {
       const lockResult = await acquireMissionDurableLock(missionId, lockPool, {
-        tryOnly: true,
+        tryOnly: input.lockMode !== 'wait',
+        lockTimeoutMs: input.lockTimeoutMs,
         transactionId,
+        tenantId,
+        correlationId: input.correlationId,
       });
       globalLockHeld = lockResult.acquired === true && lockResult.reentrant !== true;
+      lease = lockResult.lease || null;
     } catch (err) {
       endTmeTransaction(missionId, transactionId);
       throw wrapAs(TME_CLASSES.PERSISTENCE, err, err.code || 'tme_transaction_overlap', err.message);
@@ -388,6 +393,10 @@ async function executeMissionStage(input = {}) {
           output,
           commitResult,
           audit: auditPreview,
+          // MAX-P0-003 — the open mission lease; the durable writer commits the
+          // stage on lease.client so the lock and the write share a transaction.
+          lease: lease && lease.isOpen() ? lease : null,
+          correlationId: input.correlationId || (lease && lease.correlationId) || null,
         });
       } catch (err) {
         throw wrapAs(TME_CLASSES.PERSISTENCE, err, 'tme_persistence', err.message || 'Persistence failure.');
@@ -458,7 +467,8 @@ async function executeMissionStage(input = {}) {
     throw wrapped;
   } finally {
     if (globalLockHeld && lockPool) {
-      await releaseMissionDurableLock(missionId, lockPool);
+      // Rolls back an uncommitted lease (no durable change); forgets a committed one.
+      await releaseMissionDurableLock(missionId);
     }
     endTmeTransaction(missionId, transactionId);
   }

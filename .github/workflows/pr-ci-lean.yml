@@ -401,6 +401,8 @@ jobs:
         run: node --test test/maxConversationHttpPostgres.test.js
       - name: Durable mission recovery on real PostgreSQL (P0)
         run: node --test test/maxReliabilityRecoveryPostgres.test.js
+      - name: MAX-P0-003 reliability core — leases, CAS, action ledger, receipts on real PostgreSQL (no skips)
+        run: npm run test:max:reliability-core
       - name: Investigation priority end-to-end acceptance on disposable PostgreSQL (P0)
         run: node --test test/maxInvestigationAcceptancePostgres.test.js
       - name: Verify attention lifecycle and crash recovery on real PostgreSQL

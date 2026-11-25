@@ -185,7 +185,8 @@
     "test:scout-research-approval": "node --test test/sessionLifecycle.test.js test/scoutResearchApprovalPostgres.test.js test/browser/scoutResearchApprovalBrowser.test.js",
     "test:signal-dashboard": "node --test test/signalDashboard*.test.js test/signalOpportunity*.test.js test/signalHistorical*.test.js test/signalPaperAccount.test.js",
     "signal:dashboard-worker": "node scripts/signalDashboardWorker.js",
-    "signal:historical-backfill": "node scripts/signalHistoricalBackfill.js"
+    "signal:historical-backfill": "node scripts/signalHistoricalBackfill.js",
+    "test:max:reliability-core": "node --test test/maxReliabilityCorePostgres.test.js test/maxReliabilityOutboundAdapterPostgres.test.js"
   },
   "repository": {
     "type": "git",

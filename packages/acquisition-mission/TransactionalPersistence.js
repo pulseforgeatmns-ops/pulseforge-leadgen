@@ -6,38 +6,36 @@
  * During an active TME transaction, exactly one component may mutate durable
  * mission state: persistStageCommit(). Legacy writers must not write.
  *
- * Cross-process: PostgreSQL advisory locks ensure only one runtime mutates a
- * mission at a time (global transactional authority, not process-local).
+ * Cross-process: a transaction-scoped mission lease (MAX-P0-003,
+ * services/missionLease.js) ensures only one runtime mutates a mission at a
+ * time. The lock lives and dies with one transaction on one dedicated
+ * connection, so it cannot leak onto a pooled connection.
  */
 
-const crypto = require('crypto');
-
-/** PostgreSQL advisory lock namespace for AMO mission durable writes (ADR-075). */
+/**
+ * Historical ADR-075 advisory namespace. MAX-P0-003 replaced the session-level
+ * two-int lock with a transaction-scoped lease (services/missionLease.js);
+ * the constant is kept for diagnostics and compatibility only.
+ */
 const MISSION_DURABLE_LOCK_NAMESPACE = 750825;
+
+const {
+  acquireMissionLease,
+  LEASE_ERRORS,
+} = require('../../services/missionLease');
 
 /** @type {Set<string>} */
 const activeTransactions = new Set();
 
-/** @type {Set<string>} missionIds held by this process via pg advisory lock */
-const heldGlobalLocks = new Set();
-
-/** @type {Map<string, string|null>} missionId -> owning transactionId */
-const globalLockOwners = new Map();
+/** @type {Map<string, { lease: object|null, transactionId: string|null }>} missionId -> held lease */
+const heldLeases = new Map();
 
 function transactionKey(missionId, transactionId) {
   return `${missionId || ''}:${transactionId || ''}`;
 }
 
 function globalLockKey(missionId) {
-  return String(missionId || '');
-}
-
-function missionLockKeys(missionId) {
-  const hash = crypto.createHash('sha256').update(String(missionId)).digest();
-  return {
-    key1: MISSION_DURABLE_LOCK_NAMESPACE,
-    key2: hash.readInt32BE(0),
-  };
+  return String(missionId || '').trim();
 }
 
 function beginTmeTransaction(missionId, transactionId) {
@@ -65,98 +63,111 @@ function shouldSuppressLegacyDurableWrite(missionId = null) {
   return isTmeTransactionActive(missionId);
 }
 
+/** True while this process holds an OPEN lease for the mission. */
 function isGlobalLockHeld(missionId) {
-  return heldGlobalLocks.has(globalLockKey(missionId));
+  const held = heldLeases.get(globalLockKey(missionId));
+  return Boolean(held && held.lease && held.lease.isOpen());
 }
 
-function overlapError(missionId) {
+/**
+ * The open lease this process holds for a mission, or null. Writers that run
+ * inside a TME stage commit on lease.client so the lock and the write share
+ * one transaction.
+ */
+function getMissionLease(missionId) {
+  const held = heldLeases.get(globalLockKey(missionId));
+  return held && held.lease && held.lease.isOpen() ? held.lease : null;
+}
+
+function overlapError(missionId, cause) {
   const err = new Error(
     `Mission ${missionId} is locked by another transactional authority.`
   );
   err.code = 'tme_transaction_overlap';
   err.spec = 'ADR-075';
+  if (cause) err.cause = cause;
   return err;
 }
 
 /**
- * Acquire cross-process durable lock for a mission (ADR-075).
- * Reentrant within the same process. Skips when pool lacks advisory lock support.
+ * Acquire the cross-process mission lease (ADR-075 / MAX-P0-003).
+ *
+ * Re-entrant only for the same transactionId within this process. A pool that
+ * cannot provide a dedicated connection (bare query() test doubles) is skipped,
+ * exactly as before; production pg.Pool always provides one.
  *
  * @param {string} missionId
- * @param {{ query: Function }} pool
- * @param {{ blocking?: boolean, tryOnly?: boolean }} [opts]
+ * @param {{ query: Function, connect?: Function }} pool
+ * @param {{ tryOnly?: boolean, transactionId?: string, tenantId?: string,
+ *           lockTimeoutMs?: number, correlationId?: string }} [opts]
  */
 async function acquireMissionDurableLock(missionId, pool, opts = {}) {
   if (!missionId) return { acquired: false, skipped: true };
   const localKey = globalLockKey(missionId);
   const transactionId = opts.transactionId || null;
 
-  if (heldGlobalLocks.has(localKey)) {
-    const existingOwner = globalLockOwners.get(localKey);
-    if (transactionId && existingOwner === transactionId) {
-      return { acquired: true, reentrant: true };
+  const existing = heldLeases.get(localKey);
+  if (existing) {
+    if (existing.lease && !existing.lease.isOpen()) {
+      heldLeases.delete(localKey);
+    } else {
+      if (transactionId && existing.transactionId === transactionId) {
+        return { acquired: true, reentrant: true, lease: existing.lease };
+      }
+      throw overlapError(missionId);
     }
-    throw overlapError(missionId);
   }
-  if (!pool || typeof pool.query !== 'function') {
+  if (!pool || typeof pool.query !== 'function' || typeof pool.connect !== 'function') {
     return { acquired: false, skipped: true };
   }
-
-  const { key1, key2 } = missionLockKeys(missionId);
-  const tryOnly = opts.tryOnly === true;
-  const sql = tryOnly
-    ? 'SELECT pg_try_advisory_lock($1, $2) AS locked'
-    : 'SELECT pg_advisory_lock($1, $2) AS locked';
-
+  // Reserve the slot before awaiting so two same-process callers cannot both connect.
+  const reservation = { lease: null, transactionId, pending: true };
+  heldLeases.set(localKey, reservation);
   try {
-    const result = await pool.query(sql, [key1, key2]);
-    const row = result.rows && result.rows[0];
-    if (tryOnly) {
-      if (!row || row.locked === undefined) {
-        return { acquired: false, skipped: true };
-      }
-      if (row.locked !== true) {
-        throw overlapError(missionId);
-      }
-    }
-    heldGlobalLocks.add(localKey);
-    globalLockOwners.set(localKey, transactionId);
-    return { acquired: true };
+    const lease = await acquireMissionLease(pool, {
+      missionId: localKey,
+      tenantId: opts.tenantId,
+      mode: opts.tryOnly === false ? 'wait' : 'try',
+      lockTimeoutMs: opts.lockTimeoutMs,
+      correlationId: opts.correlationId,
+    });
+    reservation.lease = lease;
+    reservation.pending = false;
+    return { acquired: true, lease };
   } catch (err) {
-    if (err.code === 'tme_transaction_overlap') throw err;
-    if (/Unhandled SQL|pg_advisory|pg_try_advisory/i.test(String(err.message))) {
-      return { acquired: false, skipped: true };
-    }
+    if (heldLeases.get(localKey) === reservation) heldLeases.delete(localKey);
+    if (err && err.code === LEASE_ERRORS.BUSY) throw overlapError(missionId, err);
+    // Non-PostgreSQL test doubles (no boolean lock result): same "skipped"
+    // outcome the ADR-075 lock always returned for them. Real PostgreSQL never
+    // takes this branch.
+    if (err && err.code === LEASE_ERRORS.UNSUPPORTED) return { acquired: false, skipped: true };
     throw err;
   }
 }
 
 /**
- * Release cross-process durable lock for a mission.
+ * Release the mission lease. A lease whose transaction is still open is rolled
+ * back (its writes, if any, were never committed); a lease already committed by
+ * its writer is simply forgotten. The lock is released by the transaction end
+ * on the same connection that took it — never by a separate pooled statement.
  * @param {string} missionId
- * @param {{ query: Function }} [pool]
  */
-async function releaseMissionDurableLock(missionId, pool) {
+async function releaseMissionDurableLock(missionId) {
   const localKey = globalLockKey(missionId);
-  if (!heldGlobalLocks.has(localKey)) return;
-  heldGlobalLocks.delete(localKey);
-  globalLockOwners.delete(localKey);
-
-  if (!pool || typeof pool.query !== 'function') return;
-  const { key1, key2 } = missionLockKeys(missionId);
-  try {
-    await pool.query('SELECT pg_advisory_unlock($1, $2)', [key1, key2]);
-  } catch (err) {
-    if (!/Unhandled SQL|pg_advisory/i.test(String(err.message))) {
-      console.error('[amo] advisory unlock failed:', err.message);
-    }
+  const held = heldLeases.get(localKey);
+  if (!held) return;
+  heldLeases.delete(localKey);
+  if (held.lease && held.lease.state === 'open') {
+    await held.lease.rollback();
   }
 }
 
-/** Test helper — reset in-process lock tracking. */
+/** Test helper — reset in-process lock tracking (rolls back any open lease). */
 function resetMissionDurableLocksForTests() {
-  heldGlobalLocks.clear();
-  globalLockOwners.clear();
+  for (const held of heldLeases.values()) {
+    if (held.lease && held.lease.state === 'open') held.lease.rollback();
+  }
+  heldLeases.clear();
   activeTransactions.clear();
 }
 
@@ -169,5 +180,6 @@ module.exports = {
   isGlobalLockHeld,
   acquireMissionDurableLock,
   releaseMissionDurableLock,
+  getMissionLease,
   resetMissionDurableLocksForTests,
 };
