@@ -421,7 +421,14 @@
       "scripts/smokeMaxShadow.js",
       "scripts/validateMax",
       "scripts/backfillMaxSignals.js",
-      "scripts/max"
+      "scripts/max",
+      "services/missionLease.js",
+      "services/maxReliability/",
+      "services/acquisitionMissionPersistence.js",
+      "services/acquisitionMissionRuntime.js",
+      "packages/acquisition-mission/",
+      "packages/max/workspace/OutboundExecutionAdapter.js",
+      "migrations/2026-11-25-max-p0-003-reliability-core.sql"
     ]
   },
   "escalationRules": [
