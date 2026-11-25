@@ -376,14 +376,29 @@ router.post('/api/v1/amo/missions/:id/execute', requireActor, async (req, res) =
       allowFixtureFallback: req.body?.allowFixtureFallback === true,
     };
     noStore(res);
+    // MAX-P0-003 — an Idempotency-Key is MANDATORY for intents with external
+    // effects or spend (provider research, outreach authorization, outreach,
+    // paid media): a retried or double-submitted request must never run twice.
+    const idempotencyKey = req.get('idempotency-key') || undefined;
+    // Classify exactly the intent that will execute (trimmed, as the CER does).
+    if (typeof command.intent === 'string') command.intent = command.intent.trim() || undefined;
+    if (!idempotencyKey && requiresIdempotencyKey(command)) {
+      res.setHeader('X-Correlation-Id', correlationId);
+      return res.status(428).json({
+        error: 'idempotency_key_required',
+        message: 'This execution has external effects; send an Idempotency-Key header (8-200 characters of [A-Za-z0-9._:-]).',
+        correlationId,
+      });
+    }
     const keyed = await runKeyedRequest({
       pool,
       tenantId: String(tenantId),
       scope: `amo_execute:${req.params.id}`,
-      idempotencyKey: req.get('idempotency-key') || undefined,
+      idempotencyKey,
       request: { ...command, tenantId: String(tenantId), operatorId: actor.id != null ? String(actor.id) : null },
       correlationId,
       volatileFields: ['snapshot'],
+      receiptOf: executeReceipt,
       errorStatus: (err) => failStatus(err, 'amo_execute_failed'),
       run: async () => executeCanonicalResponse(await executeCanonical({ ...command, correlationId }, { pool })),
     });
@@ -395,6 +410,52 @@ router.post('/api/v1/amo/missions/:id/execute', requireActor, async (req, res) =
     return fail(res, err, 'amo_execute_failed');
   }
 });
+
+/**
+ * MAX-P0-003 — the permanent receipt for an execute request. Allowlisted fields
+ * only: no operator free text (question), no payload, no mission snapshot.
+ */
+function executeReceipt(body = {}) {
+  const request = body.request || {};
+  const result = body.executionResult || {};
+  return {
+    spec: body.spec || 'SPEC-171',
+    receipt: true,
+    request: { id: request.id || null, intent: request.intent || null, source: request.source || null,
+      missionId: request.missionId || null },
+    action: body.action || null,
+    specialist: body.specialist || null,
+    runtimeOwner: body.runtimeOwner || null,
+    execution: body.execution ? { state: body.execution.state || null } : null,
+    executionResult: {
+      alreadyExecuted: result.alreadyExecuted === true,
+      rolledBack: result.rolledBack === true,
+      executionOutcome: result.executionOutcome || null,
+      transactionId: result.transactionId || null,
+      errorClass: result.errorClass || null,
+    },
+  };
+}
+
+/**
+ * A key is required whenever the request can reach external effects or spend:
+ *   - no intent: executeCanonical falls back to the mission's pending decision,
+ *     which may be discovery or execution approval;
+ *   - an intent whose action class is external (provider research, outreach
+ *     authorization, outreach, paid media);
+ *   - continuation/progression intents, which drive specialists onward;
+ *   - any executionMode: APPROVE_PLAN under an autonomous policy chains into
+ *     discovery (paid provider research) in the router.
+ */
+const KEY_REQUIRED_INTENTS = new Set(['AUTONOMOUS_PROGRESSION', 'MISSION_CONTINUATION', 'CONTINUE_INVESTIGATION']);
+function requiresIdempotencyKey(command = {}) {
+  const { intentActionClass, EXTERNAL_ACTION_CLASSES } = require('../packages/acquisition-mission/AuthorizationConstraints');
+  const intent = typeof command.intent === 'string' ? command.intent.trim() : '';
+  if (!intent) return true;
+  if (command.executionMode != null && String(command.executionMode).trim() !== '') return true;
+  if (KEY_REQUIRED_INTENTS.has(intent.toUpperCase())) return true;
+  return EXTERNAL_ACTION_CLASSES.includes(intentActionClass(intent));
+}
 
 function executeCanonicalResponse(routed) {
     return ({
@@ -512,3 +573,6 @@ router.post('/api/v1/amo/ask', requireActor, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.requiresIdempotencyKey = requiresIdempotencyKey;
+module.exports.executeReceipt = executeReceipt;
+module.exports.executeCanonicalResponse = executeCanonicalResponse;

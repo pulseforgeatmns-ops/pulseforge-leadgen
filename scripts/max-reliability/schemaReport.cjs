@@ -40,7 +40,7 @@ const MAX_CORE_TABLES = [
   'clients', 'users', 'session', 'prospects', 'companies', 'agent_log', 'agent_actions',
   'acquisition_missions', 'acquisition_mission_events', 'acquisition_mission_contributions',
   'acquisition_mission_observations', 'acquisition_mission_outcomes', 'acquisition_mission_execution_audit',
-  'acquisition_outbound_executions', 'max_conversation_context',
+  'acquisition_mission_outbound_executions', 'max_conversation_context',
   'max_external_action_claims', 'max_request_receipts', 'max_reliability_audit',
 ];
 
@@ -89,7 +89,7 @@ async function main() {
       : [];
     const freshness = {};
     for (const [table, column] of [['agent_log', 'created_at'], ['touchpoints', 'created_at'], ['session', 'expire'],
-      ['acquisition_mission_events', 'at'], ['acquisition_outbound_executions', 'updated_at']]) {
+      ['acquisition_mission_events', 'at'], ['acquisition_mission_outbound_executions', 'updated_at']]) {
       if (!present.has(table)) { freshness[table] = 'absent'; continue; }
       try {
         freshness[table] = (await q(`SELECT max(${column}) AS latest FROM ${table}`))[0].latest;

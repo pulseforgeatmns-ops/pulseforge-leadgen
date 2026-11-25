@@ -28,6 +28,12 @@ async function recoverInterruptedExecution(pool, opts = {}) {
   if (!tenantId) throw Object.assign(new Error('tenantId is required.'), { code: 'recovery_tenant_required' });
   const staleAfterMs = Math.max(MIN_STALE_AFTER_MS, Number(opts.staleAfterMs) || DEFAULT_STALE_AFTER_MS);
   const apply = opts.apply === true;
+  // Applying changes durable state: it must name the operator who authorised
+  // it. Every audit row carries that actor; plan mode writes nothing.
+  const actor = opts.actor == null ? '' : String(opts.actor).trim();
+  if (apply && !/^[A-Za-z0-9][A-Za-z0-9._:@-]{0,79}$/.test(actor)) {
+    throw Object.assign(new Error('Applying recovery requires an operator identity (actor).'), { code: 'recovery_actor_required' });
+  }
   await assertReliabilitySchema(pool);
   const cutoff = new Date((opts.now ? opts.now() : new Date()).getTime() - staleAfterMs);
 
@@ -58,7 +64,7 @@ async function recoverInterruptedExecution(pool, opts = {}) {
       changed.abandoned.push(row.idempotency_key);
       await recordReliabilityAudit(pool, { tenantId, correlationId: row.correlation_id, subjectKind: 'external_action',
         subjectKey: row.idempotency_key, event: 'recovery_abandoned_not_dispatched', fromState: 'claimed',
-        toState: 'abandoned_not_dispatched', detail: { missionId: row.mission_id, actionKind: row.action_kind } });
+        toState: 'abandoned_not_dispatched', detail: { missionId: row.mission_id, actionKind: row.action_kind, actor } });
     }
   }
   for (const row of plan.staleDispatches) {
@@ -70,7 +76,7 @@ async function recoverInterruptedExecution(pool, opts = {}) {
       changed.unknown.push(row.idempotency_key);
       await recordReliabilityAudit(pool, { tenantId, correlationId: row.correlation_id, subjectKind: 'external_action',
         subjectKey: row.idempotency_key, event: 'recovery_outcome_unknown_escalated', fromState: 'dispatch_attempted',
-        toState: 'outcome_unknown', detail: { missionId: row.mission_id, actionKind: row.action_kind, escalation: 'operator_reconcile_required' } });
+        toState: 'outcome_unknown', detail: { missionId: row.mission_id, actionKind: row.action_kind, escalation: 'operator_reconcile_required', actor } });
     }
   }
   for (const row of plan.staleReceipts) {
@@ -82,10 +88,14 @@ async function recoverInterruptedExecution(pool, opts = {}) {
       changed.interrupted.push(`${row.scope}:${row.idempotency_key}`);
       await recordReliabilityAudit(pool, { tenantId, correlationId: row.correlation_id, subjectKind: 'request_receipt',
         subjectKey: `${row.scope}:${row.idempotency_key}`, event: 'recovery_request_interrupted', fromState: 'in_progress',
-        toState: 'interrupted', detail: { scope: row.scope } });
+        toState: 'interrupted', detail: { scope: row.scope, actor } });
     }
   }
-  return { applied: true, ...summarize(plan), changed, escalationRequired: changed.unknown.length + plan.unresolvedUnknown > 0 };
+  await recordReliabilityAudit(pool, { tenantId, correlationId: opts.correlationId || null, subjectKind: 'recovery_run',
+    subjectKey: `${tenantId}:${(opts.now ? opts.now() : new Date()).toISOString()}`, event: 'recovery_applied', fromState: null, toState: null,
+    detail: { actor, cutoff: plan.cutoff, staleAfterMs, abandoned: changed.abandoned.length, unknown: changed.unknown.length,
+      interrupted: changed.interrupted.length, unresolvedUnknownBefore: plan.unresolvedUnknown } });
+  return { applied: true, actor, ...summarize(plan), changed, escalationRequired: changed.unknown.length + plan.unresolvedUnknown > 0 };
 }
 
 function summarize(plan) {

@@ -3,6 +3,7 @@ require('dotenv').config();
 const axios = require('axios');
 const { randomUUID } = require('crypto');
 const pool = require('./db');
+const { withWorkerAdvisoryLock } = require('./utils/workerAdvisoryLock');
 const { getRuntimeClientId } = require('./utils/clientContext');
 const { reportAgentRun } = require('./utils/agentObservability');
 const { OPEN_SOURCE, ensureOpenSignalSchema } = require('./utils/openSignalGate');
@@ -1099,15 +1100,8 @@ async function sendOverflowDigest(clientId) {
 }
 
 async function withWorkerLock(fn) {
-  const lock = await pool.query('SELECT pg_try_advisory_lock($1) AS locked', [ADVISORY_LOCK_KEY]);
-  if (!lock.rows[0]?.locked) return { skipped: true, reason: 'worker_already_running' };
-  try {
-    return await fn();
-  } finally {
-    await pool.query('SELECT pg_advisory_unlock($1)', [ADVISORY_LOCK_KEY]).catch(err => {
-      console.error('[warm_routing] advisory unlock failed:', err.message);
-    });
-  }
+  // MAX-P0-003 — lock and unlock on one dedicated connection (never pool.query).
+  return withWorkerAdvisoryLock(pool, ADVISORY_LOCK_KEY, fn, { label: 'warm_routing' });
 }
 
 async function run(params = {}) {

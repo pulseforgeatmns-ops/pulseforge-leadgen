@@ -29,7 +29,7 @@ const RELEASABLE_ERROR_CODES = new Set([
 ]);
 
 async function runKeyedRequest(input = {}) {
-  const { pool, tenantId, scope, idempotencyKey, request, correlationId, run, errorStatus, volatileFields = [] } = input;
+  const { pool, tenantId, scope, idempotencyKey, request, correlationId, run, errorStatus, volatileFields = [], receiptOf } = input;
   const headers = correlationId ? { 'X-Correlation-Id': correlationId } : {};
   const statusFor = (err) => (typeof errorStatus === 'function' ? errorStatus(err) : 500);
   const errorBody = (err) => ({ error: (err && err.code) || 'request_failed', message: String((err && err.message) || err), correlationId });
@@ -88,10 +88,14 @@ async function runKeyedRequest(input = {}) {
         fromState: 'in_progress', toState: null, detail: { errorCode: failure.error } });
       return { status, body: { ...failure, retryable: true }, headers, error: err };
     }
-    await receipts.fail(handle, status, failure, failure.error);
+    // Failure receipts are permanent too: keep the machine code only, never the
+    // raw error text (it can carry data). The live response keeps the message.
+    await receipts.fail(handle, status, { error: failure.error, correlationId }, failure.error);
     return { status, body: failure, headers, error: err };
   }
-  const stored = { ...body };
+  // Receipts are permanent (they cannot be deleted), so store only what a
+  // replay needs: an allowlisted summary when the caller provides receiptOf.
+  const stored = typeof receiptOf === 'function' ? receiptOf(body) : { ...body };
   for (const field of volatileFields) delete stored[field];
   await receipts.complete(handle, 200, stored);
   return { status: 200, body, headers };

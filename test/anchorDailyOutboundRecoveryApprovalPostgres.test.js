@@ -154,7 +154,7 @@ test('native recovery freeze to canonical approval and one-shot leaf',{timeout:1
       const f=await setup(pool);await frozen(pool,f);const calls=[],audited=auditPool(pool,calls);let changed=false;
       const racing={query:audited.query,async connect(){const c=await audited.connect();return{release:c.release,async query(q,v){
         const sql=typeof q==='string'?q:q.text,values=typeof q==='string'?v:q.values;
-        if(!changed && /SELECT pg_try_advisory_lock/.test(sql) && values?.[0]===750825){
+        if(!changed && /SELECT pg_try_advisory_lock/.test(sql) && String(values?.[0]||'').startsWith('amo-mission:')){
           changed=true;
           if(kind==='mission')await pool.query("UPDATE acquisition_missions SET payload=jsonb_set(payload,'{syntheticChanged}','true') WHERE id=$1",[f.missionRow.id]);
           else await pool.query("UPDATE acquisition_mission_contributions SET payload=jsonb_set(payload,'{payload,syntheticChanged}','true') WHERE id=$1",[f.artifactRows[2].id]);

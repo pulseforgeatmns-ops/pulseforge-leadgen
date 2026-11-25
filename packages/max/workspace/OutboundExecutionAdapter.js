@@ -47,6 +47,24 @@ function resolveExternalActionLedger(input = {}) {
  * means the process stopped between dispatch and recording the result. The
  * message may have been delivered; it must not be sent again automatically.
  */
+/**
+ * R7 — a mission sends at most one outbound message per prospect. A revised
+ * artifact (new prepared revision → new execution identity) must not bypass a
+ * send that was, or may have been, dispatched under an earlier revision.
+ * Legitimate follow-up outreach is a distinct, separately authorized logical
+ * intent (a different mission); this adapter does not create one.
+ */
+function findPriorDispatchForProspect(records = [], prospectId, executionIdentity) {
+  return records.find((row) => row
+    && String(row.prospectId) === String(prospectId)
+    // A record without an identity is treated as a different revision (block).
+    && row.executionIdentity !== executionIdentity
+    && (row.status === EXECUTION_RECORD_STATUS.SENT
+      // A ledger-era ATTEMPTED record is decided by its claim (findBlockingForSubject):
+      // an abandoned or definitively failed claim must not block a revision.
+      || (row.status === EXECUTION_RECORD_STATUS.ATTEMPTED && !(row.payload && row.payload.externalActionLedger === true)))) || null;
+}
+
 function findUnresolvedLegacyAttempt(records = [], executionIdentity) {
   const forIdentity = records.filter((row) => row && row.executionIdentity === executionIdentity);
   if (forIdentity.some((row) => row.status === EXECUTION_RECORD_STATUS.SENT
@@ -296,6 +314,14 @@ async function executeOutboundBundle(input = {}) {
       continue;
     }
 
+    if (findPriorDispatchForProspect([...existingRecords, ...records], send.prospectId, identified.executionIdentity)) {
+      const blocked = blockedFor('outreach_intent_already_dispatched',
+        'This prospect already has a sent or attempted message in this mission; a revised message is not sent.');
+      records.push(blocked);
+      if (typeof persistExecutionRecord === 'function') await persistExecutionRecord(blocked);
+      continue;
+    }
+
     const command = {
       outreachAuthorization: { prospectId: send.prospectId, clientId: input.clientId || bundle.tenantId, pool: input.pool },
       toEmail: send.email, toName: send.toName, subject: send.message.subject, body: send.message.body,
@@ -338,6 +364,19 @@ async function executeOutboundBundle(input = {}) {
     if (ledger) {
       let guarded;
       try {
+        // R7 — the durable ledger also sees sends from other processes/revisions.
+        const priorClaim = await ledger.findBlockingForSubject({
+          tenantId: String(bundle.tenantId), actionKind: OUTBOUND_ACTION_KIND, missionId: bundle.missionId,
+          subjectRef: `prospect:${send.prospectId}`, excludeKey: `amo-outbound:${identified.executionIdentity}`,
+        });
+        if (priorClaim) {
+          const blocked = blockedFor('outreach_intent_already_dispatched',
+            'This prospect already has a dispatched or unresolved message in this mission; a revised message is not sent.',
+            { externalActionState: priorClaim.state });
+          records.push(blocked);
+          if (typeof persistExecutionRecord === 'function') await persistExecutionRecord(blocked);
+          continue;
+        }
         guarded = await guardedDispatch({
           ledger,
           claim: {
@@ -450,6 +489,7 @@ module.exports = {
   executeOutboundBundle,
   resolveExternalActionLedger,
   findUnresolvedLegacyAttempt,
+  findPriorDispatchForProspect,
   OUTBOUND_ACTION_KIND,
   resolveExecuteSender,
   bindGovernedRefillSend,

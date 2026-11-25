@@ -1376,6 +1376,40 @@ function isNonCrmMailboxVerification(input = {}, opts = {}) {
     && input.outreachAssetId === 'mailbox-test-send';
 }
 
+/**
+ * MAX-P0-003 — the durable claim ledger for PostgreSQL-backed mailboxes.
+ * Explicit opts.externalActionLedger wins (null opts out — test doubles only).
+ * The in-memory store is a test transport and has no durable state to guard.
+ */
+function resolveMailboxLedger(store, opts = {}) {
+  if (opts.externalActionLedger !== undefined) return opts.externalActionLedger;
+  if (!(store instanceof PostgresTenantMailboxStore)) return null;
+  return require('./maxReliability/externalActionLedger').createExternalActionLedger(store.pool);
+}
+
+/**
+ * MAX-P0-003 — true only when the SMTP failure proves the message was NOT
+ * accepted. nodemailer (8.x) tags socket errors, unexpected closes and
+ * timeouts with command 'CONN' at ANY stage — including after DATA, when the
+ * 250 reply may simply have been lost — so neither the 'CONN' command nor
+ * ECONNECTION/ESOCKET/ETIMEDOUT is evidence of non-delivery. Definitive only:
+ *   - an SMTP error reply (responseCode >= 400): the server refused;
+ *   - EAUTH / EENVELOPE / EDNS: failed before any message data could be sent;
+ *   - a TCP connect / DNS lookup failure from the socket layer.
+ * Everything else after the dispatch marker is an unknown outcome.
+ */
+function smtpFailureIsDefinitive(err) {
+  if (!err) return false;
+  if (Number(err.responseCode) >= 400) return true;
+  if (['EAUTH', 'EENVELOPE', 'EDNS'].includes(err.code)) return true;
+  if (err.syscall === 'connect' || err.syscall === 'getaddrinfo') return true;
+  return /^(connect|getaddrinfo) E[A-Z]+/.test(String(err.message || ''));
+}
+
+function mailboxRequestFingerprint(value) {
+  return require('./maxReliability/externalActionLedger').requestFingerprint(value);
+}
+
 async function sendTenantEmail(input = {}, opts = {}) {
   const store = opts.store || new PostgresTenantMailboxStore(opts.pool || defaultPool);
   if (input.metadata?.governedProgramId) {
@@ -1441,7 +1475,60 @@ async function sendTenantEmail(input = {}, opts = {}) {
 
   const messageId = prefixedId('tom', `${tenantId}:${key}`);
   const rfcMessageId = input.rfcMessageId || generateRfcMessageId({ tenantId, sendingIdentityId: identity.senderEmail, messageId });
-  let message = await store.saveMessage({
+
+  // MAX-P0-003 — durable external-action claim before the PENDING row and long
+  // before SMTP. Replays restore the acknowledged send; unknown outcomes and
+  // concurrent holders are refused before the provider is reached.
+  const ledger = resolveMailboxLedger(store, opts);
+  let ledgerHandle = null;
+  if (ledger) {
+    const claimInput = {
+      tenantId: String(tenantId),
+      idempotencyKey: `tenant-mailbox:${key}`,
+      actionKind: 'tenant_mailbox_smtp',
+      requestFingerprint: mailboxRequestFingerprint({
+        tenantId: String(tenantId),
+        sendingIdentityId: String(identity.id),
+        recipients: recipients.map((r) => String(r).toLowerCase()).sort(),
+        subject: clean(input.subject),
+        body: input.text || input.body || null,
+        html: input.html || null,
+        inReplyTo: input.inReplyTo || null,
+        referencesHeader: input.referencesHeader || null,
+      }),
+      missionId: input.missionId || null,
+      subjectRef: input.prospectId ? `prospect:${input.prospectId}` : null,
+      provider: 'smtp',
+      providerIdempotencyKey: rfcMessageId,
+      correlationId: input.metadata?.correlationId || opts.correlationId || null,
+    };
+    const claimed = await ledger.claim(claimInput);
+    if (claimed.outcome === 'replay') {
+      const restored = await store.saveMessage({
+        id: messageId, tenantId, threadId: thread.id, direction: MESSAGE_DIRECTION.OUTBOUND,
+        missionId: input.missionId || thread.missionId || null, prospectId: input.prospectId || thread.prospectId || null,
+        sendingIdentityId: identity.id, subject: clean(input.subject), body: input.body || null, recipients, rfcMessageId,
+        sender: { email: identity.senderEmail, displayName: identity.senderDisplayName || integration.displayName || null,
+          replyTo: identity.replyToAddress || identity.senderEmail },
+        status: MESSAGE_STATUS.SENT, providerMessageId: claimed.receipt.providerRef || rfcMessageId,
+        sentAt: claimed.receipt.acknowledgedAt || nowIso(opts),
+        metadata: { ...(input.metadata || {}), providerBoundary: undefined, idempotencyKey: key, providerAccepted: true, ledgerReplay: true },
+      });
+      return { message: restored, thread: await store.getThread(tenantId, thread.id), duplicate: true, sent: false };
+    }
+    if (claimed.outcome !== 'claimed') {
+      throw mailboxError(claimed.code || 'external_action_blocked', claimed.code === 'external_action_outcome_unknown'
+        ? 'A previous send of this message has an unknown outcome; it requires reconciliation and is not retried.'
+        : claimed.code === 'idempotency_key_reused'
+          ? 'This idempotency key was already used for different message content; nothing was sent.'
+          : 'This message is already claimed by another send; nothing was sent.', { externalActionState: claimed.receipt?.state || null });
+    }
+    ledgerHandle = { tenantId: claimInput.tenantId, idempotencyKey: claimInput.idempotencyKey, ownerToken: claimed.ownerToken };
+  }
+
+  let message;
+  try {
+    message = await store.saveMessage({
     id: messageId,
     tenantId,
     missionId: input.missionId || thread.missionId || null,
@@ -1467,9 +1554,15 @@ async function sendTenantEmail(input = {}, opts = {}) {
     sequenceStepRef: input.sequenceStepRef || null,
     metadata: { ...(input.metadata || {}), idempotencyKey: key },
   });
+  } catch (err) {
+    if (ledgerHandle) await ledger.releaseUndispatched(ledgerHandle, 'pending_record_failed').catch(() => {});
+    throw err;
+  }
 
   let smtpAuth;
   let crossedProviderBoundary = false;
+  let dispatchMarked = false;
+  let providerReturned = false;
   try {
     smtpAuth = await resolveSmtpAuth(integration, opts);
     const transport = createSmtpTransport(integration, smtpAuth, opts);
@@ -1494,11 +1587,19 @@ async function sendTenantEmail(input = {}, opts = {}) {
     // non-Anchor transports retain their original payload and behavior.
     if (String(tenantId) === '10') require('./anchorScopedResume').deepFreeze(actualPayload);
     const dispatch = async () => {
+      // The dispatch marker COMMITS (own connection) before SMTP is invoked.
+      if (ledgerHandle) {
+        await ledger.markDispatchAttempted(ledgerHandle);
+        dispatchMarked = true;
+      }
       crossedProviderBoundary = true;
       if (providerBoundary && typeof providerBoundary.markCrossed === 'function') {
         providerBoundary.markCrossed();
       }
-      return transport.sendMail(actualPayload);
+      const sent = await transport.sendMail(actualPayload);
+      // The provider returned: from here on, no failure may be read as "not sent".
+      providerReturned = true;
+      return sent;
     };
     const result = store instanceof PostgresTenantMailboxStore
       ? (!isNonCrmMailboxVerification(input, opts)
@@ -1509,6 +1610,7 @@ async function sendTenantEmail(input = {}, opts = {}) {
           : await dispatch()))
       : await dispatch(); // Explicit in-memory test transport only.
     const providerMessageId = result?.messageId || result?.response || rfcMessageId;
+    if (ledgerHandle) await ledger.recordProviderResult(ledgerHandle, { success: true, providerMessageId });
     const sentAt = nowIso(opts);
     message = await store.saveMessage({
       ...message,
@@ -1530,14 +1632,32 @@ async function sendTenantEmail(input = {}, opts = {}) {
     });
     return { message, thread: await store.getThread(tenantId, thread.id), providerResult: { messageId: providerMessageId }, duplicate: false, sent: true };
   } catch (err) {
+    // MAX-P0-003 — an SMTP reply code means the server refused the message
+    // (definitively not accepted). Anything else after the boundary — dropped
+    // connection, timeout, lost acknowledgement — is an unknown outcome.
+    // After sendMail returned, a later failure (recording the result, saving the
+    // row, a lost authorization COMMIT) can never mean the message was not sent.
+    const definitiveRefusal = !providerReturned && smtpFailureIsDefinitive(err);
+    const outcomeUnknown = dispatchMarked && !definitiveRefusal;
+    if (ledgerHandle) {
+      if (!dispatchMarked) {
+        await ledger.releaseUndispatched(ledgerHandle, err.code || 'not_dispatched').catch(() => {});
+      } else if (definitiveRefusal) {
+        await ledger.recordProviderResult(ledgerHandle, { success: false, definitive: true,
+          providerErrorCode: `smtp_${err.responseCode ?? err.code ?? 'refused'}` }).catch(() => {});
+      } else {
+        await ledger.markOutcomeUnknown(ledgerHandle, err.code || 'smtp_outcome_unknown').catch(() => {});
+      }
+    }
     message = await store.saveMessage({
       ...message,
       status: MESSAGE_STATUS.FAILED,
-      failureCode: err.code || 'smtp_send_failed',
+      failureCode: outcomeUnknown ? 'external_action_outcome_unknown' : (err.code || 'smtp_send_failed'),
       failureMessage: sanitizeErrorMessage(err),
       metadata: {
         ...message.metadata,
-        providerAccepted: false,
+        providerAccepted: outcomeUnknown ? null : false,
+        ...(outcomeUnknown ? { outcomeUnknown: true } : {}),
       },
     });
     await store.saveThread({
@@ -1927,6 +2047,7 @@ module.exports = {
   usesGoogleOAuthImap,
   verifyImapConnection,
   sendTenantEmail,
+  smtpFailureIsDefinitive,
   pollTenantMailbox,
   markTenantSuppression,
   verifyTenantMailbox,

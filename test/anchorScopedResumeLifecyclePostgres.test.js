@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const {createRequire}=require('node:module'),{createHash}=require('node:crypto');
-const {Pool}=require('pg');
+const {createTrackedPostgresPool,closePostgresFixture}=require('./helpers/closePostgresPool');
 const {startDisposablePostgres}=require('./helpers/disposablePostgres');
 const {seedScopedResume}=require('./helpers/anchorScopedResumePostgresFixture');
 const {insert}=require('./helpers/anchorRecoveryPostgresFixture');
@@ -29,7 +29,7 @@ async function canonicalApprove(pool,f,envelope){const approval=clone(f.approval
  approval.payload.payload.preparedArtifactRevision=envelope.revision;approval.payload.payload.dailyEnvelope={id:envelope.id,programId:f.program.id,policyHash:f.program.policy_hash,manifestHash:envelope.manifest_hash,localDay:clock(f.now).day,candidateIds:envelope.manifest.map(i=>i.candidateId)};
  await insert(pool,'acquisition_mission_contributions',approval);await pool.query("UPDATE acquisition_outbound_envelopes SET status='authorized',approval_id=$2 WHERE id=$1",[envelope.id,approval.id]);return {...envelope,status:'authorized',approval_id:approval.id};}
 test('native scoped lifecycle: tenant10 maintenance, approved batch, fresh days, durable caps, UNKNOWN and revoke',{timeout:120000},async t=>{
- const pg=await startDisposablePostgres('anchor-scoped-lifecycle-'),pool=new Pool({connectionString:pg.connectionString,max:14});t.after(async()=>{await pool.end();await pg.stop();});
+ const pg=await startDisposablePostgres('anchor-scoped-lifecycle-'),pool=createTrackedPostgresPool({connectionString:pg.connectionString,max:14});t.after(()=>closePostgresFixture(pool,pg));
  const f=await seedScopedResume(pool,{preparation:true});
  f.program.policy.expiresAt='2026-10-22T00:00:00.000Z';f.program.policy_hash=hash(f.program.policy);f.manifest.policyHash=f.program.policy_hash;f.manifest.expiresAt='2026-10-21T20:30:00.000Z';
  f.manifest.scopes.email.dailyCap=1;f.manifest.scopes.email.totalCap=2;f.manifest.scopes.preparation.dailyCap=3;f.manifest.scopes.preparation.totalCap=6;f.manifest.scopes.preparation.dailyItemCap=1;f.manifest.scopes.preparation.totalItemCap=3;
@@ -77,7 +77,7 @@ test('native scoped lifecycle: tenant10 maintenance, approved batch, fresh days,
 });
 
 test('native scoped scheduler approval bridge consumes authority and keeps canonical writer preinitialized',{timeout:120000},async t=>{
- const pg=await startDisposablePostgres('anchor-scoped-approval-'),pool=new Pool({connectionString:pg.connectionString,max:12});t.after(async()=>{await pool.end();await pg.stop();});
+ const pg=await startDisposablePostgres('anchor-scoped-approval-'),pool=createTrackedPostgresPool({connectionString:pg.connectionString,max:12});t.after(()=>closePostgresFixture(pool,pg));
  const f=await seedScopedResume(pool,{preparation:true});f.manifest.scopes.email.approvalMode='delegated_existing_program';f.manifest.scopes.preparation.operations.push('approve_canonical_envelope');
  t.mock.timers.enable({ apis: ['Date'], now: +f.now });
  await pool.query("UPDATE acquisition_outbound_envelopes SET status='frozen',approval_id=NULL WHERE id=$1",[f.envelope.id]);f.envelope.status='frozen';f.envelope.approval_id=null;

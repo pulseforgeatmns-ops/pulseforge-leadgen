@@ -59,6 +59,7 @@ const BLOCK_CODES = Object.freeze({
   KEY_REUSED: 'idempotency_key_reused',
   IN_PROGRESS: 'external_action_in_progress',
   OUTCOME_UNKNOWN: 'external_action_outcome_unknown',
+  SUBJECT_ALREADY_DISPATCHED: 'outreach_intent_already_dispatched',
 });
 
 const REPLAYABLE = new Set([STATES.PROVIDER_ACKNOWLEDGED, STATES.VERIFIED]);
@@ -177,6 +178,12 @@ function createExternalActionLedger(pool, options = {}) {
     const ownerToken = newOwnerToken();
     const correlationId = input.correlationId || null;
 
+    const r7Block = (err) => {
+      if (err && err.code === '23505' && err.constraint === 'max_external_action_claims_one_outbound_per_subject') {
+        return { outcome: CLAIM_OUTCOMES.BLOCKED, code: BLOCK_CODES.SUBJECT_ALREADY_DISPATCHED, receipt: null };
+      }
+      throw err;
+    };
     const inserted = await pool.query(
       `INSERT INTO max_external_action_claims (
          tenant_id, idempotency_key, action_kind, request_fingerprint, attempt, state,
@@ -187,7 +194,8 @@ function createExternalActionLedger(pool, options = {}) {
        RETURNING *`,
       [tenantId, idempotencyKey, actionKind, fingerprint, input.missionId || null, input.subjectRef || null,
         input.provider || null, input.providerIdempotencyKey || null, correlationId, ownerToken, now()]
-    );
+    ).catch((err) => ({ r7: r7Block(err) }));
+    if (inserted.r7) return inserted.r7;
     if (inserted.rows[0]) {
       await audit(inserted.rows[0], 'claimed', null, STATES.CLAIMED);
       return { outcome: CLAIM_OUTCOMES.CLAIMED, ownerToken, receipt: receiptFromRow(inserted.rows[0]) };
@@ -224,7 +232,8 @@ function createExternalActionLedger(pool, options = {}) {
           WHERE tenant_id = $1 AND idempotency_key = $2 AND state = $6 AND attempt = $7
         RETURNING *`,
         [tenantId, idempotencyKey, ownerToken, correlationId, now(), existing.state, existing.attempt]
-      );
+      ).catch((err) => ({ r7: r7Block(err) }));
+      if (reclaimed.r7) return reclaimed.r7;
       if (reclaimed.rows[0]) {
         await audit(reclaimed.rows[0], 'reclaimed', existing.state, STATES.CLAIMED);
         return { outcome: CLAIM_OUTCOMES.CLAIMED, ownerToken, receipt: receiptFromRow(reclaimed.rows[0]) };
@@ -322,6 +331,27 @@ function createExternalActionLedger(pool, options = {}) {
     return receiptFromRow(await load(requireText(tenantId, 'tenantId'), requireText(idempotencyKey, 'idempotencyKey')));
   }
 
+  /**
+   * R7 — claims for the SAME logical outreach target under a DIFFERENT key that
+   * may have reached (or are reaching) the recipient. Changing message content
+   * creates a new key; it must not create a second send while any of these exist.
+   * failed_definitive and abandoned_not_dispatched never delivered and do not block.
+   */
+  async function findBlockingForSubject(input = {}) {
+    await assertReliabilitySchema(pool);
+    const r = await pool.query(
+      `SELECT * FROM max_external_action_claims
+        WHERE tenant_id = $1 AND action_kind = $2 AND mission_id = $3 AND subject_ref = $4
+          AND idempotency_key <> $5
+          AND state IN ('claimed','dispatch_attempted','provider_acknowledged','verified','outcome_unknown')
+        ORDER BY updated_at DESC LIMIT 1`,
+      [requireText(input.tenantId, 'tenantId'), requireText(input.actionKind, 'actionKind'),
+        requireText(input.missionId, 'missionId'), requireText(input.subjectRef, 'subjectRef'),
+        requireText(input.excludeKey, 'excludeKey')]
+    );
+    return receiptFromRow(r.rows[0]);
+  }
+
   async function listUnresolved(tenantId, { limit = 100 } = {}) {
     await assertReliabilitySchema(pool);
     const r = await pool.query(
@@ -341,6 +371,7 @@ function createExternalActionLedger(pool, options = {}) {
     releaseUndispatched,
     reconcile,
     get,
+    findBlockingForSubject,
     listUnresolved,
   };
 }

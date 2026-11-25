@@ -192,7 +192,7 @@
   async function api(url, opts) {
     const res = await fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts || {}));
     const body = await res.json().catch(function () { return {}; });
-    if (!res.ok) throw new Error(body.message || body.error || 'Request failed');
+    if (!res.ok) throw Object.assign(new Error(body.message || body.error || 'Request failed'), { httpStatus: res.status });
     return body;
   }
 
@@ -583,23 +583,49 @@
     }
   });
 
+  // MAX-P0-003 — one Idempotency-Key per operator click; a second click while
+  // the first is in flight is ignored, so one decision is submitted once.
+  let executionInFlight = false;
+  function newIdempotencyKey() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') return 'ui-' + window.crypto.randomUUID();
+    const bytes = new Uint8Array(16);
+    window.crypto.getRandomValues(bytes);
+    return 'ui-' + Array.from(bytes, function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+  }
+
+  // A key is reused only when the previous attempt for the same mission+intent
+  // ended without any HTTP response (network failure): the server may still be
+  // executing it, and the retry must replay rather than run again.
+  let pendingKey = null;
   async function submitExecution(intent) {
     if (!selected) return setMsg('Select a mission first', 'err');
     if (!intent) return setMsg('No executable intent', 'err');
+    if (executionInFlight) return setMsg('An execution request is already being submitted…');
+    executionInFlight = true;
+    const target = selected + '|' + intent;
+    if (!pendingKey || pendingKey.target !== target) pendingKey = { target: target, key: newIdempotencyKey() };
     try {
       setMsg('Submitting execution request…');
       const body = await api('/api/v1/amo/missions/' + encodeURIComponent(selected) + '/execute', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': pendingKey.key },
         body: JSON.stringify({
           intent: intent,
           source: 'approval_button',
           question: intent,
         }),
       });
+      pendingKey = null;
       await loadOne(selected);
       setMsg('Executed ' + ((body.request && body.request.intent) || intent), 'ok');
     } catch (err) {
+      // A definitive application answer means the next click is a new request.
+      // No response (network), 409 (still in progress) or a gateway 502/503/504
+      // may mean the original is still running: keep the key so a retry replays.
+      if (err && err.httpStatus && ![409, 502, 503, 504].includes(err.httpStatus)) pendingKey = null;
       setMsg(err.message, 'err');
+    } finally {
+      executionInFlight = false;
     }
   }
 
