@@ -112,15 +112,19 @@ New suites (real disposable PostgreSQL 16, separate OS processes each with its o
 
 Failure injection covered: process crash holding a lease mid-write (exit 137) → no partial write, lock released; backend terminated under an open lease → `mission_lease_lost`, nothing persisted; specialist throws; failure after the durable write but before commit; lease killed during specialist execution; crash after provider dispatch before acknowledgement (exit 137) → three retries refused, recovery escalates, evidence-backed reconcile; crash after claim before dispatch → recovery abandons, single retry; provider exception / timeout / 4xx / 429 / 503 classification; pre-dispatch guard refusal; 8 competing writers in 8 processes → exactly 1 commit, 7 `mission_version_conflict`, durable row = winner; 10 identical dispatches in 10 processes → **1 provider call**; 10 identical keyed requests → 1 execution; lock timeout explicit; schema missing → fail closed.
 
-Regression (baseline = clean worktree of `76a1059`, same container, failure sets compared by name):
+Regression. Two baselines, failure sets compared by test name in the same container: `76a1059` (`main`) for the first pass, then the **deployment candidate** `origin/migration/render-current-main` (`69e7216`) after merging it into this branch (merge was conflict-free). Final numbers are for the merged tree:
 
-| Suite | Baseline | MAX-P0-003 | New failures |
+| Suite | Candidate baseline | MAX-P0-003 (merged) | New failures |
 |---|---|---|---|
-| `npm run test:max` | 2934 pass / 0 fail | 2934 / 0 | 0 |
-| `npm run test:amo` | 498 / 46 fail | 498 / 46 | **0** (identical set; pre-existing: Places/fixture-environment) |
+| `test:amo` ratchet (`scripts/ci/testRatchet.js`, 72 reviewed keys — the CI gate) | within baseline | **No failures outside the reviewed baseline** | 0 |
+| `npm run test:max` | 2946 / 0 | 2946 / 0 | 0 |
 | `npm run test:global-smoke` | — | 10 / 0 | 0 |
-| 17 PostgreSQL suites touching mission persistence (anchor scoped resume ×11, recovery approval, evidence registry, investigation acceptance, reliability recovery, legacy hydration, review-only ×2) | 182 / 2 | 182 / 2 | **0** |
-| `npm run test:anchor-outbound` | see PR | see PR | see PR |
+| `npm run test:anchor-outbound` (as non-root, real PostgreSQL) | 877 / 0 | **877 / 0** | 0 |
+| 24 PostgreSQL suites touching mission persistence / pilot policy | 212 / 2 | 212 / 2 (identical set) | 0 |
+| `npm run test:max:reliability-core` | — | 28 / 0 | — |
+| `test/ciPlanPr.test.js`, `test/ciPostgresProvisioning.test.js` | — | 76 / 0 | 0 |
+
+Notes: one anchor-outbound run executed concurrently with three other suites showed 3 failures (a 10 s "hung persistence" timing test and a worker-outcome check); the two affected files then passed 4/4 in isolation and the full suite passed 877/877 run alone. The ratchet reports `spec140` as newly passing on the unmodified candidate too (environmental); the baseline was not edited. During development the 17 mission-persistence suites caught a real defect in this change (false `mission_version_conflict`: CAS compared the payload against a column-derived hydrate fingerprint; 148/184 → fixed → 182/184 = baseline; regression test added).
 
 Test fixture update (no assertion weakened or removed): the `adr075TransactionalPersistence` in-memory pool hand-emulated the *old* session-lock SQL; it now emulates the lease protocol (transaction-scoped lock released at COMMIT/ROLLBACK). `spec131`/`spec206` are unchanged and pass through the non-PostgreSQL "lock skipped" path (decision 7). No baseline exception was added.
 
@@ -157,9 +161,9 @@ Test fixture update (no assertion weakened or removed): the `adr075Transactional
 
 **Access.** The Render database `pulseforge-production-migration` (`dpg-dbtgtloae00c73dd8040-a`, PostgreSQL 18, Ohio, 1c-2g, 10 GB, no HA, no replica) has an **empty IP allowlist**: it accepts no external connections, so the Render MCP read-only query tool cannot reach it. Adding an allowlist entry would expose it and is outside this authorisation. No in-network read path exists in this session (no SSH key for the service; the cutover's in-network component is a restore receiver, not a reporter). **The live schema report was therefore not executed.** `scripts/max-reliability/schemaReport.cjs` is ready: run it in **Render Shell** on `pulseforge-api-migration` (private network, existing `DATABASE_URL`); it uses one `REPEATABLE READ READ ONLY` transaction, a 20 s statement timeout, and emits counts/catalog only (verified locally: `transaction_read_only = on`).
 
-**Escalation — public pgAdmin.** Render service `pgAdmin-dpg-dbtgtloae00c73dd8040-a` (created 2026-11-24, `ipAllowList 0.0.0.0/0`, public URL) is attached to the production database. That is a public administrative path to production data, contrary to "do not expose PostgreSQL publicly". **Not modified** (no authority). Recommend suspending it or restricting its allowlist today.
+**Escalation — public pgAdmin.** (The MAX-P0-002 runbook already lists its suspension; as of this report it is still running.) Render service `pgAdmin-dpg-dbtgtloae00c73dd8040-a` (created 2026-11-24, `ipAllowList 0.0.0.0/0`, public URL) is attached to the production database. That is a public administrative path to production data, contrary to "do not expose PostgreSQL publicly". **Not modified** (no authority). Recommend suspending it or restricting its allowlist today.
 
-**Deployment branch.** Render `pulseforge-api-migration` deploys branch `migration/render-current-main` with auto-deploy **off**; `main` is `76a1059`. This branch (MAX-P0-003) is cut from `76a1059`. Reconciliation path: PR to `main`; then a reviewed fast-forward/merge of `main` into `migration/render-current-main`. Divergence between `migration/render-current-main` and `main` could not be inspected from this session (only this repository's `main` and the work branch are fetched); check with `git log main..migration/render-current-main` before the merge.
+**Deployment branch.** Render `pulseforge-api-migration` deploys `migration/render-current-main` with auto-deploy **off**. It is **26 commits ahead of `main`** and `main` has nothing it lacks (Levi Scout research-only integration, tenant-21 pilot policy, MAX-P0-001/002 audits and containment, fail-closed cron auth, CI on the deploy candidate, `test:amo` ratchet). Reconciliation: a reviewed PR `migration/render-current-main → main` (pure fast-forward content). MAX-P0-003 has the candidate merged in, so after that PR merges its own PR diff is MAX-P0-003 only, and what CI validates equals what would deploy.
 
 **Railway vs Render divergence.** No Pulseforge project is visible in the accessible Railway workspace (consistent with commit `3c4aed6`, "retire Railway DB after verified promotion"). Live comparison is impossible. Recorded evidence (`docs/migration/CUTOVER_EXECUTION_20261122.md`): production-data rehearsal **0 differences** across 274 tables / 1,630,980 rows, catalog identical (319 tables, 3 views, 80 triggers, 779 indexes, 3,629 constraints, 84 functions, 56 sequences), 45 Signal tables intentionally empty; final cutover promoted the verified copy by rename, keeping `pulseforge_pre_cutover_<stamp>`. Off-Railway copy: GitHub artifact `14765103365` (90-day retention, from 2026-11-22 → expires ≈ 2027-02-20). **Writes after the 18:49Z unfreeze** were re-snapshotted (`4e8b1c8`, `d134540`); confirming no Railway write landed after the final snapshot requires the Railway audit/log which is not reachable here.
 
