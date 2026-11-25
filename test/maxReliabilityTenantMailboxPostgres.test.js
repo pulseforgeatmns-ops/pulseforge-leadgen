@@ -156,3 +156,22 @@ test('mailbox sends fail closed without the reliability migration', { timeout: 6
     await bare.end();
   }
 });
+
+test('legitimate sequence steps to the same prospect in the same mission all send (not constrained by R7)', { timeout: 60000 }, async () => {
+  const t = transport(async (n) => ({ messageId: `<step-${n}@example.test>` }));
+  // Same tenant, identity, mission and prospect; distinct steps → distinct idempotency keys and content.
+  const step = (n) => sendTenantEmail({
+    tenantId: TENANT, sendingIdentityId: fixture.identity.id, to: 'buyer@example.test', subject: `Step ${n}`,
+    body: `Sequence step ${n}`, prospectId: 'safe-test', missionId: 'mailbox-verification', outreachAssetId: 'mailbox-test-send',
+    sequenceStepRef: String(n), metadata: { idempotencyKey: `mb-seq-step-${n}` },
+  }, { store: fixture.store, transport: t, purpose: 'mailbox_verification', secretResolver: () => 'dummy' });
+  const results = [await step(1), await step(2), await step(3)];
+  assert.ok(results.every((r) => r.sent === true), JSON.stringify(results.map((r) => r.sent)));
+  assert.equal(t.calls, 3);
+  const claims = (await fixture.pool.query(
+    "SELECT state FROM max_external_action_claims WHERE tenant_id = $1 AND idempotency_key LIKE 'tenant-mailbox:mb-seq-step-%'", [TENANT])).rows;
+  assert.deepEqual(claims.map((c) => c.state), ['provider_acknowledged', 'provider_acknowledged', 'provider_acknowledged']);
+  // A retry of step 2 is still deduplicated (replay, no SMTP call).
+  assert.equal((await step(2)).duplicate, true);
+  assert.equal(t.calls, 3);
+});

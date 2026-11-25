@@ -21,7 +21,7 @@ SELECT (SELECT count(*) FROM pg_tables WHERE schemaname = 'public') AS tables,
 SELECT t AS table_name, to_regclass(t) IS NOT NULL AS present
   FROM unnest(ARRAY['clients','users','session','prospects','companies','agent_log','agent_actions',
     'acquisition_missions','acquisition_mission_events','acquisition_mission_contributions','acquisition_mission_observations',
-    'acquisition_mission_outcomes','acquisition_mission_execution_audit','acquisition_outbound_executions','max_conversation_context',
+    'acquisition_mission_outcomes','acquisition_mission_execution_audit','acquisition_mission_outbound_executions','max_conversation_context',
     'tenant_outreach_messages','max_external_action_claims','max_request_receipts','max_reliability_audit']) AS t;
 \echo '== other schemas'
 SELECT nspname AS schema FROM pg_namespace WHERE nspname NOT IN ('public','information_schema') AND nspname NOT LIKE 'pg\_%' ORDER BY 1;

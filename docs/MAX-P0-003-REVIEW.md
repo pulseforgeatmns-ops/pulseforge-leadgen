@@ -150,7 +150,7 @@ SELECT current_database() AS database, current_user AS role, split_part(version(
 \echo '== catalog (rehearsal reference: 319 tables, 3 views, 80 triggers, 779 indexes, 3629 constraints, 84 functions, 56 sequences)'
 SELECT (SELECT count(*) FROM pg_tables WHERE schemaname='public') AS tables, (SELECT count(*) FROM pg_views WHERE schemaname='public') AS views, (SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND NOT t.tgisinternal) AS triggers, (SELECT count(*) FROM pg_indexes WHERE schemaname='public') AS indexes, (SELECT count(*) FROM information_schema.table_constraints WHERE table_schema='public') AS constraints, (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public') AS functions, (SELECT count(*) FROM pg_sequences WHERE schemaname='public') AS sequences;
 \echo '== Max / AMO / MAX-P0-003 core tables'
-SELECT t AS table_name, to_regclass(t) IS NOT NULL AS present FROM unnest(ARRAY['clients','users','session','prospects','companies','agent_log','agent_actions','acquisition_missions','acquisition_mission_events','acquisition_mission_contributions','acquisition_mission_observations','acquisition_mission_outcomes','acquisition_mission_execution_audit','acquisition_outbound_executions','max_conversation_context','tenant_outreach_messages','max_external_action_claims','max_request_receipts','max_reliability_audit']) AS t;
+SELECT t AS table_name, to_regclass(t) IS NOT NULL AS present FROM unnest(ARRAY['clients','users','session','prospects','companies','agent_log','agent_actions','acquisition_missions','acquisition_mission_events','acquisition_mission_contributions','acquisition_mission_observations','acquisition_mission_outcomes','acquisition_mission_execution_audit','acquisition_mission_outbound_executions','max_conversation_context','tenant_outreach_messages','max_external_action_claims','max_request_receipts','max_reliability_audit']) AS t;
 \echo '== tenants (counts only)'
 SELECT c.id, c.name, c.active, (SELECT count(*) FROM prospects p WHERE p.client_id=c.id) AS prospects FROM clients c ORDER BY c.id;
 \echo '== missions by tenant'
@@ -332,3 +332,19 @@ Bottom line: **no duplicate-send hole.** The R2.1 fix was confirmed against node
 | The receipt test used its own `receiptOf` | gap | **Fixed**: the policy test composes `executeCanonicalResponse` → `executeReceipt`. |
 
 After these fixes: `test:max:reliability-core` **51/51**; review-only + recovery approval + CI plan **71/71**; `test:anchor-outbound` **877/877**; mailbox/scheduler suites 224/225 (1 skip), identical to `main`.
+
+### 7.7 Correction after `26b9d35` (documented)
+1. **Operator-material defect fixed.** The schema report (`schema-report-readonly.sql`, `schemaReport.cjs`, and the §4.1 command) listed a non-existent table `acquisition_outbound_executions`; the real table is `acquisition_mission_outbound_executions`. That row would have shown a false `f`. No code change.
+2. **Pre-migration conflict check added**: `scripts/max-reliability/pre-migration-check-readonly.sql`. Read-only (`READ ONLY` transaction plus `default_transaction_read_only=on`). Verified on disposable PostgreSQL:
+   - never-migrated database → reports all objects absent and that the index is built on an empty table;
+   - migrated table with a seeded duplicate → lists exactly the conflicting AMO group, does **not** flag two mailbox sequence steps for the same prospect, and `CREATE UNIQUE INDEX` over the conflict is refused with `23505` (the transactional migration would roll back as a whole).
+3. **Mailbox sequence steps proven unaffected** end-to-end through `sendTenantEmail`: three steps to one prospect/mission all send with three acknowledged claims, and a retry of one step is still deduplicated (`maxReliabilityTenantMailboxPostgres` 8/8). The scheduler's per-step key (`buildIdempotencyKey`) includes `sequenceStep` and `scheduledFor`.
+
+### 7.8 Partial unique index — production compatibility
+| Question | Answer |
+|---|---|
+| Can it conflict with existing production rows? | **No, on a never-migrated database:** the index is on `max_external_action_claims`, which the same migration creates, so it is built on an empty table. Production has never had the migration applied (pending confirmation by check §2). |
+| What if the table somehow exists with data? | Check §3 lists any violating groups. If any exist, `CREATE UNIQUE INDEX IF NOT EXISTS` fails with `23505` and the migration's single transaction rolls back completely. Nothing is partially applied. Resolution is a separately approved reconciliation, never deleting claims. |
+| Does it constrain existing tables? | No. Existing `acquisition_mission_outbound_executions` and `tenant_outreach_messages` rows are untouched. Check §4–5 report how the R7 *record* rule and the ledger will treat existing history (informational). |
+| Locking impact | Created on an empty table inside the migration transaction: instantaneous; no lock on live tables. |
+| Mailbox sequence steps | Excluded by predicate (`action_kind = 'amo_outbound_email'` only); proven by test. |
