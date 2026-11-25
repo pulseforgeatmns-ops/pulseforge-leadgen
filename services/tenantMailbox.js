@@ -1389,17 +1389,20 @@ function resolveMailboxLedger(store, opts = {}) {
 
 /**
  * MAX-P0-003 — true only when the SMTP failure proves the message was NOT
- * accepted: the server answered with an error reply, or the failure happened
- * before any message data could be transmitted (DNS, TCP connect, TLS/auth,
- * envelope rejection). Mid-transfer drops, timeouts and lost acknowledgements
- * are unknown and must never be retried automatically.
+ * accepted. nodemailer (8.x) tags socket errors, unexpected closes and
+ * timeouts with command 'CONN' at ANY stage — including after DATA, when the
+ * 250 reply may simply have been lost — so neither the 'CONN' command nor
+ * ECONNECTION/ESOCKET/ETIMEDOUT is evidence of non-delivery. Definitive only:
+ *   - an SMTP error reply (responseCode >= 400): the server refused;
+ *   - EAUTH / EENVELOPE / EDNS: failed before any message data could be sent;
+ *   - a TCP connect / DNS lookup failure from the socket layer.
+ * Everything else after the dispatch marker is an unknown outcome.
  */
 function smtpFailureIsDefinitive(err) {
   if (!err) return false;
   if (Number(err.responseCode) >= 400) return true;
   if (['EAUTH', 'EENVELOPE', 'EDNS'].includes(err.code)) return true;
-  if (err.code === 'ECONNECTION' && (!err.command || err.command === 'CONN')) return true;
-  if (err.command === 'CONN' || err.syscall === 'connect' || err.syscall === 'getaddrinfo') return true;
+  if (err.syscall === 'connect' || err.syscall === 'getaddrinfo') return true;
   return /^(connect|getaddrinfo) E[A-Z]+/.test(String(err.message || ''));
 }
 
@@ -1491,6 +1494,7 @@ async function sendTenantEmail(input = {}, opts = {}) {
         body: input.text || input.body || null,
         html: input.html || null,
         inReplyTo: input.inReplyTo || null,
+        referencesHeader: input.referencesHeader || null,
       }),
       missionId: input.missionId || null,
       subjectRef: input.prospectId ? `prospect:${input.prospectId}` : null,
@@ -1515,7 +1519,9 @@ async function sendTenantEmail(input = {}, opts = {}) {
     if (claimed.outcome !== 'claimed') {
       throw mailboxError(claimed.code || 'external_action_blocked', claimed.code === 'external_action_outcome_unknown'
         ? 'A previous send of this message has an unknown outcome; it requires reconciliation and is not retried.'
-        : 'This message is already claimed by another send; nothing was sent.', { externalActionState: claimed.receipt?.state || null });
+        : claimed.code === 'idempotency_key_reused'
+          ? 'This idempotency key was already used for different message content; nothing was sent.'
+          : 'This message is already claimed by another send; nothing was sent.', { externalActionState: claimed.receipt?.state || null });
     }
     ledgerHandle = { tenantId: claimInput.tenantId, idempotencyKey: claimInput.idempotencyKey, ownerToken: claimed.ownerToken };
   }
@@ -1556,6 +1562,7 @@ async function sendTenantEmail(input = {}, opts = {}) {
   let smtpAuth;
   let crossedProviderBoundary = false;
   let dispatchMarked = false;
+  let providerReturned = false;
   try {
     smtpAuth = await resolveSmtpAuth(integration, opts);
     const transport = createSmtpTransport(integration, smtpAuth, opts);
@@ -1589,7 +1596,10 @@ async function sendTenantEmail(input = {}, opts = {}) {
       if (providerBoundary && typeof providerBoundary.markCrossed === 'function') {
         providerBoundary.markCrossed();
       }
-      return transport.sendMail(actualPayload);
+      const sent = await transport.sendMail(actualPayload);
+      // The provider returned: from here on, no failure may be read as "not sent".
+      providerReturned = true;
+      return sent;
     };
     const result = store instanceof PostgresTenantMailboxStore
       ? (!isNonCrmMailboxVerification(input, opts)
@@ -1625,14 +1635,16 @@ async function sendTenantEmail(input = {}, opts = {}) {
     // MAX-P0-003 — an SMTP reply code means the server refused the message
     // (definitively not accepted). Anything else after the boundary — dropped
     // connection, timeout, lost acknowledgement — is an unknown outcome.
-    const definitiveRefusal = smtpFailureIsDefinitive(err);
+    // After sendMail returned, a later failure (recording the result, saving the
+    // row, a lost authorization COMMIT) can never mean the message was not sent.
+    const definitiveRefusal = !providerReturned && smtpFailureIsDefinitive(err);
     const outcomeUnknown = dispatchMarked && !definitiveRefusal;
     if (ledgerHandle) {
       if (!dispatchMarked) {
         await ledger.releaseUndispatched(ledgerHandle, err.code || 'not_dispatched').catch(() => {});
       } else if (definitiveRefusal) {
         await ledger.recordProviderResult(ledgerHandle, { success: false, definitive: true,
-          providerErrorCode: `smtp_${err.responseCode}` }).catch(() => {});
+          providerErrorCode: `smtp_${err.responseCode ?? err.code ?? 'refused'}` }).catch(() => {});
       } else {
         await ledger.markOutcomeUnknown(ledgerHandle, err.code || 'smtp_outcome_unknown').catch(() => {});
       }

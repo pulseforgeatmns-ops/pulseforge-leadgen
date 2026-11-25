@@ -72,7 +72,8 @@ test('concurrent sends of one message reach SMTP exactly once', { timeout: 60000
 });
 
 test('mid-transfer failure is outcome-unknown and is never retried', { timeout: 60000 }, async () => {
-  const t = transport(async () => { throw Object.assign(new Error('Connection closed unexpectedly'), { code: 'ECONNECTION', command: 'DATA' }); });
+  // nodemailer 8.x tags an unexpected close with command 'CONN' at ANY stage, including after DATA.
+  const t = transport(async () => { throw Object.assign(new Error('Connection closed unexpectedly'), { code: 'ECONNECTION', command: 'CONN' }); });
   await assert.rejects(send('mb-unknown', t), { code: 'ECONNECTION' });
   const row = (await fixture.pool.query("SELECT status, failure_code, metadata FROM tenant_outreach_messages WHERE metadata->>'idempotencyKey' = 'mb-unknown'")).rows[0];
   assert.equal(row.status, MESSAGE_STATUS.FAILED);
@@ -84,9 +85,36 @@ test('mid-transfer failure is outcome-unknown and is never retried', { timeout: 
   assert.equal(receipt.state, STATES.OUTCOME_UNKNOWN);
 });
 
+test('socket reset and timeout (real nodemailer CONN shapes) are unknown, never retried', { timeout: 60000 }, async () => {
+  for (const [key, err] of [
+    ['mb-reset', Object.assign(new Error('read ECONNRESET'), { code: 'ESOCKET', command: 'CONN', syscall: 'read' })],
+    ['mb-timeout', Object.assign(new Error('Timeout'), { code: 'ETIMEDOUT', command: 'CONN' })],
+  ]) {
+    const t = transport(async () => { throw err; });
+    await assert.rejects(send(key, t));
+    await assert.rejects(send(key, t), { code: 'external_action_outcome_unknown' });
+    assert.equal(t.calls, 1, `${key}: no blind retry`);
+  }
+});
+
+test('failure after the provider returned is never read as "not sent"', { timeout: 60000 }, async () => {
+  const real = createExternalActionLedger(fixture.pool);
+  let failOnce = true;
+  const ledger = { ...real, recordProviderResult: async (...args) => {
+    if (failOnce) { failOnce = false; throw Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:5432'), { code: 'ECONNREFUSED', syscall: 'connect' }); }
+    return real.recordProviderResult(...args);
+  } };
+  const t = transport(async () => ({ messageId: '<accepted@example.test>' }));
+  await assert.rejects(send('mb-post-provider', t, { externalActionLedger: ledger }), { code: 'ECONNREFUSED' });
+  const row = (await fixture.pool.query("SELECT metadata FROM tenant_outreach_messages WHERE metadata->>'idempotencyKey' = 'mb-post-provider'")).rows[0];
+  assert.notEqual(row.metadata.providerAccepted, false, 'never recorded as definitely not accepted');
+  await assert.rejects(send('mb-post-provider', t, { externalActionLedger: ledger }), { code: 'external_action_outcome_unknown' });
+  assert.equal(t.calls, 1, 'the accepted message is not sent again');
+});
+
 test('connection never established is definitive and may be retried once', { timeout: 60000 }, async () => {
   const t = transport(async (n) => {
-    if (n === 1) throw Object.assign(new Error('connect ENETUNREACH 192.0.2.1:465'), { code: 'ESOCKET' });
+    if (n === 1) throw Object.assign(new Error('connect ENETUNREACH 192.0.2.1:465'), { code: 'ESOCKET', command: 'CONN', syscall: 'connect' });
     return { messageId: '<retry@example.test>' };
   });
   await assert.rejects(send('mb-definitive', t), { code: 'ESOCKET' });

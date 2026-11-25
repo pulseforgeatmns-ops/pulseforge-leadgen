@@ -241,3 +241,75 @@ Values are read from the code (`=== '1'`, `=== 'true'`, etc.). Secrets: confirm 
 | Load-sensitive failures | **Tracked**: L1 open (pre-existing, safe direction); L2 fixed. |
 | Production schema verification | **Open**: awaiting the operator's Render Shell output. |
 | **pgAdmin public exposure** | **Residual, accepted by the operator (deferred). Not a deployment blocker.** The Render service `pgAdmin-dpg-dbtgtloae00c73dd8040-a` is reachable from `0.0.0.0/0` and attached to the production database, so its protection rests entirely on pgAdmin authentication. No evidence found that it participates in execution integrity. Re-escalate only on new evidence (e.g. credential exposure or unexpected pgAdmin sessions in `pg_stat_activity`). |
+
+## 6. Retention protections: lifecycle and data-management verification
+
+The R4 triggers forbid `DELETE`/`TRUNCATE` on `max_external_action_claims` and `max_reliability_audit`, and `DELETE` on any `max_request_receipts` row that is not `in_progress`. Checked against every lifecycle path:
+
+| Concern | Finding | Status |
+|---|---|---|
+| Application lifecycle transitions | Claim → dispatch → result, re-claim, reconcile, recovery and receipt finish are all `UPDATE`. The only `DELETE` is the receipt release after pre-execution lock contention (`in_progress`, still allowed and audited). | ✔ no conflict |
+| Tenant AMO reset (`deleteAllAmoData`) | Deletes AMO mission tables only. Claims, receipts and audit are retained. Intended: they record what may have been sent, and mission ids are random, so a reset mission cannot collide with old claims. | ✔ intended |
+| Tenant/workspace deletion | No such code path exists. If one is added, it must not delete claims for actions that were or may have been dispatched. Use the scrub procedure below for personal data. | ✔ (constraint recorded) |
+| Restore / migration tooling | `restoreFinalRender.py` uses `pg_restore` into a **new** database. Triggers are created in the post-data section after rows load. No `TRUNCATE`/`DELETE` in `scripts/migration`. | ✔ |
+| Test fixtures | No fixture applies all migrations in a loop (the three `readdirSync(migrations)` users filter for their own files). Suites that apply this migration do not truncate. | ✔ |
+| Personal data | Claims store `subject_ref` (prospect id), mission id, provider message id and hashes; **no recipient or content**. Audit details pass through `redact()`: content keys removed, secrets removed, e-mails replaced by a 16-hex SHA-256 prefix (pseudonymous). **Receipts were the gap:** they stored the full execute response, including operator free text. Fixed: `/execute` now stores an allowlisted summary only (`executeReceipt`). | ✔ after fix |
+| Erasure requests | `UPDATE` is not blocked. Erasure scrubs fields (e.g. `UPDATE max_reliability_audit SET detail = '{}'::jsonb WHERE …`; `UPDATE max_external_action_claims SET subject_ref = NULL WHERE …`). The claim row itself must stay, or the duplicate-send barrier disappears. | ✔ procedure |
+| Growth | Roughly one claim and 3–5 audit rows per external action, and one receipt per keyed request. Negligible at current volumes (outbound paused). Indexes are partial or tenant-led. | ✔; review at scale |
+| Archival | Not possible with ordinary statements, by design. A future archival must be a separately approved migration: export, then `ALTER TABLE … DISABLE TRIGGER` within one transaction, deleting only rows for actions in terminal states older than an agreed horizon, then re-enable. Claims for `dispatch_attempted`/`outcome_unknown` are never archived. | documented |
+| Limit of the guard | The table owner (the application role on Render) can `DISABLE TRIGGER` or `DROP TABLE`. The triggers stop accidental and automated deletion (cleanup jobs, retention scripts, mistaken statements), not a deliberate owner action. | accepted |
+| `session_replication_role = replica` | Bypasses ordinary triggers; requires superuser. Render managed databases do not grant superuser to the application role. Confirm with `SELECT rolsuper FROM pg_roles WHERE rolname = current_user;` (expected `f`). | accepted |
+
+## 7. Final consolidation (owner directive "MAX-P0-003 — Final Review Consolidation")
+
+### 7.1 R7 decision implemented
+Policy: legitimate follow-up or revised outreach happens only through a distinct, authorized logical outreach intent. Changing content must not bypass an existing claim, unresolved outcome, suppression or duplicate restriction. No outreach capability is added.
+
+Implementation (`OutboundExecutionAdapter.js`, `externalActionLedger.findBlockingForSubject`): within one mission (the logical outreach intent), a prospect receives at most one outbound action. A revised artifact is refused with `outreach_intent_already_dispatched` while the same tenant/mission/prospect has, under another key:
+- a claim in `claimed`, `dispatch_attempted`, `provider_acknowledged`, `verified` or `outcome_unknown`; or
+- a `SENT`/`ATTEMPTED` execution record.
+
+Only `failed_definitive`/`abandoned_not_dispatched` (nothing delivered) let a revision proceed. The tenant-mailbox path was already covered: same key with different content → `idempotency_key_reused`. Tests: four R7 cases in `maxReliabilityOutboundAdapterPostgres`.
+
+### 7.2 Scheduler decisions
+| Workflow | Decision | Evidence |
+|---|---|---|
+| `penny-anchor-daily` | **Paused** (schedule removed; `workflow_dispatch` kept; not invoked). CI guard in `test/ciPlanPr.test.js` fails if a schedule returns. Takes effect when #1163 merges. "Disable workflow" in Actions pauses it immediately. | negative control: the guard fails on the old file |
+| `max-context-cleanup-hourly` | **Stays active**: strictly internal maintenance. `routes/cron.js:870` is one bounded `DELETE … LIMIT 500 … FOR UPDATE SKIP LOCKED` of expired `max_conversation_context` rows, behind timing-safe `CRON_SECRET` auth, registered before `/cron/:agent`. No triggers on the table, no specialist, no external call. | code inspection |
+| `levi-scout-weekly` | Manual-dispatch only (`b5a544b`), guarded by `0ad281b`. | unchanged |
+
+### 7.3 Independent review of R1–R6
+A separate reviewer with no implementation context reviewed `3bc3360..4a6052b` read-only. Verdicts and dispositions:
+
+| Item | Reviewer verdict | Disposition |
+|---|---|---|
+| **R2.1** `smtpFailureIsDefinitive` treated `command:'CONN'` / `ECONNECTION+CONN` as definitive. nodemailer 8.0.10 tags socket errors, unexpected closes and timeouts with `'CONN'` at **any** stage (`smtp-connection/index.js:225, 959–961, 986`), including after DATA. A lost 250 would have become `failed_definitive` → re-claimable → **re-send**. The original test used an unrealistic `command:'DATA'`. | **DEFECT, high**: verified in the installed source | **Fixed.** Definitive only for SMTP reply ≥400, `EAUTH`/`EENVELOPE`/`EDNS`, socket-layer `syscall` connect/getaddrinfo, or a "connect/getaddrinfo E…" message. Tests use the real shapes (close, reset, timeout = unknown; refused/DNS/550/auth = definitive). |
+| **R2.2** A failure after `sendMail` returned (recording success, saving the row, a lost authorization COMMIT) could be classified definitive if it looked like a connect error. | DEFECT, medium | **Fixed**: a `providerReturned` flag makes any later failure non-definitive. Test injects a connect-shaped ledger failure after acceptance → no re-send. |
+| **R2.3** Every PostgreSQL-backed `sendTenantEmail` (scheduler sends, governed replies, mailbox verification) fails closed until the migration is applied — broader than "AMO sends". | deploy-order note | **Documented** as a deploy prerequisite (§7.5). Intended fail-closed behaviour. |
+| R2.4 The fingerprint omitted `referencesHeader`; the key-reuse message was misleading. R2.5 `smtp_undefined` code. | low | **Fixed**: `referencesHeader` added; accurate message; `responseCode ?? code`. |
+| **R3.1** With no body intent, `executeCanonical` uses the pending decision (possibly discovery or execution approval), so the 428 check saw a planning intent. | **DEFECT, high** | **Fixed**: a key is required when the intent is absent. |
+| R3.2 Untrimmed intent bypassed the classification. | DEFECT, medium | **Fixed**: the intent is trimmed before classification, and the trimmed value executes. |
+| R3.3 Continuation intents. Also found while verifying: `APPROVE_PLAN` with any `executionMode` can chain into discovery (`ExecutionRouter.maybeChainAutonomousDiscovery`). | uncertain → confirmed | **Fixed**: key required for `AUTONOMOUS_PROGRESSION`, `MISSION_CONTINUATION`, `CONTINUE_INVESTIGATION`, and any request with `executionMode`. |
+| R3.4 A new key per click meant a retry after a network error was a new request. | low | **Fixed**: the UI reuses the key for the same mission+intent until any HTTP response arrives. |
+| R1 | CORRECT WITH CAVEATS | R1.2 **fixed**: unlock failure is logged, never masks a committed approval; the dedicated client is destroyed anyway. R1.1 (uncertain): a `persistMissionState` without an explicit pool inside the critical section would be refused (safe direction, not a deadlock). The approval path makes no such call; the full real-PostgreSQL approval suite passes 32/32. Recorded as a constraint in the handoff. |
+| R4 | CORRECT WITH CAVEATS | R4.2 header **fixed**. R4.1: `UPDATE` is unguarded (an owner could rewrite state then delete). Accepted as defence-in-depth (see §6). |
+| R5 | CORRECT | R5.2 `opts.now` **fixed**. R5.1: e-mail-shaped operator ids are hashed by redaction; use non-e-mail operator ids. |
+| R6 | CORRECT WITH CAVEATS | R6.2 **fixed**: a failed lock query destroys the connection. R6.1: the lock holds one pooled connection for the run's duration; an idle-killing proxy would drop the lock mid-run (the work continues unlocked). Recorded for MAX-P0-004. |
+| Test changes | no assertion removed or loosened | Coverage note: `p0ReviewOnlyAmendmentPostgres` now always sends a key. The keyless cases are pinned in `test/maxReliabilityPolicy.test.js`. |
+
+### 7.4 Regression (before/after, same container, sequential, failure sets compared by name)
+Baseline `origin/main` @ `3bc3360` vs PR #1163 @ `4a6052b`. Later commits re-ran the targeted suites: reliability-core 47/47; review-only + recovery approval + CI plan 71/71.
+
+| Suite | `main` | #1163 | New failures |
+|---|---|---|---|
+| `test:amo` ratchet | no failures outside baseline | no failures outside baseline | 0 |
+| `test:global-smoke` | 10/0 | 10/0 | 0 |
+| `test:anchor-outbound` | 877/0 | 877/0 | 0 |
+| 24 mission-persistence/pilot PostgreSQL suites | 212 pass / 3 fail | 212 / 2 | 0 (the extra `main` failure is an L2 teardown race in `p0ReviewOnlyAmendmentPostgres`, not a fix) |
+| 13 mailbox/scheduler suites | 224/0 (1 skip) | 224/0 | 0 |
+| `test:max` | 2946/0 | 2946/0 | 0 |
+| `test:max:reliability-core` | n/a | 47/47 | — |
+
+### 7.5 Deploy prerequisites added by this PR
+1. Apply `2026-11-25-max-p0-003-reliability-core.sql` **before** deploying code that contains #1162/#1163 (separate approval). Until then, all AMO outbound sends **and every PostgreSQL-backed tenant-mailbox send (scheduler sends, governed replies, mailbox verification)** are refused with `reliability_schema_missing` (fail closed), and keyed `/execute` returns 503.
+2. API clients of `/execute` must send `Idempotency-Key` for external-effect, intent-less, continuation or `executionMode` requests (428 otherwise). The Mission Workspace UI does.

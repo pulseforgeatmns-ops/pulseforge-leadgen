@@ -380,7 +380,9 @@ router.post('/api/v1/amo/missions/:id/execute', requireActor, async (req, res) =
     // effects or spend (provider research, outreach authorization, outreach,
     // paid media): a retried or double-submitted request must never run twice.
     const idempotencyKey = req.get('idempotency-key') || undefined;
-    if (!idempotencyKey && requiresIdempotencyKey(command.intent)) {
+    // Classify exactly the intent that will execute (trimmed, as the CER does).
+    if (typeof command.intent === 'string') command.intent = command.intent.trim() || undefined;
+    if (!idempotencyKey && requiresIdempotencyKey(command)) {
       res.setHeader('X-Correlation-Id', correlationId);
       return res.status(428).json({
         error: 'idempotency_key_required',
@@ -435,8 +437,23 @@ function executeReceipt(body = {}) {
   };
 }
 
-function requiresIdempotencyKey(intent) {
+/**
+ * A key is required whenever the request can reach external effects or spend:
+ *   - no intent: executeCanonical falls back to the mission's pending decision,
+ *     which may be discovery or execution approval;
+ *   - an intent whose action class is external (provider research, outreach
+ *     authorization, outreach, paid media);
+ *   - continuation/progression intents, which drive specialists onward;
+ *   - any executionMode: APPROVE_PLAN under an autonomous policy chains into
+ *     discovery (paid provider research) in the router.
+ */
+const KEY_REQUIRED_INTENTS = new Set(['AUTONOMOUS_PROGRESSION', 'MISSION_CONTINUATION', 'CONTINUE_INVESTIGATION']);
+function requiresIdempotencyKey(command = {}) {
   const { intentActionClass, EXTERNAL_ACTION_CLASSES } = require('../packages/acquisition-mission/AuthorizationConstraints');
+  const intent = typeof command.intent === 'string' ? command.intent.trim() : '';
+  if (!intent) return true;
+  if (command.executionMode != null && String(command.executionMode).trim() !== '') return true;
+  if (KEY_REQUIRED_INTENTS.has(intent.toUpperCase())) return true;
   return EXTERNAL_ACTION_CLASSES.includes(intentActionClass(intent));
 }
 
@@ -556,3 +573,5 @@ router.post('/api/v1/amo/ask', requireActor, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.requiresIdempotencyKey = requiresIdempotencyKey;
+module.exports.executeReceipt = executeReceipt;

@@ -539,7 +539,13 @@ function adapters(pool, dependencies = {}) {
           ...(schemaReady ? { preinitializedSchema: true, persistencePool: options.persistencePool } : {}) });
         return result.executionResult?.approval;
       } finally {
-        if (missionLock) await options.persistencePool.query(missionLease.MISSION_SESSION_UNLOCK_SQL, missionLock);
+        if (missionLock) {
+          // A failed unlock must not mask an approval that already committed; the
+          // dedicated client is destroyed by its owner (release(true)), which
+          // releases the session lock regardless.
+          await options.persistencePool.query(missionLease.MISSION_SESSION_UNLOCK_SQL, missionLock)
+            .catch((err) => console.error('[anchor-recovery] mission unlock failed (connection is discarded):', err.message));
+        }
       }
     },
     execute: async (envelope, item, program, sendEmail) => {

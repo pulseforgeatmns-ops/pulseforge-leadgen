@@ -1,6 +1,6 @@
 -- MAX-P0-003 — Reliability Core (operator migration; never startup DDL).
 --
--- Additive only: three new tables, no change to existing tables or rows.
+-- Additive only: three new tables plus delete/truncate guard triggers on them; no change to existing tables or rows.
 -- Idempotent (IF NOT EXISTS). Safe to run before the application deploy; the
 -- application fails closed (refuses external dispatch and keyed requests) until
 -- these tables exist.

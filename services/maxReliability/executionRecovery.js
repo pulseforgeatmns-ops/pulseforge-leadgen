@@ -92,7 +92,7 @@ async function recoverInterruptedExecution(pool, opts = {}) {
     }
   }
   await recordReliabilityAudit(pool, { tenantId, correlationId: opts.correlationId || null, subjectKind: 'recovery_run',
-    subjectKey: `${tenantId}:${new Date().toISOString()}`, event: 'recovery_applied', fromState: null, toState: null,
+    subjectKey: `${tenantId}:${(opts.now ? opts.now() : new Date()).toISOString()}`, event: 'recovery_applied', fromState: null, toState: null,
     detail: { actor, cutoff: plan.cutoff, staleAfterMs, abandoned: changed.abandoned.length, unknown: changed.unknown.length,
       interrupted: changed.interrupted.length, unresolvedUnknownBefore: plan.unresolvedUnknown } });
   return { applied: true, actor, ...summarize(plan), changed, escalationRequired: changed.unknown.length + plan.unresolvedUnknown > 0 };

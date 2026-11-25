@@ -20,7 +20,13 @@ async function withWorkerAdvisoryLock(pool, key, fn, opts = {}) {
   let locked = false;
   let releaseError;
   try {
-    locked = (await client.query('SELECT pg_try_advisory_lock($1) AS locked', [key])).rows[0]?.locked === true;
+    try {
+      locked = (await client.query('SELECT pg_try_advisory_lock($1) AS locked', [key])).rows[0]?.locked === true;
+    } catch (err) {
+      // Lock state unknown: never return this connection to the pool.
+      releaseError = err;
+      throw err;
+    }
     if (!locked) return { skipped: true, reason: 'worker_already_running' };
     return await fn();
   } finally {
