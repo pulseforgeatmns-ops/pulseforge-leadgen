@@ -21,7 +21,7 @@ Build MAX-P0-004 on `main` after #1163 merges, or rebase onto it. #1163 changes 
 |---|---|
 | `services/missionLease.js` | **New exports** `MISSION_SESSION_LOCK_SQL`, `MISSION_SESSION_UNLOCK_SQL`: a session-level lock on the **same key** as the transaction-scoped mission lease (`hashtextextended('amo-mission:'||id, 0)`), for code that already owns ONE dedicated connection. Lease and session holders exclude each other. `missionLockText(id)` gives the key text. |
 | `services/governedOutboundAdapters.js` | Anchor recovery approval now holds `MISSION_SESSION_LOCK_SQL` (not the old ADR-075 two-int key 750825) on its dedicated `persistencePool` connection. The nested TME stage takes no second lease because the wrapper has no `connect()`. |
-| `services/maxReliability/externalActionLedger.js` | **New** `findBlockingForSubject({ tenantId, actionKind, missionId, subjectRef, excludeKey })`: the latest claim for the same logical target under another key in a state that may have reached the recipient. |
+| `services/maxReliability/externalActionLedger.js` | **New** `findBlockingForSubject({ tenantId, actionKind, missionId, subjectRef, excludeKey })`: the latest claim for the same logical target under another key in a state that may have reached the recipient. `claim()` maps the R7 unique-index violation to `outreach_intent_already_dispatched` (new `BLOCK_CODES.SUBJECT_ALREADY_DISPATCHED`). |
 | `packages/max/workspace/OutboundExecutionAdapter.js` | R7: refuses `outreach_intent_already_dispatched` when the same (tenant, mission, prospect) already has a blocking claim or a `SENT`/`ATTEMPTED` record under another revision. Exports `findPriorDispatchForProspect`. |
 | `services/tenantMailbox.js` | `sendTenantEmail` (PostgreSQL store) claims in the ledger; new export `smtpFailureIsDefinitive(err)`; option `opts.externalActionLedger` (`null` opts out — test doubles only). |
 | `routes/acquisitionMissions.js` | `/execute`: 428 `idempotency_key_required` for external-effect intents; permanent receipt = `executeReceipt(body)` allowlist; `failStatus()` maps lease/CAS errors to 409/404. |
@@ -30,7 +30,7 @@ Build MAX-P0-004 on `main` after #1163 merges, or rebase onto it. #1163 changes 
 | `scripts/max-reliability/recover.cjs` | `--apply` requires `--confirm-tenant <id>` (= `--tenant`) and `--operator <id>`. |
 | `utils/workerAdvisoryLock.js` | **New** `withWorkerAdvisoryLock(pool, key, fn, { label })`: lock, work and unlock on one dedicated connection; destroys the connection if the unlock fails. Used by `miraTranscriptionAgent`, `miraClassifierAgent`, `miraRouterAgent`, `warmRoutingAgent`. |
 | `public/acquisition-missions.html` | Sends `Idempotency-Key: ui-<uuid>` per click; ignores a second click while one is in flight. |
-| `migrations/2026-11-25-max-p0-003-reliability-core.sql` | Adds triggers `max_reliability_forbid_delete()` / `max_reliability_receipt_delete_guard()`. |
+| `migrations/2026-11-25-max-p0-003-reliability-core.sql` | Adds triggers `max_reliability_forbid_delete()` / `max_reliability_receipt_delete_guard()` and the partial unique index `max_external_action_claims_one_outbound_per_subject` (one live `amo_outbound_email` claim per tenant/mission/subject). If MAX-P0-004 adds new outbound action kinds, decide explicitly whether they join this index. |
 | `.github/workflows/penny-anchor-daily.yml`, `test/ciPlanPr.test.js` | Penny schedule paused (manual dispatch only), with a CI guard. Levi stays manual-only. |
 
 ## 3. Requirements MAX-P0-004 must preserve
@@ -84,6 +84,8 @@ Build MAX-P0-004 on `main` after #1163 merges, or rebase onto it. #1163 changes 
 ### 3.7 Constraints from the independent review
 - Inside the Anchor recovery approval critical section, no mission write may obtain its own pool lease. It would be refused (`tme_transaction_overlap`) because the section holds the mission key on its dedicated connection. Pass `persistencePool` explicitly.
 - `withWorkerAdvisoryLock` holds one pooled connection for the run's duration. If MAX-P0-004 adds long-running owners, prefer database leases (claim/heartbeat) over held connections.
+- Open (uncertain): governed refill sends key `subject_ref` on `candidate_id`; confirm it equals the CRM prospect id used by any earlier send in the same mission, or R7 could miss a match.
+- Failure receipts store only the machine error code and correlation id; success receipts use `receiptOf`. Keep both minimal.
 - Deploy prerequisite: the reliability migration must precede any deploy of #1162/#1163. Without it, AMO outbound and **all PostgreSQL tenant-mailbox sends** fail closed.
 
 ## 5. Open items not in #1163
