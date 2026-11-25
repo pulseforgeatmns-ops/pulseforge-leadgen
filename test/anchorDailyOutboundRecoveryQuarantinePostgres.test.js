@@ -6,8 +6,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { Pool } = require('pg');
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
+const { createTrackedPostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
 const quarantine = require('../services/anchorEmailQuarantine');
 const preflight = require('../scripts/anchorEmailRecoveryPreflight');
 const { GovernedOutboundStore } = require('../services/governedOutboundStore');
@@ -31,8 +31,8 @@ function tracedPool(pool, hook) {
 
 test('SPEC-261 quarantine, schema guards and preflight on native PostgreSQL', { timeout: 120000 }, async t => {
   const instance = await startDisposablePostgres('anchor-quarantine-');
-  const pool = new Pool({ connectionString: instance.connectionString, max: 12 });
-  t.after(async () => { await pool.end(); await instance.stop(); });
+  const pool = createTrackedPostgresPool({ connectionString: instance.connectionString, max: 12 });
+  t.after(() => closePostgresFixture(pool, instance));
   assert.ok(Number((await pool.query('SHOW server_version_num')).rows[0].server_version_num) >= 140000);
   async function install() {
     const db = await pool.connect();
