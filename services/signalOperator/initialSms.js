@@ -50,12 +50,16 @@ class InitialSmsStore {
     const alert=buildOperatorAlert({evidence:event,approvedChannelId:this.channelId});
     const id=hash([this.tenantId,this.namespace,alert.id,'sms']);
     // DB clock, not event text or client clock, establishes active window and freshness.
+    // id is derived from the same (tenant, namespace, event, channel) tuple as the
+    // unique key, so two identical enqueues racing each other can collide on either
+    // the primary key or that key. A targetless ON CONFLICT skips both instead of
+    // raising 23505 on the primary key.
     const r=await this.pool.query(`INSERT INTO signal_initial_sms_deliveries(id,tenant_id,namespace,window_id,event_id,payload,status)
       SELECT $1,$2,$3,w.id,$5,$6::jsonb,$7 FROM signal_initial_sms_windows w
       WHERE w.id=$4 AND w.tenant_id=$2 AND w.namespace=$3 AND clock_timestamp()>=w.starts_at AND clock_timestamp()<w.ends_at
       AND $8::timestamptz>=w.starts_at AND $8::timestamptz<=clock_timestamp() AND $9::timestamptz<=clock_timestamp()
       AND $10::timestamptz>clock_timestamp()-interval '5 minutes'
-      ON CONFLICT(tenant_id,namespace,event_id,channel) DO NOTHING RETURNING id`,
+      ON CONFLICT DO NOTHING RETURNING id`,
     [id,this.tenantId,this.namespace,this.windowId,alert.id,JSON.stringify(alert),this.namespace==='test'?'TEST_ONLY':'PENDING',alert.occurredAt,alert.ingestedAt,alert.knowledgeAt]);
     return {id,created:r.rowCount===1};
   }
