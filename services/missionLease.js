@@ -140,8 +140,13 @@ async function acquireMissionLease(pool, opts = {}) {
     // A connection whose transaction state is unknown must never return to the pool.
     client.release(failure || lost || destroyError || undefined);
     if (failure) {
-      throw leaseError(sql === 'COMMIT' ? LEASE_ERRORS.LOST : 'mission_lease_rollback_failed',
-        `Mission lease ${sql} failed: ${failure.message}`, { cause: failure, missionId, correlationId });
+      // A killed backend reports its socket error before commit in some pg
+      // versions. commit() then attempts the normal rollback, which necessarily
+      // fails because that socket is no longer queryable. Preserve the terminal
+      // fact for callers: the lease was lost, not that recovery SQL failed.
+      const code = sql === 'COMMIT' || lost ? LEASE_ERRORS.LOST : 'mission_lease_rollback_failed';
+      throw leaseError(code, `Mission lease ${sql} failed: ${failure.message}`,
+        { cause: lost || failure, missionId, correlationId });
     }
   }
 
