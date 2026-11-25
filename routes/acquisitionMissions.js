@@ -396,6 +396,7 @@ router.post('/api/v1/amo/missions/:id/execute', requireActor, async (req, res) =
       request: { ...command, tenantId: String(tenantId), operatorId: actor.id != null ? String(actor.id) : null },
       correlationId,
       volatileFields: ['snapshot'],
+      receiptOf: executeReceipt,
       errorStatus: (err) => failStatus(err, 'amo_execute_failed'),
       run: async () => executeCanonicalResponse(await executeCanonical({ ...command, correlationId }, { pool })),
     });
@@ -407,6 +408,32 @@ router.post('/api/v1/amo/missions/:id/execute', requireActor, async (req, res) =
     return fail(res, err, 'amo_execute_failed');
   }
 });
+
+/**
+ * MAX-P0-003 — the permanent receipt for an execute request. Allowlisted fields
+ * only: no operator free text (question), no payload, no mission snapshot.
+ */
+function executeReceipt(body = {}) {
+  const request = body.request || {};
+  const result = body.executionResult || {};
+  return {
+    spec: body.spec || 'SPEC-171',
+    receipt: true,
+    request: { id: request.id || null, intent: request.intent || null, source: request.source || null,
+      missionId: request.missionId || null },
+    action: body.action || null,
+    specialist: body.specialist || null,
+    runtimeOwner: body.runtimeOwner || null,
+    execution: body.execution ? { state: body.execution.state || null } : null,
+    executionResult: {
+      alreadyExecuted: result.alreadyExecuted === true,
+      rolledBack: result.rolledBack === true,
+      executionOutcome: result.executionOutcome || null,
+      transactionId: result.transactionId || null,
+      errorClass: result.errorClass || null,
+    },
+  };
+}
 
 function requiresIdempotencyKey(intent) {
   const { intentActionClass, EXTERNAL_ACTION_CLASSES } = require('../packages/acquisition-mission/AuthorizationConstraints');

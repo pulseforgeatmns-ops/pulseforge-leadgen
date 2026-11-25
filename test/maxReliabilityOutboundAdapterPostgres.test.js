@@ -31,15 +31,15 @@ const { createExternalActionLedger, STATES } = require('../services/maxReliabili
 const { EXECUTION_RECORD_STATUS } = realOutbound;
 const MIGRATION = path.join(__dirname, '../migrations/2026-11-25-max-p0-003-reliability-core.sql');
 
-function bundleFor(missionId) {
+function bundleFor(missionId, revision = 'rev-1', bodySuffix = '') {
   return {
     missionId,
     tenantId: '10',
     provider: { provider: 'brevo', senderIdentity: 'hello@example.com', senderName: 'Example Sender', sendingDomain: 'example.com' },
-    executionApproval: { preparedArtifactRevision: 'rev-1', contributionId: 'contrib-approval-1' },
+    executionApproval: { preparedArtifactRevision: revision, contributionId: 'contrib-approval-1' },
     sends: [
-      { prospectId: 'p-1', email: 'Owner@Example.test', toName: 'Owner', queuePosition: 1, status: 'queued', message: { subject: 'Hello', body: 'Body one' } },
-      { prospectId: 'p-2', email: 'ops@example.test', toName: 'Ops', queuePosition: 2, status: 'queued', message: { subject: 'Hello', body: 'Body two' } },
+      { prospectId: 'p-1', email: 'Owner@Example.test', toName: 'Owner', queuePosition: 1, status: 'queued', message: { subject: 'Hello', body: 'Body one' + bodySuffix } },
+      { prospectId: 'p-2', email: 'ops@example.test', toName: 'Ops', queuePosition: 2, status: 'queued', message: { subject: 'Hello', body: 'Body two' + bodySuffix } },
     ],
   };
 }
@@ -136,4 +136,53 @@ test('pre-ledger attempted record without an outcome is never re-sent', { timeou
   const result = await run(null, async () => { calls += 1; return { success: true, providerMessageId: 'y' }; }, { existingRecords: [legacyAttempt] });
   assert.equal(result.records.find((r) => r.prospectId === 'p-1').providerErrorCode, 'external_action_outcome_unknown');
   assert.equal(calls, 1, 'only p-2 was sent');
+});
+
+test('R7: a revised message cannot bypass a prior dispatch to the same prospect in the same mission', { timeout: 60000 }, async () => {
+  const ledger = createExternalActionLedger(fixture.pool);
+  let calls = 0;
+  const ok = async () => { calls += 1; return { success: true, providerMessageId: `r7-${calls}` }; };
+  currentBundle = bundleFor('m-r7-sent', 'rev-1');
+  await run(ledger, ok);
+  assert.equal(calls, 2);
+  // Paige revises the copy: new revision → new execution identity → new ledger key.
+  currentBundle = bundleFor('m-r7-sent', 'rev-2', ' (revised)');
+  const revised = await run(ledger, ok);
+  assert.equal(calls, 2, 'no second send to either prospect');
+  assert.ok(revised.records.every((r) => r.status === EXECUTION_RECORD_STATUS.BLOCKED
+    && r.providerErrorCode === 'outreach_intent_already_dispatched'), JSON.stringify(revised.records.map((r) => r.providerErrorCode)));
+});
+
+test('R7: an unresolved (unknown) prior send also blocks a revision', { timeout: 60000 }, async () => {
+  const ledger = createExternalActionLedger(fixture.pool);
+  currentBundle = bundleFor('m-r7-unknown', 'rev-1');
+  await assert.rejects(run(ledger, async () => { throw Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }); }), { code: 'ETIMEDOUT' });
+  currentBundle = bundleFor('m-r7-unknown', 'rev-2', ' (revised)');
+  let calls = 0;
+  const revised = await run(ledger, async () => { calls += 1; return { success: true, providerMessageId: 'x' }; });
+  const p1 = revised.records.find((r) => r.prospectId === 'p-1');
+  assert.equal(p1.providerErrorCode, 'outreach_intent_already_dispatched');
+  assert.equal(calls, 1, 'only p-2 (never attempted) was sent');
+});
+
+test('R7: a revision after a definitive failure (nothing delivered) may be sent', { timeout: 60000 }, async () => {
+  const ledger = createExternalActionLedger(fixture.pool);
+  currentBundle = bundleFor('m-r7-definitive', 'rev-1');
+  let calls = 0;
+  await run(ledger, async () => { calls += 1; return { success: false, providerErrorCode: 'brevo_http_400', providerBoundaryCrossed: true }; });
+  assert.equal(calls, 2);
+  currentBundle = bundleFor('m-r7-definitive', 'rev-2', ' (fixed)');
+  const fixed = await run(ledger, async () => { calls += 1; return { success: true, providerMessageId: `ok-${calls}` }; });
+  assert.equal(calls, 4);
+  assert.ok(fixed.records.every((r) => r.status === EXECUTION_RECORD_STATUS.SENT));
+});
+
+test('R7: pre-ledger records — a SENT record under another revision blocks the revision', { timeout: 60000 }, async () => {
+  currentBundle = bundleFor('m-r7-legacy', 'rev-2', ' (revised)');
+  const prior = realOutbound.buildExecutionRecord({ missionId: 'm-r7-legacy', tenantId: '10', prospectId: 'p-1',
+    preparedArtifactRevision: 'rev-1', status: EXECUTION_RECORD_STATUS.SENT, providerMessageId: 'old' });
+  let calls = 0;
+  const result = await run(null, async () => { calls += 1; return { success: true, providerMessageId: 'y' }; }, { existingRecords: [prior] });
+  assert.equal(result.records.find((r) => r.prospectId === 'p-1').providerErrorCode, 'outreach_intent_already_dispatched');
+  assert.equal(calls, 1);
 });

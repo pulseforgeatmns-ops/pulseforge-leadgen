@@ -322,6 +322,27 @@ function createExternalActionLedger(pool, options = {}) {
     return receiptFromRow(await load(requireText(tenantId, 'tenantId'), requireText(idempotencyKey, 'idempotencyKey')));
   }
 
+  /**
+   * R7 — claims for the SAME logical outreach target under a DIFFERENT key that
+   * may have reached (or are reaching) the recipient. Changing message content
+   * creates a new key; it must not create a second send while any of these exist.
+   * failed_definitive and abandoned_not_dispatched never delivered and do not block.
+   */
+  async function findBlockingForSubject(input = {}) {
+    await assertReliabilitySchema(pool);
+    const r = await pool.query(
+      `SELECT * FROM max_external_action_claims
+        WHERE tenant_id = $1 AND action_kind = $2 AND mission_id = $3 AND subject_ref = $4
+          AND idempotency_key <> $5
+          AND state IN ('claimed','dispatch_attempted','provider_acknowledged','verified','outcome_unknown')
+        ORDER BY updated_at DESC LIMIT 1`,
+      [requireText(input.tenantId, 'tenantId'), requireText(input.actionKind, 'actionKind'),
+        requireText(input.missionId, 'missionId'), requireText(input.subjectRef, 'subjectRef'),
+        requireText(input.excludeKey, 'excludeKey')]
+    );
+    return receiptFromRow(r.rows[0]);
+  }
+
   async function listUnresolved(tenantId, { limit = 100 } = {}) {
     await assertReliabilitySchema(pool);
     const r = await pool.query(
@@ -341,6 +362,7 @@ function createExternalActionLedger(pool, options = {}) {
     releaseUndispatched,
     reconcile,
     get,
+    findBlockingForSubject,
     listUnresolved,
   };
 }

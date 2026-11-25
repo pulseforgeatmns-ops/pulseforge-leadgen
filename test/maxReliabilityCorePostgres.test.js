@@ -628,6 +628,26 @@ test('keyed requests: concurrent identical → one execution; replay → origina
   assert.equal((await call({ intent: 'APPROVE' }, 'bad key!')).status, 400);
 });
 
+test('permanent receipts store only the allowlisted summary (no free text or payload)', { timeout: 60000 }, async (t) => {
+  const { pool } = await db(t);
+  const live = { request: { id: 'cer_1', intent: 'APPROVE_PLAN', source: 'api', missionId: 'm9', question: 'call Bob at 555-0100',
+    payload: { note: 'private operator note' } }, action: 'plan_approved', execution: { state: 'committed_internal', verified: false },
+    executionResult: { transactionId: 'tme_1', rollbackReason: 'free text', blockReason: 'free text' }, snapshot: { big: true } };
+  const receiptOf = (b) => ({ request: { id: b.request.id, intent: b.request.intent }, action: b.action,
+    execution: { state: b.execution.state }, executionResult: { transactionId: b.executionResult.transactionId } });
+  const first = await runKeyedRequest({ pool, tenantId: '71', scope: 'amo_execute:m9', idempotencyKey: 'receipt-min-1',
+    request: { intent: 'APPROVE_PLAN' }, run: async () => live, receiptOf, volatileFields: ['snapshot'] });
+  assert.equal(first.body.request.question, 'call Bob at 555-0100', 'the live response is unchanged');
+  const stored = (await pool.query("SELECT response FROM max_request_receipts WHERE tenant_id = '71'")).rows[0].response;
+  assert.equal(JSON.stringify(stored).includes('555-0100'), false);
+  assert.equal(JSON.stringify(stored).includes('private operator note'), false);
+  assert.equal(JSON.stringify(stored).includes('free text'), false);
+  const replay = await runKeyedRequest({ pool, tenantId: '71', scope: 'amo_execute:m9', idempotencyKey: 'receipt-min-1',
+    request: { intent: 'APPROVE_PLAN' }, run: async () => assert.fail('no re-run'), receiptOf });
+  assert.equal(replay.body.replayed, true);
+  assert.equal(replay.body.executionResult.transactionId, 'tme_1');
+});
+
 test('keyed requests: failure is the receipt; lock contention releases it; interrupted is never re-run', { timeout: 60000 }, async (t) => {
   const { pool } = await db(t);
   const base = { pool, tenantId: '10', scope: 'amo_execute:m2', request: { intent: 'X' }, errorStatus: () => 409 };
