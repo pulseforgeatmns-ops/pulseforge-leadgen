@@ -72,8 +72,10 @@ ALTER TABLE max_external_action_claims
 ALTER TABLE max_external_action_claims
   DROP CONSTRAINT IF EXISTS max_external_action_claims_task_id_fkey;
 ALTER TABLE max_external_action_claims
-  ADD CONSTRAINT max_external_action_claims_task_id_fkey
-  FOREIGN KEY (task_id) REFERENCES max_durable_execution_tasks(id);
+  DROP CONSTRAINT IF EXISTS max_external_action_claims_tenant_task_fkey;
+ALTER TABLE max_external_action_claims
+  ADD CONSTRAINT max_external_action_claims_tenant_task_fkey
+  FOREIGN KEY (tenant_id, task_id) REFERENCES max_durable_execution_tasks(tenant_id, id);
 CREATE INDEX IF NOT EXISTS max_external_action_claims_task
   ON max_external_action_claims (tenant_id, task_id, state) WHERE task_id IS NOT NULL;
 

@@ -86,6 +86,8 @@ test('tenant scope and the P0-003 ledger prevent a stale task owner from reachin
   const { pool } = await db(); const store = createDurableExecutionOwnership(pool); const input = taskInput(); const accepted = await store.accept(input); const claim = await store.claim({ tenantId: input.tenantId, ownerToken: 'owner-send', leaseMs: 1000 });
   assert.equal(await store.get({ tenantId: 'tenant-b', taskId: accepted.task.id }), null);
   await assert.rejects(store.accept(taskInput({ tenantId: 'tenant-b', parentTaskId: accepted.task.id })), { code: '23503' });
+  const crossTenantLedger = createExternalActionLedger(pool);
+  await assert.rejects(crossTenantLedger.claim({ tenantId: 'tenant-b', taskId: accepted.task.id, idempotencyKey: `cross-tenant-${sequence}`, actionKind: 'test', requestFingerprint: requestFingerprint({ task: accepted.task.id }) }), { code: '23503' });
   await pool.query("UPDATE max_durable_execution_tasks SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [claim.id]);
   let providerCalls = 0; const ledger = createExternalActionLedger(pool);
   await assert.rejects(guardedDispatch({ ledger, claim: { tenantId: input.tenantId, idempotencyKey: `task-send-${sequence}`, actionKind: 'test', requestFingerprint: requestFingerprint({ accepted: accepted.task.id }) }, beforeDispatch: () => store.requireOwner(owner(claim, 'owner-send')), dispatch: async () => { providerCalls += 1; return { success: true }; } }), { code: 'durable_task_fenced' });
