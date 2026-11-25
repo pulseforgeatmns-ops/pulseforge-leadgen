@@ -93,3 +93,196 @@ test('tenant scope and the P0-003 ledger prevent a stale task owner from reachin
   await assert.rejects(guardedDispatch({ ledger, claim: { tenantId: input.tenantId, idempotencyKey: `task-send-${sequence}`, actionKind: 'test', requestFingerprint: requestFingerprint({ accepted: accepted.task.id }) }, beforeDispatch: () => store.requireOwner(owner(claim, 'owner-send')), dispatch: async () => { providerCalls += 1; return { success: true }; } }), { code: 'durable_task_fenced' });
   assert.equal(providerCalls, 0);
 });
+
+// ---------------------------------------------------------------------------
+// Direct-database tenant isolation and invariants (no application store).
+// ---------------------------------------------------------------------------
+async function expire(pool, id) { await pool.query("UPDATE max_durable_execution_tasks SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [id]); }
+function rawClaimSql(taskColumn = true) {
+  return `INSERT INTO max_external_action_claims (tenant_id, idempotency_key, action_kind, request_fingerprint, attempt, state, ${taskColumn ? 'task_id, ' : ''}owner_token, claimed_at, updated_at)
+          VALUES ($1, $2, 'test', $3, 1, 'claimed', ${taskColumn ? '$4, ' : ''}'raw-owner', now(), now())`;
+}
+
+test('PostgreSQL itself rejects every cross-tenant task association, even from direct callers', async () => {
+  const { pool } = await db(); const store = createDurableExecutionOwnership(pool); const input = taskInput();
+  const a = (await store.accept(input)).task; const fp = requestFingerprint({ raw: a.id });
+  // Ledger claim linked to another tenant's task: INSERT.
+  await assert.rejects(pool.query(rawClaimSql(), ['tenant-b', `raw-x-${sequence}`, fp, a.id]), { code: '23503', constraint: 'max_external_action_claims_tenant_task_fkey' });
+  // Ledger claim re-pointed at another tenant's task: UPDATE.
+  await pool.query(rawClaimSql(false), ['tenant-b', `raw-y-${sequence}`, fp]);
+  await assert.rejects(pool.query('UPDATE max_external_action_claims SET task_id=$1 WHERE tenant_id=$2 AND idempotency_key=$3', [a.id, 'tenant-b', `raw-y-${sequence}`]), { code: '23503' });
+  // Same-tenant link succeeds; once linked it cannot be detached or moved.
+  await pool.query(rawClaimSql(), [input.tenantId, `raw-z-${sequence}`, fp, a.id]);
+  await assert.rejects(pool.query('UPDATE max_external_action_claims SET task_id=NULL WHERE tenant_id=$1 AND idempotency_key=$2', [input.tenantId, `raw-z-${sequence}`]), { code: '23514' });
+  await pool.query("UPDATE max_external_action_claims SET state='abandoned_not_dispatched' WHERE tenant_id=$1 AND idempotency_key=$2", [input.tenantId, `raw-z-${sequence}`]);
+  // Moving a claim's tenant away from its task's tenant is also refused.
+  await assert.rejects(pool.query("UPDATE max_external_action_claims SET tenant_id='tenant-b' WHERE tenant_id=$1 AND idempotency_key=$2", [input.tenantId, `raw-z-${sequence}`]), { code: '23503' });
+  // Event rows for another tenant's task.
+  await assert.rejects(pool.query("INSERT INTO max_durable_execution_task_events(task_id,tenant_id,fence_epoch,event) VALUES($1,'tenant-b',0,'forged')", [a.id]), { code: '23503', constraint: 'max_durable_execution_task_events_tenant_task_fkey' });
+  // Parent task from another tenant; a task as its own parent.
+  await assert.rejects(pool.query(`INSERT INTO max_durable_execution_tasks(id,tenant_id,parent_task_id,logical_key,input_fingerprint,specialist,state) VALUES(gen_random_uuid(),'tenant-b',$1,$2,$3,'x','queued')`, [a.id, `raw-parent-${sequence}`, 'a'.repeat(64)]), { code: '23503' });
+  const self = '00000000-0000-4000-8000-0000000000aa';
+  await assert.rejects(pool.query(`INSERT INTO max_durable_execution_tasks(id,tenant_id,parent_task_id,logical_key,input_fingerprint,specialist,state) VALUES($1,$2,$1,$3,$4,'x','queued')`, [self, input.tenantId, `raw-self-${sequence}`, 'a'.repeat(64)]), { code: '23514' });
+  // A tenant can never read another tenant's task or events through the store.
+  assert.equal(await store.get({ tenantId: 'tenant-b', taskId: a.id }), null);
+  assert.deepEqual(await store.listEvents({ tenantId: 'tenant-b', taskId: a.id }), []);
+});
+
+test('database guards: immutable accepted input, monotonic fence, final terminal states, append-only evidence', async () => {
+  const { pool } = await db(); const store = createDurableExecutionOwnership(pool); const input = taskInput();
+  const task = (await store.accept(input)).task; const claimed = await store.claim({ tenantId: input.tenantId, ownerToken: 'guard', leaseMs: 5000 });
+  await assert.rejects(pool.query("UPDATE max_durable_execution_tasks SET immutable_input='{\"query\":\"swapped\"}' WHERE id=$1", [task.id]), { code: '23514' });
+  await assert.rejects(pool.query("UPDATE max_durable_execution_tasks SET tenant_id='tenant-b' WHERE id=$1", [task.id]), { code: '23514' });
+  await assert.rejects(pool.query('UPDATE max_durable_execution_tasks SET fence_epoch=0 WHERE id=$1', [task.id]), { code: '23514' });
+  await assert.rejects(pool.query('UPDATE max_durable_execution_tasks SET ownership_token=NULL WHERE id=$1', [task.id]), { code: '23514', constraint: 'max_durable_execution_tasks_owner_matches_state' });
+  await assert.rejects(pool.query("UPDATE max_durable_execution_task_events SET event='rewritten' WHERE task_id=$1", [task.id]), { code: '23514' });
+  await assert.rejects(pool.query('DELETE FROM max_durable_execution_task_events WHERE task_id=$1', [task.id]));
+  await assert.rejects(pool.query('DELETE FROM max_durable_execution_tasks WHERE id=$1', [task.id]));
+  await store.cancel({ tenantId: input.tenantId, taskId: claimed.id, reason: 'guard test' });
+  await assert.rejects(pool.query("UPDATE max_durable_execution_tasks SET state='queued' WHERE id=$1", [task.id]), { code: '23514' });
+  const events = await store.listEvents({ tenantId: input.tenantId, taskId: task.id });
+  assert.deepEqual(events.map(e => [e.event, e.from_state, e.to_state]), [['accepted', null, 'queued'], ['claimed', 'queued', 'claimed'], ['cancelled', 'claimed', 'cancelled']]);
+});
+
+test('acceptance replay is bound to deadline and retry budget as well as input', async () => {
+  const { pool } = await db(); const store = createDurableExecutionOwnership(pool); const input = taskInput({ deadlineAt: new Date(Date.now() + 3600e3).toISOString() });
+  await store.accept(input);
+  await assert.rejects(store.accept({ ...input, retryBudget: 5 }), { code: 'durable_task_key_reused' });
+  await assert.rejects(store.accept({ ...input, deadlineAt: new Date(Date.now() + 7200e3).toISOString() }), { code: 'durable_task_key_reused' });
+  await assert.rejects(store.accept(taskInput({ retryBudget: 1000 })), { code: 'durable_task_invalid' });
+  await assert.rejects(store.accept(taskInput({ taskId: '00000000-0000-4000-8000-0000000000ab', parentTaskId: '00000000-0000-4000-8000-0000000000ab' })), { code: 'durable_task_invalid' });
+});
+
+test('deadlines fence a live owner and escalate waiting work without replay', async () => {
+  const { pool } = await db(); const store = createDurableExecutionOwnership(pool);
+  const input = taskInput({ deadlineAt: new Date(Date.now() + 1500).toISOString(), retryBudget: 5 }); const task = (await store.accept(input)).task;
+  const c = await store.claim({ tenantId: input.tenantId, ownerToken: 'deadline', leaseMs: 60000 }); await store.start(owner(c, 'deadline'));
+  await new Promise(r => setTimeout(r, 1700));
+  await assert.rejects(store.heartbeat({ ...owner(c, 'deadline'), leaseMs: 60000 }), { code: 'durable_task_fenced' });
+  await assert.rejects(store.requireOwner(owner(c, 'deadline')), { code: 'durable_task_fenced' });
+  await assert.rejects(store.reportCompletion({ ...owner(c, 'deadline'), resultRef: {}, evidenceRefs: [] }), { code: 'durable_task_fenced' });
+  await expire(pool, task.id);
+  const [escalated] = await store.recoverExpired({ tenantId: input.tenantId });
+  assert.equal(escalated.state, STATES.ESCALATED); assert.equal(escalated.escalationReason, 'deadline_exceeded');
+
+  const waiting = taskInput({ deadlineAt: new Date(Date.now() + 500).toISOString() }); const w = (await store.accept(waiting)).task;
+  await new Promise(r => setTimeout(r, 700));
+  assert.equal(await store.claim({ tenantId: waiting.tenantId, ownerToken: 'late' }), null, 'expired queued work is not claimable');
+  const [swept] = await store.recoverExpired({ tenantId: waiting.tenantId });
+  assert.equal(swept.id, w.id); assert.equal(swept.state, STATES.ESCALATED); assert.equal(swept.escalationReason, 'deadline_exceeded');
+});
+
+test('retry budget counts every lease-expiry recovery, including after dependency revalidation', async () => {
+  const { pool } = await db(); const store = createDurableExecutionOwnership(pool); const input = taskInput({ retryBudget: 2 }); const task = (await store.accept(input)).task;
+  for (let i = 1; i <= 2; i += 1) {
+    const c = await store.claim({ tenantId: input.tenantId, ownerToken: `budget-${i}`, leaseMs: 1000 }); assert.equal(c.fenceEpoch, i);
+    await expire(pool, task.id);
+    const [r] = await store.recoverExpired({ tenantId: input.tenantId }); assert.equal(r.state, STATES.RECOVERY_REQUIRED); assert.equal(r.recoveryAttempts, i);
+    await store.revalidateDependencies({ tenantId: input.tenantId, taskId: task.id, dependencyRefs: input.dependencyRefs });
+  }
+  await store.claim({ tenantId: input.tenantId, ownerToken: 'budget-3', leaseMs: 1000 }); await expire(pool, task.id);
+  const [last] = await store.recoverExpired({ tenantId: input.tenantId });
+  assert.equal(last.state, STATES.ESCALATED); assert.equal(last.escalationReason, 'retry_budget_exhausted');
+  const claimEvents = (await store.listEvents({ tenantId: input.tenantId, taskId: task.id })).filter(e => e.event === 'claimed');
+  assert.deepEqual(claimEvents.map(e => e.from_state), ['queued', 'queued', 'queued'], 'event history records the real prior state');
+});
+
+test('recovery escalates instead of replaying a task whose external action is unresolved', async () => {
+  const { pool } = await db(); const store = createDurableExecutionOwnership(pool); const ledger = createExternalActionLedger(pool);
+  const input = taskInput({ retryBudget: 5 }); const task = (await store.accept(input)).task;
+  const c = await store.claim({ tenantId: input.tenantId, ownerToken: 'w1', leaseMs: 5000 }); await store.start(owner(c, 'w1'));
+  const key = `unresolved-recovery-${sequence}`;
+  const action = await ledger.claim({ tenantId: input.tenantId, taskId: task.id, idempotencyKey: key, actionKind: 'test', requestFingerprint: requestFingerprint({ key }) });
+  await ledger.markDispatchAttempted({ tenantId: input.tenantId, idempotencyKey: key, ownerToken: action.ownerToken, taskFence: { taskId: task.id, ownershipToken: 'w1', fenceEpoch: c.fenceEpoch } });
+  await expire(pool, task.id);
+  const [r] = await store.recoverExpired({ tenantId: input.tenantId });
+  assert.equal(r.state, STATES.ESCALATED); assert.equal(r.escalationReason, 'external_action_unresolved');
+  assert.equal(await store.claim({ tenantId: input.tenantId, ownerToken: 'w2' }), null, 'never reclaimed');
+  assert.equal((await ledger.get(input.tenantId, key)).state, 'dispatch_attempted', 'ledger state preserved for reconciliation');
+});
+
+test('cancellation before dispatch fences the marker; cancellation after dispatch escalates with claim states', async () => {
+  const { pool } = await db(); const store = createDurableExecutionOwnership(pool); const ledger = createExternalActionLedger(pool);
+  // Before dispatch: the owner has claimed the action but the task is cancelled.
+  const a = taskInput(); const ta = (await store.accept(a)).task; const ca = await store.claim({ tenantId: a.tenantId, ownerToken: 'a1', leaseMs: 5000 }); await store.start(owner(ca, 'a1'));
+  let providerCalls = 0;
+  const claimA = { tenantId: a.tenantId, taskId: ta.id, idempotencyKey: `cancel-before-${sequence}`, actionKind: 'test', requestFingerprint: requestFingerprint({ a: ta.id }) };
+  const cancelled = await store.cancel({ tenantId: a.tenantId, taskId: ta.id, reason: 'operator stop' });
+  assert.equal(cancelled.state, STATES.CANCELLED);
+  await assert.rejects(guardedDispatch({ ledger, claim: claimA, taskFence: { taskId: ta.id, ownershipToken: 'a1', fenceEpoch: ca.fenceEpoch }, dispatch: async () => { providerCalls += 1; } }), { code: 'durable_task_fenced' });
+  assert.equal(providerCalls, 0); assert.equal((await ledger.get(a.tenantId, claimA.idempotencyKey)).state, 'abandoned_not_dispatched');
+
+  // After dispatch: the effect cannot be recalled, so the task is escalated.
+  const b = taskInput(); const tb = (await store.accept(b)).task; const cb = await store.claim({ tenantId: b.tenantId, ownerToken: 'b1', leaseMs: 5000 }); await store.start(owner(cb, 'b1'));
+  const sent = await guardedDispatch({ ledger, claim: { tenantId: b.tenantId, taskId: tb.id, idempotencyKey: `cancel-after-${sequence}`, actionKind: 'test', requestFingerprint: requestFingerprint({ b: tb.id }) },
+    taskFence: { taskId: tb.id, ownershipToken: 'b1', fenceEpoch: cb.fenceEpoch }, dispatch: async () => { providerCalls += 1; return { success: true, providerMessageId: 'pm-1' }; } });
+  assert.equal(sent.outcome, 'dispatched'); assert.equal(providerCalls, 1);
+  const escalated = await store.cancel({ tenantId: b.tenantId, taskId: tb.id, reason: 'operator stop' });
+  assert.equal(escalated.state, STATES.ESCALATED); assert.equal(escalated.escalationReason, 'cancelled_after_dispatch'); assert.equal(escalated.cancellationReason, 'operator stop');
+  const last = (await store.listEvents({ tenantId: b.tenantId, taskId: tb.id })).at(-1);
+  assert.equal(last.event, 'cancel_escalated'); assert.deepEqual(last.detail.actionStates, { provider_acknowledged: 1 });
+});
+
+test('the dispatch marker is atomic with the fence: a stale owner is refused even without beforeDispatch, and a concurrent cancel serializes', { timeout: 30000 }, async () => {
+  const { pool, pool2 } = await db(); const store = createDurableExecutionOwnership(pool); const ledger = createExternalActionLedger(pool);
+  // A task-linked action without the fence, or with a fence for another task, never claims.
+  const x = taskInput(); const tx = (await store.accept(x)).task;
+  await assert.rejects(guardedDispatch({ ledger, claim: { tenantId: x.tenantId, taskId: tx.id, idempotencyKey: `nofence-${sequence}`, actionKind: 'test', requestFingerprint: requestFingerprint({ f: sequence }) }, dispatch: async () => {} }), { code: 'durable_task_fenced' });
+  assert.equal(await ledger.get(x.tenantId, `nofence-${sequence}`), null);
+
+  // Stale owner after takeover; no beforeDispatch check at all.
+  const s = taskInput({ retryBudget: 3 }); const ts = (await store.accept(s)).task;
+  const old = await store.claim({ tenantId: s.tenantId, ownerToken: 'old', leaseMs: 1000 }); await expire(pool, ts.id); await store.recoverExpired({ tenantId: s.tenantId });
+  await store.revalidateDependencies({ tenantId: s.tenantId, taskId: ts.id, dependencyRefs: s.dependencyRefs });
+  const fresh = await store.claim({ tenantId: s.tenantId, ownerToken: 'new', leaseMs: 5000 }); assert.ok(fresh.fenceEpoch > old.fenceEpoch);
+  let calls = 0;
+  await assert.rejects(guardedDispatch({ ledger, claim: { tenantId: s.tenantId, taskId: ts.id, idempotencyKey: `stale-${sequence}`, actionKind: 'test', requestFingerprint: requestFingerprint({ f: sequence }) },
+    taskFence: { taskId: ts.id, ownershipToken: 'old', fenceEpoch: old.fenceEpoch }, dispatch: async () => { calls += 1; } }), { code: 'durable_task_fenced' });
+  assert.equal(calls, 0);
+  // A fence naming a different tenant's view of the task is also refused.
+  await assert.rejects(ledger.markDispatchAttempted({ tenantId: 'tenant-b', idempotencyKey: `stale-${sequence}`, ownerToken: 'x', taskFence: { taskId: ts.id, ownershipToken: 'new', fenceEpoch: fresh.fenceEpoch } }), { code: 'durable_task_fenced' });
+
+  // Concurrent cancellation holds the row lock; the marker waits, then is fenced.
+  const k = `race-${sequence}`; const action = await ledger.claim({ tenantId: s.tenantId, taskId: ts.id, idempotencyKey: k, actionKind: 'test', requestFingerprint: requestFingerprint({ f: sequence }) });
+  const canceller = await pool2.connect();
+  try {
+    await canceller.query('BEGIN');
+    await canceller.query('SELECT 1 FROM max_durable_execution_tasks WHERE id=$1 FOR UPDATE', [ts.id]);
+    let settled = false;
+    const marker = ledger.markDispatchAttempted({ tenantId: s.tenantId, idempotencyKey: k, ownerToken: action.ownerToken, taskFence: { taskId: ts.id, ownershipToken: 'new', fenceEpoch: fresh.fenceEpoch } })
+      .then(v => { settled = true; return v; }, e => { settled = true; throw e; });
+    await new Promise(r => setTimeout(r, 300));
+    assert.equal(settled, false, 'marker blocks behind the cancellation lock');
+    await canceller.query("UPDATE max_durable_execution_tasks SET state='cancelled', ownership_token=NULL, lease_expires_at=NULL WHERE id=$1", [ts.id]);
+    await canceller.query('COMMIT');
+    await assert.rejects(marker, { code: 'durable_task_fenced' });
+  } finally { canceller.release(); }
+  assert.equal((await ledger.get(s.tenantId, k)).state, 'claimed', 'never marked dispatched');
+});
+
+test('at most one active task per mission per tenant, under concurrent claimers and direct writes', async () => {
+  const { pool, pool2 } = await db(); const a = createDurableExecutionOwnership(pool); const b = createDurableExecutionOwnership(pool2);
+  const tenantId = `tenant-mission-${sequence}`; const missionId = `mission-${sequence}`;
+  const t1 = (await a.accept(taskInput({ tenantId, missionId }))).task; const t2 = (await a.accept(taskInput({ tenantId, missionId }))).task;
+  const other = (await a.accept(taskInput({ tenantId, missionId: `${missionId}-other` }))).task;
+  const results = await Promise.all([a.claim({ tenantId, ownerToken: 'c1' }), b.claim({ tenantId, ownerToken: 'c2' }), a.claim({ tenantId, ownerToken: 'c3' })]);
+  const won = results.filter(Boolean);
+  const activeForMission = won.filter(t => t.missionId === missionId);
+  assert.equal(activeForMission.length, 1, 'one active task for the mission');
+  assert.ok(won.length <= 2 && won.every(t => [t1.id, t2.id, other.id].includes(t.id)));
+  const idle = [t1, t2].find(t => t.id !== activeForMission[0].id);
+  await assert.rejects(pool.query("UPDATE max_durable_execution_tasks SET state='claimed', ownership_token='raw', lease_expires_at=clock_timestamp()+interval '1 minute', fence_epoch=fence_epoch+1 WHERE id=$1", [idle.id]),
+    { code: '23505', constraint: 'max_durable_execution_tasks_one_active_per_mission' });
+  // Once the active task leaves the active states, the sibling becomes claimable.
+  await a.cancel({ tenantId, taskId: activeForMission[0].id, reason: 'done with it' });
+  const next = await a.claim({ tenantId, ownerToken: 'c4' });
+  assert.ok(next && [idle.id, other.id].includes(next.id));
+});
+
+test('the operator migration is additive and re-runnable over existing P0-003 rows', async () => {
+  const { pool } = await db();
+  await pool.query(rawClaimSql(false), ['tenant-legacy', `legacy-${sequence}`, requestFingerprint({ legacy: sequence })]);
+  await pool.query(fs.readFileSync(P004, 'utf8'));
+  const r = await pool.query('SELECT task_id, state FROM max_external_action_claims WHERE tenant_id=$1 AND idempotency_key=$2', ['tenant-legacy', `legacy-${sequence}`]);
+  assert.deepEqual(r.rows, [{ task_id: null, state: 'claimed' }], 'existing P0-003 claims are untouched');
+});

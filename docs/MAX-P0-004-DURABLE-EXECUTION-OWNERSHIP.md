@@ -12,23 +12,61 @@ State sequence: `requested → queued → claimed → running → awaiting_verif
 
 ## Ownership and recovery
 
-Claims atomically allocate a token, increment a monotonic fence epoch, and set a database-clock lease. Every start, heartbeat, checkpoint, completion, and external-action pre-dispatch check validates tenant, token, epoch, active state, and unexpired lease. Cancellation clears the owner and lease, preventing later work by an already-running process. A stale or superseded owner cannot write a checkpoint/result or enter the provider path.
+Claims atomically allocate a token, increment a monotonic fence epoch, and set a database-clock lease. Every ownership-bound write (start, heartbeat, checkpoint, completion) is one compare-and-set on tenant, task, token, epoch, active state, unexpired lease **and unexpired deadline**, committed together with its event row. A stale, superseded, cancelled or past-deadline owner cannot write a checkpoint/result or enter the provider path.
 
-Recovery never replays blindly. An expired active lease becomes `recovery_required`, preserving the checkpoint. Revalidation compares persisted dependency references with supplied current references: drift becomes `blocked_dependency`; an exact match returns it to `queued`. Deadlines and retry budget exhaustion escalate instead of looping forever. Unknown provider outcomes remain in the P0-003 ledger and are reconciliation-only.
+Recovery never replays blindly. `recoverExpired` locks each due row and decides, in this order: an unresolved task-linked external action (`claimed`, `dispatch_attempted`, `outcome_unknown`) → `escalated` / `external_action_unresolved`; deadline passed → `escalated` / `deadline_exceeded`; recovery attempts ≥ retry budget → `escalated` / `retry_budget_exhausted`; otherwise `recovery_required` with the checkpoint preserved. `recovery_attempts` is incremented when a task *enters* recovery, so revalidation or requeueing can never reset the budget. Waiting tasks (`queued`, `recovery_required`, `blocked_dependency`) whose deadline passed are escalated by the same sweep and are never claimable. Revalidation compares persisted dependency references with supplied current references: drift becomes `blocked_dependency`; an exact match returns it to `queued`. Unknown provider outcomes remain in the P0-003 ledger and are reconciliation-only.
 
-`OutboundExecutionAdapter` accepts an optional `durableTaskOwnership` binding. Where supplied, it fails closed without the P0-003 ledger and invokes `requireOwner` immediately before the ledger dispatch marker. The P0-004 migration links the resulting ledger claim to `task_id`; verification rejects a task with a `claimed`, `dispatch_attempted`, or `outcome_unknown` claim. Thus an ownership transfer cannot produce a second logical send, and P0-004 does not create or bypass another action claim.
+Cancellation locks the task row. If any task-linked action may already have reached a provider (`dispatch_attempted`, `outcome_unknown`, `provider_acknowledged`, `verified`), the effect cannot be recalled: the task ends `escalated` / `cancelled_after_dispatch` with the claim states in the event. Otherwise it ends `cancelled`.
+
+### Dispatch fence (atomic with the P0-003 marker)
+
+`OutboundExecutionAdapter` accepts an optional `durableTaskOwnership` binding. Where supplied, it fails closed without the P0-003 ledger, links the claim to `task_id`, checks `requireOwner` early, and passes a `taskFence` to `guardedDispatch`. `externalActionLedger.markDispatchAttempted({ …, taskFence })` then commits the dispatch marker in **one transaction** with a `SELECT … FOR SHARE` of the task row that re-checks token, epoch, active state, lease and deadline, and requires the claim's `task_id` to be that task. Cancellation, recovery and verification take `FOR UPDATE` on the same row, so either the marker commits first (and they observe the dispatch) or the marker is fenced and the claim is released as `abandoned_not_dispatched`. `guardedDispatch` refuses a task-linked claim without a matching fence before claiming. Verification rejects a task with a `claimed`, `dispatch_attempted`, or `outcome_unknown` claim. An ownership transfer therefore cannot produce a second logical send, and P0-004 does not create or bypass another action claim.
 
 P0-003's R7 mission/prospect uniqueness remains authoritative. This layer never synthesizes a new outreach intent: task ownership is an additional fence, not permission to resend after a revision. Mission writes must continue to use `missionLockText(id)` through the P0-003 lease/session-lock protocol; a future task-to-mission commit adapter must validate its fence inside that same lease transaction.
 
+### Database-enforced invariants (direct callers included)
+
+- Tenant isolation by composite foreign keys: task parent `(tenant_id, parent_task_id)`, task events `(tenant_id, task_id)`, and ledger claims `(tenant_id, task_id)` all reference `max_durable_execution_tasks(tenant_id, id)`. A claim's task link is immutable once set.
+- No self-parent; `parent_task_id` is immutable, so the parent relation cannot form a cycle.
+- Owner and lease are present exactly while the task is `claimed`/`running` (CHECK).
+- At most one `claimed`/`running` task per `(tenant_id, mission_id)` (partial unique index); `claim` skips a busy mission.
+- Accepted identity, tenant, input, dependency snapshot, deadline and retry budget are immutable; fence epoch and recovery attempts never decrease; terminal states are final (trigger).
+- Task rows and events cannot be deleted or truncated; events cannot be updated.
+
 ## Persistence and migration
 
-Apply `migrations/2026-11-25-max-p0-004-durable-execution-ownership.sql` only after P0-003 and only with separate production approval. It is additive: two task tables, indexes, a nullable `task_id` link on the existing ledger, and P0-003-style no-delete/no-truncate triggers for durable task evidence. It changes no existing rows or authorization policies. Old code ignores the new column and tables, so application rollback is a previous deploy while retaining the records. Do not drop them while unfinished tasks or action claims could require recovery.
+Apply `migrations/2026-11-25-max-p0-004-durable-execution-ownership.sql` only after P0-003 and only with separate production approval. It is additive and re-runnable: two task tables, indexes (including the one-active-task-per-mission index), a nullable composite-keyed `task_id` link on the existing ledger with an immutability trigger, the task guard and append-only triggers above, and P0-003-style no-delete/no-truncate triggers for durable task evidence. It changes no existing rows or authorization policies. Old code ignores the new column and tables, so application rollback is a previous deploy while retaining the records. Do not drop them while unfinished tasks or action claims could require recovery.
 
 ## Acceptance evidence
 
-`test/maxDurableExecutionOwnershipPostgres.test.js` runs on disposable real PostgreSQL and is included in `npm run test:max:reliability-core` (the hosted Max orchestration lane). It covers durable/idempotent acceptance, two-pool concurrent claiming, stale-owner fencing after takeover, expired-lease recovery, checkpoint preservation, budget escalation, dependency drift, cancellation, specialist-vs-verified completion, tenant scope, and a stale-owner P0-003 guarded-dispatch injection with zero provider calls.
+All on disposable real PostgreSQL, included in `npm run test:max:reliability-core` (the hosted Max orchestration lane), alongside the restored P0-003 policy and tenant-mailbox suites:
 
-The suite intentionally requires `initdb` and `pg_ctl`; it does not skip when PostgreSQL is unavailable. Process restart and backend termination are already covered by P0-003's real PostgreSQL suite; P0-004's persisted records are reloaded by a fresh ownership store in the durable-acceptance test. Hosted execution is required before merge.
+- `test/maxDurableExecutionOwnershipPostgres.test.js`: durable/idempotent acceptance (input, deadline and budget bound to the key); two-pool concurrent claiming; stale-owner fencing after takeover; bounded recovery with preserved checkpoint; retry budget counted across revalidation; dependency drift; deadlines fencing a live owner and escalating waiting work; recovery escalation for unresolved external actions; cancel-before-dispatch (marker fenced, zero provider calls) and cancel-after-dispatch (escalated with claim states); the marker refusing a stale fence with no `beforeDispatch` check, and serializing behind a concurrent cancellation's row lock; one active task per mission under concurrent claimers and direct writes; **direct-SQL cross-tenant rejection** (claim INSERT/UPDATE, claim tenant change, event insert, parent insert, self-parent); immutable input, monotonic fence, final terminal states, append-only evidence; migration re-run over existing P0-003 rows.
+- `test/maxDurableExecutionOwnershipAdapterPostgres.test.js`: the real `executeOutboundBundle` with a binding — a current owner sends once with task-linked claims and completes only through verification; a cancelled owner, and a binding whose fence is forged past the store check, reach no provider; no ledger → blocked.
+
+The suites require `initdb`/`pg_ctl` and never skip. Process restart and backend termination are covered by P0-003's real PostgreSQL suite; P0-004's persisted records are reloaded by a fresh store over a second pool.
+
+## Status against the approved P0-004 acceptance criteria
+
+The approved proposal (this file at `main` `c51ce3c`, §5) defined 13 criteria across phases P1–P7. **This branch delivers P1 (store) plus the store-level parts of P3 (fencing), P4 (recovery rules) and P5 (cancellation), and the outbound dispatch fence.** It does not wire tasks into the router/TME, receipts, recovery CLI or Max presentation.
+
+| # | Criterion (abridged) | Status |
+|---|---|---|
+| 1 | Every execution request creates one durable root task before specialist code | **Not in this branch** (P2: router/TME integration) |
+| 2 | Max status derived from durable task state; never "done" early | **Not in this branch** (P6). Store separates `awaiting_verification` from evidence-backed `completed`. |
+| 3 | CAS on state/fence/owner/DB-time lease; fence enforced in the TME commit | **Partial**: all store transitions and the outbound dispatch marker are fenced; TME commit fence and mission-lease narrowing are P3 integration. |
+| 4 | At most one active task per mission per tenant, DB-enforced | **Met** (partial unique index) |
+| 5 | Explicit recoverable state after a crash at every boundary | **Partial**: store and dispatch boundaries (claim/start/lease/marker) are covered; router/TME/receipt boundaries arrive with P2. |
+| 6 | Deadline/stall never replays; external doubt → intervention | **Met** at store level (`escalated` is the intervention state) |
+| 7 | Recovery tenant-scoped, plan-by-default, operator-attributed, audited | **Partial**: `recoverExpired` is tenant-scoped and evented; `recover.cjs` extension (plan-by-default, `--operator`) not done. |
+| 8 | Cycle-free dependencies, admission, failure propagation | **Partial**: parent tree cycle-free by DB; dependency drift blocks; no DAG admission/propagation. |
+| 9 | Cancel before dispatch → cancelled, after → intervention with claim states | **Met** |
+| 10 | Receipts, claims and tasks linked; task cannot complete with an unresolved claim | **Partial**: claims linked and enforced; receipts not linked. |
+| 11 | Evidence non-deletable; tenant-scoped; no cross-tenant reads | **Met** (composite FKs, triggers, tenant-filtered reads) |
+| 12 | Workers stay disabled | **Met**: no worker, timer, schedule or claimant |
+| 13 | Existing suites green against `main`, no new baseline exceptions | Local: green. Hosted: see the PR / final report. |
+
+State vocabulary differs from the proposal (`queued` ≈ `admitted`, `escalated` ≈ `awaiting_intervention`, `recovery_required` ≈ `interrupted`, `completed` after evidence ≈ `verified`); a presentation layer must map it without claiming more.
 
 ## Known limits
 

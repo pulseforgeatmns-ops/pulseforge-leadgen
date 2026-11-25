@@ -282,9 +282,64 @@ function createExternalActionLedger(pool, options = {}) {
     return receiptFromRow(r.rows[0]);
   }
 
-  /** Must COMMIT before the provider is invoked. */
-  function markDispatchAttempted(input) {
-    return transition(input, [STATES.CLAIMED], STATES.DISPATCH_ATTEMPTED, { dispatch_attempted_at: now() }, 'dispatch_attempted');
+  /**
+   * Must COMMIT before the provider is invoked.
+   *
+   * MAX-P0-004: with `taskFence` ({ taskId, ownershipToken, fenceEpoch }) the
+   * marker commits only if, in the same transaction, the claim is linked to
+   * that task and the task row (locked FOR SHARE) is still owned by that
+   * token/epoch with an unexpired lease and deadline. Task cancellation,
+   * recovery and verification lock the row FOR UPDATE, so either the marker
+   * commits first and they observe the dispatch, or the marker is fenced.
+   */
+  async function markDispatchAttempted(input) {
+    if (!input || !input.taskFence) {
+      return transition(input, [STATES.CLAIMED], STATES.DISPATCH_ATTEMPTED, { dispatch_attempted_at: now() }, 'dispatch_attempted');
+    }
+    await assertReliabilitySchema(pool);
+    const tenantId = requireText(input.tenantId, 'tenantId');
+    const idempotencyKey = requireText(input.idempotencyKey, 'idempotencyKey');
+    const ownerToken = requireText(input.ownerToken, 'ownerToken');
+    const fence = input.taskFence;
+    const taskId = requireText(fence.taskId, 'taskFence.taskId');
+    const taskToken = requireText(fence.ownershipToken, 'taskFence.ownershipToken');
+    const fenceEpoch = Number(fence.fenceEpoch);
+    if (!Number.isSafeInteger(fenceEpoch) || fenceEpoch < 1) throw ledgerError('external_action_invalid', 'taskFence.fenceEpoch must be a positive integer.');
+    if (typeof pool.connect !== 'function') throw ledgerError('external_action_ledger_unavailable', 'A fenced dispatch marker requires a connection pool.');
+    const client = await pool.connect();
+    let updated;
+    try {
+      await client.query('BEGIN');
+      const owner = await client.query(
+        `SELECT id FROM max_durable_execution_tasks
+          WHERE id = $1 AND tenant_id = $2 AND ownership_token = $3 AND fence_epoch = $4
+            AND state IN ('claimed','running') AND lease_expires_at > clock_timestamp()
+            AND (deadline_at IS NULL OR deadline_at > clock_timestamp())
+          FOR SHARE`,
+        [taskId, tenantId, taskToken, fenceEpoch]
+      );
+      if (!owner.rows[0]) {
+        throw ledgerError('durable_task_fenced', 'Task ownership is stale, expired, cancelled or past its deadline; nothing was dispatched.');
+      }
+      const r = await client.query(
+        `UPDATE max_external_action_claims SET state = 'dispatch_attempted', dispatch_attempted_at = $5, updated_at = $5
+          WHERE tenant_id = $1 AND idempotency_key = $2 AND owner_token = $3 AND task_id = $4 AND state = 'claimed'
+        RETURNING *`,
+        [tenantId, idempotencyKey, ownerToken, taskId, now()]
+      );
+      if (!r.rows[0]) {
+        throw ledgerError('external_action_state_conflict', 'External action is not a claimed action of this task.');
+      }
+      await client.query('COMMIT');
+      updated = r.rows[0];
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+    await audit(updated, 'dispatch_attempted', STATES.CLAIMED, STATES.DISPATCH_ATTEMPTED, { taskId, fenceEpoch });
+    return receiptFromRow(updated);
   }
 
   /** Record a provider result classified by classifyProviderResult(). */

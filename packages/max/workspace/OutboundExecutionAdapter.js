@@ -432,6 +432,13 @@ async function executeOutboundBundle(input = {}) {
           },
           persistAttempt: persistPending,
           dispatch: () => sendEmail(command),
+          // MAX-P0-004: the dispatch marker itself re-checks this owner, in the
+          // same transaction, under a share lock on the task row.
+          taskFence: input.durableTaskOwnership ? {
+            taskId: input.durableTaskOwnership.taskId,
+            ownershipToken: input.durableTaskOwnership.ownershipToken,
+            fenceEpoch: input.durableTaskOwnership.fenceEpoch,
+          } : undefined,
         });
       } catch (err) {
         if (!/^reliability_schema_|^external_action_ledger_/.test(String(err && err.code))) throw err;
