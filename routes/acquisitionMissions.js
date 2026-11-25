@@ -376,11 +376,23 @@ router.post('/api/v1/amo/missions/:id/execute', requireActor, async (req, res) =
       allowFixtureFallback: req.body?.allowFixtureFallback === true,
     };
     noStore(res);
+    // MAX-P0-003 — an Idempotency-Key is MANDATORY for intents with external
+    // effects or spend (provider research, outreach authorization, outreach,
+    // paid media): a retried or double-submitted request must never run twice.
+    const idempotencyKey = req.get('idempotency-key') || undefined;
+    if (!idempotencyKey && requiresIdempotencyKey(command.intent)) {
+      res.setHeader('X-Correlation-Id', correlationId);
+      return res.status(428).json({
+        error: 'idempotency_key_required',
+        message: 'This execution has external effects; send an Idempotency-Key header (8-200 characters of [A-Za-z0-9._:-]).',
+        correlationId,
+      });
+    }
     const keyed = await runKeyedRequest({
       pool,
       tenantId: String(tenantId),
       scope: `amo_execute:${req.params.id}`,
-      idempotencyKey: req.get('idempotency-key') || undefined,
+      idempotencyKey,
       request: { ...command, tenantId: String(tenantId), operatorId: actor.id != null ? String(actor.id) : null },
       correlationId,
       volatileFields: ['snapshot'],
@@ -395,6 +407,11 @@ router.post('/api/v1/amo/missions/:id/execute', requireActor, async (req, res) =
     return fail(res, err, 'amo_execute_failed');
   }
 });
+
+function requiresIdempotencyKey(intent) {
+  const { intentActionClass, EXTERNAL_ACTION_CLASSES } = require('../packages/acquisition-mission/AuthorizationConstraints');
+  return EXTERNAL_ACTION_CLASSES.includes(intentActionClass(intent));
+}
 
 function executeCanonicalResponse(routed) {
     return ({

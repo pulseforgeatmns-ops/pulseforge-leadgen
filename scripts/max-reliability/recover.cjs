@@ -5,7 +5,7 @@
  * MAX-P0-003 — operator-run interrupted-execution recovery for ONE tenant.
  *
  *   node scripts/max-reliability/recover.cjs --tenant 10                 # plan (read-only)
- *   node scripts/max-reliability/recover.cjs --tenant 10 --apply         # apply the plan
+ *   node scripts/max-reliability/recover.cjs --tenant 10 --apply --confirm-tenant 10 --operator <your-id>
  *   node scripts/max-reliability/recover.cjs --tenant 10 --unresolved    # list unknown outcomes
  *   [--stale-minutes 15]
  *
@@ -27,7 +27,7 @@ function arg(name) {
 async function main() {
   const tenantId = arg('--tenant');
   if (!tenantId) {
-    console.error('usage: recover.cjs --tenant <id> [--apply] [--unresolved] [--stale-minutes N]');
+    console.error('usage: recover.cjs --tenant <id> [--unresolved] [--stale-minutes N] [--apply --confirm-tenant <id> --operator <id>]');
     process.exit(2);
   }
   const pool = require('../../db');
@@ -38,8 +38,13 @@ async function main() {
       return;
     }
     const staleMinutes = Number(arg('--stale-minutes')) || 15;
+    const apply = process.argv.includes('--apply');
+    if (apply && arg('--confirm-tenant') !== tenantId) {
+      console.error('--apply requires --confirm-tenant <id> equal to --tenant (guards against applying to the wrong tenant).');
+      process.exit(2);
+    }
     const result = await recoverInterruptedExecution(pool, {
-      tenantId, staleAfterMs: staleMinutes * 60 * 1000, apply: process.argv.includes('--apply'),
+      tenantId, staleAfterMs: staleMinutes * 60 * 1000, apply, actor: arg('--operator'),
     });
     const { plan, ...summary } = result;
     console.log(JSON.stringify(summary, (k, v) => (k === 'unknown' || k === 'abandoned' ? (v || []).map(shortHash) : v), 2));

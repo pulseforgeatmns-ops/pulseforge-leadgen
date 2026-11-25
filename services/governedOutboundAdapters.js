@@ -514,13 +514,15 @@ function adapters(pool, dependencies = {}) {
       if (options.preinitializedSchema === true && (!options.persistencePool || dependencies.persist === false)) fail('anchor_recovery_preinitialized_persistence_required');
       let missionLock = null;
       const schemaReady = options.preinitializedSchema === true;
-      // Hold the existing ADR-075 namespace on this dedicated connection before
-      // hydration. The canonical stage's nested lock is PostgreSQL-reentrant.
-      // No other mission writer can replace artifacts between review and commit.
+      // Hold the canonical mission lock (MAX-P0-003: the same key every mission
+      // lease takes) on this dedicated connection before hydration, so no other
+      // mission writer can replace artifacts between review and commit. The
+      // persistence wrapper here has no connect(), so the nested stage does not
+      // take a second lease. Lock and unlock both run on this one connection.
+      const missionLease = require('./missionLease');
       if (schemaReady) {
-        const { MISSION_DURABLE_LOCK_NAMESPACE } = require('../packages/acquisition-mission/TransactionalPersistence');
-        missionLock = [MISSION_DURABLE_LOCK_NAMESPACE, require('node:crypto').createHash('sha256').update(snapshot.mission.id).digest().readInt32BE(0)];
-        const result = await options.persistencePool.query('SELECT pg_try_advisory_lock($1,$2) AS locked', missionLock);
+        missionLock = [missionLease.missionLockText(snapshot.mission.id)];
+        const result = await options.persistencePool.query(missionLease.MISSION_SESSION_LOCK_SQL, missionLock);
         if (result.rows[0]?.locked !== true) fail('anchor_recovery_mission_busy');
       }
       try {
@@ -537,7 +539,7 @@ function adapters(pool, dependencies = {}) {
           ...(schemaReady ? { preinitializedSchema: true, persistencePool: options.persistencePool } : {}) });
         return result.executionResult?.approval;
       } finally {
-        if (missionLock) await options.persistencePool.query('SELECT pg_advisory_unlock($1,$2)', missionLock);
+        if (missionLock) await options.persistencePool.query(missionLease.MISSION_SESSION_UNLOCK_SQL, missionLock);
       }
     },
     execute: async (envelope, item, program, sendEmail) => {

@@ -72,6 +72,16 @@ function missionLockText(missionId) {
   return `amo-mission:${canonicalMissionId(missionId)}`;
 }
 
+/**
+ * For callers that already own ONE dedicated connection for their whole
+ * critical section (e.g. Anchor recovery approval): a session-level lock on the
+ * SAME key as the lease. Session and transaction advisory locks on one key
+ * conflict, so these holders and lease holders exclude each other. Lock and
+ * unlock MUST run on that same connection — never through a pg.Pool.
+ */
+const MISSION_SESSION_LOCK_SQL = 'SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked';
+const MISSION_SESSION_UNLOCK_SQL = 'SELECT pg_advisory_unlock(hashtextextended($1, 0)) AS unlocked';
+
 function newCorrelationId() {
   return `cor_${crypto.randomBytes(12).toString('hex')}`;
 }
@@ -234,6 +244,8 @@ module.exports = {
   acquireMissionLease,
   withMissionLease,
   missionLockText,
+  MISSION_SESSION_LOCK_SQL,
+  MISSION_SESSION_UNLOCK_SQL,
   canonicalMissionId,
   newCorrelationId,
 };

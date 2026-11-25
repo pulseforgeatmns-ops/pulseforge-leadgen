@@ -44,7 +44,10 @@ function post(port, path, body) {
     const payload = JSON.stringify(body);
     const req = http.request({
       host: '127.0.0.1', port, path, method: 'POST',
-      headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) },
+      // A fresh Idempotency-Key per call, exactly as the Mission Workspace UI sends
+      // (MAX-P0-003 makes it mandatory for intents with external effects).
+      headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload),
+        'idempotency-key': `test-${require('node:crypto').randomUUID()}` },
     }, (res) => {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
@@ -63,6 +66,9 @@ test('review-only lifecycle, governed amendment and REST sender ordering are dur
   process.env.DATABASE_SSL = 'false';
   const pool = new Pool({ connectionString: pg.connectionString });
   pool.on('error', () => {});
+  // MAX-P0-003 operator migration: keyed executions need the receipt tables.
+  await pool.query(require('node:fs').readFileSync(require('node:path').join(__dirname,
+    '../migrations/2026-11-25-max-p0-003-reliability-core.sql'), 'utf8'));
   let server = null;
   t.after(async () => {
     if (server) await new Promise((resolve) => server.close(resolve));
@@ -125,6 +131,20 @@ test('review-only lifecycle, governed amendment and REST sender ordering are dur
     assert.equal(res.status, 403, `${intent}: ${JSON.stringify(res.body)}`);
     assert.equal(res.body.error, 'authorization_constraint_blocked', intent);
   }
+
+  // --- MAX-P0-003: external intents without an Idempotency-Key are refused before any work.
+  const keyless = await new Promise((resolve, reject) => {
+    const payload = JSON.stringify({ intent: 'EXECUTE_OUTBOUND' });
+    const req = http.request({ host: '127.0.0.1', port, path: `/api/v1/amo/missions/${missionId}/execute`, method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } }, (res) => {
+      let data = ''; res.on('data', (c) => { data += c; });
+      res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(data), correlation: res.headers['x-correlation-id'] }));
+    });
+    req.on('error', reject); req.end(payload);
+  });
+  assert.equal(keyless.status, 428, JSON.stringify(keyless.body));
+  assert.equal(keyless.body.error, 'idempotency_key_required');
+  assert.ok(keyless.correlation, 'correlation id echoed');
 
   // --- Plan approval needs no sender: it is not blocked by the incomplete sender.
   const approved = await execute(missionId, 'APPROVE_PLAN');

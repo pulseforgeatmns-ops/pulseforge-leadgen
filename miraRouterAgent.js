@@ -1,6 +1,7 @@
 require('dotenv').config();
 
 const pool = require('./db');
+const { withWorkerAdvisoryLock } = require('./utils/workerAdvisoryLock');
 
 const AGENT_NAME = 'mira_router';
 const WORKER_INTERVAL_MS = 15 * 60 * 1000;
@@ -356,18 +357,8 @@ async function getRoutableCaptures() {
 }
 
 async function withWorkerLock(fn) {
-  const lock = await pool.query('SELECT pg_try_advisory_lock($1) AS locked', [ADVISORY_LOCK_KEY]);
-  if (!lock.rows[0]?.locked) {
-    return { skipped: true, reason: 'worker_already_running' };
-  }
-
-  try {
-    return await fn();
-  } finally {
-    await pool.query('SELECT pg_advisory_unlock($1)', [ADVISORY_LOCK_KEY]).catch(err => {
-      console.error('[mira_router] advisory unlock failed:', err.message);
-    });
-  }
+  // MAX-P0-003 — lock and unlock on one dedicated connection (never pool.query).
+  return withWorkerAdvisoryLock(pool, ADVISORY_LOCK_KEY, fn, { label: 'mira_router' });
 }
 
 async function run(params = {}) {

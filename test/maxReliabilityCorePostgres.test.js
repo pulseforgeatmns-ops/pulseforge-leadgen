@@ -151,6 +151,24 @@ test('fixed: mission lease releases on the same connection and never leaks', { t
   }
 });
 
+test('worker advisory lock (Mira/warm-routing agents): single-flight and never leaks onto the pool', { timeout: 60000 }, async (t) => {
+  const { pool, pool2 } = await db(t);
+  const { withWorkerAdvisoryLock } = require('../utils/workerAdvisoryLock');
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const first = withWorkerAdvisoryLock(pool, 990001, async () => { await gate; return 'done'; });
+  await new Promise((r) => setTimeout(r, 50));
+  assert.deepEqual(await withWorkerAdvisoryLock(pool2, 990001, async () => assert.fail('must not run')),
+    { skipped: true, reason: 'worker_already_running' });
+  const busy = await Promise.all([pool.connect(), pool.connect()]);
+  release();
+  assert.equal(await first, 'done');
+  busy.forEach((c) => c.release());
+  assert.deepEqual(await advisoryLocks(pool), [], 'released on the connection that took it');
+  await assert.rejects(withWorkerAdvisoryLock(pool, 990001, async () => { throw new Error('work failed'); }), /work failed/);
+  assert.deepEqual(await advisoryLocks(pool), [], 'released after a failure too');
+});
+
 test('lease contention across pools: try fails fast, wait times out explicitly, release unblocks', { timeout: 60000 }, async (t) => {
   const { pool, pool2 } = await db(t);
   const lease = await acquireMissionLease(pool, { missionId: 'contended', mode: 'try' });
@@ -178,6 +196,27 @@ test('lock identity is the canonical mission id: competing versions and wrong-te
   // Tenant isolation: another tenant cannot lease (or learn about) this mission.
   await assert.rejects(acquireMissionLease(pool2, { missionId: mission.id, tenantId: '2' }), { code: LEASE_ERRORS.TENANT_MISMATCH });
   assert.deepEqual(await advisoryLocks(pool), [], 'a refused lease holds nothing');
+});
+
+test('dedicated-client session holders (Anchor recovery) and lease holders exclude each other on one key', { timeout: 60000 }, async (t) => {
+  const { pool, pool2 } = await db(t);
+  const { MISSION_SESSION_LOCK_SQL, MISSION_SESSION_UNLOCK_SQL, missionLockText } = require('../services/missionLease');
+  const id = 'recovery-vs-lease';
+  const dedicated = await pool.connect();
+  try {
+    assert.equal((await dedicated.query(MISSION_SESSION_LOCK_SQL, [missionLockText(id)])).rows[0].locked, true);
+    await assert.rejects(acquireMissionLease(pool2, { missionId: id }), { code: LEASE_ERRORS.BUSY }, 'lease refused while recovery holds it');
+    assert.equal((await dedicated.query(MISSION_SESSION_UNLOCK_SQL, [missionLockText(id)])).rows[0].unlocked, true);
+    const lease = await acquireMissionLease(pool2, { missionId: id });
+    assert.equal((await dedicated.query(MISSION_SESSION_LOCK_SQL, [missionLockText(id)])).rows[0].locked, false,
+      'recovery refused while a lease holds it');
+    await lease.rollback();
+    assert.equal((await dedicated.query(MISSION_SESSION_LOCK_SQL, [missionLockText(id)])).rows[0].locked, true);
+    await dedicated.query(MISSION_SESSION_UNLOCK_SQL, [missionLockText(id)]);
+  } finally {
+    dedicated.release();
+  }
+  assert.deepEqual(await advisoryLocks(pool), []);
 });
 
 test('crash while holding a lease: no partial write, lock released, mission re-leasable', { timeout: 60000 }, async (t) => {
@@ -469,7 +508,7 @@ test('crash after dispatch, before acknowledgement: outcome unknown, never retri
   const plan = await recoverInterruptedExecution(pool, { tenantId: '10', now: later });
   assert.equal(plan.applied, false);
   assert.ok(plan.counts.staleDispatches >= 1);
-  const applied = await recoverInterruptedExecution(pool, { tenantId: '10', now: later, apply: true });
+  const applied = await recoverInterruptedExecution(pool, { tenantId: '10', now: later, apply: true, actor: 'operator:test' });
   assert.ok(applied.changed.unknown.length >= 1);
   assert.equal(applied.escalationRequired, true);
   const ledger = createExternalActionLedger(pool);
@@ -493,7 +532,7 @@ test('crash before the dispatch marker: recovery abandons the claim and a retry 
   assert.equal(crashed.outcome, 'claimed');
   const ledger = createExternalActionLedger(pool);
   assert.equal((await guardedDispatch({ ledger, claim, dispatch: async () => assert.fail('held') })).code, 'external_action_in_progress');
-  await recoverInterruptedExecution(pool, { tenantId: '10', apply: true, now: () => new Date(Date.now() + 3600e3) });
+  await recoverInterruptedExecution(pool, { tenantId: '10', apply: true, actor: 'operator:test', now: () => new Date(Date.now() + 3600e3) });
   assert.equal((await ledger.get('10', claim.idempotencyKey)).state, STATES.ABANDONED_NOT_DISPATCHED);
   let calls = 0;
   const retry = await guardedDispatch({ ledger, claim, dispatch: async () => { calls += 1; return { success: true, providerMessageId: 'm2' }; } });
@@ -544,7 +583,7 @@ test('tenant isolation: claims, receipts, reads and recovery are tenant-scoped',
   assert.equal(a.outcome, 'claimed');
   assert.equal(b.outcome, 'claimed', 'same key in another tenant is an independent action');
   assert.equal(await ledger.get('23', 'shared-key'), null, 'a third tenant sees nothing');
-  const recovered = await recoverInterruptedExecution(pool, { tenantId: '22', apply: true, now: () => new Date(Date.now() + 3600e3) });
+  const recovered = await recoverInterruptedExecution(pool, { tenantId: '22', apply: true, actor: 'operator:test', now: () => new Date(Date.now() + 3600e3) });
   assert.deepEqual(recovered.changed.abandoned, ['shared-key']);
   assert.equal((await ledger.get('21', 'shared-key')).state, STATES.CLAIMED, 'tenant 21 untouched by tenant 22 recovery');
   assert.equal((await ledger.listUnresolved('22')).length, 0);
@@ -609,7 +648,7 @@ test('keyed requests: failure is the receipt; lock contention releases it; inter
   const receipts = createRequestReceipts(pool);
   const handle = await receipts.begin({ tenantId: '10', scope: 'amo_execute:m2', idempotencyKey: 'dead-key-0001', request: { intent: 'X' } });
   assert.equal(handle.outcome, 'owner');
-  await recoverInterruptedExecution(pool, { tenantId: '10', apply: true, now: () => new Date(Date.now() + 3600e3) });
+  await recoverInterruptedExecution(pool, { tenantId: '10', apply: true, actor: 'operator:test', now: () => new Date(Date.now() + 3600e3) });
   const after = await runKeyedRequest({ ...base, idempotencyKey: 'dead-key-0001', run: async () => assert.fail('must not re-run') });
   assert.equal(after.status, 409);
   assert.equal(after.body.error, 'request_outcome_unknown');
@@ -631,6 +670,46 @@ test('audit trail is durable, correlated and redacted', { timeout: 60000 }, asyn
   assert.equal(text.includes('xkeysib-secret'), false, 'secret removed');
   assert.equal(text.includes('Hello there'), false, 'content removed');
   assert.equal(text.includes('audit-1'), false, 'subject key hashed');
+});
+
+test('recovery apply requires an operator identity and audits the run', { timeout: 60000 }, async (t) => {
+  const { pool } = await db(t);
+  await createExternalActionLedger(pool).claim(claimInput('61', 'recovery-actor'));
+  const later = () => new Date(Date.now() + 3600e3);
+  await assert.rejects(recoverInterruptedExecution(pool, { tenantId: '61', apply: true, now: later }), { code: 'recovery_actor_required' });
+  assert.equal((await createExternalActionLedger(pool).get('61', 'recovery-actor')).state, STATES.CLAIMED, 'refused run changed nothing');
+  const plan = await recoverInterruptedExecution(pool, { tenantId: '61', now: later });
+  assert.equal(plan.applied, false);
+  assert.equal((await listReliabilityAudit(pool, '61')).filter((r) => r.subject_kind === 'recovery_run').length, 0, 'plan writes nothing');
+  await recoverInterruptedExecution(pool, { tenantId: '61', apply: true, now: later, actor: 'operator:jm' });
+  const rows = await listReliabilityAudit(pool, '61');
+  const run = rows.find((r) => r.event === 'recovery_applied');
+  assert.equal(run.detail.actor, 'operator:jm');
+  assert.equal(run.detail.abandoned, 1);
+  assert.equal(rows.find((r) => r.event === 'recovery_abandoned_not_dispatched').detail.actor, 'operator:jm');
+});
+
+test('durable barriers cannot be expired: claims/audit undeletable, only in_progress receipts releasable', { timeout: 60000 }, async (t) => {
+  const { pool } = await db(t);
+  const ledger = createExternalActionLedger(pool);
+  await guardedDispatch({ ledger, claim: claimInput('51', 'barrier-1'), dispatch: async () => ({ success: true, providerMessageId: 'b1' }) });
+  await assert.rejects(pool.query("DELETE FROM max_external_action_claims WHERE tenant_id = '51'"), /durable idempotency barrier/);
+  await assert.rejects(pool.query("DELETE FROM max_external_action_claims WHERE updated_at < now() + interval '1 day'"), /durable idempotency barrier/);
+  await assert.rejects(pool.query('TRUNCATE max_external_action_claims'), /durable idempotency barrier/);
+  await assert.rejects(pool.query("DELETE FROM max_reliability_audit WHERE tenant_id = '51'"), /durable idempotency barrier/);
+  await assert.rejects(pool.query('TRUNCATE max_reliability_audit'), /durable idempotency barrier/);
+  assert.equal((await ledger.get('51', 'barrier-1')).state, STATES.PROVIDER_ACKNOWLEDGED, 'claim survives');
+
+  const receipts = createRequestReceipts(pool);
+  const done = await receipts.begin({ tenantId: '51', scope: 's', idempotencyKey: 'barrier-done', request: { a: 1 } });
+  await receipts.complete(done, 200, { ok: true });
+  await assert.rejects(pool.query("DELETE FROM max_request_receipts WHERE tenant_id = '51' AND idempotency_key = 'barrier-done'"),
+    /durable idempotency barrier/, 'a completed receipt cannot be expired');
+  await assert.rejects(pool.query('TRUNCATE max_request_receipts'), /durable idempotency barrier/);
+  const open = await receipts.begin({ tenantId: '51', scope: 's', idempotencyKey: 'barrier-open', request: { a: 1 } });
+  assert.equal(open.outcome, 'owner');
+  const released = await pool.query("DELETE FROM max_request_receipts WHERE tenant_id = '51' AND idempotency_key = 'barrier-open'");
+  assert.equal(released.rowCount, 1, 'in_progress receipt may be released (pre-execution lock contention path)');
 });
 
 test('fails closed without the operator migration', { timeout: 60000 }, async (t) => {

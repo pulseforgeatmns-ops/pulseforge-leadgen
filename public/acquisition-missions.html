@@ -583,13 +583,26 @@
     }
   });
 
+  // MAX-P0-003 — one Idempotency-Key per operator click; a second click while
+  // the first is in flight is ignored, so one decision is submitted once.
+  let executionInFlight = false;
+  function newIdempotencyKey() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') return 'ui-' + window.crypto.randomUUID();
+    const bytes = new Uint8Array(16);
+    window.crypto.getRandomValues(bytes);
+    return 'ui-' + Array.from(bytes, function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+  }
+
   async function submitExecution(intent) {
     if (!selected) return setMsg('Select a mission first', 'err');
     if (!intent) return setMsg('No executable intent', 'err');
+    if (executionInFlight) return setMsg('An execution request is already being submitted…');
+    executionInFlight = true;
     try {
       setMsg('Submitting execution request…');
       const body = await api('/api/v1/amo/missions/' + encodeURIComponent(selected) + '/execute', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': newIdempotencyKey() },
         body: JSON.stringify({
           intent: intent,
           source: 'approval_button',
@@ -600,6 +613,8 @@
       setMsg('Executed ' + ((body.request && body.request.intent) || intent), 'ok');
     } catch (err) {
       setMsg(err.message, 'err');
+    } finally {
+      executionInFlight = false;
     }
   }
 
