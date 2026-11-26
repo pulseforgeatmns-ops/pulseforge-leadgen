@@ -103,7 +103,17 @@ State vocabulary differs from the proposal (`queued` ≈ `admitted`, `escalated`
 - Activation (`MAX_DURABLE_TASKS=true`) requires the P0-003 and P0-004 migrations; it is an operator decision and not part of this change.
 - `persistStageCommit` still has a pre-existing unlocked fallback when a caller holds the process's mission lock but passes neither `lease` nor `skipGlobalLock`. No production caller reaches it, and under a task fence it is refused.
 - A task-linked keyed request whose dispatch fails before anything ran (e.g. `tme_transaction_overlap`) keeps its receipt as a failure (`retryableWithNewKey: true`). The task and its logical key are permanent, so the same Idempotency-Key only ever replays it; the client retries with a new key.
-- Two concurrent callers passing the same explicit `durableTaskKey` outside the receipt path (scripts) can race at acceptance; the loser gets `durable_task_key_reused` (422) rather than a replay. REST is serialized by its receipt.
+- Two concurrent callers passing the same explicit `durableTaskKey` outside the receipt path (scripts) can race at acceptance. Verified (`verify:` test, 5 rounds × 3 callers):
+  - at most one execution;
+  - each loser gets `durable_task_key_reused` (422; the accepted deadline differs) or `durable_task_mission_busy`, instead of a replay;
+  - a loser never cancels the winner's task, because it cancels only a task it reads as `queued` after a failed claim, and the winner's claim already moved it out of `queued`;
+  - keys are tenant-scoped.
+  REST is serialized by its receipt.
+- A new-key retry after a definitive pre-dispatch failure is a new task, but it cannot bypass ownership or deduplication. Verified (`verify:` test):
+  - while any task of the mission is active, it is refused (`durable_task_mission_busy`);
+  - a send already acknowledged under the earlier task is replayed by the P0-003 ledger, which keys on the action, not the task;
+  - a revised artifact for the same mission and prospect is blocked by R7;
+  - the delivered claim stays attributed to the task that sent it.
 - Code spawned inside a task-owned dispatch inherits the fence (AsyncLocalStorage). That is intended: anything it commits is fenced by the same owner.
 
 - Conservative escalation: a task whose only action is `claimed` (never dispatched) is escalated on lease expiry; an operator must release it. This favours no-replay over availability.

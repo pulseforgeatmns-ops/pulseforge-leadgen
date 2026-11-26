@@ -426,3 +426,68 @@ test('review: with durable tasks off, router results carry no durableTask key', 
   const { executeCanonicalResponse } = require('../routes/acquisitionMissions');
   assert.equal(Object.prototype.hasOwnProperty.call(executeCanonicalResponse(routed), 'durableTask'), false);
 });
+
+// ---------------------------------------------------------------------------
+// Pre-merge verification (owner-requested): new-key retry and explicit-key race.
+// ---------------------------------------------------------------------------
+test('verify: a new-key retry cannot bypass task ownership (old task active → refused) or external-action dedup (acknowledged send → replay, R7)', { timeout: 60000 }, async () => {
+  const { pool } = await db(); const store = createDurableExecutionOwnership(pool); const ledger = createExternalActionLedger(pool);
+  const { engine, mission } = await missionFixture(pool);
+  // (1) Old task still active: a request under any new key is refused before a specialist runs.
+  const old = await store.accept({ tenantId: '10', logicalKey: `verify-old-${seq}`, specialist: 'operator', missionId: mission.id });
+  await store.claimTask({ tenantId: '10', taskId: old.task.id, ownerToken: 'old', leaseMs: 30000 });
+  let executed = 0;
+  await assert.rejects(route(engine, mission, pool, store, { onExecute: () => { executed += 1; }, context: { durableTaskKey: `verify-newkey-a-${seq}` } }),
+    { code: 'durable_task_mission_busy' });
+  assert.equal(executed, 0);
+  await store.cancel({ tenantId: '10', taskId: old.task.id, reason: 'test cleanup' });
+
+  // (2) A send acknowledged under task A (which then escalates) is never re-sent by task B under a new key.
+  let providerCalls = 0;
+  const sendKey = `verify-send-${seq}`; const subject = `prospect:verify-${seq}`;
+  const sendStage = (keyForLedger) => async () => executeMissionStage({
+    engine, missionId: mission.id, tenantId: '10', pool, specialist: 'operator', stage: mission.stage,
+    validatePreconditions: () => ({}),
+    execute: async () => {
+      const fence = currentTaskFence();
+      const out = await guardedDispatch({ ledger, taskFence: fence,
+        claim: { tenantId: '10', taskId: fence.taskId, idempotencyKey: keyForLedger, actionKind: 'amo_outbound_email', missionId: mission.id,
+          subjectRef: subject, requestFingerprint: requestFingerprint({ keyForLedger }) },
+        dispatch: async () => { providerCalls += 1; return { success: true, providerMessageId: `pm-${providerCalls}` }; } });
+      return { ok: true, outcome: out.outcome, code: out.code || null };
+    },
+    commit: async () => { throw Object.assign(new Error('rollback after send'), { code: 'injected' }); },
+    persistDurable: persistence.bindStagePersistDurable({ pool, preinitializedSchema: true }, engine, '10'),
+  });
+  const a = await route(engine, mission, pool, store, { handler: sendStage(sendKey), context: { durableTaskKey: `verify-a-${seq}` } });
+  assert.equal(providerCalls, 1);
+  assert.equal(a.durableTask.state, 'escalated');
+  // Same logical send under a new request key: the ledger replays; no provider call.
+  await route(engine, mission, pool, store, { handler: sendStage(sendKey), context: { durableTaskKey: `verify-b-${seq}` } });
+  assert.equal(providerCalls, 1, 'replay, not a second send');
+  // A revised artifact (different ledger key, same mission/prospect): R7 blocks it.
+  await route(engine, mission, pool, store, { handler: sendStage(`${sendKey}-revised`), context: { durableTaskKey: `verify-c-${seq}` } });
+  assert.equal(providerCalls, 1, 'R7: at most one outbound per mission/prospect');
+  const claim = await ledger.get('10', sendKey);
+  assert.equal(claim.taskId, a.durableTask.id, 'the delivered claim stays attributed to the task that sent it');
+});
+
+test('verify: concurrent callers with the same explicit task key execute at most once and never cancel the winner', { timeout: 60000 }, async () => {
+  const { pool } = await db(); const store = createDurableExecutionOwnership(pool);
+  for (let round = 0; round < 5; round += 1) {
+    const { engine, mission } = await missionFixture(pool);
+    const key = `verify-race-${seq}-${round}`;
+    let executions = 0;
+    const call = () => route(engine, mission, pool, store, { onExecute: () => { executions += 1; }, context: { durableTaskKey: key } })
+      .then((r) => ({ ok: r }), (e) => ({ err: e }));
+    const results = await Promise.all([call(), call(), call()]);
+    assert.ok(executions <= 1, `round ${round}: at most one execution`);
+    for (const r of results) {
+      if (r.err) assert.ok(['durable_task_key_reused', 'durable_task_mission_busy'].includes(r.err.code), `round ${round}: ${r.err.code}`);
+    }
+    const task = await store.getByLogicalKey({ tenantId: '10', logicalKey: key });
+    if (executions === 1) assert.equal(task.state, 'completed', `round ${round}: the winner's task was not cancelled by a loser`);
+    // Tenant isolation: the same key in another tenant is a different task.
+    assert.equal(await store.getByLogicalKey({ tenantId: '11', logicalKey: key }), null);
+  }
+});
