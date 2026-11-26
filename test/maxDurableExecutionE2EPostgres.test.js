@@ -491,3 +491,21 @@ test('verify: concurrent callers with the same explicit task key execute at most
     assert.equal(await store.getByLogicalKey({ tenantId: '11', logicalKey: key }), null);
   }
 });
+
+test('verify: a caller that lost the claim race cannot cancel the winner\'s running task (atomic cancel-if-queued)', { timeout: 60000 }, async () => {
+  const { pool } = await db(); const store = createDurableExecutionOwnership(pool);
+  const { mission } = await missionFixture(pool);
+  // Reviewer's interleaving: the loser read the task as queued, then the winner claimed and started it.
+  const shared = await store.accept({ tenantId: '10', logicalKey: `verify-cancel-race-${seq}`, specialist: 'operator', missionId: mission.id });
+  const winner = await store.claimTask({ tenantId: '10', taskId: shared.task.id, ownerToken: 'winner', leaseMs: 30000 });
+  await store.start({ tenantId: '10', taskId: winner.id, ownershipToken: 'winner', fenceEpoch: winner.fenceEpoch });
+  // The loser's late cancel is a no-op.
+  assert.equal(await store.cancelIfQueued({ tenantId: '10', taskId: shared.task.id, reason: 'mission_has_active_task' }), null);
+  const still = await store.get({ tenantId: '10', taskId: shared.task.id });
+  assert.equal(still.state, 'running');
+  await store.heartbeat({ tenantId: '10', taskId: winner.id, ownershipToken: 'winner', fenceEpoch: winner.fenceEpoch, leaseMs: 30000 });
+  // A genuinely queued task is cancelled, and another tenant cannot cancel it.
+  const queued = await store.accept({ tenantId: '10', logicalKey: `verify-cancel-queued-${seq}`, specialist: 'operator', missionId: `${mission.id}-other` });
+  assert.equal(await store.cancelIfQueued({ tenantId: '11', taskId: queued.task.id }), null);
+  assert.equal((await store.cancelIfQueued({ tenantId: '10', taskId: queued.task.id, reason: 'x' })).state, 'cancelled');
+});

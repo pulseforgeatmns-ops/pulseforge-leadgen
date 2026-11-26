@@ -404,6 +404,24 @@ function createDurableExecutionOwnership(pool, options = {}) {
     });
   }
 
+  /**
+   * Cancel a task only if it is still `queued`, in one conditional UPDATE (no
+   * read-then-write window). Returns the cancelled task, or null if anyone has
+   * claimed, started or finished it meanwhile — a caller that never owned the
+   * task can therefore never cancel someone else's running work.
+   */
+  async function cancelIfQueued(input = {}) {
+    const tenantId = text(input.tenantId, 'tenantId'); const taskId = text(input.taskId, 'taskId');
+    const reason = String(input.reason || 'cancelled_before_claim').slice(0, 200);
+    return tx(async (db) => {
+      const r = await db.query(`UPDATE max_durable_execution_tasks SET state='cancelled', cancellation_reason=$3, updated_at=clock_timestamp()
+         WHERE id=$1 AND tenant_id=$2 AND state='queued' RETURNING *`, [taskId, tenantId, reason]);
+      if (!r.rows[0]) return null;
+      await event(db, r.rows[0], 'cancelled', STATES.QUEUED, STATES.CANCELLED, { reason });
+      return row(r.rows[0]);
+    });
+  }
+
   async function get(input = {}) { await assertSchema(pool); const r = await pool.query('SELECT * FROM max_durable_execution_tasks WHERE id=$1 AND tenant_id=$2', [text(input.taskId, 'taskId'), text(input.tenantId, 'tenantId')]); return row(r.rows[0]); }
   async function getByLogicalKey(input = {}) { await assertSchema(pool); const r = await pool.query('SELECT * FROM max_durable_execution_tasks WHERE tenant_id=$1 AND logical_key=$2', [text(input.tenantId, 'tenantId'), text(input.logicalKey, 'logicalKey')]); return row(r.rows[0]); }
   async function list(input = {}) {
@@ -415,7 +433,7 @@ function createDurableExecutionOwnership(pool, options = {}) {
     return r.rows.map(row);
   }
   async function listEvents(input = {}) { await assertSchema(pool); const tenantId = text(input.tenantId, 'tenantId'); const taskId = text(input.taskId, 'taskId'); const r = await pool.query('SELECT id,fence_epoch,event,from_state,to_state,detail,at FROM max_durable_execution_task_events WHERE tenant_id=$1 AND task_id=$2 ORDER BY id', [tenantId, taskId]); return r.rows; }
-  return { accept, claim, claimTask, fail, planRecovery, requireOwner, start, heartbeat, checkpoint, reportCompletion, verify, recoverExpired, revalidateDependencies, cancel, get, getByLogicalKey, list, listEvents };
+  return { accept, claim, claimTask, fail, planRecovery, requireOwner, start, heartbeat, checkpoint, reportCompletion, verify, recoverExpired, revalidateDependencies, cancel, cancelIfQueued, get, getByLogicalKey, list, listEvents };
 }
 module.exports = {
   STATES, REQUIRED_TABLES, UNRESOLVED_ACTION_STATES, DISPATCHED_ACTION_STATES,

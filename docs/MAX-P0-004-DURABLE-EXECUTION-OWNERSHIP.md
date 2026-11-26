@@ -106,7 +106,7 @@ State vocabulary differs from the proposal (`queued` ≈ `admitted`, `escalated`
 - Two concurrent callers passing the same explicit `durableTaskKey` outside the receipt path (scripts) can race at acceptance. Verified (`verify:` test, 5 rounds × 3 callers):
   - at most one execution;
   - each loser gets `durable_task_key_reused` (422; the accepted deadline differs) or `durable_task_mission_busy`, instead of a replay;
-  - a loser never cancels the winner's task, because it cancels only a task it reads as `queued` after a failed claim, and the winner's claim already moved it out of `queued`;
+  - a loser never cancels the winner's task: after a failed claim it cancels with an atomic, conditional `cancelIfQueued`, which is a no-op once anyone has claimed the task. An earlier read-then-cancel had a narrow window, found in independent review and fixed;
   - keys are tenant-scoped.
   REST is serialized by its receipt.
 - A new-key retry after a definitive pre-dispatch failure is a new task, but it cannot bypass ownership or deduplication. Verified (`verify:` test):

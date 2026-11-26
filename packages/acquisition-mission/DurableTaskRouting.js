@@ -130,7 +130,7 @@ async function beginDurableTask(request, context, mission, { specialist } = {}) 
     try {
       await context.onDurableTaskAccepted(summarizeTask(task));
     } catch (err) {
-      await store.cancel({ tenantId, taskId: task.id, reason: 'receipt_link_failed' }).catch(() => {});
+      await store.cancelIfQueued({ tenantId, taskId: task.id, reason: 'receipt_link_failed' }).catch(() => {});
       throw err;
     }
   }
@@ -140,10 +140,9 @@ async function beginDurableTask(request, context, mission, { specialist } = {}) 
   if (!claimed) {
     // Another task of this mission is active (or the deadline passed). Do not
     // leave this one queued for a later claimant: record why it never ran.
-    const current = await store.get({ tenantId, taskId: task.id });
-    if (current && current.state === 'queued') {
-      await store.cancel({ tenantId, taskId: task.id, reason: 'mission_has_active_task' }).catch(() => {});
-    }
+    // Atomic: cancels only while still queued, so a caller that lost a race
+    // can never cancel the winner's claimed or running task.
+    await store.cancelIfQueued({ tenantId, taskId: task.id, reason: 'mission_has_active_task' }).catch(() => {});
     throw taskError('durable_task_mission_busy', 'Another execution of this mission is in progress; nothing ran.', {
       statusCode: 409, missionId: mission.id, taskId: task.id,
     });
