@@ -551,8 +551,7 @@ async function routeExecutionRequest(request, context = {}) {
       executionResult: { alreadyExecuted: taskRun.replay.state === 'completed', durableTaskReplay: true },
       snapshot: context.engine && context.engine.inspect(mission.id, { tenantId: context.tenantId }),
       audit, replay: true, autoConsumedDiscoveryApproval: false, planResult: null,
-      execution: { state: taskRun.replay.state === 'completed' ? 'already_executed' : 'outcome_unknown',
-        reason: `durable_task_${taskRun.replay.state}` },
+      execution: { state: replayExecutionState(taskRun.replay.state), reason: `durable_task_${taskRun.replay.state}` },
       durableTask: taskRun.replay,
       routed: true,
     };
@@ -573,10 +572,15 @@ async function routeExecutionRequest(request, context = {}) {
     throw err;
   }
 
-  const snapshot = (chained.executionResult && chained.executionResult.snapshot)
+  let snapshot;
+  let outcome;
+  let execution;
+  let durableTask;
+  try {
+  snapshot = (chained.executionResult && chained.executionResult.snapshot)
     || (context.engine && context.engine.inspect(mission.id, { tenantId: context.tenantId }));
 
-  const outcome = chained.executionResult && chained.executionResult.rolledBack
+  outcome = chained.executionResult && chained.executionResult.rolledBack
     ? 'rolled_back'
     : chained.executionResult && chained.executionResult.alreadyExecuted
       ? 'already_executed'
@@ -586,7 +590,7 @@ async function routeExecutionRequest(request, context = {}) {
 
   // P0 — dispatch is not completion. Classify the result against structural
   // commit/rollback evidence; only verified states may be reported as done.
-  const execution = classifyExecutionEvidence({
+  execution = classifyExecutionEvidence({
     request: chained.autoConsumedDiscoveryApproval && chained.request ? chained.request : request,
     executionResult: chained.executionResult,
     specialist: chained.specialist || specialist,
@@ -594,7 +598,13 @@ async function routeExecutionRequest(request, context = {}) {
     tenantId: context.tenantId,
   });
 
-  const durableTask = taskRun ? await taskRun.finish(execution) : null;
+  durableTask = taskRun ? await taskRun.finish(execution) : null;
+  } catch (err) {
+    // Never leave a task's lease heartbeat running: any failure after dispatch
+    // still ends ownership (fail escalates if an effect may have happened).
+    if (taskRun) err.durableTask = await taskRun.failed(err);
+    throw err;
+  }
 
   const audit = recordRouterAudit({
     requestId: request.id,
@@ -628,9 +638,18 @@ async function routeExecutionRequest(request, context = {}) {
     autoConsumedDiscoveryApproval: chained.autoConsumedDiscoveryApproval === true,
     planResult: chained.planResult || null,
     execution,
-    durableTask,
+    // Present only for task-owned requests: the default (disabled) result is unchanged.
+    ...(durableTask ? { durableTask } : {}),
     routed: true,
   };
+}
+
+/** MAX-P0-004 — honest execution state for a replayed task (never "unknown" when it is known). */
+function replayExecutionState(taskState) {
+  if (taskState === 'completed') return 'already_executed';
+  if (taskState === 'failed') return 'failed';
+  if (taskState === 'cancelled') return 'blocked';
+  return 'outcome_unknown';
 }
 
 /**

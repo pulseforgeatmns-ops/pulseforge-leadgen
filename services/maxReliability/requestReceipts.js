@@ -64,7 +64,7 @@ function createRequestReceipts(pool, options = {}) {
       completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
       // MAX-P0-004: the durable task this request created (column added by the
       // P0-004 migration; undefined on a P0-003-only database).
-      taskId: row.task_id ? String(row.task_id) : null,
+      ...(row.task_id ? { taskId: String(row.task_id) } : {}),
     };
   }
 

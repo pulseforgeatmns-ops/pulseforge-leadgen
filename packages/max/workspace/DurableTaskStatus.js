@@ -18,6 +18,7 @@ const REASON_TEXT = Object.freeze({
   deadline_exceeded: 'it passed its deadline before finishing',
   retry_budget_exhausted: 'it was interrupted more times than its retry budget allows',
   cancelled_after_dispatch: 'it was cancelled after an external action may already have been sent',
+  failed_after_dispatch: 'it failed after an external action had already reached the provider; that effect is not reflected in the mission',
   lease_expired: 'its owner stopped renewing its lease (the process stopped or stalled)',
   dependency_drift: 'something it depends on changed since it was accepted',
   mission_has_active_task: 'another execution of this mission was already in progress',

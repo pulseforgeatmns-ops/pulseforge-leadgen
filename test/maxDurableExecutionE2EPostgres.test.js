@@ -299,3 +299,119 @@ test('durable tasks are off unless explicitly enabled', async () => {
   assert.equal(resolveDurableTasks({}, { MAX_DURABLE_TASKS: 'true' }), null, 'never without a pool');
   assert.equal(typeof resolveDurableTasks({ pool }, { MAX_DURABLE_TASKS: 'true' }).claimTask, 'function');
 });
+
+// ---------------------------------------------------------------------------
+// Independent review regressions (P2–P6).
+// ---------------------------------------------------------------------------
+const { createExternalActionLedger, requestFingerprint } = require('../services/maxReliability/externalActionLedger');
+const { guardedDispatch } = require('../services/maxReliability/guardedDispatch');
+const { currentTaskFence } = require('../services/maxReliability/taskExecutionContext');
+const { presentDurableTaskStatus } = require('../packages/max/workspace/DurableTaskStatus');
+
+test('review: a send acknowledged before the mission commit rolls back escalates (never "failed, nothing in doubt")', { timeout: 60000 }, async () => {
+  const { pool } = await db(); const store = createDurableExecutionOwnership(pool); const ledger = createExternalActionLedger(pool);
+  const { engine, mission } = await missionFixture(pool);
+  const request = cer(mission);
+  const routed = await route(engine, mission, pool, store, {
+    request,
+    handler: async () => executeMissionStage({
+      engine, missionId: mission.id, tenantId: '10', pool, specialist: 'operator', stage: mission.stage,
+      validatePreconditions: () => ({}),
+      execute: async () => {
+        const fence = currentTaskFence();
+        const sent = await guardedDispatch({ ledger, taskFence: fence,
+          claim: { tenantId: '10', taskId: fence.taskId, idempotencyKey: `review-send-${seq}`, actionKind: 'test', requestFingerprint: requestFingerprint({ s: seq }) },
+          dispatch: async () => ({ success: true, providerMessageId: 'pm-review' }) });
+        assert.equal(sent.outcome, 'dispatched');
+        return { ok: true };
+      },
+      commit: async () => { throw Object.assign(new Error('injected commit failure after the send'), { code: 'injected' }); },
+      persistDurable: persistence.bindStagePersistDurable({ pool, preinitializedSchema: true }, engine, '10'),
+    }),
+  });
+  assert.equal(routed.executionResult.rolledBack, true);
+  assert.equal(routed.durableTask.state, 'escalated');
+  assert.equal(routed.durableTask.escalationReason, 'failed_after_dispatch');
+  assert.match(presentDurableTaskStatus(routed.durableTask).sentence, /already reached the provider/);
+  assert.doesNotMatch(presentDurableTaskStatus(routed.durableTask).sentence, /Nothing is in doubt/);
+});
+
+test('review: a releasable failure of a task-linked request is never released; same-key retry replays the failure, new key runs', { timeout: 60000 }, async () => {
+  const { pool } = await db(); const store = createDurableExecutionOwnership(pool);
+  const { engine, mission } = await missionFixture(pool);
+  const key = `review-release-${seq}-key`;
+  let runs = 0;
+  const keyed = (idempotencyKey, fail) => runKeyedRequest({ pool, tenantId: '10', scope: `amo_execute:${mission.id}`, idempotencyKey,
+    request: { intent: 'EDIT_PLAN', missionId: mission.id },
+    loadTask: async (taskId) => summarizeTask(await store.get({ tenantId: '10', taskId })),
+    errorStatus: () => 409,
+    run: async (receipt) => {
+      runs += 1;
+      const routed = await route(engine, engine.get(mission.id, '10'), pool, store, {
+        handler: fail ? async () => { throw Object.assign(new Error('mission lease busy'), { code: 'tme_transaction_overlap' }); } : undefined,
+        context: {
+          durableTaskKey: `receipt:${receipt.scope}:${receipt.idempotencyKey}`,
+          durableTaskInput: { receiptFingerprint: receipt.requestFingerprint },
+          onDurableTaskAccepted: (task) => receipt.linkTask(task.id),
+        },
+      });
+      return { durableTask: routed.durableTask };
+    } });
+  const failed = await keyed(key, true);
+  assert.equal(failed.status, 409);
+  assert.equal(failed.body.retryable, false);
+  assert.equal(failed.body.retryableWithNewKey, true);
+  const row = (await pool.query('SELECT state, task_id FROM max_request_receipts WHERE tenant_id=$1 AND idempotency_key=$2', ['10', key])).rows[0];
+  assert.equal(row.state, 'failed', 'linked receipt kept, not released');
+  const retry = await keyed(key, false);
+  assert.equal(runs, 1, 'same key never runs again');
+  assert.equal(retry.body.replayed, true);
+  assert.equal(retry.body.durableTask.state, 'failed', 'live task state: a clean failure (nothing ran)');
+  const fresh = await keyed(`${key}-2`, false);
+  assert.equal(fresh.status, 200);
+  assert.equal(fresh.body.durableTask.state, 'completed', 'a new key runs normally');
+});
+
+test('review: replay labels are honest for failed and cancelled tasks', { timeout: 60000 }, async () => {
+  const { pool } = await db(); const store = createDurableExecutionOwnership(pool);
+  const { engine, mission } = await missionFixture(pool);
+  const failedKey = `review-label-failed-${seq}`;
+  await assert.rejects(route(engine, mission, pool, store, { handler: async () => { throw Object.assign(new Error('x'), { code: 'boom' }); }, context: { durableTaskKey: failedKey } }));
+  const replayFailed = await route(engine, mission, pool, store, { context: { durableTaskKey: failedKey } });
+  assert.equal(replayFailed.execution.state, 'failed');
+  const holder = await store.accept({ tenantId: '10', logicalKey: `review-holder-${seq}`, specialist: 'operator', missionId: mission.id });
+  await store.claimTask({ tenantId: '10', taskId: holder.task.id, ownerToken: 'h', leaseMs: 30000 });
+  const busyKey = `review-label-busy-${seq}`;
+  await assert.rejects(route(engine, mission, pool, store, { context: { durableTaskKey: busyKey } }), { code: 'durable_task_mission_busy' });
+  await store.cancel({ tenantId: '10', taskId: holder.task.id });
+  const replayCancelled = await route(engine, mission, pool, store, { context: { durableTaskKey: busyKey } });
+  assert.equal(replayCancelled.execution.state, 'blocked');
+});
+
+test('review: a failure after dispatch (classification) still ends task ownership', { timeout: 60000 }, async () => {
+  const { pool } = await db(); const store = createDurableExecutionOwnership(pool);
+  const { engine, mission } = await missionFixture(pool);
+  const key = `review-postfail-${seq}`;
+  const brokenEngine = Object.create(engine);
+  brokenEngine.inspect = () => { throw Object.assign(new Error('inspect failed'), { code: 'inspect_failed' }); };
+  const err = await amo.routeExecutionRequest(cer(mission), {
+    engine: brokenEngine, tenantId: '10', pool, durableTasks: store, durableTaskKey: key,
+    handlers: { [amo.EXECUTION_INTENTS.EDIT_PLAN]: async () => ({ committed: true }) },
+  }).catch((e) => e);
+  assert.equal(err.code, 'inspect_failed');
+  const task = await store.getByLogicalKey({ tenantId: '10', logicalKey: key });
+  assert.equal(task.state, 'failed', 'ownership ended; no heartbeat keeps a lease alive');
+  assert.equal(task.lease_expires_at, null);
+});
+
+test('review: with durable tasks off, router results carry no durableTask key', { timeout: 60000 }, async () => {
+  const { pool } = await db();
+  const { engine, mission } = await missionFixture(pool);
+  const request = cer(mission);
+  const routed = await amo.routeExecutionRequest(request, {
+    engine, tenantId: '10', pool, handlers: { [request.intent]: stageHandler(engine, mission, pool) },
+  });
+  assert.equal(Object.prototype.hasOwnProperty.call(routed, 'durableTask'), false);
+  const { executeCanonicalResponse } = require('../routes/acquisitionMissions');
+  assert.equal(Object.prototype.hasOwnProperty.call(executeCanonicalResponse(routed), 'durableTask'), false);
+});

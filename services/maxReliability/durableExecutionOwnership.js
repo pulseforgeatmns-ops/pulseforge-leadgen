@@ -205,8 +205,9 @@ function createDurableExecutionOwnership(pool, options = {}) {
 
   /**
    * The current owner reports a definitive failure (nothing in doubt). If a
-   * task-linked external action is unresolved, the task is escalated instead:
-   * a failure must never hide an effect that may have happened.
+   * task-linked external action is unresolved or already reached a provider,
+   * the task is escalated instead: a failure must never hide an effect that
+   * may have happened.
    */
   async function fail(input = {}) {
     const o = validOwner(input); const reason = String(input.reason || 'failed').slice(0, 200);
@@ -215,13 +216,18 @@ function createDurableExecutionOwnership(pool, options = {}) {
         [o.taskId, o.tenantId, o.ownershipToken, o.fenceEpoch])).rows[0];
       if (!task) throw error('durable_task_fenced', 'Failure rejected for stale owner.');
       const actions = await actionStates(db, o.tenantId, o.taskId);
+      // An unresolved action, or one that already reached the provider (e.g. a
+      // send acknowledged before the mission commit rolled back), means
+      // something may have happened: never report that as a clean failure.
       const unresolved = anyIn(actions, UNRESOLVED_ACTION_STATES);
+      const dispatched = anyIn(actions, DISPATCHED_ACTION_STATES);
+      const escalationReason = unresolved ? 'external_action_unresolved' : dispatched ? 'failed_after_dispatch' : null;
       const r = await db.query(`UPDATE max_durable_execution_tasks SET state=$3, recovery_reason=$4, escalation_reason=$5,
            result_ref=$6::jsonb, ownership_token=NULL, lease_expires_at=NULL, updated_at=clock_timestamp()
          WHERE id=$1 AND tenant_id=$2 RETURNING *`,
-      [o.taskId, o.tenantId, unresolved ? STATES.ESCALATED : STATES.FAILED, reason,
-        unresolved ? 'external_action_unresolved' : null, JSON.stringify(json(input.resultRef, {}))]);
-      await event(db, r.rows[0], unresolved ? 'failure_escalated' : 'failed', task.state, r.rows[0].state, { reason, actionStates: actions });
+      [o.taskId, o.tenantId, escalationReason ? STATES.ESCALATED : STATES.FAILED, reason,
+        escalationReason, JSON.stringify(json(input.resultRef, {}))]);
+      await event(db, r.rows[0], escalationReason ? 'failure_escalated' : 'failed', task.state, r.rows[0].state, { reason, actionStates: actions });
       return row(r.rows[0]);
     });
   }

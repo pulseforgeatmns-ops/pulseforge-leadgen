@@ -1718,7 +1718,7 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     executionResult,
     executionRequest,
     execution,
-    durableTask,
+    ...(durableTask ? { durableTask } : {}),
     audit,
   };
 }

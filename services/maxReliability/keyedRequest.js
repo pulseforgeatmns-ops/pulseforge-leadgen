@@ -85,11 +85,12 @@ async function runKeyedRequest(input = {}) {
 
   // The receipt identity a task-owned execution derives its logical key from,
   // and the hook that links the receipt to the task before any specialist runs.
+  let linkedTaskId = null;
   const receipt = {
     scope: handle.scope,
     idempotencyKey: handle.idempotencyKey,
     requestFingerprint: handle.requestFingerprint,
-    linkTask: (taskId) => receipts.linkTask(handle, taskId),
+    linkTask: async (taskId) => { const view = await receipts.linkTask(handle, taskId); linkedTaskId = String(taskId); return view; },
   };
 
   let body;
@@ -98,7 +99,15 @@ async function runKeyedRequest(input = {}) {
   } catch (err) {
     const status = statusFor(err);
     const failure = errorBody(err);
-    if (RELEASABLE_ERROR_CODES.has(err && err.code) || RELEASABLE_ERROR_CODES.has(err && err.cause && err.cause.code)) {
+    const releasable = RELEASABLE_ERROR_CODES.has(err && err.code) || RELEASABLE_ERROR_CODES.has(err && err.cause && err.cause.code);
+    // MAX-P0-004 — a receipt linked to a durable task is never released: the
+    // task (and its logical key) is permanent, so the same key can only ever
+    // replay it. Nothing ran; the client may retry with a NEW key.
+    if (releasable && linkedTaskId) {
+      await receipts.fail(handle, status, { error: failure.error, correlationId, retryableWithNewKey: true }, failure.error);
+      return { status, body: { ...failure, retryable: false, retryableWithNewKey: true }, headers, error: err };
+    }
+    if (releasable) {
       await pool.query(
         `DELETE FROM max_request_receipts WHERE tenant_id = $1 AND scope = $2 AND idempotency_key = $3
            AND owner_token = $4 AND state = 'in_progress'`,

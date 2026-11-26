@@ -443,7 +443,7 @@ function executeReceipt(body = {}) {
     specialist: body.specialist || null,
     runtimeOwner: body.runtimeOwner || null,
     execution: body.execution ? { state: body.execution.state || null } : null,
-    durableTask: body.durableTask ? { id: body.durableTask.id || null, state: body.durableTask.state || null } : null,
+    ...(body.durableTask ? { durableTask: { id: body.durableTask.id || null, state: body.durableTask.state || null } } : {}),
     executionResult: {
       alreadyExecuted: result.alreadyExecuted === true,
       rolledBack: result.rolledBack === true,
@@ -483,7 +483,7 @@ function executeCanonicalResponse(routed) {
       runtimeOwner: routed.runtimeOwner,
       snapshot: routed.snapshot,
       execution: routed.execution || null,
-      durableTask: routed.durableTask || null,
+      ...(routed.durableTask ? { durableTask: routed.durableTask } : {}),
       executionResult: routed.executionResult && {
         alreadyExecuted: routed.executionResult.alreadyExecuted === true,
         rolledBack: routed.executionResult.rolledBack === true,
