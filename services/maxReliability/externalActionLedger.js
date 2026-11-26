@@ -60,6 +60,8 @@ const BLOCK_CODES = Object.freeze({
   IN_PROGRESS: 'external_action_in_progress',
   OUTCOME_UNKNOWN: 'external_action_outcome_unknown',
   SUBJECT_ALREADY_DISPATCHED: 'outreach_intent_already_dispatched',
+  /** MAX-P0-004: the key belongs to a durable task; only a task-fenced caller may reclaim it. */
+  TASK_LINKED: 'external_action_task_linked',
 });
 
 const REPLAYABLE = new Set([STATES.PROVIDER_ACKNOWLEDGED, STATES.VERIFIED]);
@@ -102,6 +104,7 @@ function receiptFromRow(row) {
     state: row.state,
     attempt: Number(row.attempt),
     missionId: row.mission_id || null,
+    taskId: row.task_id || null,
     subjectRef: row.subject_ref || null,
     provider: row.provider || null,
     providerRef: row.provider_ref || null,
@@ -184,16 +187,24 @@ function createExternalActionLedger(pool, options = {}) {
       }
       throw err;
     };
+    // task_id is introduced by the additive P0-004 migration. Keep the
+    // P0-003-only path usable until that migration is explicitly applied.
+    const taskColumn = input.taskId ? ', task_id' : '';
+    const taskValue = input.taskId ? ',$6' : '';
+    const offset = input.taskId ? 1 : 0;
     const inserted = await pool.query(
       `INSERT INTO max_external_action_claims (
          tenant_id, idempotency_key, action_kind, request_fingerprint, attempt, state,
-         mission_id, subject_ref, provider, provider_idempotency_key, correlation_id, owner_token,
+         mission_id${taskColumn}, subject_ref, provider, provider_idempotency_key, correlation_id, owner_token,
          claimed_at, updated_at)
-       VALUES ($1,$2,$3,$4,1,'claimed',$5,$6,$7,$8,$9,$10,$11,$11)
+       VALUES ($1,$2,$3,$4,1,'claimed',$5${taskValue},$${6 + offset},$${7 + offset},$${8 + offset},$${9 + offset},$${10 + offset},$${11 + offset},$${11 + offset})
        ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
        RETURNING *`,
-      [tenantId, idempotencyKey, actionKind, fingerprint, input.missionId || null, input.subjectRef || null,
-        input.provider || null, input.providerIdempotencyKey || null, correlationId, ownerToken, now()]
+      input.taskId
+        ? [tenantId, idempotencyKey, actionKind, fingerprint, input.missionId || null, input.taskId, input.subjectRef || null,
+          input.provider || null, input.providerIdempotencyKey || null, correlationId, ownerToken, now()]
+        : [tenantId, idempotencyKey, actionKind, fingerprint, input.missionId || null, input.subjectRef || null,
+          input.provider || null, input.providerIdempotencyKey || null, correlationId, ownerToken, now()]
     ).catch((err) => ({ r7: r7Block(err) }));
     if (inserted.r7) return inserted.r7;
     if (inserted.rows[0]) {
@@ -221,17 +232,30 @@ function createExternalActionLedger(pool, options = {}) {
     if (existing.state === STATES.CLAIMED) {
       return { outcome: CLAIM_OUTCOMES.BLOCKED, code: BLOCK_CODES.IN_PROGRESS, receipt: receiptFromRow(existing) };
     }
+    if (RECLAIMABLE.has(existing.state) && existing.task_id && !input.taskId) {
+      // MAX-P0-004: never let an untasked caller reuse a task-linked claim;
+      // the send would bypass the task fence and be attributed to that task.
+      await audit(existing, 'claim_rejected_task_linked', existing.state, existing.state);
+      return { outcome: CLAIM_OUTCOMES.BLOCKED, code: BLOCK_CODES.TASK_LINKED, receipt: receiptFromRow(existing) };
+    }
     if (RECLAIMABLE.has(existing.state)) {
       // Compare-and-set on the observed state + attempt: two concurrent re-claims
       // cannot both win.
+      // MAX-P0-004: a reclaim by a durable task re-attributes the never-delivered
+      // claim to that task (the migration allows this only from
+      // abandoned_not_dispatched/failed_definitive back to claimed), so the
+      // fenced dispatch marker can bind it to the reclaiming owner.
+      const reclaimTask = input.taskId ? ', task_id = $8' : '';
+      const reclaimParams = [tenantId, idempotencyKey, ownerToken, correlationId, now(), existing.state, existing.attempt];
+      if (input.taskId) reclaimParams.push(input.taskId);
       const reclaimed = await pool.query(
         `UPDATE max_external_action_claims
             SET state = 'claimed', attempt = attempt + 1, owner_token = $3, correlation_id = $4,
                 provider_ref = NULL, error_class = NULL, claimed_at = $5, dispatch_attempted_at = NULL,
-                acknowledged_at = NULL, verified_at = NULL, resolved_at = NULL, updated_at = $5
+                acknowledged_at = NULL, verified_at = NULL, resolved_at = NULL, updated_at = $5${reclaimTask}
           WHERE tenant_id = $1 AND idempotency_key = $2 AND state = $6 AND attempt = $7
         RETURNING *`,
-        [tenantId, idempotencyKey, ownerToken, correlationId, now(), existing.state, existing.attempt]
+        reclaimParams
       ).catch((err) => ({ r7: r7Block(err) }));
       if (reclaimed.r7) return reclaimed.r7;
       if (reclaimed.rows[0]) {
@@ -273,9 +297,64 @@ function createExternalActionLedger(pool, options = {}) {
     return receiptFromRow(r.rows[0]);
   }
 
-  /** Must COMMIT before the provider is invoked. */
-  function markDispatchAttempted(input) {
-    return transition(input, [STATES.CLAIMED], STATES.DISPATCH_ATTEMPTED, { dispatch_attempted_at: now() }, 'dispatch_attempted');
+  /**
+   * Must COMMIT before the provider is invoked.
+   *
+   * MAX-P0-004: with `taskFence` ({ taskId, ownershipToken, fenceEpoch }) the
+   * marker commits only if, in the same transaction, the claim is linked to
+   * that task and the task row (locked FOR SHARE) is still owned by that
+   * token/epoch with an unexpired lease and deadline. Task cancellation,
+   * recovery and verification lock the row FOR UPDATE, so either the marker
+   * commits first and they observe the dispatch, or the marker is fenced.
+   */
+  async function markDispatchAttempted(input) {
+    if (!input || !input.taskFence) {
+      return transition(input, [STATES.CLAIMED], STATES.DISPATCH_ATTEMPTED, { dispatch_attempted_at: now() }, 'dispatch_attempted');
+    }
+    await assertReliabilitySchema(pool);
+    const tenantId = requireText(input.tenantId, 'tenantId');
+    const idempotencyKey = requireText(input.idempotencyKey, 'idempotencyKey');
+    const ownerToken = requireText(input.ownerToken, 'ownerToken');
+    const fence = input.taskFence;
+    const taskId = requireText(fence.taskId, 'taskFence.taskId');
+    const taskToken = requireText(fence.ownershipToken, 'taskFence.ownershipToken');
+    const fenceEpoch = Number(fence.fenceEpoch);
+    if (!Number.isSafeInteger(fenceEpoch) || fenceEpoch < 1) throw ledgerError('external_action_invalid', 'taskFence.fenceEpoch must be a positive integer.');
+    if (typeof pool.connect !== 'function') throw ledgerError('external_action_ledger_unavailable', 'A fenced dispatch marker requires a connection pool.');
+    const client = await pool.connect();
+    let updated;
+    try {
+      await client.query('BEGIN');
+      const owner = await client.query(
+        `SELECT id FROM max_durable_execution_tasks
+          WHERE id = $1 AND tenant_id = $2 AND ownership_token = $3 AND fence_epoch = $4
+            AND state IN ('claimed','running') AND lease_expires_at > clock_timestamp()
+            AND (deadline_at IS NULL OR deadline_at > clock_timestamp())
+          FOR SHARE`,
+        [taskId, tenantId, taskToken, fenceEpoch]
+      );
+      if (!owner.rows[0]) {
+        throw ledgerError('durable_task_fenced', 'Task ownership is stale, expired, cancelled or past its deadline; nothing was dispatched.');
+      }
+      const r = await client.query(
+        `UPDATE max_external_action_claims SET state = 'dispatch_attempted', dispatch_attempted_at = $5, updated_at = $5
+          WHERE tenant_id = $1 AND idempotency_key = $2 AND owner_token = $3 AND task_id = $4 AND state = 'claimed'
+        RETURNING *`,
+        [tenantId, idempotencyKey, ownerToken, taskId, now()]
+      );
+      if (!r.rows[0]) {
+        throw ledgerError('external_action_state_conflict', 'External action is not a claimed action of this task.');
+      }
+      await client.query('COMMIT');
+      updated = r.rows[0];
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+    await audit(updated, 'dispatch_attempted', STATES.CLAIMED, STATES.DISPATCH_ATTEMPTED, { taskId, fenceEpoch });
+    return receiptFromRow(updated);
   }
 
   /** Record a provider result classified by classifyProviderResult(). */

@@ -398,6 +398,14 @@ test('TME failure injection: specialist throw, persistence failure, and lost lea
     execute: async () => {
       const holder = (await advisoryLocks(pool))[0];
       await pool2.query('SELECT pg_terminate_backend($1)', [holder.pid]);
+      // pg_terminate_backend only signals the backend. Under CPU load the stage
+      // could otherwise commit before the backend exits, so the scenario would
+      // not be "lease lost before commit". Wait until the backend is gone.
+      for (let i = 0; i < 200; i += 1) {
+        const alive = await pool2.query('SELECT 1 FROM pg_stat_activity WHERE pid = $1', [holder.pid]);
+        if (!alive.rows[0]) break;
+        await new Promise((r) => setTimeout(r, 25));
+      }
       return { ok: true };
     },
   })), (err) => err.rollback === true);

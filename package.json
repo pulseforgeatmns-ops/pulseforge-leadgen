@@ -186,7 +186,7 @@
     "test:signal-dashboard": "node --test test/signalDashboard*.test.js test/signalOpportunity*.test.js test/signalHistorical*.test.js test/signalPaperAccount.test.js",
     "signal:dashboard-worker": "node scripts/signalDashboardWorker.js",
     "signal:historical-backfill": "node scripts/signalHistoricalBackfill.js",
-    "test:max:reliability-core": "node --test test/maxReliabilityPolicy.test.js test/maxReliabilityCorePostgres.test.js test/maxReliabilityOutboundAdapterPostgres.test.js test/maxReliabilityTenantMailboxPostgres.test.js"
+    "test:max:reliability-core": "node --test test/maxReliabilityPolicy.test.js test/maxReliabilityCorePostgres.test.js test/maxReliabilityOutboundAdapterPostgres.test.js test/maxReliabilityTenantMailboxPostgres.test.js test/maxDurableExecutionOwnershipPostgres.test.js test/maxDurableExecutionOwnershipAdapterPostgres.test.js"
   },
   "repository": {
     "type": "git",

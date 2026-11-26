@@ -384,6 +384,14 @@ async function executeMissionStage(input = {}) {
 
     if (typeof input.persistDurable === 'function') {
       try {
+        // A lease that was acquired but is no longer open (its connection
+        // failed underneath it) must fail the stage. Passing no lease would
+        // let the durable writer fall back to an unlocked pool write and
+        // commit the stage without the mission lock (fail-open).
+        if (lease && !lease.isOpen()) {
+          throw Object.assign(new Error('Mission lease was lost before the stage could commit.'),
+            { code: 'mission_lease_lost', cause: lease.lost || undefined });
+        }
         await input.persistDurable({
           engine,
           missionId,
@@ -395,7 +403,7 @@ async function executeMissionStage(input = {}) {
           audit: auditPreview,
           // MAX-P0-003 — the open mission lease; the durable writer commits the
           // stage on lease.client so the lock and the write share a transaction.
-          lease: lease && lease.isOpen() ? lease : null,
+          lease: lease || null,
           correlationId: input.correlationId || (lease && lease.correlationId) || null,
         });
       } catch (err) {
