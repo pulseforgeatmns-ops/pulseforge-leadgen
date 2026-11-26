@@ -601,8 +601,17 @@ async function routeExecutionRequest(request, context = {}) {
   durableTask = taskRun ? await taskRun.finish(execution) : null;
   } catch (err) {
     // Never leave a task's lease heartbeat running: any failure after dispatch
-    // still ends ownership (fail escalates if an effect may have happened).
-    if (taskRun) err.durableTask = await taskRun.failed(err);
+    // still ends ownership. If the stage already committed, mission state did
+    // change: record it as unverified (awaiting_verification), never as a
+    // clean failure. Otherwise fail (which escalates if an effect may have
+    // happened).
+    if (taskRun) {
+      const result = chained && chained.executionResult;
+      const committed = Boolean(result && !result.rolledBack && (result.committed === true || result.transactionId));
+      err.durableTask = committed
+        ? await taskRun.finish({ state: 'outcome_unknown', reason: 'post_dispatch_error' })
+        : await taskRun.failed(err);
+    }
     throw err;
   }
 

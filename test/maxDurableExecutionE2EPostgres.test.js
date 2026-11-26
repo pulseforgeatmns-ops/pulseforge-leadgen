@@ -400,8 +400,19 @@ test('review: a failure after dispatch (classification) still ends task ownershi
   }).catch((e) => e);
   assert.equal(err.code, 'inspect_failed');
   const task = await store.getByLogicalKey({ tenantId: '10', logicalKey: key });
-  assert.equal(task.state, 'failed', 'ownership ended; no heartbeat keeps a lease alive');
-  assert.equal(task.lease_expires_at, null);
+  assert.equal(task.state, 'awaiting_verification', 'the stage committed: unverified, never a clean failure');
+  assert.equal(task.lease_expires_at, null, 'ownership ended; no heartbeat keeps a lease alive');
+
+  // Nothing committed before the post-dispatch failure → a clean failure.
+  const key2 = `${key}-nocommit`;
+  const err2 = await amo.routeExecutionRequest(cer(mission), {
+    engine: brokenEngine, tenantId: '10', pool, durableTasks: store, durableTaskKey: key2,
+    handlers: { [amo.EXECUTION_INTENTS.EDIT_PLAN]: async () => ({}) },
+  }).catch((e) => e);
+  assert.equal(err2.code, 'inspect_failed');
+  const task2 = await store.getByLogicalKey({ tenantId: '10', logicalKey: key2 });
+  assert.equal(task2.state, 'failed');
+  assert.equal(task2.lease_expires_at, null);
 });
 
 test('review: with durable tasks off, router results carry no durableTask key', { timeout: 60000 }, async () => {
