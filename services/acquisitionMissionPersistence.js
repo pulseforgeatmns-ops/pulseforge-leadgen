@@ -16,6 +16,7 @@ const {
   diffCanonicalMissionProjections,
 } = require('../packages/acquisition-mission/CanonicalMissionProjection');
 const { persistOutboundExecution, ensureOutboundExecutionSchema } = require('./acquisitionMissionOutboundPersistence');
+const { currentTaskFence, assertTaskFenceOnClient, fencedError } = require('./maxReliability/taskExecutionContext');
 const {
   ensureAcquisitionKnowledgeSchema,
   persistLearningCandidatesForStageCommit,
@@ -1030,7 +1031,7 @@ function wrapStageCommitError(err) {
   if (err && err.code === 'tme_persistence' && err.cause) return err;
   const wrapped = new Error((err && err.message) || 'Persistence failure.');
   const passthrough = ['tme_transaction_overlap', 'mission_version_conflict', 'mission_tenant_mismatch',
-    'mission_lock_timeout', 'mission_lease_lost'];
+    'mission_lock_timeout', 'mission_lease_lost', 'durable_task_fenced'];
   wrapped.code = err && passthrough.includes(err.code) ? err.code : 'tme_persistence';
   wrapped.cause = err;
   if (err && err.details) wrapped.details = err.details;
@@ -1050,6 +1051,19 @@ function wrapStageCommitError(err) {
  *     by the tenant + version compare-and-set in persistMission.
  * opts.expectedFingerprint pins the durable revision the writer read.
  */
+/** MAX-P0-004 P3 — the current task fence must be live and of the mission's tenant. */
+async function assertMissionTaskFence(mission, client) {
+  const fence = currentTaskFence();
+  if (!fence) return;
+  const missionTenant = mission.tenantId != null ? String(mission.tenantId)
+    : (mission.clientId != null ? String(mission.clientId) : null);
+  if (missionTenant !== fence.tenantId) {
+    throw fencedError('The task fence belongs to a different tenant than the mission; nothing was written.',
+      { missionId: mission.id });
+  }
+  await assertTaskFenceOnClient(client, fence);
+}
+
 async function persistStageCommit(bundle = {}, pool = defaultPool(), opts = {}) {
   const mission = bundle.mission;
   if (!mission?.id) {
@@ -1076,6 +1090,11 @@ async function persistStageCommit(bundle = {}, pool = defaultPool(), opts = {}) 
     try {
       await lease.client.query('SAVEPOINT amo_stage_commit');
       try {
+        // MAX-P0-004 P3 — inside a task-owned execution the stage commits only
+        // while that owner is current: the fence is re-checked FOR SHARE in the
+        // lease transaction itself, so a superseded, cancelled, recovered or
+        // past-deadline owner can never make mission state durable.
+        await assertMissionTaskFence(mission, lease.client);
         await writeStageBundle(bundle, mission, lease.client, expectedFingerprint);
         await lease.client.query('RELEASE SAVEPOINT amo_stage_commit');
       } catch (err) {
@@ -1116,6 +1135,12 @@ async function persistStageCommit(bundle = {}, pool = defaultPool(), opts = {}) 
     }
   }
 
+  // MAX-P0-004 P3 — a task-owned write never takes the unlocked path: without
+  // a mission lease the fence cannot be checked atomically with the write.
+  if (currentTaskFence()) {
+    throw wrapStageCommitError(fencedError('A task-owned mission write requires the mission lease; nothing was written.',
+      { missionId: mission.id }));
+  }
   const client = typeof pool.connect === 'function' ? await pool.connect() : pool;
   const ownsClient = client !== pool && typeof client.release === 'function';
 

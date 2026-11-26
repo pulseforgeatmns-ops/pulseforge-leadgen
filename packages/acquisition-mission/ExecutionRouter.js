@@ -43,6 +43,8 @@ const {
 } = require('./AuthorizationConstraints');
 const { assertResearchPlanningComplete } = require('./ResearchPlanning');
 
+const { beginDurableTask } = require('./DurableTaskRouting');
+
 function cerError(code, message, extras = {}) {
   const err = amoError(code, message);
   err.spec = 'SPEC-171';
@@ -420,6 +422,9 @@ async function maybeChainAutonomousDiscovery(request, context, dispatched, handl
     ...context,
     handlers,
     question: child.payload.question,
+    // MAX-P0-004 — the chained step runs under the parent's task and fence;
+    // a second task for the same mission could never be claimed alongside it.
+    durableTasks: null,
   });
   return {
     ...childRouted,
@@ -531,8 +536,42 @@ async function routeExecutionRequest(request, context = {}) {
     }
   }
 
-  const dispatched = await dispatch(request, context, mission, handlers, runtimeOwner);
-  const chained = await maybeChainAutonomousDiscovery(request, context, dispatched, handlers);
+  // MAX-P0-004 P2 — opt-in durable task ownership (context.durableTasks). The
+  // task is accepted before any specialist code runs; a replay of an accepted
+  // key returns the recorded task and never dispatches again.
+  const taskRun = await beginDurableTask(request, context, mission, { specialist });
+  if (taskRun && taskRun.replay) {
+    const audit = recordRouterAudit({
+      requestId: request.id, source: request.source, intent: request.intent, missionId: request.missionId,
+      operatorId: request.operatorId, runtimeOwner, specialist, action,
+      outcome: 'durable_task_replay', executionState: taskRun.replay.state, replay: true, request,
+    });
+    return {
+      spec: 'SPEC-171', request, action, specialist, runtimeOwner,
+      executionResult: { alreadyExecuted: taskRun.replay.state === 'completed', durableTaskReplay: true },
+      snapshot: context.engine && context.engine.inspect(mission.id, { tenantId: context.tenantId }),
+      audit, replay: true, autoConsumedDiscoveryApproval: false, planResult: null,
+      execution: { state: taskRun.replay.state === 'completed' ? 'already_executed' : 'outcome_unknown',
+        reason: `durable_task_${taskRun.replay.state}` },
+      durableTask: taskRun.replay,
+      routed: true,
+    };
+  }
+
+  let dispatched;
+  let chained;
+  try {
+    const runDispatch = async () => {
+      const first = await dispatch(request, context, mission, handlers, runtimeOwner);
+      return { first, chainedResult: await maybeChainAutonomousDiscovery(request, context, first, handlers) };
+    };
+    const out = taskRun ? await taskRun.run(runDispatch) : await runDispatch();
+    dispatched = out.first;
+    chained = out.chainedResult;
+  } catch (err) {
+    if (taskRun) err.durableTask = await taskRun.failed(err);
+    throw err;
+  }
 
   const snapshot = (chained.executionResult && chained.executionResult.snapshot)
     || (context.engine && context.engine.inspect(mission.id, { tenantId: context.tenantId }));
@@ -554,6 +593,8 @@ async function routeExecutionRequest(request, context = {}) {
     runtimeOwner,
     tenantId: context.tenantId,
   });
+
+  const durableTask = taskRun ? await taskRun.finish(execution) : null;
 
   const audit = recordRouterAudit({
     requestId: request.id,
@@ -587,6 +628,7 @@ async function routeExecutionRequest(request, context = {}) {
     autoConsumedDiscoveryApproval: chained.autoConsumedDiscoveryApproval === true,
     planResult: chained.planResult || null,
     execution,
+    durableTask,
     routed: true,
   };
 }

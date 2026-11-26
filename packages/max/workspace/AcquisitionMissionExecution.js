@@ -1,4 +1,6 @@
 'use strict';
+const { applyDurableTaskStatus } = require('./DurableTaskStatus');
+const { resolveDurableTasks } = require('../../acquisition-mission/DurableTaskRouting');
 
 /**
  * SPEC-127 / SPEC-128 — Acquisition Mission execution commands from the workspace ask path.
@@ -139,6 +141,7 @@ async function maybeAutoAdvanceDiscoveryAfterPlan(input = {}, planResult = {}) {
       audit: input.audit,
       executionPolicy,
       ...resolveStagePersistOpts(input),
+      durableTasks: resolveDurableTasks({ ...resolveStagePersistOpts(input), durableTasks: input.durableTasks }),
     }
   );
   snapshot = routed.snapshot || engine.inspect(mission.id, { tenantId });
@@ -365,6 +368,8 @@ async function submitChatExecutionRequest(input, {
     planningContext: input.planningContext || input.context,
     context: input.planningContext || input.context,
     ...resolveStagePersistOpts(input),
+    // MAX-P0-004 P2 — chat executions are task-owned only with MAX_DURABLE_TASKS=true.
+    durableTasks: resolveDurableTasks({ ...resolveStagePersistOpts(input), durableTasks: input.durableTasks }),
   });
 }
 
@@ -1618,6 +1623,7 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
   let executionResult = null;
   let executionRequest = null;
   let execution = null;
+  let durableTask = null;
   const intent = intentFromAction(action);
 
   if (intent) {
@@ -1648,6 +1654,7 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     executionRequest = routed.request;
     executionResult = routed.executionResult;
     execution = routed.execution || null;
+    durableTask = routed.durableTask || null;
     action = routed.action || action;
     snapshot = routed.snapshot || engine.inspect(mission.id, { tenantId });
   }
@@ -1681,13 +1688,15 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     executionRequest = chained.executionRequest || executionRequest;
   }
 
-  const response = applySyntheticNotice(applyExecutionTruth(buildExecutionMissionResponse({
+  // MAX-P0-004 P6 — with durable tasks enabled, the turn also states the
+  // authoritative task status and never implies completion it does not record.
+  const response = applyDurableTaskStatus(applySyntheticNotice(applyExecutionTruth(buildExecutionMissionResponse({
     mission: snapshot.mission || mission,
     snapshot,
     action,
     question,
     executionResult,
-  }), execution), snapshot.mission || mission, execution);
+  }), execution), snapshot.mission || mission, execution), durableTask);
 
   if (input.session && input.session.context && typeof input.session.context === 'object') {
     input.session.context.missionId = mission.id;
@@ -1709,6 +1718,7 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     executionResult,
     executionRequest,
     execution,
+    durableTask,
     audit,
   };
 }

@@ -1,6 +1,6 @@
 # MAX-P0-004 — Durable Execution Ownership
 
-Status: implemented on a development branch; not deployed. This document incorporates the MAX-P0-003 handoff and review at authoritative `main` `c51ce3c`. No worker, cron, provider, tenant policy, production migration, or frontend path is enabled by this change.
+Status: Phase 1 (store, fencing, dispatch fence) merged to `main` in #1164 (`a51facd9`). Phases P2–P6 (router/TME integration, mission-commit fencing, receipt linkage, recovery CLI, task-aware presentation) are implemented on a development branch and are **default-off** (`MAX_DURABLE_TASKS`). Not deployed. No worker, cron, provider, tenant policy, production migration, or frontend path is enabled by this change.
 
 ## Design
 
@@ -33,9 +33,26 @@ P0-003's R7 mission/prospect uniqueness remains authoritative. This layer never 
 - Accepted identity, tenant, input, dependency snapshot, deadline and retry budget are immutable; fence epoch and recovery attempts never decrease; a new owner token requires a new fence epoch; terminal rows are final (trigger).
 - Task rows and events cannot be deleted or truncated; events cannot be updated.
 
+## Router, TME, receipts, recovery and presentation (P2–P6)
+
+Everything below is active only when the router context carries a task store. Production surfaces pass one only with `MAX_DURABLE_TASKS=true` and a pool (`DurableTaskRouting.resolveDurableTasks`); otherwise behaviour is byte-for-byte unchanged.
+
+**P2 — router ownership** (`packages/acquisition-mission/DurableTaskRouting.js`, wired in `routeExecutionRequest`). After the router's authorization, research-planning and synthetic-evidence gates, and before any specialist code:
+1. `accept` the request as a task. The logical key is `receipt:<scope>:<Idempotency-Key>` for keyed REST requests, else `cer:<requestId>`. If the key already exists and is not `queued`, the recorded task is returned (`durable_task_replay`) and nothing is dispatched. A `queued` task (accepted, never claimed) is resumed with its recorded deadline.
+2. `claimTask` that specific task: new token, fence epoch + 1, DB-clock lease, at most one active task per mission. If the mission already has an active task the request is refused (`durable_task_mission_busy`, HTTP 409) and the new task is cancelled (`mission_has_active_task`) rather than left queued.
+3. `start`, then run the dispatch inside `runWithTaskFence` (`services/maxReliability/taskExecutionContext.js`, AsyncLocalStorage). A heartbeat renews the lease while the request runs and is cleared when it ends. This is not a claimant: it only renews a lease the request already holds.
+4. `finish` from the router's execution evidence: `committed_internal` / `completed_verified` / `already_executed` → `reportCompletion` + `verify` with the evidence (state, level, transaction id) → `completed`; `failed` / `blocked` → `failed`; anything else → `awaiting_verification`. A request that throws → `fail`. An unresolved task-linked action turns either into `escalated`. If ownership was lost meanwhile, the durable state is reported as it is.
+Router tasks have `retryBudget: 0`: an interrupted inline request is escalated for an operator, never resumed automatically. The chained autonomous-discovery step runs under its parent's task and fence. Surfaces wired: `executeCanonical` (REST `/execute`) and Max chat (`AcquisitionMissionExecution`).
+
+**P3 — mission-commit fencing.** Every leased mission write goes through the lease branch of `persistStageCommit`, which now runs `assertTaskFenceOnClient` (`SELECT … FOR SHARE` on the task row, same tenant as the mission) inside the lease transaction before writing. A superseded, cancelled, recovered or past-deadline owner therefore cannot make mission state durable. Cancellation and recovery lock the row `FOR UPDATE`, so they either wait for the commit or make it fail. Under a fence, the unlocked write path is refused, and TME refuses a stage without the mission lease before the specialist runs. The outbound adapter picks up the context fence automatically: claims are task-linked and the P0-003 dispatch marker is fenced. Fail-open fix from Phase 1 retained: a lost mission lease rolls the stage back.
+
+**P4 — receipts and recovery.** `max_request_receipts.task_id` (composite FK to the task, immutable once set) is linked by the receipt owner after `accept` and before any specialist runs; if linking fails the task is cancelled and nothing runs. Replays, `request_in_progress` and `request_outcome_unknown` responses carry `durableTask` (live state). `scripts/max-reliability/recover.cjs` gains `--tasks` (plan, read-only), `--tasks --apply`, `--revalidate-task <id> --dependency-refs <json>` and `--cancel-task <id>`. Every mutation needs `--confirm-tenant` equal to `--tenant` and `--operator`, which is recorded as `operator:<id>` in the task event (`services/maxReliability/taskRecovery.js`). Output is redacted.
+
+**P6 — presentation** (`packages/max/workspace/DurableTaskStatus.js`). Status comes only from the task row. Only `completed` is "done"; `awaiting_verification` says "not verified"; `escalated` and `recovery_required` name the reason and the operator action; unknown states are reported as unknown. Max chat turns carry `metadata.durableTask` and a visible notice whenever the task is not verifiably done. `GET /api/v1/amo/missions/:id/tasks` is read-only and tenant-scoped (`enabled:false` when off; 503 if the schema is missing).
+
 ## Persistence and migration
 
-Apply `migrations/2026-11-25-max-p0-004-durable-execution-ownership.sql` only after P0-003 and only with separate production approval. It is additive and re-runnable: two task tables, indexes (including the one-active-task-per-mission index), a nullable composite-keyed `task_id` link on the existing ledger with an immutability trigger, the task guard and append-only triggers above, and P0-003-style no-delete/no-truncate triggers for durable task evidence. It changes no existing rows or authorization policies. Old code ignores the new column and tables, so application rollback is a previous deploy while retaining the records. Do not drop them while unfinished tasks or action claims could require recovery.
+Apply `migrations/2026-11-25-max-p0-004-durable-execution-ownership.sql` only after P0-003 and only with separate production approval. It is additive and re-runnable: two task tables, a composite-keyed immutable `task_id` on request receipts, indexes (including the one-active-task-per-mission index), a nullable composite-keyed `task_id` link on the existing ledger with an immutability trigger, the task guard and append-only triggers above, and P0-003-style no-delete/no-truncate triggers for durable task evidence. It changes no existing rows or authorization policies. Old code ignores the new column and tables, so application rollback is a previous deploy while retaining the records. Do not drop them while unfinished tasks or action claims could require recovery.
 
 ## Acceptance evidence
 
@@ -44,31 +61,48 @@ All on disposable real PostgreSQL, included in `npm run test:max:reliability-cor
 - `test/maxDurableExecutionOwnershipPostgres.test.js`: durable/idempotent acceptance (input, deadline and budget bound to the key); two-pool concurrent claiming; stale-owner fencing after takeover; bounded recovery with preserved checkpoint; retry budget counted across revalidation; dependency drift; deadlines fencing a live owner and escalating waiting work; recovery escalation for unresolved external actions; cancel-before-dispatch (marker fenced, zero provider calls) and cancel-after-dispatch (escalated with claim states); the marker refusing a stale fence with no `beforeDispatch` check, and serializing behind a concurrent cancellation's row lock; one active task per mission under concurrent claimers and direct writes; **direct-SQL cross-tenant rejection** (claim INSERT/UPDATE, claim tenant change, event insert, parent insert, self-parent); immutable input, monotonic fence, final terminal states, append-only evidence; migration re-run over existing P0-003 rows.
 - `test/maxDurableExecutionOwnershipAdapterPostgres.test.js`: the real `executeOutboundBundle` with a binding — a current owner sends once with task-linked claims and completes only through verification; a cancelled owner, and a binding whose fence is forged past the store check, reach no provider; no ledger → blocked.
 
+- `test/maxDurableExecutionE2EPostgres.test.js` (P2–P6): router + real TME + real mission persistence + task store + receipts + recovery. It covers:
+  - completion only with evidence, and replay never re-dispatching;
+  - takeover and cancellation during execute rolling the stage back with no durable write;
+  - task-owned writes refusing the unlocked path, a stage without the lease never running, and a foreign-tenant fence being refused;
+  - one active task per mission;
+  - an owner process killed with `SIGKILL` mid-specialist, then restart, plan-only recovery, attributed apply and no mission write;
+  - receipts linked before dispatch, with live task state on replay, an immutable link and cross-tenant rejection;
+  - operator revalidate/cancel, tenant-scoped;
+  - default-off resolution.
+  A mutation check (fence check removed from `persistStageCommit`) makes the takeover, cancellation and foreign-fence tests fail.
+- `test/maxDurableTaskStatus.test.js` (P6): only `completed` is done; unknown never success; notices on every non-done turn.
+- The adapter suite also proves that the context fence alone task-links and fences sends, and that a stale or foreign fence reaches no provider.
+
 The suites require `initdb`/`pg_ctl` and never skip. Process restart and backend termination are covered by P0-003's real PostgreSQL suite; P0-004's persisted records are reloaded by a fresh store over a second pool.
 
 ## Status against the approved P0-004 acceptance criteria
 
-The approved proposal (this file at `main` `c51ce3c`, §5) defined 13 criteria across phases P1–P7. **This branch delivers P1 (store) plus the store-level parts of P3 (fencing), P4 (recovery rules) and P5 (cancellation), and the outbound dispatch fence.** It does not wire tasks into the router/TME, receipts, recovery CLI or Max presentation.
+The approved proposal (`main` `c51ce3c`, §5) defined 13 criteria across phases P1–P7. Phase 1 (#1164) delivered the store and fences. This branch adds P2–P6, all **default-off** (`MAX_DURABLE_TASKS`). P7 (a background executor) is not part of P0-004's authorized scope and is not implemented.
 
 | # | Criterion (abridged) | Status |
 |---|---|---|
-| 1 | Every execution request creates one durable root task before specialist code | **Not in this branch** (P2: router/TME integration) |
-| 2 | Max status derived from durable task state; never "done" early | **Not in this branch** (P6). Store separates `awaiting_verification` from evidence-backed `completed`. |
-| 3 | CAS on state/fence/owner/DB-time lease; fence enforced in the TME commit | **Partial**: all store transitions and the outbound dispatch marker are fenced; TME commit fence and mission-lease narrowing are P3 integration. |
-| 4 | At most one active task per mission per tenant, DB-enforced | **Met** (partial unique index) |
-| 5 | Explicit recoverable state after a crash at every boundary | **Partial**: store and dispatch boundaries (claim/start/lease/marker) are covered; router/TME/receipt boundaries arrive with P2. |
-| 6 | Deadline/stall never replays; external doubt → intervention | **Met** at store level for lease expiry, deadline, cancellation and completion (`escalated` is the intervention state). An `awaiting_verification` task whose action is attached later by a direct ledger caller is refused by `verify` but not swept. |
-| 7 | Recovery tenant-scoped, plan-by-default, operator-attributed, audited | **Partial**: `recoverExpired` is tenant-scoped and evented, and re-admission is explicit (`recovery_required` is only re-queued by revalidation); `recover.cjs` extension (plan-by-default, `--operator`) not done. |
-| 8 | Cycle-free dependencies, admission, failure propagation | **Partial**: parent tree cycle-free by DB; dependency drift blocks; no DAG admission/propagation. |
-| 9 | Cancel before dispatch → cancelled, after → intervention with claim states | **Met** |
-| 10 | Receipts, claims and tasks linked; task cannot complete with an unresolved claim | **Partial**: claims linked and enforced; receipts not linked. |
-| 11 | Evidence non-deletable; tenant-scoped; no cross-tenant reads | **Met** (composite FKs, triggers, tenant-filtered reads) |
-| 12 | Workers stay disabled | **Met**: no worker, timer, schedule or claimant |
-| 13 | Existing suites green against `main`, no new baseline exceptions | Local: green. Hosted: see the PR / final report. |
+| 1 | Every execution request creates one durable root task before specialist code; concurrent identical requests yield one task | **Met for router-owned surfaces when enabled**: REST `/execute` and Max chat accept a task after the router's gates and before any handler, and a duplicate key yields one task. Operator scripts and governed adapters that call the router with their own context (`scripts/*`, `services/governedOutboundAdapters.js`, `services/anchorScopedResumeCrmPreparation.js`) do not pass a store yet. |
+| 2 | Max status derived from durable task state; never "done" early | **Met when enabled**: `DurableTaskStatus` + chat notice + `GET …/tasks`. |
+| 3 | CAS on state/fence/owner/DB-time lease; fence enforced in the TME commit | **Met**: every store transition, the dispatch marker and every leased mission commit re-check the fence in PostgreSQL. *Mission-lease narrowing (§3.2) is deliberately not done*: it changes P0-003's lock topology and needs its own approval and multi-process proof. |
+| 4 | At most one active task per mission per tenant, DB-enforced | **Met** (partial unique index; the router refuses a second request). |
+| 5 | Explicit recoverable state after a crash at every boundary | **Met for the tested boundaries**: owner killed mid-specialist (separate process, `SIGKILL`) → expired lease → plan → attributed recovery, with no mission write; takeover and cancellation mid-execute → commit refused; accept-before-claim → resumed on replay. Other boundaries (claim/start, finish/receipt) fall to the same lease-expiry rule but are not individually injected. |
+| 6 | Deadline/stall never replays; external doubt → intervention | **Met**: router tasks have no retry budget, so interruption escalates; unresolved actions escalate on failure, completion, recovery and cancellation. |
+| 7 | Recovery tenant-scoped, plan-by-default, operator-attributed, audited | **Met**: `recover.cjs --tasks` (plan / apply / revalidate / cancel), tenant confirmation, operator attribution in task events. |
+| 8 | Cycle-free dependencies, admission, failure propagation | **Partial**: the parent tree is cycle-free by DB and dependency drift blocks; there is no DAG admission or failure propagation. Chained steps share the parent task instead of becoming dependents. |
+| 9 | Cancel before dispatch → cancelled, after → intervention with claim states | **Met** (store and E2E). |
+| 10 | Receipts, claims and tasks linked; replay returns live task state; no completion with an unresolved claim | **Met**: receipt `task_id` linked before dispatch; replays and conflicts carry `durableTask`. |
+| 11 | Evidence non-deletable; tenant-scoped; no cross-tenant reads | **Met** (composite FKs on claims, events, parents and receipts; triggers; tenant-filtered reads). |
+| 12 | Workers stay disabled | **Met**: no worker, schedule or claimant. The only timer is a request-scoped lease heartbeat, cleared when the request ends. |
+| 13 | Existing suites green against `main`, no new baseline exceptions | Local: green. Hosted: see the PR. |
 
-State vocabulary differs from the proposal (`queued` ≈ `admitted`, `escalated` ≈ `awaiting_intervention`, `recovery_required` ≈ `interrupted`, `completed` after evidence ≈ `verified`); a presentation layer must map it without claiming more.
+State vocabulary differs from the proposal (`queued` ≈ `admitted`, `escalated` ≈ `awaiting_intervention`, `recovery_required` ≈ `interrupted`, `completed` after evidence ≈ `verified`). `DurableTaskStatus` maps it for operators without claiming more.
 
 ## Known limits
+
+- Activation (`MAX_DURABLE_TASKS=true`) requires the P0-003 and P0-004 migrations; it is an operator decision and not part of this change.
+- `persistStageCommit` still has a pre-existing unlocked fallback when a caller holds the process's mission lock but passes neither `lease` nor `skipGlobalLock`. No production caller reaches it, and under a task fence it is refused.
+- Code spawned inside a task-owned dispatch inherits the fence (AsyncLocalStorage). That is intended: anything it commits is fenced by the same owner.
 
 - Conservative escalation: a task whose only action is `claimed` (never dispatched) is escalated on lease expiry; an operator must release it. This favours no-replay over availability.
 - A replayed action (same idempotency key already acknowledged under an earlier task) returns the original receipt; the successor task has no linked claim of its own, so its verification evidence must cite that receipt.
@@ -88,8 +122,9 @@ State vocabulary differs from the proposal (`queued` ≈ `admitted`, `escalated`
 1. Keep workers, Levi, schedules, and outbound execution disabled.
 2. Run the Render Shell report below; require `read_only: "on"`, P0-003 installed, and no unexpected catalog/migration discrepancies.
 3. Obtain separate approval, apply P0-003 if absent, then P0-004 migration once. Re-run the report and require `durableExecutionOwnershipInstalled: true`.
-4. Deploy manually with `PF_DISABLE_BACKGROUND_WORKERS` still set. Run read-only health and task-state inspection only.
-5. Roll back by redeploying the previous app revision; retain both reliability tables. Never erase unresolved task or action-ledger records as part of rollback.
+4. Deploy manually with `PF_DISABLE_BACKGROUND_WORKERS` still set and `MAX_DURABLE_TASKS` unset. Run read-only health and task-state inspection only.
+5. Enabling `MAX_DURABLE_TASKS=true` is a separate, explicitly approved step after both migrations. It changes no authorization: requests still pass every existing gate and only gain ownership, fencing and durable status.
+6. Roll back by unsetting `MAX_DURABLE_TASKS` (or redeploying the previous app revision); retain both reliability tables. Never erase unresolved task or action-ledger records as part of rollback.
 
 ## Render Shell production schema report (read-only)
 

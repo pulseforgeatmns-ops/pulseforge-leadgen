@@ -1,4 +1,5 @@
 'use strict';
+const { currentTaskFence, fencedError } = require('../../services/maxReliability/taskExecutionContext');
 
 const {
   assertActionAuthorized,
@@ -217,6 +218,16 @@ async function executeMissionStage(input = {}) {
       endTmeTransaction(missionId, transactionId);
       throw wrapAs(TME_CLASSES.PERSISTENCE, err, err.code || 'tme_transaction_overlap', err.message);
     }
+  }
+
+  // MAX-P0-004 P3 — inside a task-owned execution a stage may only run under
+  // the mission lease, because only the leased write re-checks the task fence
+  // atomically with the commit. Refuse before the specialist runs.
+  if (currentTaskFence() && !lease) {
+    if (globalLockHeld) await releaseMissionDurableLock(missionId).catch(() => {});
+    endTmeTransaction(missionId, transactionId);
+    throw wrapAs(TME_CLASSES.PERSISTENCE, fencedError('A task-owned stage requires the mission lease; nothing ran.',
+      { missionId }), 'durable_task_fenced', 'A task-owned stage requires the mission lease; nothing ran.');
   }
 
   let snapshot;

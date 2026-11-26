@@ -165,6 +165,29 @@ DROP TRIGGER IF EXISTS max_durable_execution_task_events_no_update ON max_durabl
 CREATE TRIGGER max_durable_execution_task_events_no_update BEFORE UPDATE ON max_durable_execution_task_events
   FOR EACH ROW EXECUTE FUNCTION max_durable_execution_task_event_immutable();
 
+-- P4: a keyed request receipt names the durable task it created, so a replay,
+-- conflict or interruption reports the task's live state. Same tenant only
+-- (composite key); linked once by the receipt owner, then immutable.
+ALTER TABLE max_request_receipts
+  ADD COLUMN IF NOT EXISTS task_id UUID;
+ALTER TABLE max_request_receipts
+  DROP CONSTRAINT IF EXISTS max_request_receipts_tenant_task_fkey;
+ALTER TABLE max_request_receipts
+  ADD CONSTRAINT max_request_receipts_tenant_task_fkey
+  FOREIGN KEY (tenant_id, task_id) REFERENCES max_durable_execution_tasks(tenant_id, id);
+CREATE OR REPLACE FUNCTION max_request_receipt_task_guard() RETURNS trigger
+  LANGUAGE plpgsql AS $$
+BEGIN
+  IF OLD.task_id IS NOT NULL AND NEW.task_id IS DISTINCT FROM OLD.task_id THEN
+    RAISE EXCEPTION 'MAX-P0-004: a request receipt task link is immutable'
+      USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS max_request_receipts_task_guard ON max_request_receipts;
+CREATE TRIGGER max_request_receipts_task_guard BEFORE UPDATE OF task_id ON max_request_receipts
+  FOR EACH ROW EXECUTE FUNCTION max_request_receipt_task_guard();
+
 -- Task state and event history are durable recovery evidence. P0-003 supplies
 -- this function and is a required predecessor migration.
 DROP TRIGGER IF EXISTS max_durable_execution_tasks_no_delete ON max_durable_execution_tasks;
