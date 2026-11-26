@@ -43,6 +43,8 @@ const {
 } = require('./AuthorizationConstraints');
 const { assertResearchPlanningComplete } = require('./ResearchPlanning');
 
+const { beginDurableTask } = require('./DurableTaskRouting');
+
 function cerError(code, message, extras = {}) {
   const err = amoError(code, message);
   err.spec = 'SPEC-171';
@@ -420,6 +422,9 @@ async function maybeChainAutonomousDiscovery(request, context, dispatched, handl
     ...context,
     handlers,
     question: child.payload.question,
+    // MAX-P0-004 — the chained step runs under the parent's task and fence;
+    // a second task for the same mission could never be claimed alongside it.
+    durableTasks: null,
   });
   return {
     ...childRouted,
@@ -531,13 +536,51 @@ async function routeExecutionRequest(request, context = {}) {
     }
   }
 
-  const dispatched = await dispatch(request, context, mission, handlers, runtimeOwner);
-  const chained = await maybeChainAutonomousDiscovery(request, context, dispatched, handlers);
+  // MAX-P0-004 P2 — opt-in durable task ownership (context.durableTasks). The
+  // task is accepted before any specialist code runs; a replay of an accepted
+  // key returns the recorded task and never dispatches again.
+  const taskRun = await beginDurableTask(request, context, mission, { specialist });
+  if (taskRun && taskRun.replay) {
+    const audit = recordRouterAudit({
+      requestId: request.id, source: request.source, intent: request.intent, missionId: request.missionId,
+      operatorId: request.operatorId, runtimeOwner, specialist, action,
+      outcome: 'durable_task_replay', executionState: taskRun.replay.state, replay: true, request,
+    });
+    return {
+      spec: 'SPEC-171', request, action, specialist, runtimeOwner,
+      executionResult: { alreadyExecuted: taskRun.replay.state === 'completed', durableTaskReplay: true },
+      snapshot: context.engine && context.engine.inspect(mission.id, { tenantId: context.tenantId }),
+      audit, replay: true, autoConsumedDiscoveryApproval: false, planResult: null,
+      execution: { state: replayExecutionState(taskRun.replay.state), reason: `durable_task_${taskRun.replay.state}` },
+      durableTask: taskRun.replay,
+      routed: true,
+    };
+  }
 
-  const snapshot = (chained.executionResult && chained.executionResult.snapshot)
+  let dispatched;
+  let chained;
+  try {
+    const runDispatch = async () => {
+      const first = await dispatch(request, context, mission, handlers, runtimeOwner);
+      return { first, chainedResult: await maybeChainAutonomousDiscovery(request, context, first, handlers) };
+    };
+    const out = taskRun ? await taskRun.run(runDispatch) : await runDispatch();
+    dispatched = out.first;
+    chained = out.chainedResult;
+  } catch (err) {
+    if (taskRun) err.durableTask = await taskRun.failed(err);
+    throw err;
+  }
+
+  let snapshot;
+  let outcome;
+  let execution;
+  let durableTask;
+  try {
+  snapshot = (chained.executionResult && chained.executionResult.snapshot)
     || (context.engine && context.engine.inspect(mission.id, { tenantId: context.tenantId }));
 
-  const outcome = chained.executionResult && chained.executionResult.rolledBack
+  outcome = chained.executionResult && chained.executionResult.rolledBack
     ? 'rolled_back'
     : chained.executionResult && chained.executionResult.alreadyExecuted
       ? 'already_executed'
@@ -547,13 +590,30 @@ async function routeExecutionRequest(request, context = {}) {
 
   // P0 — dispatch is not completion. Classify the result against structural
   // commit/rollback evidence; only verified states may be reported as done.
-  const execution = classifyExecutionEvidence({
+  execution = classifyExecutionEvidence({
     request: chained.autoConsumedDiscoveryApproval && chained.request ? chained.request : request,
     executionResult: chained.executionResult,
     specialist: chained.specialist || specialist,
     runtimeOwner,
     tenantId: context.tenantId,
   });
+
+  durableTask = taskRun ? await taskRun.finish(execution) : null;
+  } catch (err) {
+    // Never leave a task's lease heartbeat running: any failure after dispatch
+    // still ends ownership. If the stage already committed, mission state did
+    // change: record it as unverified (awaiting_verification), never as a
+    // clean failure. Otherwise fail (which escalates if an effect may have
+    // happened).
+    if (taskRun) {
+      const result = chained && chained.executionResult;
+      const committed = Boolean(result && !result.rolledBack && (result.committed === true || result.transactionId));
+      err.durableTask = committed
+        ? await taskRun.finish({ state: 'outcome_unknown', reason: 'post_dispatch_error' })
+        : await taskRun.failed(err);
+    }
+    throw err;
+  }
 
   const audit = recordRouterAudit({
     requestId: request.id,
@@ -587,8 +647,18 @@ async function routeExecutionRequest(request, context = {}) {
     autoConsumedDiscoveryApproval: chained.autoConsumedDiscoveryApproval === true,
     planResult: chained.planResult || null,
     execution,
+    // Present only for task-owned requests: the default (disabled) result is unchanged.
+    ...(durableTask ? { durableTask } : {}),
     routed: true,
   };
+}
+
+/** MAX-P0-004 — honest execution state for a replayed task (never "unknown" when it is known). */
+function replayExecutionState(taskState) {
+  if (taskState === 'completed') return 'already_executed';
+  if (taskState === 'failed') return 'failed';
+  if (taskState === 'cancelled') return 'blocked';
+  return 'outcome_unknown';
 }
 
 /**

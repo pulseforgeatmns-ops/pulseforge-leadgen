@@ -56,28 +56,58 @@ async function runKeyedRequest(input = {}) {
     throw err;
   }
 
+  // MAX-P0-004 P4 — a request linked to a durable task reports the task's
+  // live state on every replay, conflict or interruption (never a re-run).
+  const liveTask = async () => {
+    if (!handle.receipt || !handle.receipt.taskId || typeof input.loadTask !== 'function') return undefined;
+    try { return await input.loadTask(handle.receipt.taskId); } catch (_) { return undefined; }
+  };
   if (handle.outcome === 'replay') {
+    const task = await liveTask();
     return { status: handle.receipt.httpStatus || 200, headers,
-      body: { ...(handle.receipt.response || {}), replayed: true, originalCorrelationId: handle.receipt.correlationId } };
+      body: { ...(handle.receipt.response || {}), replayed: true, originalCorrelationId: handle.receipt.correlationId,
+        ...(task !== undefined ? { durableTask: task } : {}) } };
   }
   if (handle.outcome === 'mismatch') {
     return { status: 422, headers, body: { error: 'idempotency_key_reused', message: 'This Idempotency-Key was already used for a different request.', correlationId } };
   }
   if (handle.outcome === 'interrupted') {
+    const task = await liveTask();
     return { status: 409, headers, body: { error: 'request_outcome_unknown',
-      message: 'An earlier request with this key was interrupted; its outcome must be reconciled from mission state. It will not be re-run.', correlationId } };
+      message: 'An earlier request with this key was interrupted; its outcome must be reconciled from mission state. It will not be re-run.', correlationId,
+      ...(task !== undefined ? { durableTask: task } : {}) } };
   }
   if (handle.outcome !== 'owner') {
-    return { status: 409, headers, body: { error: 'request_in_progress', message: 'A request with this Idempotency-Key is still running.', correlationId } };
+    const task = await liveTask();
+    return { status: 409, headers, body: { error: 'request_in_progress', message: 'A request with this Idempotency-Key is still running.', correlationId,
+      ...(task !== undefined ? { durableTask: task } : {}) } };
   }
+
+  // The receipt identity a task-owned execution derives its logical key from,
+  // and the hook that links the receipt to the task before any specialist runs.
+  let linkedTaskId = null;
+  const receipt = {
+    scope: handle.scope,
+    idempotencyKey: handle.idempotencyKey,
+    requestFingerprint: handle.requestFingerprint,
+    linkTask: async (taskId) => { const view = await receipts.linkTask(handle, taskId); linkedTaskId = String(taskId); return view; },
+  };
 
   let body;
   try {
-    body = await run();
+    body = await run(receipt);
   } catch (err) {
     const status = statusFor(err);
     const failure = errorBody(err);
-    if (RELEASABLE_ERROR_CODES.has(err && err.code) || RELEASABLE_ERROR_CODES.has(err && err.cause && err.cause.code)) {
+    const releasable = RELEASABLE_ERROR_CODES.has(err && err.code) || RELEASABLE_ERROR_CODES.has(err && err.cause && err.cause.code);
+    // MAX-P0-004 — a receipt linked to a durable task is never released: the
+    // task (and its logical key) is permanent, so the same key can only ever
+    // replay it. Nothing ran; the client may retry with a NEW key.
+    if (releasable && linkedTaskId) {
+      await receipts.fail(handle, status, { error: failure.error, correlationId, retryableWithNewKey: true }, failure.error);
+      return { status, body: { ...failure, retryable: false, retryableWithNewKey: true }, headers, error: err };
+    }
+    if (releasable) {
       await pool.query(
         `DELETE FROM max_request_receipts WHERE tenant_id = $1 AND scope = $2 AND idempotency_key = $3
            AND owner_token = $4 AND state = 'in_progress'`,

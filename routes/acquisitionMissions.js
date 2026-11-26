@@ -31,6 +31,7 @@ const { resolveActiveTenantId } = require('../packages/max/workspace/TenantConte
 const pool = require('../db');
 const { correlationIdFrom } = require('../services/maxReliability/correlation');
 const { runKeyedRequest } = require('../services/maxReliability/keyedRequest');
+const { loadTaskSummary } = require('../packages/acquisition-mission/DurableTaskRouting');
 const { observeOperatorHttp } = require('../packages/decision-service/httpObserver');
 const {
   createMission,
@@ -94,6 +95,10 @@ function failStatus(err, fallbackCode, fallbackStatus = 500) {
       : code === 'amo_mission_exists' ? 409
       : code === 'authorization_amendment_stale' ? 409
       : code === 'research_planning_required' ? 409
+      // MAX-P0-004 — task ownership refusals: another execution owns the
+      // mission, or this request key was accepted for a different execution.
+      : code === 'durable_task_mission_busy' || code === 'durable_task_fenced' ? 409
+      : code === 'durable_task_key_reused' ? 422
       // P0 — tenant sender configuration problems are client-correctable
       // preconditions, never a generic server error. Still fail closed.
       : code === 'canonical_sender_tenant_required' ? 400
@@ -400,7 +405,18 @@ router.post('/api/v1/amo/missions/:id/execute', requireActor, async (req, res) =
       volatileFields: ['snapshot'],
       receiptOf: executeReceipt,
       errorStatus: (err) => failStatus(err, 'amo_execute_failed'),
-      run: async () => executeCanonicalResponse(await executeCanonical({ ...command, correlationId }, { pool })),
+      // MAX-P0-004 P4 — with durable tasks enabled (MAX_DURABLE_TASKS), the task
+      // key derives from this receipt and the receipt is linked to the task
+      // before any specialist runs; replays report the task's live state.
+      loadTask: (taskId) => loadTaskSummary(pool, String(tenantId), taskId),
+      run: async (receipt) => executeCanonicalResponse(await executeCanonical({ ...command, correlationId }, {
+        pool,
+        ...(receipt ? {
+          durableTaskKey: `receipt:${receipt.scope}:${receipt.idempotencyKey}`,
+          durableTaskInput: { receiptFingerprint: receipt.requestFingerprint },
+          onDurableTaskAccepted: (task) => receipt.linkTask(task.id),
+        } : {}),
+      })),
     });
     if (keyed.error) console.error('[amo] execute', keyed.error);
     for (const [name, value] of Object.entries(keyed.headers || {})) res.setHeader(name, value);
@@ -427,6 +443,7 @@ function executeReceipt(body = {}) {
     specialist: body.specialist || null,
     runtimeOwner: body.runtimeOwner || null,
     execution: body.execution ? { state: body.execution.state || null } : null,
+    ...(body.durableTask ? { durableTask: { id: body.durableTask.id || null, state: body.durableTask.state || null } } : {}),
     executionResult: {
       alreadyExecuted: result.alreadyExecuted === true,
       rolledBack: result.rolledBack === true,
@@ -466,6 +483,7 @@ function executeCanonicalResponse(routed) {
       runtimeOwner: routed.runtimeOwner,
       snapshot: routed.snapshot,
       execution: routed.execution || null,
+      ...(routed.durableTask ? { durableTask: routed.durableTask } : {}),
       executionResult: routed.executionResult && {
         alreadyExecuted: routed.executionResult.alreadyExecuted === true,
         rolledBack: routed.executionResult.rolledBack === true,
@@ -483,6 +501,35 @@ function executeCanonicalResponse(routed) {
       },
     });
 }
+
+/**
+ * MAX-P0-004 P6 — durable task status for one mission, derived only from the
+ * task store. Read-only and tenant-scoped (another tenant's mission returns no
+ * tasks). Disabled (enabled:false, no reads) unless MAX_DURABLE_TASKS=true.
+ */
+router.get('/api/v1/amo/missions/:id/tasks', requireActor, async (req, res) => {
+  try {
+    const tenantId = actorTenantId(req);
+    if (tenantId == null) return res.status(400).json({ error: 'no_tenant', message: 'No active client selected.' });
+    noStore(res);
+    if (String(process.env.MAX_DURABLE_TASKS || '').toLowerCase() !== 'true') {
+      return res.json({ spec: 'MAX-P0-004', enabled: false, missionId: req.params.id, tasks: [] });
+    }
+    const { createDurableExecutionOwnership } = require('../services/maxReliability/durableExecutionOwnership');
+    const { summarizeTask } = require('../packages/acquisition-mission/DurableTaskRouting');
+    const { presentDurableTaskStatus } = require('../packages/max/workspace/DurableTaskStatus');
+    const rows = await createDurableExecutionOwnership(pool).list({ tenantId: String(tenantId), missionId: req.params.id, limit: 50 });
+    return res.json({
+      spec: 'MAX-P0-004', enabled: true, missionId: req.params.id,
+      tasks: rows.map((t) => ({ ...summarizeTask(t), status: presentDurableTaskStatus(t) })),
+    });
+  } catch (err) {
+    if (err && /^durable_task_schema_/.test(String(err.code))) {
+      return res.status(503).json({ error: 'durable_tasks_unavailable', message: 'Durable task status is unavailable (schema not installed).' });
+    }
+    return fail(res, err, 'amo_tasks_failed');
+  }
+});
 
 /**
  * P0 — current mission authorization restrictions and the hash an amendment

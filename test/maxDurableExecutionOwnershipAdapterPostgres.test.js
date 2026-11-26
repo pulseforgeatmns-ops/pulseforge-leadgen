@@ -117,3 +117,28 @@ test('durable task execution fails closed without the external-action ledger', {
   assert.equal(calls, 0);
   assert.ok(result.records.every(r => r.status === EXECUTION_RECORD_STATUS.BLOCKED && r.providerErrorCode === 'external_action_ledger_unavailable'));
 });
+
+test('inside a task-owned execution the adapter task-links and fences sends from context alone (no binding passed)', { timeout: 60000 }, async () => {
+  const { runWithTaskFence } = require('../services/maxReliability/taskExecutionContext');
+  const store = createDurableExecutionOwnership(fixture.pool); const ledger = createExternalActionLedger(fixture.pool);
+  const { task, binding } = await ownedTask(store); currentBundle = bundleFor(task.missionId);
+  const fence = { tenantId: TENANT, taskId: binding.taskId, ownershipToken: binding.ownershipToken, fenceEpoch: binding.fenceEpoch };
+  let calls = 0;
+  const result = await runWithTaskFence(fence, () => run({ externalActionLedger: ledger, sendEmail: async () => { calls += 1; return { success: true, providerMessageId: `ctx-${calls}` }; } }));
+  assert.equal(calls, 2);
+  assert.ok(result.records.every((r) => r.status === EXECUTION_RECORD_STATUS.SENT));
+  const linked = await fixture.pool.query('SELECT count(*)::int AS n FROM max_external_action_claims WHERE tenant_id=$1 AND task_id=$2', [TENANT, task.id]);
+  assert.equal(linked.rows[0].n, 2, 'claims linked to the context task');
+
+  // A stale context fence (cancelled task) reaches no provider.
+  const second = await ownedTask(store); currentBundle = bundleFor(second.task.missionId);
+  await store.cancel({ tenantId: TENANT, taskId: second.task.id, reason: 'stop' });
+  const staleFence = { tenantId: TENANT, taskId: second.binding.taskId, ownershipToken: second.binding.ownershipToken, fenceEpoch: second.binding.fenceEpoch };
+  await assert.rejects(runWithTaskFence(staleFence, () => run({ externalActionLedger: ledger, sendEmail: async () => { calls += 1; return { success: true, providerMessageId: 'never' }; } })),
+    { code: 'durable_task_fenced' });
+  assert.equal(calls, 2, 'no provider call under a stale fence');
+  // A fence of another tenant is refused before anything is claimed.
+  await assert.rejects(runWithTaskFence({ ...fence, tenantId: '99' }, () => run({ externalActionLedger: ledger, sendEmail: async () => { calls += 1; } })),
+    { code: 'durable_task_fenced' });
+  assert.equal(calls, 2);
+});

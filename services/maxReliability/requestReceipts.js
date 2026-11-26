@@ -62,6 +62,9 @@ function createRequestReceipts(pool, options = {}) {
       correlationId: row.correlation_id || null,
       createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
       completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
+      // MAX-P0-004: the durable task this request created (column added by the
+      // P0-004 migration; undefined on a P0-003-only database).
+      ...(row.task_id ? { taskId: String(row.task_id) } : {}),
     };
   }
 
@@ -84,7 +87,7 @@ function createRequestReceipts(pool, options = {}) {
     );
     if (inserted.rows[0]) {
       await audit(inserted.rows[0], 'request_started', null, 'in_progress');
-      return { outcome: 'owner', ownerToken, tenantId, scope, idempotencyKey: key };
+      return { outcome: 'owner', ownerToken, tenantId, scope, idempotencyKey: key, requestFingerprint: fingerprint };
     }
     const existing = await load(tenantId, scope, key);
     if (!existing) return { outcome: 'in_progress' };
@@ -114,8 +117,27 @@ function createRequestReceipts(pool, options = {}) {
     return view(r.rows[0]);
   }
 
+  /**
+   * MAX-P0-004 P4 — link the owning request's receipt to the durable task it
+   * accepted, before any specialist runs. Only the owner of an in_progress
+   * receipt may link it, and the link is immutable (migration trigger).
+   */
+  async function linkTask(handle, taskId) {
+    const r = await pool.query(
+      `UPDATE max_request_receipts SET task_id = $5, updated_at = $6
+        WHERE tenant_id = $1 AND scope = $2 AND idempotency_key = $3 AND owner_token = $4 AND state = 'in_progress'
+          AND (task_id IS NULL OR task_id = $5)
+      RETURNING *`,
+      [handle.tenantId, handle.scope, handle.idempotencyKey, handle.ownerToken, taskId, now()]
+    );
+    if (!r.rows[0]) throw receiptError('request_receipt_state_conflict', 'Request receipt could not be linked to its task.');
+    await audit(r.rows[0], 'request_task_linked', 'in_progress', 'in_progress', { taskId: String(taskId) });
+    return view(r.rows[0]);
+  }
+
   return {
     begin,
+    linkTask,
     complete: (handle, httpStatus, response) => finish(handle, 'completed', httpStatus, response, null),
     fail: (handle, httpStatus, response, errorCode) => finish(handle, 'failed', httpStatus, response, errorCode),
     async get(tenantId, scope, key) {

@@ -103,6 +103,8 @@ const SENDER_REQUIRED_INTENTS = new Set([
   amo.EXECUTION_INTENTS.APPROVE_EXECUTION,
 ]);
 
+const { resolveDurableTasks } = require('../packages/acquisition-mission/DurableTaskRouting');
+
 async function executeCanonical(input = {}, opts = {}) {
   const runtime = runtimeFromOpts(opts);
   const tenantId = String(input.tenantId || opts.tenantId || '');
@@ -227,6 +229,12 @@ async function executeCanonical(input = {}, opts = {}) {
     brevoState: input.brevoState || opts.brevoState,
     senderReadiness: input.senderReadiness || opts.senderReadiness,
     requireProviderReadiness: input.requireProviderReadiness || opts.requireProviderReadiness,
+    // MAX-P0-004 P2 — durable task ownership, only with MAX_DURABLE_TASKS=true
+    // (or an explicitly injected store). Default: unchanged behaviour.
+    durableTasks: resolveDurableTasks(opts),
+    durableTaskKey: opts.durableTaskKey,
+    durableTaskInput: opts.durableTaskInput,
+    onDurableTaskAccepted: opts.onDurableTaskAccepted,
   });
   // Cancellation is an operator edit, not a specialist TME stage. Persist it
   // through the runtime's canonical commit path before a subsequent hydration.

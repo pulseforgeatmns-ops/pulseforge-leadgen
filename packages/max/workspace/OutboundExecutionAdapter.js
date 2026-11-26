@@ -1,4 +1,5 @@
 'use strict';
+const { currentTaskFence } = require('../../../services/maxReliability/taskExecutionContext');
 
 /**
  * Canonical outbound execution adapter — executes approved mission bundle via provider transport.
@@ -50,6 +51,9 @@ function resolveExternalActionLedger(input = {}) {
 async function assertDurableTaskOwnership(input = {}) {
   const binding = input.durableTaskOwnership;
   if (!binding) return;
+  // A context fence has no store handle: the fenced dispatch marker re-checks
+  // it atomically, which is the authoritative check.
+  if (binding.fromContext === true) return;
   if (!binding.store || typeof binding.store.requireOwner !== 'function') {
     throw Object.assign(new Error('Durable task ownership binding is invalid.'), { code: 'durable_task_fenced' });
   }
@@ -114,6 +118,18 @@ async function resolveExecuteSender(input = {}) {
  * @returns {Promise<object>}
  */
 async function executeOutboundBundle(input = {}) {
+  // MAX-P0-004 P2 — inside a task-owned execution (the router claimed a durable
+  // task and set its fence), every send is task-linked and its dispatch marker
+  // is fenced, without each caller threading a binding through.
+  if (!input.durableTaskOwnership) {
+    const fence = currentTaskFence();
+    if (fence) {
+      if (input.tenantId != null && String(input.tenantId) !== fence.tenantId) {
+        throw Object.assign(new Error('The task fence belongs to a different tenant; nothing was sent.'), { code: 'durable_task_fenced' });
+      }
+      input = { ...input, durableTaskOwnership: { ...fence, fromContext: true } };
+    }
+  }
   let governedProgram = null;
   const governedTenantId = input.tenantId != null ? String(input.tenantId) : null;
   if (input.pool && governedTenantId && ['10', '13'].includes(governedTenantId)) {

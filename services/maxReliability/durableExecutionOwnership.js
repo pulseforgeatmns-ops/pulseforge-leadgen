@@ -176,6 +176,86 @@ function createDurableExecutionOwnership(pool, options = {}) {
     });
   }
 
+  /**
+   * Claim one specific queued task (the inline owner of a request it just
+   * accepted). Same CAS as claim(): new token, fence epoch + 1, DB-clock lease,
+   * unexpired deadline, at most one active task per mission. Returns null when
+   * the task is not claimable or its mission already has an active task.
+   */
+  async function claimTask(input = {}) {
+    const tenantId = text(input.tenantId, 'tenantId'); const taskId = text(input.taskId, 'taskId');
+    const ownerToken = text(input.ownerToken, 'ownerToken'); const leaseMs = leaseOf(input);
+    return tx(async (db) => {
+      const claimed = await db.query(`WITH candidate AS (
+          SELECT id, state AS prior_state FROM max_durable_execution_tasks
+           WHERE id=$1 AND tenant_id=$2 AND state=ANY($3::text[]) AND (deadline_at IS NULL OR deadline_at>clock_timestamp())
+             AND (mission_id IS NULL OR NOT EXISTS (SELECT 1 FROM max_durable_execution_tasks active
+                   WHERE active.tenant_id=max_durable_execution_tasks.tenant_id AND active.mission_id=max_durable_execution_tasks.mission_id
+                     AND active.state IN ('claimed','running')))
+           FOR UPDATE)
+        UPDATE max_durable_execution_tasks t SET state='claimed', ownership_token=$4, fence_epoch=t.fence_epoch+1,
+               lease_expires_at=clock_timestamp()+($5 * interval '1 millisecond'), heartbeat_at=clock_timestamp(), updated_at=clock_timestamp()
+          FROM candidate WHERE t.id=candidate.id RETURNING t.*, candidate.prior_state`, [taskId, tenantId, CLAIMABLE, ownerToken, leaseMs])
+        .catch((err) => { if (err && err.code === '23505' && err.constraint === 'max_durable_execution_tasks_one_active_per_mission') return { rows: [] }; throw err; });
+      const task = claimed.rows[0]; if (!task) return null;
+      await event(db, task, 'claimed', task.prior_state, STATES.CLAIMED, { ownerToken });
+      return row(task);
+    });
+  }
+
+  /**
+   * The current owner reports a definitive failure (nothing in doubt). If a
+   * task-linked external action is unresolved or already reached a provider,
+   * the task is escalated instead: a failure must never hide an effect that
+   * may have happened.
+   */
+  async function fail(input = {}) {
+    const o = validOwner(input); const reason = String(input.reason || 'failed').slice(0, 200);
+    return tx(async (db) => {
+      const task = (await db.query(`SELECT * FROM max_durable_execution_tasks WHERE ${OWNER_PREDICATE} FOR UPDATE`,
+        [o.taskId, o.tenantId, o.ownershipToken, o.fenceEpoch])).rows[0];
+      if (!task) throw error('durable_task_fenced', 'Failure rejected for stale owner.');
+      const actions = await actionStates(db, o.tenantId, o.taskId);
+      // An unresolved action, or one that already reached the provider (e.g. a
+      // send acknowledged before the mission commit rolled back), means
+      // something may have happened: never report that as a clean failure.
+      const unresolved = anyIn(actions, UNRESOLVED_ACTION_STATES);
+      const dispatched = anyIn(actions, DISPATCHED_ACTION_STATES);
+      const escalationReason = unresolved ? 'external_action_unresolved' : dispatched ? 'failed_after_dispatch' : null;
+      const r = await db.query(`UPDATE max_durable_execution_tasks SET state=$3, recovery_reason=$4, escalation_reason=$5,
+           result_ref=$6::jsonb, ownership_token=NULL, lease_expires_at=NULL, updated_at=clock_timestamp()
+         WHERE id=$1 AND tenant_id=$2 RETURNING *`,
+      [o.taskId, o.tenantId, escalationReason ? STATES.ESCALATED : STATES.FAILED, reason,
+        escalationReason, JSON.stringify(json(input.resultRef, {}))]);
+      await event(db, r.rows[0], escalationReason ? 'failure_escalated' : 'failed', task.state, r.rows[0].state, { reason, actionStates: actions });
+      return row(r.rows[0]);
+    });
+  }
+
+  /**
+   * Read-only recovery plan for one tenant: what recoverExpired would decide
+   * now, without changing anything (used by the operator CLI's plan mode).
+   */
+  async function planRecovery(input = {}) {
+    await assertSchema(pool);
+    const tenantId = text(input.tenantId, 'tenantId'); const limit = Math.min(500, Math.max(1, Number(input.limit) || 100));
+    const r = await pool.query(`SELECT t.*, (t.deadline_at IS NOT NULL AND t.deadline_at<=clock_timestamp()) AS deadline_passed,
+         EXISTS (SELECT 1 FROM max_external_action_claims c WHERE c.tenant_id=t.tenant_id AND c.task_id=t.id
+                  AND c.state = ANY($4::text[])) AS action_unresolved
+       FROM max_durable_execution_tasks t
+      WHERE t.tenant_id=$1 AND ((t.state=ANY($2::text[]) AND t.lease_expires_at<=clock_timestamp())
+         OR (t.state=ANY($3::text[]) AND t.deadline_at IS NOT NULL AND t.deadline_at<=clock_timestamp()))
+      ORDER BY t.updated_at, t.id LIMIT $5`, [tenantId, ACTIVE, WAITING, UNRESOLVED_ACTION_STATES, limit]);
+    return r.rows.map((task) => {
+      let decision = 'recovery_required'; let reason = 'lease_expired';
+      if (task.action_unresolved) { decision = 'escalated'; reason = 'external_action_unresolved'; }
+      else if (task.deadline_passed) { decision = 'escalated'; reason = 'deadline_exceeded'; }
+      else if (Number(task.recovery_attempts) >= Number(task.retry_budget)) { decision = 'escalated'; reason = 'retry_budget_exhausted'; }
+      const { action_unresolved: _a, ...rest } = task;
+      return { task: row(rest), decision, reason };
+    });
+  }
+
   async function requireOwner(input) {
     await assertSchema(pool); const o = validOwner(input);
     const r = await pool.query(`SELECT * FROM max_durable_execution_tasks WHERE ${OWNER_PREDICATE}`, [o.taskId, o.tenantId, o.ownershipToken, o.fenceEpoch]);
@@ -277,7 +357,8 @@ function createDurableExecutionOwnership(pool, options = {}) {
              recovery_attempts=recovery_attempts+$6, ownership_token=NULL, lease_expires_at=NULL, updated_at=clock_timestamp()
            WHERE id=$1 AND tenant_id=$2 RETURNING *`,
         [task.id, tenantId, escalate ? STATES.ESCALATED : STATES.RECOVERY_REQUIRED, reason, escalate ? reason : null, escalate ? 0 : 1]);
-        await event(db, r.rows[0], wasActive ? 'lease_expired' : 'deadline_expired', task.state, r.rows[0].state, { reason, actionStates: actions });
+        await event(db, r.rows[0], wasActive ? 'lease_expired' : 'deadline_expired', task.state, r.rows[0].state,
+          { reason, actionStates: actions, ...(input.actor ? { actor: String(input.actor).slice(0, 120) } : {}) });
         out.push(row(r.rows[0]));
       }
       return out;
@@ -294,7 +375,8 @@ function createDurableExecutionOwnership(pool, options = {}) {
       const r = await db.query(`UPDATE max_durable_execution_tasks SET state=CASE WHEN dependency_refs=$3::jsonb THEN 'queued' ELSE 'blocked_dependency' END,
           recovery_reason=CASE WHEN dependency_refs=$3::jsonb THEN NULL ELSE 'dependency_drift' END, updated_at=clock_timestamp()
         WHERE id=$1 AND tenant_id=$2 RETURNING *`, [taskId, tenantId, JSON.stringify(current)]);
-      await event(db, r.rows[0], 'dependencies_revalidated', task.state, r.rows[0].state, { drift: r.rows[0].state === STATES.BLOCKED_DEPENDENCY });
+      await event(db, r.rows[0], 'dependencies_revalidated', task.state, r.rows[0].state,
+        { drift: r.rows[0].state === STATES.BLOCKED_DEPENDENCY, ...(input.actor ? { actor: String(input.actor).slice(0, 120) } : {}) });
       return row(r.rows[0]);
     });
   }
@@ -316,15 +398,42 @@ function createDurableExecutionOwnership(pool, options = {}) {
       const r = await db.query(`UPDATE max_durable_execution_tasks SET state=$3, cancellation_reason=$4, escalation_reason=$5,
            ownership_token=NULL, lease_expires_at=NULL, updated_at=clock_timestamp() WHERE id=$1 AND tenant_id=$2 RETURNING *`,
       [taskId, tenantId, afterDispatch ? STATES.ESCALATED : STATES.CANCELLED, reason, afterDispatch ? 'cancelled_after_dispatch' : null]);
-      await event(db, r.rows[0], afterDispatch ? 'cancel_escalated' : 'cancelled', task.state, r.rows[0].state, { reason, actionStates: actions });
+      await event(db, r.rows[0], afterDispatch ? 'cancel_escalated' : 'cancelled', task.state, r.rows[0].state,
+        { reason, actionStates: actions, ...(input.actor ? { actor: String(input.actor).slice(0, 120) } : {}) });
+      return row(r.rows[0]);
+    });
+  }
+
+  /**
+   * Cancel a task only if it is still `queued`, in one conditional UPDATE (no
+   * read-then-write window). Returns the cancelled task, or null if anyone has
+   * claimed, started or finished it meanwhile — a caller that never owned the
+   * task can therefore never cancel someone else's running work.
+   */
+  async function cancelIfQueued(input = {}) {
+    const tenantId = text(input.tenantId, 'tenantId'); const taskId = text(input.taskId, 'taskId');
+    const reason = String(input.reason || 'cancelled_before_claim').slice(0, 200);
+    return tx(async (db) => {
+      const r = await db.query(`UPDATE max_durable_execution_tasks SET state='cancelled', cancellation_reason=$3, updated_at=clock_timestamp()
+         WHERE id=$1 AND tenant_id=$2 AND state='queued' RETURNING *`, [taskId, tenantId, reason]);
+      if (!r.rows[0]) return null;
+      await event(db, r.rows[0], 'cancelled', STATES.QUEUED, STATES.CANCELLED, { reason });
       return row(r.rows[0]);
     });
   }
 
   async function get(input = {}) { await assertSchema(pool); const r = await pool.query('SELECT * FROM max_durable_execution_tasks WHERE id=$1 AND tenant_id=$2', [text(input.taskId, 'taskId'), text(input.tenantId, 'tenantId')]); return row(r.rows[0]); }
-  async function list(input = {}) { await assertSchema(pool); const tenantId = text(input.tenantId, 'tenantId'); const limit = Math.min(100, Math.max(1, Number(input.limit) || 50)); const r = await pool.query('SELECT * FROM max_durable_execution_tasks WHERE tenant_id=$1 ORDER BY updated_at DESC, id LIMIT $2', [tenantId, limit]); return r.rows.map(row); }
+  async function getByLogicalKey(input = {}) { await assertSchema(pool); const r = await pool.query('SELECT * FROM max_durable_execution_tasks WHERE tenant_id=$1 AND logical_key=$2', [text(input.tenantId, 'tenantId'), text(input.logicalKey, 'logicalKey')]); return row(r.rows[0]); }
+  async function list(input = {}) {
+    await assertSchema(pool); const tenantId = text(input.tenantId, 'tenantId'); const limit = Math.min(100, Math.max(1, Number(input.limit) || 50));
+    const missionId = input.missionId == null ? null : String(input.missionId);
+    const r = missionId
+      ? await pool.query('SELECT * FROM max_durable_execution_tasks WHERE tenant_id=$1 AND mission_id=$2 ORDER BY updated_at DESC, id LIMIT $3', [tenantId, missionId, limit])
+      : await pool.query('SELECT * FROM max_durable_execution_tasks WHERE tenant_id=$1 ORDER BY updated_at DESC, id LIMIT $2', [tenantId, limit]);
+    return r.rows.map(row);
+  }
   async function listEvents(input = {}) { await assertSchema(pool); const tenantId = text(input.tenantId, 'tenantId'); const taskId = text(input.taskId, 'taskId'); const r = await pool.query('SELECT id,fence_epoch,event,from_state,to_state,detail,at FROM max_durable_execution_task_events WHERE tenant_id=$1 AND task_id=$2 ORDER BY id', [tenantId, taskId]); return r.rows; }
-  return { accept, claim, requireOwner, start, heartbeat, checkpoint, reportCompletion, verify, recoverExpired, revalidateDependencies, cancel, get, list, listEvents };
+  return { accept, claim, claimTask, fail, planRecovery, requireOwner, start, heartbeat, checkpoint, reportCompletion, verify, recoverExpired, revalidateDependencies, cancel, cancelIfQueued, get, getByLogicalKey, list, listEvents };
 }
 module.exports = {
   STATES, REQUIRED_TABLES, UNRESOLVED_ACTION_STATES, DISPATCHED_ACTION_STATES,

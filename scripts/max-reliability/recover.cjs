@@ -9,6 +9,12 @@
  *   node scripts/max-reliability/recover.cjs --tenant 10 --unresolved    # list unknown outcomes
  *   [--stale-minutes 15]
  *
+ * MAX-P0-004 durable tasks (same command, same safeguards):
+ *   node scripts/max-reliability/recover.cjs --tenant 10 --tasks                       # plan (read-only)
+ *   node scripts/max-reliability/recover.cjs --tenant 10 --tasks --apply --confirm-tenant 10 --operator <id>
+ *   node scripts/max-reliability/recover.cjs --tenant 10 --revalidate-task <taskId> --dependency-refs '<json array>' --confirm-tenant 10 --operator <id>
+ *   node scripts/max-reliability/recover.cjs --tenant 10 --cancel-task <taskId> [--reason <text>] --confirm-tenant 10 --operator <id>
+ *
  * Never scheduled. Never dispatches, retries or reconciles anything: it only
  * moves stale claims to abandoned_not_dispatched, stale dispatches to
  * outcome_unknown (escalation), and stale request receipts to interrupted.
@@ -32,6 +38,23 @@ async function main() {
   }
   const pool = require('../../db');
   try {
+    const revalidateTask = arg('--revalidate-task');
+    const cancelTask = arg('--cancel-task');
+    if (process.argv.includes('--tasks') || revalidateTask || cancelTask) {
+      const { runTaskRecovery } = require('../../services/maxReliability/taskRecovery');
+      let dependencyRefs;
+      if (revalidateTask) {
+        try { dependencyRefs = JSON.parse(arg('--dependency-refs') || 'null'); } catch (_) { dependencyRefs = null; }
+      }
+      const mode = revalidateTask ? 'revalidate' : cancelTask ? 'cancel' : (process.argv.includes('--apply') ? 'apply' : 'plan');
+      const result = await runTaskRecovery(pool, {
+        tenantId, mode, confirmTenant: arg('--confirm-tenant'), operator: arg('--operator'),
+        taskId: revalidateTask || cancelTask, dependencyRefs, reason: arg('--reason'),
+      });
+      console.log(JSON.stringify(result, null, 2));
+      if (result.escalationRequired) process.exitCode = 3;
+      return;
+    }
     if (process.argv.includes('--unresolved')) {
       const rows = await createExternalActionLedger(pool).listUnresolved(tenantId);
       console.log(JSON.stringify(rows.map((r) => ({ ...r, idempotencyKey: shortHash(r.idempotencyKey) })), null, 2));
