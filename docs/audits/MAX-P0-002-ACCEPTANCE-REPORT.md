@@ -1,119 +1,94 @@
 # MAX-P0-002 — Final reconciliation and acceptance report
 
-Status: **configuration accepted; record reconciliation prepared and verified, awaiting one read-only Shell readback.**
-Deployed code: Render, commit `69e7216`. Assessed 2026-11-27.
+Status: **ACCEPTED FOR CONTAINMENT AND RECONCILIATION; closure documentation ready to merge.**
+One non-mutating acceptance follow-up remains: verify a fresh interactive login after the SESSION_SECRET rotation (§6). It is not authorization to activate any capability.
 
-No mutation, release, send, deploy, migration or worker activation was performed or is requested here.
+Deployed code: Render, commit 69e7216. Production reconciliation executed in Render Shell on 2026-11-27.
+
+No production mutation, hold release, send, deploy, migration, credential restoration, or worker activation was performed by this reconciliation.
 
 ---
 
-## 1. Why the reconciliation was not executed directly
+## 1. Verified production evidence
 
-- The production PostgreSQL (`pulseforge-production-migration`, PG 18) has an **empty IP allowlist**, so it refuses every external connection, including Render's read-only query tool.
-- That allowlist is a security control and was deliberately left unchanged.
-- The reconciliation is therefore delivered as one read-only paste block to run in the Render Shell: `docs/audits/MAX-P0-002-RECONCILIATION-SHELL.md`.
-- The block was executed end to end against a disposable PostgreSQL built from the deployed migrations, with fixtures covering each outcome path. It wrote nothing.
-
-## 2. Correction to the earlier remediation plan (§5 of `MAX-P0-002-CONFIGURATION-REMEDIATION.md`)
-
-- The 20 "unresolved outbound attempts" are the P0-003 pre-migration check's §4c population: **AMO `acquisition_mission_outbound_executions` rows with `status='attempted'` and no `sent`/`failed` row for the same `execution_identity`**.
-- They are **not** governed-outbound `acquisition_outbound_items`.
-- The governed reconciler (`scripts/reconcileGovernedUncertainFromEvidence.js`) does not apply to them, and there is no deployed reconciler for this table.
-- The reconciliation below therefore classifies from evidence with read-only SQL and makes no release.
-
-**What an `attempted` AMO row means in the deployed code.**
-- `packages/max/workspace/OutboundExecutionAdapter.js:250-293` writes `attempted`, calls the provider, then writes `sent`/`failed`.
-- The Brevo `sendEmail` never throws (`packages/providers/brevo/sendEmail.js`). So a row left at `attempted` means the process stopped, or the final write failed, between the two writes. That can happen before or after Brevo accepted the request.
-- No attempt token links the row to a pre-provider proof. **An `attempted` AMO row can therefore never be proven unsent from local data.** It can only be confirmed sent from direct evidence, or stay `UNKNOWN`.
-
-## 3. Classification rules applied
-
-| Outcome | AMO attempts (20) | Failed mailbox record (1) |
-|---|---|---|
-| `SENT_CONFIRMED` | Provider events stored against this record id; provider message id or provider response on the record; **or** (Brevo step) a Brevo event whose tags carry exactly `mission:<id>` and `prospect:<id>` (and `revision:<rev>` if Brevo shows one) | Provider id or `sent_at` on the record |
-| `NOT_SENT_DEFINITIVE` | **Not available**: no pre-boundary proof exists for this table | Authorization refused before dispatch (`outreach_review_required`, `CALL_SUPPRESSED`, `tenant_pilot_policy_denied`, `anchor_recovery_scope_invalid`); `EAUTH`/`EENVELOPE`/`EDNS`; socket `connect`/`getaddrinfo` failure; `EMESSAGE` with a 4xx/5xx SMTP reply |
-| `UNKNOWN` | Everything else, with the sub-reason recorded: `governed_attempt_crossed_provider_boundary`, `unattributed_send_signal_near_attempt`, `governed_pre_provider_signal_not_linked_to_record`, `no_local_post_attempt_evidence`; from Brevo `no_brevo_event_found_in_window_not_proof` | Everything else, including `ECONNECTION`, `ESOCKET`, `ETIMEDOUT`, `CONN` and generic `smtp_send_failed`. The deployed mailbox code marks *any* exception `failed`, even after `sendMail` returned. |
-
-- Unattributed signals (CRM touchpoints, governed items near the same time, opens) are reported but never upgrade a record.
-- Absence of a Brevo event is never proof: retention limits and filters apply.
-
-## 4. Acceptance criteria and readback
-
-P0-002 is **accepted** when the Shell output shows all of the following.
-
-| Check | Section | Required |
-|---|---|---|
-| Session read-only | 0 | `read_only = on` |
-| Fail-closed precondition | 1a | `P0002_PRECONDITION_OK` (otherwise psql stops before classification and no Brevo lookup is made) |
-| Baseline unchanged | 1 | `unresolved_attempts = 20`, `duplicate_groups = 0`, `failed_mailbox = 1`, P0-003 tables `f`, `advisory_locks = 0` |
-| Quiescent | 2 | all 24h write counters `0`, `live_schedules = 0` (any non-zero value must be explained before acceptance) |
-| Every record classified | 3, 3b, 5 | 20 + 1 rows, each with outcome and reason |
-| Holds intact | 6 | `attempted_rows_still_attempted = 20`, no pending governed item or live schedule for an affected prospect |
-| All required queries succeeded, nothing written | footer | `P0002_SQL_COMPLETE …` then `"status": "P0002_BREVO_COMPLETE"` and `brevo_exit=0`. `P0002_SQL_FAILED` means no acceptance. Optional sections may print `UNAVAILABLE`. |
-
-- Acceptance does **not** require resolving `UNKNOWN`s. Unknowns stay held indefinitely.
-- If section 1 differs from the baseline, stop: the population changed and must be re-scoped. Do not classify new rows under this package.
-
-**Results table (to be filled from the readback; nothing below is assumed):**
-
-| # | Record | Tenant | Local outcome / reason | Brevo outcome / reason | Final |
-|---|---|---|---|---|---|
-| 1–20 | AMO attempts | | | | |
-| 21 | failed mailbox message | | | n/a | |
-
-Final per record = `SENT_CONFIRMED` if either source confirms it; `NOT_SENT_DEFINITIVE` (mailbox only) per §3; otherwise `UNKNOWN`.
-
-## 5. Disposition (unchanged by this package)
-
-- **All 21 records stay exactly as they are.** No status changes and no releases.
-- `SENT_CONFIRMED`: treat as contacted for every frequency/R7 decision. Correcting the stored `status` to `sent` is a later, separately approved write.
-- `UNKNOWN`: held. Treat as **possibly sent**: no follow-up and no re-send to that prospect under the same mission. This matches P0-003 R7 ("pre-ledger ATTEMPTED records … treated as outcome unknown, never re-sent").
-- `NOT_SENT_DEFINITIVE` (mailbox): eligible for a later, approved retry decision only. Not part of P0-002.
-
-## 6. Configuration acceptance (confirmed by operator)
-
-| Item | State |
+| Control / check | Verified result |
 |---|---|
-| `SESSION_SECRET` | Set, length verified. The repo fallback is no longer effective. |
-| `ANCHOR_RESEARCH_PROVIDERS_PAUSED` | `true`, verified |
-| Background workers / external schedulers / governed outbound | Disabled |
-| `GOVERNED_OUTBOUND_TENANT_17_ENABLED` | Unset = off (no change by design) |
-| `PF_MIGRATION_STAGING` | `0` ≡ unset for runtime routing |
-| Live deploy | `69e7216`, independently confirmed |
-| Anthropic | **Retired by owner decision.** Credentials will not be restored and no spending policy will be configured. |
+| Live application revision | Remains 69e7216 |
+| Session security | SESSION_SECRET is configured |
+| Research-provider containment | ANCHOR_RESEARCH_PROVIDERS_PAUSED=true |
+| Background execution | Background workers and durable execution are disabled |
+| Unresolved AMO population | 20 rows, all classified UNKNOWN |
+| Historical preservation | All 20 original attempted records remain preserved |
+| Duplicate execution identities | 0 groups |
+| Mailbox pending state | 0 pending mailbox records |
+| Baseline advisory locks | 0 |
+| Affected prospects | 0 pending governed-outreach records and 0 live schedules |
+| SQL reconciliation | P0002_SQL_COMPLETE: required queries succeeded and rollback completed |
+| Brevo reconciliation | P0002_BREVO_COMPLETE: 20 records returned; external lookup was correctly skipped because BREVO_API_KEY is absent |
+| Writes / releases | 0 database mutations and 0 hold releases |
 
-**Residual effects of the Anthropic retirement in the deployed code.**
-- These code paths still exist and fail on each call: Paige authoring/scoring, Riley classification, Max briefing, legacy Max chat (500), Vera/Rex/Sketch/Link/Faye/Ivy/Penny, pulse-health digest, Mira, and Bland transcript parsing.
-- Each attempt also leaves an `api_usage_events` row with `status='uncertain'` whose reserved USD counts toward shared caps.
-- Max workspace/AMO and the Gemini presentation writer are unaffected.
+The complete production readback remains at /tmp/p0002-results.log in the Render production container. It is the record-level source of truth; this report intentionally does not reproduce individual AMO record details.
 
-## 7. Remaining activation prerequisites for P0-006
+## 2. Reconciliation outcome
 
-No P0-006 specification exists in the repository (this branch or `main`). These prerequisites are **derived from P0-002 findings** and must be reconciled with the P0-006 spec when it is written.
+### AMO attempts
 
-1. **P0-002 readback accepted** per §4, with the 21-row table filed.
-2. **Reliability code actually deployed.**
-   - `69e7216` contains neither MAX-P0-003 (mission lease, CAS, external-action ledger, `Idempotency-Key`, mailbox ledger, definitive-SMTP rule) nor MAX-P0-004.
-   - Before any outbound or mission execution: apply `migrations/2026-11-25-max-p0-003-reliability-core.sql` (pre-check: `scripts/max-reliability/pre-migration-check-readonly.sql`), then the P0-004 migration. Both are separately approved.
-   - Then deploy a reviewed commit that contains both, with durable modes default-off. Without the P0-003 tables, sends fail closed (`reliability_schema_missing`).
-3. **Unknown outcomes carried into the ledger era.** All `UNKNOWN` AMO attempts and the mailbox record must remain blocking for their prospects. Verify that the deployed R7 rule (`outreach_intent_already_dispatched`) sees them before any send path is enabled.
-4. **Anthropic-dependent capabilities replaced or explicitly disabled.**
-   - Outbound copy is authored by Paige (Claude) and reply triage by Riley (Claude). An outbound activation needs a non-Anthropic authoring path or human-authored copy, and a working reply/unsubscribe path. Verify which classifier the governed mailbox poll uses.
-   - Callers that would only accumulate `uncertain` spend reservations should be disabled.
-5. **Governed outbound per tenant.** Program authorization renewed (Anchor's expired 2026-11-09). Maintenance/kill-switch state read back. Mailbox credentials valid. `GOVERNED_OUTBOUND_TENANT_IDS` and per-tenant switches set deliberately: unset defaults to `10,13`, and the tenant-13 clock arms if `BABRUN_GOVERNED_OUTBOUND_ENABLED=true`.
-6. **Single bounded canary** (`maxSends: 1`) with provider-id readback before any recurring scheduler. Workers stay off until then.
-7. **Open from earlier P0-002 findings (unchanged):**
-   - publicly reachable pgAdmin (C11): owner decision;
-   - the Railway → Render variable name-by-name reconciliation (O6);
-   - removal of `MIGRATION_RESTORE_APPROVED` / `MIGRATION_FINAL_SWAP_APPROVED` if still present.
+All 20 unresolved acquisition_mission_outbound_executions attempts are **UNKNOWN**.
 
-## 8. Boundaries respected
+They remain held and must be treated as possibly sent. No retry, re-send, status normalization, or contact-frequency exception is authorized by MAX-P0-002. The lack of a Brevo key meant no external event lookup was attempted; that absence is not evidence of non-delivery.
 
-- No production write, release, send, deploy, migration or worker change.
+### Failed mailbox message
+
+| Field | Verified evidence |
+|---|---|
+| Message | tom_9c1d4737b41a4f2cd5d63860 |
+| Tenant | 13 |
+| Classification | **NOT_SENT_DEFINITIVE** |
+| Basis | ESOCKET / connect ENETUNREACH: socket-connect failure before provider acceptance |
+| Provider receipt | No provider ID; no sent timestamp; providerAccepted=false |
+| Related history | One other sent message exists for the prospect |
+
+This classification does not release the record or authorize a retry. Any future retry is a separately approved outbound decision.
+
+## 3. Assessment of the remediation package
+
+The reviewed package is correctly scoped:
+
+- MAX-P0-002-CONFIGURATION-REMEDIATION.md identifies the production configuration changes and preserves the intentional retirement of Anthropic.
+- MAX-P0-002-RECONCILIATION-SHELL.md and scripts/max-p0-002/ are read-only reconciliation tooling. The executed SQL completed and rolled back; the provider script returned 20 results without an external call when the key was absent.
+- The earlier governed-outbound reconciliation plan is superseded for these 20 records: they are AMO execution rows, not acquisition_outbound_items.
+- No P0-004 code, database object, migration, deployment, worker state, or outbound hold was changed.
+
+Anthropic remains intentionally retired. Do not restore ANTHROPIC_API_KEY or configure an Anthropic spending policy as part of P0-002.
+
+## 4. Acceptance disposition
+
+**Accepted:** containment configuration and the bounded, read-only production reconciliation meet the P0-002 acceptance intent.
+
+**Closed state for records:** 20 AMO attempts remain UNKNOWN and held; the one failed mailbox message is NOT_SENT_DEFINITIVE and remains unchanged. No record was released.
+
+**Outstanding acceptance follow-up (non-mutating):**
+
+1. Verify a new interactive login reaches /dashboard after the SESSION_SECRET rotation and that “Remember me” persists across a browser restart. Record the result against this report. This validates the expected session invalidation and replacement session flow.
+2. If that flow fails, keep the containment configuration in place and diagnose only the login path; do not revert to the repository fallback secret.
+
+This follow-up does not block documentation merge, but it remains required before treating the session-secret change as fully user-flow validated.
+
+## 5. P0-006 activation prerequisites carried forward
+
+P0-006 must not activate workers, durable execution, governed outreach, schedules, or provider calls until all of the following are explicitly approved and evidenced:
+
+1. Complete the §4 interactive login verification.
+2. Preserve all 20 AMO UNKNOWN rows as blocking/possibly-sent history, and preserve the mailbox record’s no-release disposition. Any later ledger migration must enforce that these prospects cannot be re-sent by an activation path.
+3. Deploy and validate the separately approved P0-003/P0-004 reliability work before enabling mission or outbound execution. The live 69e7216 service does not contain that reliability schema/work.
+4. Keep Anthropic-dependent workflows disabled or provide an explicitly approved non-Anthropic authoring and reply/unsubscribe path. Do not reintroduce Anthropic credentials.
+5. Renew per-tenant program authorization; verify mailbox credentials; deliberately set tenant enablement/kill-switch configuration; and read back the disabled worker and outbound state.
+6. Run one separately approved bounded canary (maxSends: 1) with provider-ID readback before enabling any recurring schedule or worker.
+7. Resolve or explicitly retain the existing non-activation items: pgAdmin exposure (C11), Railway-to-Render variable reconciliation (O6), and removal of MIGRATION_RESTORE_APPROVED / MIGRATION_FINAL_SWAP_APPROVED if present.
+
+## 6. Boundaries respected
+
+- No production write, release, send, deploy, migration, worker activation, or Anthropic credential restoration.
 - The database allowlist was not modified.
-- No P0-004 file was touched.
-- Repository changes are limited to:
-  - `scripts/max-p0-002/` (read-only tools, not wired into the app);
-  - `docs/audits/MAX-P0-002-RECONCILIATION-SHELL.md`;
-  - this report;
-  - the plan correction note.
+- No P0-004 work was touched.
+- The reconciliation evidence was captured through Render Shell and is retained at the stated container path.
