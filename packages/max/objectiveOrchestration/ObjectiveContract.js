@@ -76,7 +76,7 @@ function enabled(env = process.env) {
 }
 
 /** Validate an immutable, non-executing objective contract. */
-function validateObjectiveContract(input = {}) {
+function validateObjectiveContract(input = {}, { allowExpired = false } = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     throw new ObjectiveContractError('objective_contract_invalid', 'contract must be an object');
   }
@@ -120,7 +120,7 @@ function validateObjectiveContract(input = {}) {
     throw new ObjectiveContractError('objective_contract_invalid', 'verification.deadlineAt must be a timestamp');
   }
   const objectiveDeadline = new Date(input.deadlineAt);
-  if (Number.isNaN(objectiveDeadline.getTime()) || objectiveDeadline.getTime() <= Date.now() || deadlineAt.getTime() > objectiveDeadline.getTime()) {
+  if (Number.isNaN(objectiveDeadline.getTime()) || (!allowExpired && objectiveDeadline.getTime() <= Date.now()) || deadlineAt.getTime() > objectiveDeadline.getTime()) {
     throw new ObjectiveContractError('objective_contract_invalid', 'verification.deadlineAt must not exceed deadlineAt');
   }
   const wakeConditions = asList(input.wakeConditions, 'wakeConditions', { min: 1 });
@@ -157,7 +157,7 @@ function validateObjectiveContract(input = {}) {
 /** Returns a bounded next verification delay; no timer is created. */
 function nextVerificationWake(policy, attempts, outcome = 'pending', random = Math.random) {
   if (TERMINAL_VERIFICATION.has(outcome)) return null;
-  const verification = validateObjectiveContract(policy).verification;
+  const verification = validateObjectiveContract(policy, { allowExpired: true }).verification;
   if (Date.now() >= new Date(verification.deadlineAt).getTime()) return null;
   const count = int(attempts, 'attempts', 0, MAX_POLL_ATTEMPTS);
   if (count >= verification.maxAttempts) return null;
@@ -225,6 +225,18 @@ async function admitObjectiveRoot(input = {}, opts = {}) {
   let objective = await objectiveService.getObjectiveById(input.objectiveId, { tenantId, ...(opts.objectiveOpts || {}) });
   if (!objective) throw new ObjectiveContractError('objective_contract_not_found', 'objective not found', 404);
   if (objective.status !== 'active') throw new ObjectiveContractError('objective_contract_inactive', 'only active objectives may be admitted', 409);
+  // A previously accepted immutable root remains the authority even after its
+  // deadline: exact replay is safe and truthful; a changed request is not.
+  const existing = typeof taskStore.getByLogicalKey === 'function'
+    ? await taskStore.getByLogicalKey({ tenantId, logicalKey: rootLogicalKey(objective.id) }) : null;
+  if (existing && existing.immutableInput && existing.immutableInput.contract) {
+    let replayContract;
+    try { replayContract = validateObjectiveContract(input.contract, { allowExpired: true }); } catch (_) { replayContract = null; }
+    if (replayContract && fingerprint(existing.immutableInput.contract) === fingerprint(replayContract)) {
+      return { enabled: true, admitted: true, replay: true, task: existing, contract: existing.immutableInput.contract };
+    }
+    throw new ObjectiveContractError('objective_contract_revision_conflict', 'the admitted root contract is immutable', 409);
+  }
   const contract = validateObjectiveContract(input.contract);
   let accepted;
   try {
