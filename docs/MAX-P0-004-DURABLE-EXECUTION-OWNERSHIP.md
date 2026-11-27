@@ -50,6 +50,63 @@ Router tasks have `retryBudget: 0`: an interrupted inline request is escalated f
 
 **P6 — presentation** (`packages/max/workspace/DurableTaskStatus.js`). Status comes only from the task row. Only `completed` is "done"; `awaiting_verification` says "not verified"; `escalated` and `recovery_required` name the reason and the operator action; unknown states are reported as unknown. Max chat turns carry `metadata.durableTask` and a visible notice whenever the task is not verifiably done. `GET /api/v1/amo/missions/:id/tasks` is read-only and tenant-scoped (`enabled:false` when off; 503 if the schema is missing).
 
+## No ownership bypasses (criterion 1, PR A)
+
+With `MAX_DURABLE_TASKS=true`, ownership is enforced at four choke points (`services/maxReliability/executionOwnershipPolicy.js`). With the flag unset, none of this changes behaviour.
+
+| Choke point | Without a live task fence |
+|---|---|
+| `routeExecutionRequest` | refused (`durable_task_owner_required`, audited as `blocked_no_task_owner`) unless the caller passes a task store. The only alternative is `offline_evaluation`: no pool, nothing persisted, discovery only with an injected Scout runner. |
+| `executeMissionStage` (TME) | refused before the specialist runs (offline evaluation excepted, never with a lock pool) |
+| `OutboundExecutionAdapter` | refused before any claim or provider call; **no exemption covers a send** |
+| `persistStageCommit` | refused unless a closed **write** exemption applies; even then only through the mission lease, and the exempted write is recorded in `max_reliability_audit` **in the same transaction**. The unlocked path is always refused. |
+
+**Write exemptions (closed allowlist; no specialist, no external effect):**
+- `mission_creation`: `runtime.create`.
+- `operator_restriction_tightening`: monotonic constraint tightening (`AcquisitionOwnership`).
+- `inbound_observation`: provider events and Riley reply interpretation.
+
+The structural test pins each exemption to its call sites.
+
+**Every other caller is task-owned:**
+- **REST and chat:** unchanged from P2.
+- **Governed adapters:** `governed-prepare:<program>:<day>:<mission>:<intent>:<version>`, `governed-approve:<program>:<mission>:<snapshotHash>`, `governed-send:<program>:<envelope>:<candidate>`, and envelope completion as `governed-complete:<envelope>`.
+- **Anchor scoped-resume:** `anchor-crm-prep:<operationId>:<step>:<intent>`.
+- **Operator scripts:** `operatorRunKey(script, parts)`, where the parts are mission, intent, the prepared-artifact revision read before the call, prospect and limits. The key never contains a run id or a time, so a retry of the same logical execution replays its task; TME rolls back on a crash, so the inputs are unchanged. The repair script `auditAnchorCapacitySupersession` goes through the mission lease when enforced.
+- **Authorization amendments:** `amendment:<mission>:<amendmentId>`.
+- **Outcome-learning evaluation:** `outcome-learning:<mission>:<version>`.
+- **Cancellation persistence:** runs inside the router task through `afterDispatch`.
+- **Runtime mutations** (`contribute`, `progress`, `runAutonomousProgression`, legacy `persistSideEffects`): `ownedMissionWork`, one task per call, like an unkeyed router request.
+- **Nested work:** inside an already task-owned execution, nested work reuses the existing fence rather than opening a second task.
+
+**Attempts (independent review, important).** A stable key replays its latest attempt, unless that attempt ended `failed` or `cancelled`. Those two states mean no effect is possible, because the store escalates instead whenever a task-linked action may have reached a provider. In that case a retry of the same logical execution opens `<key>#attempt-N`.
+- `completed` replays as the success.
+- `escalated`, `recovery_required`, `awaiting_verification` and active tasks replay; they need an operator or are still in flight.
+- After 20 no-effect attempts the key requires operator review (`durable_task_attempts_exhausted`).
+
+So a key is never spent by a transient collision (`mission_has_active_task`) or by a clean failure, and concurrent retries still converge on one attempt through the unique key.
+
+**Exemption scope (independent review, important).** Each exempt write is checked against the durable row inside the lease transaction:
+- `mission_creation`: only a mission that does not exist yet.
+- `operator_restriction_tightening`: only `authorizationConstraints`, monotonic (every prohibition and review-only kept, at least one added).
+- `inbound_observation`: none of stage, status, plan-cancelled, pending decision, plan, objective, tenant or constraints may change; the write may only add observations, outcomes and events.
+
+Anything riding along is refused (`durable_task_exemption_scope`). An `inbound_observation` write may also not carry a contribution that is new, or that differs from its durable row. That stops an in-memory approval left behind by a failed owned write from being persisted through an exempt write.
+
+Inbound events (provider observations, Riley reply interpretations) persist through `runtime.persistInbound`. It compares the guarded fields before and after the event was applied:
+- if nothing changed, the write is the audited `inbound_observation` exemption;
+- if applying the event also advanced the mission (an outcome auto-advancing OBSERVE→LEARN, a refreshed decision or status), the write is task-owned work.
+
+So a legitimate inbound write is never refused, and a mission advance is never recorded as an observation. With durable tasks off both reduce to the original `persistMissionState`.
+
+**Fence scope.** A fence carries its mission:
+- a write to another mission under it is refused unless an exemption applies;
+- `runTaskOwnedWork` inherits a fence only for the same mission, so nested work on another mission takes its own task.
+
+The offline exemption admits discovery only with a Scout runner explicitly marked `offlineFixture`.
+
+**Structural enforcement.** `test/maxDurableOwnershipStructure.test.js` scans production code for every caller of `routeExecutionRequest`, `executeMissionStage`, `persistMissionState`, `persistStageCommit`, `executeOutboundBundle` and `guardedDispatch`. It requires each file to be classified and to still carry its ownership wiring, and it pins every exemption to its permitted call sites. An unclassified caller, or one that loses its wiring, fails CI. Both failure modes were checked by mutation.
+
 ## Persistence and migration
 
 Apply `migrations/2026-11-25-max-p0-004-durable-execution-ownership.sql` only after P0-003 and only with separate production approval. It is additive and re-runnable: two task tables, a composite-keyed immutable `task_id` on request receipts, indexes (including the one-active-task-per-mission index), a nullable composite-keyed `task_id` link on the existing ledger with an immutability trigger, the task guard and append-only triggers above, and P0-003-style no-delete/no-truncate triggers for durable task evidence. It changes no existing rows or authorization policies. Old code ignores the new column and tables, so application rollback is a previous deploy while retaining the records. Do not drop them while unfinished tasks or action claims could require recovery.
@@ -82,14 +139,14 @@ The approved proposal (`main` `c51ce3c`, §5) defined 13 criteria across phases 
 
 | # | Criterion (abridged) | Status |
 |---|---|---|
-| 1 | Every execution request creates one durable root task before specialist code; concurrent identical requests yield one task | **Met for router-owned surfaces when enabled**: REST `/execute` and Max chat accept a task after the router's gates and before any handler, and a duplicate key yields one task. Operator scripts and governed adapters that call the router with their own context (`scripts/*`, `services/governedOutboundAdapters.js`, `services/anchorScopedResumeCrmPreparation.js`) do not pass a store yet. |
+| 1 | Every execution request creates one durable root task before specialist code; concurrent identical requests yield one task | **Met when enabled**: every router caller (REST, chat, governed adapters, Anchor scoped-resume, operator scripts) passes a task store with a stable key. Router, TME and send refuse unowned work, and mission writes outside a task are limited to three audited write exemptions. A structural CI test inventories every caller. |
 | 2 | Max status derived from durable task state; never "done" early | **Met when enabled**: `DurableTaskStatus` + chat notice + `GET …/tasks`. |
 | 3 | CAS on state/fence/owner/DB-time lease; fence enforced in the TME commit | **Met**: every store transition, the dispatch marker and every leased mission commit re-check the fence in PostgreSQL. *Mission-lease narrowing (§3.2) is deliberately not done*: it changes P0-003's lock topology and needs its own approval and multi-process proof. |
 | 4 | At most one active task per mission per tenant, DB-enforced | **Met** (partial unique index; the router refuses a second request). |
 | 5 | Explicit recoverable state after a crash at every boundary | **Met for the tested boundaries**: owner killed mid-specialist (separate process, `SIGKILL`) → expired lease → plan → attributed recovery, with no mission write; takeover and cancellation mid-execute → commit refused; a failure after dispatch still ends ownership. Other boundaries (claim/start, finish/receipt) fall to the same lease-expiry rule but are not individually injected. A task left `queued` by a crash between accept and claim is resumed only by a direct router call reusing its key: through `/execute` its receipt becomes `interrupted`, which is never re-run, and with no worker a re-queued task is not picked up automatically. An operator cancels it (`recover.cjs --cancel-task`). |
 | 6 | Deadline/stall never replays; external doubt → intervention | **Met**: router tasks have no retry budget, so interruption escalates. Unresolved actions escalate on failure, completion, recovery and cancellation. Actions that already reached a provider escalate on failure (`failed_after_dispatch`, e.g. a send acknowledged before the mission commit rolled back) and on cancellation. |
 | 7 | Recovery tenant-scoped, plan-by-default, operator-attributed, audited | **Met**: `recover.cjs --tasks` (plan / apply / revalidate / cancel), tenant confirmation, operator attribution in task events. |
-| 8 | Cycle-free dependencies, admission, failure propagation | **Partial**: the parent tree is cycle-free by DB and dependency drift blocks; there is no DAG admission or failure propagation. Chained steps share the parent task instead of becoming dependents. |
+| 8 | Cycle-free dependencies, admission, failure propagation | **Met when enabled**: immutable, tenant-scoped DAG edges are admitted only to existing tasks; PostgreSQL rejects direct self/cycle edits. A dependent remains `blocked_dependency` until every prerequisite is verified `completed`; claim rechecks that condition. A prerequisite that fails, is cancelled, or escalates blocks all nonterminal descendants transactionally, with an event naming the failed prerequisite. Revalidation never clears a failed/pending edge. |
 | 9 | Cancel before dispatch → cancelled, after → intervention with claim states | **Met** (store and E2E). |
 | 10 | Receipts, claims and tasks linked; replay returns live task state; no completion with an unresolved claim | **Met**: receipt `task_id` linked before dispatch; replays and conflicts carry `durableTask`. |
 | 11 | Evidence non-deletable; tenant-scoped; no cross-tenant reads | **Met** (composite FKs on claims, events, parents and receipts; triggers; tenant-filtered reads). |
@@ -99,6 +156,18 @@ The approved proposal (`main` `c51ce3c`, §5) defined 13 criteria across phases 
 State vocabulary differs from the proposal (`queued` ≈ `admitted`, `escalated` ≈ `awaiting_intervention`, `recovery_required` ≈ `interrupted`, `completed` after evidence ≈ `verified`). `DurableTaskStatus` maps it for operators without claiming more.
 
 ## Known limits
+
+- A retry after a `failed` attempt runs again. That is right for external effects: none happened, and the ledger deduplicates sends anyway. But paid provider work done before a rolled-back stage (Scout/Places, Paige generation) is paid for again on the retry.
+- When two callers retry the same key concurrently, only one attempt is created. The loser usually gets `durable_task_key_reused` (422) rather than a replay. REST is serialized by its receipt.
+- An inbound event that advances a mission needs a task. While another task owns that mission, the event is refused with `durable_task_mission_busy`:
+  - provider observations record it as `observeBlocked`;
+  - for a Riley interpretation the error propagates, and the in-memory change is persisted by that mission's next owned write.
+
+  Each advancing inbound event takes its own short-lived task.
+- The offline Scout marker (`runScout.offlineFixture`) is declared by the caller. It is a reviewed marker, pinned to one script by the structural test, not a cryptographic guarantee.
+
+- Tenant learning rows (`persistLearning`/`persistPrediction`/`persistOutcomeEvaluation`/`persistOutcomeLearning`) are written on the pool after the mission lease commits. Per-send outbound records are written by the Emmett stage, inside the router's fenced execution. Neither is a core mission row, and neither is routed through the exemption audit.
+- Provider observation skips its OBSERVE/LEARN progression while another task is active on the mission (`mission_busy` is recorded as `observeBlocked`/`learnBlocked`). It is retried on the next event, as it already was when the mission lock was held.
 
 - Activation (`MAX_DURABLE_TASKS=true`) requires the P0-003 and P0-004 migrations; it is an operator decision and not part of this change.
 - `persistStageCommit` still has a pre-existing unlocked fallback when a caller holds the process's mission lock but passes neither `lease` nor `skipGlobalLock`. No production caller reaches it, and under a task fence it is refused.

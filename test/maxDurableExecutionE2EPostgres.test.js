@@ -372,20 +372,39 @@ test('review: a releasable failure of a task-linked request is never released; s
   assert.equal(fresh.body.durableTask.state, 'completed', 'a new key runs normally');
 });
 
-test('review: replay labels are honest for failed and cancelled tasks', { timeout: 60000 }, async () => {
+test('attempts: a stable key retries after a no-effect failure or cancellation, and replays everything else', { timeout: 60000 }, async () => {
   const { pool } = await db(); const store = createDurableExecutionOwnership(pool);
   const { engine, mission } = await missionFixture(pool);
-  const failedKey = `review-label-failed-${seq}`;
-  await assert.rejects(route(engine, mission, pool, store, { handler: async () => { throw Object.assign(new Error('x'), { code: 'boom' }); }, context: { durableTaskKey: failedKey } }));
-  const replayFailed = await route(engine, mission, pool, store, { context: { durableTaskKey: failedKey } });
-  assert.equal(replayFailed.execution.state, 'failed');
-  const holder = await store.accept({ tenantId: '10', logicalKey: `review-holder-${seq}`, specialist: 'operator', missionId: mission.id });
+  let runs = 0;
+  // A definitive failure (nothing in doubt) → the same logical key runs again as attempt 2.
+  const failedKey = `attempt-failed-${seq}`;
+  await assert.rejects(route(engine, mission, pool, store, { handler: async () => { runs += 1; throw Object.assign(new Error('x'), { code: 'boom' }); }, context: { durableTaskKey: failedKey } }));
+  const retried = await route(engine, engine.get(mission.id, '10'), pool, store, { onExecute: () => { runs += 1; }, context: { durableTaskKey: failedKey } });
+  assert.equal(runs, 2, 'the retry ran');
+  assert.equal(retried.durableTask.logicalKey, `${failedKey}#attempt-2`);
+  assert.equal(retried.durableTask.state, 'completed');
+  // A completed attempt replays (never a third run).
+  const replay = await route(engine, engine.get(mission.id, '10'), pool, store, { onExecute: () => { runs += 1; }, context: { durableTaskKey: failedKey } });
+  assert.equal(runs, 2); assert.equal(replay.replay, true); assert.equal(replay.execution.state, 'already_executed');
+
+  // Cancelled because the mission was busy (no effect) → runs once the mission is free.
+  const holder = await store.accept({ tenantId: '10', logicalKey: `attempt-holder-${seq}`, specialist: 'operator', missionId: mission.id });
   await store.claimTask({ tenantId: '10', taskId: holder.task.id, ownerToken: 'h', leaseMs: 30000 });
-  const busyKey = `review-label-busy-${seq}`;
-  await assert.rejects(route(engine, mission, pool, store, { context: { durableTaskKey: busyKey } }), { code: 'durable_task_mission_busy' });
+  const busyKey = `attempt-busy-${seq}`;
+  await assert.rejects(route(engine, engine.get(mission.id, '10'), pool, store, { context: { durableTaskKey: busyKey } }), { code: 'durable_task_mission_busy' });
   await store.cancel({ tenantId: '10', taskId: holder.task.id });
-  const replayCancelled = await route(engine, mission, pool, store, { context: { durableTaskKey: busyKey } });
-  assert.equal(replayCancelled.execution.state, 'blocked');
+  const afterBusy = await route(engine, engine.get(mission.id, '10'), pool, store, { onExecute: () => { runs += 1; }, context: { durableTaskKey: busyKey } });
+  assert.equal(afterBusy.durableTask.state, 'completed', 'not spent by the earlier collision');
+
+  // An escalated attempt (needs a person) replays; it is never retried automatically.
+  const escKey = `attempt-escalated-${seq}`;
+  const esc = await store.accept({ tenantId: '10', logicalKey: escKey, specialist: 'operator', missionId: mission.id });
+  const c = await store.claimTask({ tenantId: '10', taskId: esc.task.id, ownerToken: 'e', leaseMs: 1000 });
+  await pool.query("UPDATE max_durable_execution_tasks SET lease_expires_at = clock_timestamp() - interval '1 second' WHERE id = $1", [c.id]);
+  await store.recoverExpired({ tenantId: '10' });
+  const before = runs;
+  const escReplay = await route(engine, engine.get(mission.id, '10'), pool, store, { onExecute: () => { runs += 1; }, context: { durableTaskKey: escKey } });
+  assert.equal(runs, before); assert.equal(escReplay.replay, true); assert.equal(escReplay.durableTask.state, 'escalated');
 });
 
 test('review: a failure after dispatch (classification) still ends task ownership', { timeout: 60000 }, async () => {

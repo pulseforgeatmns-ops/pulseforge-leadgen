@@ -33,7 +33,8 @@ function normalizeFence(fence) {
   if (!taskId || !tenantId || !ownershipToken || !Number.isSafeInteger(fenceEpoch) || fenceEpoch < 1) {
     throw fencedError('A task fence requires tenantId, taskId, ownershipToken and a positive fenceEpoch.');
   }
-  return Object.freeze({ taskId, tenantId, ownershipToken, fenceEpoch });
+  const missionId = fence.missionId == null || fence.missionId === '' ? null : String(fence.missionId);
+  return Object.freeze({ taskId, tenantId, ownershipToken, fenceEpoch, missionId });
 }
 
 /** Run fn with the given task fence as the current execution's fence. */

@@ -85,6 +85,25 @@ test('dependency drift blocks recovery; cancellation fences further work; comple
   await ledger.releaseUndispatched({ tenantId: thirdInput.tenantId, idempotencyKey: `unresolved-${sequence}`, ownerToken: action.ownerToken });
 });
 
+test('dependency admission is tenant-scoped, cycle-free, and terminal failure blocks descendants', async () => {
+  const { pool } = await db(); const store = createDurableExecutionOwnership(pool);
+  const tenantId = `tenant-deps-${++sequence}`;
+  const base = { tenantId, specialist: 'research', dependencyRefs: [], retryBudget: 0 };
+  const first = (await store.accept({ ...base, logicalKey: `dep-first-${sequence}` })).task;
+  const second = (await store.accept({ ...base, logicalKey: `dep-second-${sequence}`, dependencyTaskIds: [first.id] })).task;
+  assert.equal(second.state, STATES.BLOCKED_DEPENDENCY, 'incomplete prerequisite is not claimable');
+  assert.equal(await store.claimTask({ tenantId, taskId: second.id, ownerToken: 'blocked', leaseMs: 1000 }), null);
+  const firstOwner = await store.claimTask({ tenantId, taskId: first.id, ownerToken: 'first', leaseMs: 1000 });
+  await store.start(owner(firstOwner, 'first'));
+  await store.fail({ ...owner(firstOwner, 'first'), reason: 'definitive prerequisite failure' });
+  const blocked = await store.get({ tenantId, taskId: second.id });
+  assert.equal(blocked.state, STATES.BLOCKED_DEPENDENCY);
+  assert.equal(blocked.recoveryReason, 'dependency_failed');
+  await assert.rejects(store.accept({ ...base, logicalKey: `wrong-tenant-${sequence}`, dependencyTaskIds: [first.id], tenantId: `${tenantId}-other` }), { code: 'durable_task_dependency_unavailable' });
+  await assert.rejects(pool.query('INSERT INTO max_durable_execution_task_dependencies(tenant_id,task_id,depends_on_task_id) VALUES($1,$2,$3)', [tenantId, first.id, second.id]), { code: '23514' });
+  await assert.rejects(pool.query('TRUNCATE max_durable_execution_task_dependencies'), { code: '42501' });
+});
+
 test('tenant scope and the P0-003 ledger prevent a stale task owner from reaching a provider', async () => {
   const { pool } = await db(); const store = createDurableExecutionOwnership(pool); const input = taskInput(); const accepted = await store.accept(input); const claim = await store.claim({ tenantId: input.tenantId, ownerToken: 'owner-send', leaseMs: 1000 });
   assert.equal(await store.get({ tenantId: 'tenant-b', taskId: accepted.task.id }), null);

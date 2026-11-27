@@ -97,8 +97,9 @@ function failStatus(err, fallbackCode, fallbackStatus = 500) {
       : code === 'research_planning_required' ? 409
       // MAX-P0-004 — task ownership refusals: another execution owns the
       // mission, or this request key was accepted for a different execution.
-      : code === 'durable_task_mission_busy' || code === 'durable_task_fenced' ? 409
+      : code === 'durable_task_mission_busy' || code === 'durable_task_fenced' || code === 'durable_task_owner_required' ? 409
       : code === 'durable_task_key_reused' ? 422
+      : code === 'durable_task_not_completed' ? 409
       // P0 — tenant sender configuration problems are client-correctable
       // preconditions, never a generic server error. Still fail closed.
       : code === 'canonical_sender_tenant_required' ? 400
@@ -336,12 +337,24 @@ router.post('/api/v1/amo/missions/:id/outcome-learning/evaluate', requireActor, 
     }
     const { getAcquisitionMissionRuntime } = require('../services/acquisitionMissionRuntime');
     await listMissions(tenantId, { pool });
-    const result = getAcquisitionMissionRuntime().engine().evaluateOutcomeLearning(
-      req.params.id,
-      req.body || {},
-      { tenantId }
-    );
-    await getAcquisitionMissionRuntime().persistMissionState(req.params.id, { pool });
+    // MAX-P0-004 criterion 1 — task-owned when durable tasks are enabled, keyed by
+    // the mission version it evaluates (a retry at the same version replays).
+    const { resolveDurableTasks, runTaskOwnedWork } = require('../packages/acquisition-mission/DurableTaskRouting');
+    const runtimeNow = getAcquisitionMissionRuntime();
+    const missionNow = runtimeNow.engine().get(req.params.id, String(tenantId));
+    let result;
+    const owned = await runTaskOwnedWork({
+      store: resolveDurableTasks({ pool }), tenantId: String(tenantId), missionId: req.params.id,
+      logicalKey: `outcome-learning:${req.params.id}:${Number(missionNow && missionNow.version) || 0}`, specialist: 'max',
+    }, async () => {
+      result = runtimeNow.engine().evaluateOutcomeLearning(req.params.id, req.body || {}, { tenantId });
+      await runtimeNow.persistMissionState(req.params.id, { pool });
+      return result;
+    });
+    if (owned.replay) {
+      return res.status(409).json({ error: 'outcome_learning_already_evaluated', durableTask: owned.durableTask,
+        message: 'Outcome learning was already evaluated for this mission version.' });
+    }
     noStore(res);
     return res.json({
       spec: 'SPEC-166',

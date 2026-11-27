@@ -103,7 +103,7 @@ const SENDER_REQUIRED_INTENTS = new Set([
   amo.EXECUTION_INTENTS.APPROVE_EXECUTION,
 ]);
 
-const { resolveDurableTasks } = require('../packages/acquisition-mission/DurableTaskRouting');
+const { resolveDurableTasks, runTaskOwnedWork } = require('../packages/acquisition-mission/DurableTaskRouting');
 
 async function executeCanonical(input = {}, opts = {}) {
   const runtime = runtimeFromOpts(opts);
@@ -235,12 +235,13 @@ async function executeCanonical(input = {}, opts = {}) {
     durableTaskKey: opts.durableTaskKey,
     durableTaskInput: opts.durableTaskInput,
     onDurableTaskAccepted: opts.onDurableTaskAccepted,
+    // Cancellation is an operator edit, not a specialist TME stage. Persist it
+    // through the runtime's canonical commit path before a subsequent hydration
+    // — inside the router, so a task-owned request persists it under its fence.
+    afterDispatch: intent === amo.EXECUTION_INTENTS.CANCEL_PLAN
+      ? () => runtime.persistMissionState(mission.id, opts)
+      : undefined,
   });
-  // Cancellation is an operator edit, not a specialist TME stage. Persist it
-  // through the runtime's canonical commit path before a subsequent hydration.
-  if (intent === amo.EXECUTION_INTENTS.CANCEL_PLAN && !routed.executionResult?.rolledBack) {
-    await runtime.persistMissionState(mission.id, opts);
-  }
   return routed;
 }
 
@@ -383,7 +384,7 @@ async function amendMissionAuthorization(input = {}, opts = {}) {
   await runtime.hydrate(tenantId, opts);
   const engine = getEngine(opts);
   const { bindStagePersistDurable } = require('./acquisitionMissionPersistence');
-  return amo.applyAuthorizationAmendment({
+  const apply = () => amo.applyAuthorizationAmendment({
     engine,
     missionId: String(input.missionId || ''),
     tenantId,
@@ -398,6 +399,23 @@ async function amendMissionAuthorization(input = {}, opts = {}) {
       tenantId
     ),
   });
+  // MAX-P0-004 criterion 1 — an amendment is task-owned work when durable tasks
+  // are enabled, keyed by its amendmentId (already its idempotency key, so a
+  // retry of the same amendment replays rather than running again).
+  const store = resolveDurableTasks(opts);
+  if (!store) return apply();
+  const missionId = String(input.missionId || '');
+  const owned = await runTaskOwnedWork({
+    store, tenantId, missionId, logicalKey: `amendment:${missionId}:${String(input.amendmentId || '')}`, specialist: 'operator',
+    immutableInput: { amendmentId: String(input.amendmentId || ''), expectedConstraintsHash: input.expectedConstraintsHash || null },
+  }, apply);
+  if (!owned.replay) return { ...owned.result, durableTask: owned.durableTask };
+  if (owned.durableTask && owned.durableTask.state === 'completed') {
+    // The committed amendment answers idempotently from the mission (no stage runs).
+    return { ...(await apply()), durableTask: owned.durableTask };
+  }
+  throw Object.assign(new Error('An earlier attempt with this amendmentId did not complete; use a new amendmentId.'),
+    { code: 'durable_task_not_completed', statusCode: 409, durableTask: owned.durableTask });
 }
 
 module.exports = {

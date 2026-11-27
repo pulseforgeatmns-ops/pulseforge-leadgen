@@ -1,4 +1,5 @@
 'use strict';
+const { guardedSnapshot } = require('./maxReliability/executionOwnershipPolicy');
 
 /**
  * Mission-bound provider event → canonical communication observation → OBSERVE.
@@ -156,6 +157,7 @@ async function tryMissionStageSideEffects({
     await syncObservationToEngine(engine, missionId, observation);
 
     const priorOutcomes = engine.store.listOutcomes(missionId).length;
+    const guardedBefore = guardedSnapshot(engine.store.getMission(missionId));
     const structured = engine.recordCommunicationObservation(missionId, providerEvent, {
       tenantId,
       skipInterpretation: opts.skipInterpretation === true,
@@ -200,7 +202,9 @@ async function tryMissionStageSideEffects({
     }
 
     try {
-      await runtime.persistMissionState(missionId, { pool: opts.pool || pool, persist: opts.persist });
+      // MAX-P0-004 — an inbound provider event: an audited inbound_observation write,
+      // or task-owned work if it also advanced the mission (e.g. OBSERVE→LEARN).
+      await runtime.persistInbound(missionId, guardedBefore, { pool: opts.pool || pool, persist: opts.persist });
     } catch (err) {
       const code = err.code || err.message;
       observeBlocked = observeBlocked || code;

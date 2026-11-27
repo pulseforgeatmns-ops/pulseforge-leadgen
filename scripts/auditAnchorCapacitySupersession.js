@@ -126,7 +126,17 @@ async function run(options = {}) {
       return markContributionSuperseded(row, activeId);
     });
     if (repairedRowIds.length) {
-      await persistStageCommit({
+      // MAX-P0-004 criterion 1 — with durable tasks enabled the repair is
+      // task-owned and goes through the mission lease (the unlocked path is
+      // refused); its key is the exact repair, so a retry replays it.
+      const { ownershipEnforced } = require('../services/maxReliability/executionOwnershipPolicy');
+      const { resolveDurableTasks, runTaskOwnedWork, operatorRunKey } = require('../packages/acquisition-mission/DurableTaskRouting');
+      const enforced = ownershipEnforced();
+      const owned = await runTaskOwnedWork({
+        store: resolveDurableTasks({ pool }), tenantId: TENANT_ID, missionId,
+        logicalKey: operatorRunKey('auditAnchorCapacitySupersession', { missionId, activeId, repairedRowIds: [...repairedRowIds].sort() }),
+        specialist: 'operator',
+      }, () => persistStageCommit({
         mission: durable.mission,
         contributions: [
           ...(durable.contributions || []).filter(
@@ -137,7 +147,8 @@ async function run(options = {}) {
         events: [],
         observations: [],
         outcomes: [],
-      }, pool, { skipGlobalLock: true });
+      }, pool, enforced ? { tenantId: TENANT_ID } : { skipGlobalLock: true }));
+      if (owned.replay) report.durableTaskReplay = owned.durableTask;
       report.repairPerformed = true;
       report.repairedRowIds = repairedRowIds;
     }

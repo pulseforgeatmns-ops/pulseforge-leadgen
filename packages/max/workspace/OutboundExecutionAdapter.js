@@ -123,6 +123,12 @@ async function executeOutboundBundle(input = {}) {
   // is fenced, without each caller threading a binding through.
   if (!input.durableTaskOwnership) {
     const fence = currentTaskFence();
+    // Criterion 1 — with durable tasks enabled, no send happens outside a
+    // task-owned execution. No exemption covers an external send.
+    if (!fence && require('../../../services/maxReliability/executionOwnershipPolicy').ownershipEnforced()) {
+      throw Object.assign(new Error('Outbound sends require durable task ownership; nothing was sent.'),
+        { code: 'durable_task_owner_required', spec: 'MAX-P0-004' });
+    }
     if (fence) {
       if (input.tenantId != null && String(input.tenantId) !== fence.tenantId) {
         throw Object.assign(new Error('The task fence belongs to a different tenant; nothing was sent.'), { code: 'durable_task_fenced' });

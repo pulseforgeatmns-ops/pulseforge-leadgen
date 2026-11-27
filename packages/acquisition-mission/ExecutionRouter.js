@@ -44,6 +44,7 @@ const {
 const { assertResearchPlanningComplete } = require('./ResearchPlanning');
 
 const { beginDurableTask } = require('./DurableTaskRouting');
+const { ownershipEnforced, ownershipError, isOfflineEvaluation } = require('../../services/maxReliability/executionOwnershipPolicy');
 
 function cerError(code, message, extras = {}) {
   const err = amoError(code, message);
@@ -422,6 +423,7 @@ async function maybeChainAutonomousDiscovery(request, context, dispatched, handl
     ...context,
     handlers,
     question: child.payload.question,
+    afterDispatch: undefined,
     // MAX-P0-004 — the chained step runs under the parent's task and fence;
     // a second task for the same mission could never be claimed alongside it.
     durableTasks: null,
@@ -539,6 +541,21 @@ async function routeExecutionRequest(request, context = {}) {
   // MAX-P0-004 P2 — opt-in durable task ownership (context.durableTasks). The
   // task is accepted before any specialist code runs; a replay of an accepted
   // key returns the recorded task and never dispatches again.
+  // MAX-P0-004 criterion 1 — with durable tasks enabled, every routed execution
+  // is task-owned. The only alternative is non-durable offline evaluation: no
+  // pool, nothing persisted, and discovery only with an injected Scout runner.
+  if (ownershipEnforced() && !context.durableTasks) {
+    const offlineOk = isOfflineEvaluation() && !context.pool && context.persist !== true
+      && (!isDiscoveryIntent(request.intent)
+        || (typeof context.runScout === 'function' && context.runScout.offlineFixture === true));
+    if (!offlineOk) {
+      recordRouterAudit({ requestId: request.id, source: request.source, intent: request.intent, missionId: request.missionId,
+        operatorId: request.operatorId, runtimeOwner, specialist, action, outcome: 'blocked_no_task_owner',
+        executionState: 'blocked', errorCode: 'durable_task_owner_required', replay, request });
+      throw ownershipError('durable_task_owner_required',
+        'Execution requires durable task ownership (MAX_DURABLE_TASKS is enabled); nothing ran.', { requestId: request.id });
+    }
+  }
   const taskRun = await beginDurableTask(request, context, mission, { specialist });
   if (taskRun && taskRun.replay) {
     const audit = recordRouterAudit({
@@ -562,6 +579,11 @@ async function routeExecutionRequest(request, context = {}) {
   try {
     const runDispatch = async () => {
       const first = await dispatch(request, context, mission, handlers, runtimeOwner);
+      // A caller's follow-on durable write for this request (e.g. persisting a
+      // cancellation) runs here, inside the same task and fence.
+      if (typeof context.afterDispatch === 'function' && !(first.executionResult && first.executionResult.rolledBack)) {
+        await context.afterDispatch(first);
+      }
       return { first, chainedResult: await maybeChainAutonomousDiscovery(request, context, first, handlers) };
     };
     const out = taskRun ? await taskRun.run(runDispatch) : await runDispatch();

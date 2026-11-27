@@ -256,7 +256,12 @@ async function prepareWithTrace(pool, rawInput, options, trace) {
           stage: current.stage, operatorId: binding.manifest.operatorId, intent, permissions: { canExecute: true, role: 'operator' },
           payload: { question: 'Explicit existing CRM preparation only', approach: 'outbound' } });
         trace.enter('stage_execution');
+        // MAX-P0-004 criterion 1 — task-owned when durable tasks are enabled; the key
+        // derives from the replay-stable operationId and the step, so a retry of
+        // the same logical step replays its task instead of running again.
         const routed = await amo.routeExecutionRequest(request, { engine, tenantId: '10', pool: canonical, persist: true,
+          durableTasks: require('../packages/acquisition-mission/DurableTaskRouting').resolveDurableTasks({ pool }),
+          durableTaskKey: `anchor-crm-prep:${operationId}:${step}:${intent}`,
           preinitializedSchema: true, operatorId: binding.manifest.operatorId, allowFixtureFallback: false,
           runScout, runPaige, runEmmett, infrastructureSnapshot: snapshot });
         if (routed.executionResult?.rolledBack) throw routed.executionResult.error || new Error(routed.executionResult.rollbackReason);

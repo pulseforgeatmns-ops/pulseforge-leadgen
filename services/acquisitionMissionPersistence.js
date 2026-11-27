@@ -18,6 +18,9 @@ const {
 const { persistOutboundExecution, ensureOutboundExecutionSchema } = require('./acquisitionMissionOutboundPersistence');
 const { currentTaskFence, assertTaskFenceOnClient, fencedError } = require('./maxReliability/taskExecutionContext');
 const {
+  ownershipEnforced, ownershipError, isWriteExempt, currentOwnershipExemption, auditExemptWrite, EXEMPT_GUARDED_FIELDS,
+} = require('./maxReliability/executionOwnershipPolicy');
+const {
   ensureAcquisitionKnowledgeSchema,
   persistLearningCandidatesForStageCommit,
 } = require('./acquisitionKnowledgePersistence');
@@ -1031,7 +1034,7 @@ function wrapStageCommitError(err) {
   if (err && err.code === 'tme_persistence' && err.cause) return err;
   const wrapped = new Error((err && err.message) || 'Persistence failure.');
   const passthrough = ['tme_transaction_overlap', 'mission_version_conflict', 'mission_tenant_mismatch',
-    'mission_lock_timeout', 'mission_lease_lost', 'durable_task_fenced'];
+    'mission_lock_timeout', 'mission_lease_lost', 'durable_task_fenced', 'durable_task_owner_required', 'durable_task_exemption_scope'];
   wrapped.code = err && passthrough.includes(err.code) ? err.code : 'tme_persistence';
   wrapped.cause = err;
   if (err && err.details) wrapped.details = err.details;
@@ -1051,10 +1054,83 @@ function wrapStageCommitError(err) {
  *     by the tenant + version compare-and-set in persistMission.
  * opts.expectedFingerprint pins the durable revision the writer read.
  */
+/**
+ * MAX-P0-004 criterion 1 — a write exemption is bound to what it may change,
+ * checked against the durable row inside the lease transaction:
+ *   mission_creation               only a mission that does not exist yet;
+ *   operator_restriction_tightening only authorizationConstraints, tightening;
+ *   inbound_observation            none of stage, pending decision, plan,
+ *                                  objective, tenant or constraints (it may
+ *                                  only add observations/outcomes/events).
+ * Anything else — e.g. an unowned stage advance riding along — is refused.
+ */
+async function assertExemptWriteScope(client, mission, reason, bundle = {}) {
+  const { requestFingerprint } = require('./maxReliability/externalActionLedger');
+  const row = (await client.query('SELECT payload FROM acquisition_missions WHERE id = $1', [mission.id])).rows[0];
+  const durable = row && row.payload;
+  const scopeError = (detail) => ownershipError('durable_task_exemption_scope',
+    `The ${reason} exemption does not permit this write (${detail}); nothing was written.`, { missionId: mission.id });
+  if (reason === 'mission_creation') {
+    if (durable) throw scopeError('the mission already exists');
+    return;
+  }
+  if (!durable) throw scopeError('no existing mission');
+  const same = (a, b) => requestFingerprint({ v: a === undefined ? null : a }) === requestFingerprint({ v: b === undefined ? null : b });
+  const changed = EXEMPT_GUARDED_FIELDS.filter((f) => !same(durable[f], mission[f]));
+  const allowed = reason === 'operator_restriction_tightening' ? ['authorizationConstraints'] : [];
+  const forbidden = changed.filter((f) => !allowed.includes(f));
+  if (forbidden.length) throw scopeError(`changes ${forbidden.join(', ')}`);
+  if (reason === 'inbound_observation') {
+    // An inbound event adds no specialist contribution. A contribution that is
+    // new or differs from its durable row (e.g. an approval left in memory by a
+    // failed owned write) must not ride along on an exempt write.
+    const rows = (bundle.contributions || []).filter((r) => r && r.id);
+    if (rows.length) {
+      const durableRows = (await client.query(
+        'SELECT id, payload FROM acquisition_mission_contributions WHERE mission_id = $1 AND id = ANY($2::text[])',
+        [mission.id, rows.map((r) => String(r.id))]
+      )).rows;
+      const byId = new Map(durableRows.map((r) => [String(r.id), r.payload]));
+      const drift = rows.filter((r) => !byId.has(String(r.id)) || !same(byId.get(String(r.id)), JSON.parse(JSON.stringify(r))));
+      if (drift.length) throw scopeError(`carries ${drift.length} unpersisted contribution(s)`);
+    }
+  }
+  if (changed.includes('authorizationConstraints')) {
+    // Monotonic: every existing prohibition (and review-only) is kept, and at
+    // least one is added. tightens() alone only checks the addition.
+    const { tightens } = require('../packages/acquisition-mission/AuthorizationConstraints');
+    const cur = durable.authorizationConstraints || {}; const nxt = mission.authorizationConstraints || {};
+    const nextSet = new Set(nxt.prohibited || []);
+    const keepsAll = (cur.prohibited || []).every((c) => nextSet.has(c)) && !(cur.reviewOnly === true && nxt.reviewOnly !== true);
+    if (!keepsAll || !tightens(durable.authorizationConstraints, mission.authorizationConstraints)) throw scopeError('constraints do not only tighten');
+  }
+}
+
 /** MAX-P0-004 P3 — the current task fence must be live and of the mission's tenant. */
-async function assertMissionTaskFence(mission, client) {
+async function assertMissionTaskFence(mission, client, bundle = {}) {
   const fence = currentTaskFence();
-  if (!fence) return;
+  if (!fence) {
+    // Criterion 1 — with durable tasks enabled, an unowned write is allowed only
+    // under a closed write exemption, and is audited in this same transaction.
+    if (!ownershipEnforced()) return;
+    if (!isWriteExempt()) {
+      throw ownershipError('durable_task_owner_required',
+        'Mission writes require durable task ownership; nothing was written.', { missionId: mission.id });
+    }
+    await assertExemptWriteScope(client, mission, currentOwnershipExemption(), bundle);
+    await auditExemptWrite(client, { missionId: mission.id, tenantId: mission.tenantId ?? mission.clientId, reason: currentOwnershipExemption() });
+    return;
+  }
+  // A fence of another mission does not own this mission (nested work on a
+  // second mission must take its own task); an audited exemption may still apply.
+  if (fence.missionId && String(fence.missionId) !== String(mission.id)) {
+    if (!isWriteExempt()) {
+      throw fencedError('The current task owns a different mission; nothing was written.', { missionId: mission.id });
+    }
+    await assertExemptWriteScope(client, mission, currentOwnershipExemption(), bundle);
+    await auditExemptWrite(client, { missionId: mission.id, tenantId: mission.tenantId ?? mission.clientId, reason: currentOwnershipExemption() });
+    return;
+  }
   const missionTenant = mission.tenantId != null ? String(mission.tenantId)
     : (mission.clientId != null ? String(mission.clientId) : null);
   if (missionTenant !== fence.tenantId) {
@@ -1094,7 +1170,7 @@ async function persistStageCommit(bundle = {}, pool = defaultPool(), opts = {}) 
         // while that owner is current: the fence is re-checked FOR SHARE in the
         // lease transaction itself, so a superseded, cancelled, recovered or
         // past-deadline owner can never make mission state durable.
-        await assertMissionTaskFence(mission, lease.client);
+        await assertMissionTaskFence(mission, lease.client, bundle);
         await writeStageBundle(bundle, mission, lease.client, expectedFingerprint);
         await lease.client.query('RELEASE SAVEPOINT amo_stage_commit');
       } catch (err) {
@@ -1140,6 +1216,12 @@ async function persistStageCommit(bundle = {}, pool = defaultPool(), opts = {}) 
   if (currentTaskFence()) {
     throw wrapStageCommitError(fencedError('A task-owned mission write requires the mission lease; nothing was written.',
       { missionId: mission.id }));
+  }
+  // Criterion 1 — with durable tasks enabled, the unlocked path is never allowed
+  // (no exemption covers it): ownership cannot be checked or audited atomically.
+  if (ownershipEnforced()) {
+    throw wrapStageCommitError(ownershipError('durable_task_owner_required',
+      'Mission writes require durable task ownership and the mission lease; nothing was written.', { missionId: mission.id }));
   }
   const client = typeof pool.connect === 'function' ? await pool.connect() : pool;
   const ownsClient = client !== pool && typeof client.release === 'function';
