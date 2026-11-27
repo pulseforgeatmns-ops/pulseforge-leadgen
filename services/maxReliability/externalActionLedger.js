@@ -326,7 +326,7 @@ function createExternalActionLedger(pool, options = {}) {
     try {
       await client.query('BEGIN');
       const owner = await client.query(
-        `SELECT t.id, t.mission_id AS task_mission_id, c.mission_id AS claim_mission_id
+        `SELECT t.id, t.mission_id AS task_mission_id, t.specialist, t.execution_scope, c.mission_id AS claim_mission_id
            FROM max_durable_execution_tasks t
            JOIN max_external_action_claims c ON c.task_id=t.id AND c.tenant_id=t.tenant_id
           WHERE t.id = $1 AND t.tenant_id = $2 AND t.ownership_token = $3 AND t.fence_epoch = $4
@@ -339,7 +339,10 @@ function createExternalActionLedger(pool, options = {}) {
       if (!owner.rows[0]) {
         throw ledgerError('durable_task_fenced', 'Task ownership is stale, expired, cancelled or past its deadline; nothing was dispatched.');
       }
-      if (!owner.rows[0].task_mission_id
+      const rootTask = owner.rows[0].specialist === 'max_objective'
+        || owner.rows[0].execution_scope?.role === 'root';
+      if (rootTask || (owner.rows[0].claim_mission_id
+          && !owner.rows[0].task_mission_id)
         || (owner.rows[0].claim_mission_id
           && String(owner.rows[0].task_mission_id) !== String(owner.rows[0].claim_mission_id))) {
         throw ledgerError('durable_task_fenced', 'A null-mission or mismatched task fence cannot authorize a mission external action.');
