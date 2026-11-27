@@ -313,8 +313,14 @@ function createExternalActionLedger(pool, options = {}) {
       // task's live fence.  The legacy unfenced path remains available only
       // for genuinely legacy (task_id NULL) claims.
       if (input) {
-        const linked = await pool.query('SELECT task_id FROM max_external_action_claims WHERE tenant_id=$1 AND idempotency_key=$2 AND owner_token=$3', [input.tenantId, input.idempotencyKey, input.ownerToken]);
-        if (linked.rows[0] && linked.rows[0].task_id) throw ledgerError('durable_task_fenced', 'A task-linked external action requires its task ownership fence.');
+        // P0-003 is independently deployable: its schema legitimately lacks
+        // task_id. Probe metadata first so the new P0-004 fence cannot break
+        // the established legacy ledger lane.
+        const column = await pool.query("SELECT 1 FROM information_schema.columns WHERE table_name='max_external_action_claims' AND column_name='task_id'");
+        if (column.rows[0]) {
+          const linked = await pool.query('SELECT task_id FROM max_external_action_claims WHERE tenant_id=$1 AND idempotency_key=$2 AND owner_token=$3', [input.tenantId, input.idempotencyKey, input.ownerToken]);
+          if (linked.rows[0] && linked.rows[0].task_id) throw ledgerError('durable_task_fenced', 'A task-linked external action requires its task ownership fence.');
+        }
       }
       return transition(input, [STATES.CLAIMED], STATES.DISPATCH_ATTEMPTED, { dispatch_attempted_at: now() }, 'dispatch_attempted');
     }

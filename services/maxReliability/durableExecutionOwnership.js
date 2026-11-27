@@ -180,7 +180,7 @@ function createDurableExecutionOwnership(pool, options = {}) {
         const status = await dependencyStatus(db, tenantId, taskId);
         let accepted = inserted.rows[0];
         if (status.pending) accepted = (await db.query(`UPDATE max_durable_execution_tasks SET state='blocked_dependency', recovery_reason=$3, updated_at=clock_timestamp() WHERE id=$1 AND tenant_id=$2 RETURNING *`, [taskId, tenantId, status.failed ? 'dependency_failed' : 'dependency_pending'])).rows[0];
-        await event(db, accepted, 'accepted', null, accepted.state, { dependencyTaskIds }); return { accepted: true, replay: false, task: row(accepted) };
+        await event(db, accepted, 'accepted', null, accepted.state, { dependencyTaskIds, ...(input.acceptedEventDetail || {}) }); return { accepted: true, replay: false, task: row(accepted) };
       }
       const existing = (await db.query('SELECT * FROM max_durable_execution_tasks WHERE tenant_id=$1 AND logical_key=$2', [tenantId, logicalKey])).rows[0];
       // No row for this key: either a concurrent writer, or a caller-supplied

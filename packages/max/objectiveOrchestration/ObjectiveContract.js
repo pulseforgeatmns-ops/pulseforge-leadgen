@@ -172,7 +172,7 @@ function rootLogicalKey(objectiveId) {
 }
 
 /** Root tasks have no mission ID by design; children own mission slots in Package C. */
-function rootTaskInput({ tenantId, objective, contract }) {
+function rootTaskInput({ tenantId, objective, contract, actor }) {
   return {
     tenantId: text(tenantId, 'tenantId'),
     objectiveId: text(objective.id, 'objective.id'),
@@ -181,13 +181,15 @@ function rootTaskInput({ tenantId, objective, contract }) {
     specialist: 'max_objective',
     executionScope: { kind: 'objective_orchestration', role: 'root', missionOwnership: 'none' },
     immutableInput: {
-      objectiveId: String(objective.id), objectiveRevision: contract.version,
-      objectiveText: String(objective.objectiveText), contract: clone(contract),
+      // Objective prose is mutable context, not orchestration authority; do
+      // not make an unchanged contract non-replayable after an ordinary edit.
+      objectiveId: String(objective.id), objectiveRevision: contract.version, contract: clone(contract),
     },
     dependencyRefs: [],
     dependencyTaskIds: [],
     deadlineAt: contract.deadlineAt,
     retryBudget: 0,
+    acceptedEventDetail: actor && actor.id ? { actorId: String(actor.id), admission: 'objective_contract' } : undefined,
   };
 }
 
@@ -226,7 +228,7 @@ async function admitObjectiveRoot(input = {}, opts = {}) {
   const contract = validateObjectiveContract(input.contract);
   let accepted;
   try {
-    accepted = await taskStore.accept(rootTaskInput({ tenantId, objective, contract }));
+    accepted = await taskStore.accept(rootTaskInput({ tenantId, objective, contract, actor: input.actor }));
   } catch (error) {
     if (error && error.code === 'durable_task_key_reused') {
       throw new ObjectiveContractError('objective_contract_revision_conflict', 'the admitted root contract is immutable', 409);
