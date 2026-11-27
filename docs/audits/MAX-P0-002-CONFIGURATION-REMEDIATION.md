@@ -144,6 +144,10 @@ Do **not** set it to `false` "for clarity". Explicit `false` on both switches is
 
 ## 5. Bounded reconciliation plan — 20 unresolved attempts + 1 failed mailbox record
 
+> **Superseded (2026-11-27).** The 20 attempts are AMO `acquisition_mission_outbound_executions` rows (P0-003 pre-check §4c), not
+> governed `acquisition_outbound_items`, so the governed reconciler CLI below does not apply to them. Use
+> `docs/audits/MAX-P0-002-ACCEPTANCE-REPORT.md` and the paste block in `docs/audits/MAX-P0-002-RECONCILIATION-SHELL.md`.
+
 **Principles.**
 - Classification is read-only. Unknown stays held. No row is deleted or reset.
 - **No `--apply` within this package.** Releasing a `PROVEN_UNSENT` item clears it back to `pending` and makes the contact sendable again (`retryAllowed: true`).
