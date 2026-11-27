@@ -217,7 +217,15 @@ async function admitObjectiveRoot(input = {}, opts = {}) {
   if (!objective) throw new ObjectiveContractError('objective_contract_not_found', 'objective not found', 404);
   if (objective.status !== 'active') throw new ObjectiveContractError('objective_contract_inactive', 'only active objectives may be admitted', 409);
   const contract = validateObjectiveContract(input.contract);
-  const accepted = await taskStore.accept(rootTaskInput({ tenantId, objective, contract }));
+  let accepted;
+  try {
+    accepted = await taskStore.accept(rootTaskInput({ tenantId, objective, contract }));
+  } catch (error) {
+    if (error && error.code === 'durable_task_key_reused') {
+      throw new ObjectiveContractError('objective_contract_revision_conflict', 'the admitted root contract is immutable', 409);
+    }
+    throw error;
+  }
   const acceptedContract = accepted.task && accepted.task.immutableInput && accepted.task.immutableInput.contract;
   if (accepted.replay && (!acceptedContract || fingerprint(acceptedContract) !== fingerprint(contract))) {
     throw new ObjectiveContractError('objective_contract_revision_conflict', 'the admitted root contract is immutable', 409);
