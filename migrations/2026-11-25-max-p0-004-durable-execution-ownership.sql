@@ -56,6 +56,46 @@ CREATE INDEX IF NOT EXISTS max_durable_execution_tasks_recovery
   ON max_durable_execution_tasks (tenant_id, state, lease_expires_at, deadline_at);
 CREATE INDEX IF NOT EXISTS max_durable_execution_tasks_mission
   ON max_durable_execution_tasks (tenant_id, mission_id, parent_task_id);
+
+-- Explicit dependency edges are immutable acceptance evidence.  A task may
+-- only depend on tasks of its own tenant; the trigger below rejects cycles for
+-- direct SQL callers too.  P0-004 adds no worker: this is admission/fencing
+-- data only.
+CREATE TABLE IF NOT EXISTS max_durable_execution_task_dependencies (
+  tenant_id TEXT NOT NULL,
+  task_id UUID NOT NULL,
+  depends_on_task_id UUID NOT NULL,
+  PRIMARY KEY (tenant_id, task_id, depends_on_task_id),
+  FOREIGN KEY (tenant_id, task_id) REFERENCES max_durable_execution_tasks(tenant_id, id),
+  FOREIGN KEY (tenant_id, depends_on_task_id) REFERENCES max_durable_execution_tasks(tenant_id, id),
+  CHECK (task_id <> depends_on_task_id)
+);
+CREATE INDEX IF NOT EXISTS max_durable_execution_task_dependencies_parent
+  ON max_durable_execution_task_dependencies (tenant_id, depends_on_task_id);
+CREATE OR REPLACE FUNCTION max_durable_execution_task_dependency_guard() RETURNS trigger
+  LANGUAGE plpgsql AS $$
+BEGIN
+  IF EXISTS (WITH RECURSIVE reachable(id) AS (
+      SELECT depends_on_task_id FROM max_durable_execution_task_dependencies
+       WHERE tenant_id=NEW.tenant_id AND task_id=NEW.depends_on_task_id
+      UNION
+      SELECT d.depends_on_task_id FROM max_durable_execution_task_dependencies d
+       JOIN reachable r ON r.id=d.task_id WHERE d.tenant_id=NEW.tenant_id
+    ) SELECT 1 FROM reachable WHERE id=NEW.task_id) THEN
+    RAISE EXCEPTION 'MAX-P0-004: durable task dependency cycle' USING ERRCODE='check_violation';
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS max_durable_execution_task_dependency_cycle ON max_durable_execution_task_dependencies;
+CREATE TRIGGER max_durable_execution_task_dependency_cycle BEFORE INSERT ON max_durable_execution_task_dependencies
+  FOR EACH ROW EXECUTE FUNCTION max_durable_execution_task_dependency_guard();
+CREATE OR REPLACE FUNCTION max_durable_execution_task_dependency_immutable() RETURNS trigger
+  LANGUAGE plpgsql AS $$ BEGIN
+  RAISE EXCEPTION 'MAX-P0-004: task dependency evidence is immutable' USING ERRCODE='check_violation';
+END $$;
+DROP TRIGGER IF EXISTS max_durable_execution_task_dependencies_no_update ON max_durable_execution_task_dependencies;
+CREATE TRIGGER max_durable_execution_task_dependencies_no_update BEFORE UPDATE OR DELETE ON max_durable_execution_task_dependencies
+  FOR EACH ROW EXECUTE FUNCTION max_durable_execution_task_dependency_immutable();
 -- At most one active (claimed/running) task per mission per tenant.
 CREATE UNIQUE INDEX IF NOT EXISTS max_durable_execution_tasks_one_active_per_mission
   ON max_durable_execution_tasks (tenant_id, mission_id)

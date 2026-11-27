@@ -38,7 +38,7 @@ const TERMINAL = [STATES.COMPLETED, STATES.FAILED, STATES.CANCELLED, STATES.ESCA
 const UNRESOLVED_ACTION_STATES = ['claimed', 'dispatch_attempted', 'outcome_unknown'];
 /** Claim states that may already have reached the provider. */
 const DISPATCHED_ACTION_STATES = ['dispatch_attempted', 'outcome_unknown', 'provider_acknowledged', 'verified'];
-const REQUIRED_TABLES = Object.freeze(['max_durable_execution_tasks', 'max_durable_execution_task_events']);
+const REQUIRED_TABLES = Object.freeze(['max_durable_execution_tasks', 'max_durable_execution_task_events', 'max_durable_execution_task_dependencies']);
 const MAX_RETRY_BUDGET = 100;
 const verifiedPools = new WeakSet();
 
@@ -124,6 +124,29 @@ function createDurableExecutionOwnership(pool, options = {}) {
     const r = await db.query('SELECT state, count(*)::int AS n FROM max_external_action_claims WHERE tenant_id=$1 AND task_id=$2 GROUP BY state ORDER BY state', [tenantId, taskId]);
     return Object.fromEntries(r.rows.map(x => [x.state, x.n]));
   }
+  async function dependencyStatus(db, tenantId, taskId) {
+    const r = await db.query(`SELECT d.depends_on_task_id, t.state
+      FROM max_durable_execution_task_dependencies d
+      JOIN max_durable_execution_tasks t ON t.id=d.depends_on_task_id AND t.tenant_id=d.tenant_id
+      WHERE d.tenant_id=$1 AND d.task_id=$2 FOR UPDATE`, [tenantId, taskId]);
+    const failed = r.rows.find(x => [STATES.FAILED, STATES.CANCELLED, STATES.ESCALATED].includes(x.state));
+    return { rows: r.rows, failed: failed && String(failed.depends_on_task_id), pending: r.rows.some(x => x.state !== STATES.COMPLETED) };
+  }
+  async function propagateDependencyFailure(db, tenantId, dependencyTaskId, reason) {
+    const blocked = await db.query(`WITH RECURSIVE descendants(id) AS (
+        SELECT task_id FROM max_durable_execution_task_dependencies WHERE tenant_id=$1 AND depends_on_task_id=$2
+        UNION
+        SELECT d.task_id FROM max_durable_execution_task_dependencies d JOIN descendants x ON x.id=d.depends_on_task_id WHERE d.tenant_id=$1
+      ), changed AS (
+        UPDATE max_durable_execution_tasks t SET state='blocked_dependency', recovery_reason=$3,
+          ownership_token=NULL, lease_expires_at=NULL, updated_at=clock_timestamp()
+        FROM (SELECT id, state AS prior_state FROM max_durable_execution_tasks
+          WHERE tenant_id=$1 AND id IN (SELECT id FROM descendants)
+            AND state NOT IN ('completed','failed','cancelled','escalated','blocked_dependency')) prior
+        WHERE t.id=prior.id RETURNING t.*, prior.prior_state)
+      SELECT * FROM changed`, [tenantId, dependencyTaskId, reason]);
+    for (const task of blocked.rows) await event(db, task, 'dependency_failed', task.prior_state, STATES.BLOCKED_DEPENDENCY, { dependencyTaskId, reason });
+  }
   const anyIn = (states, set) => set.some(s => states[s] > 0);
 
   async function accept(input = {}) {
@@ -132,18 +155,31 @@ function createDurableExecutionOwnership(pool, options = {}) {
     if (!Array.isArray(dependencyRefs)) throw error('durable_task_invalid', 'dependencyRefs must be an array.');
     const deadlineAt = deadlineOf(input.deadlineAt); const retryBudget = retryBudgetOf(input.retryBudget);
     const parentTaskId = input.parentTaskId || null;
+    if (!Array.isArray(input.dependencyTaskIds || [])) throw error('durable_task_invalid', 'dependencyTaskIds must be an array.');
+    const dependencyTaskIds = [...new Set((input.dependencyTaskIds || []).map(String))];
     // Deadline and retry budget are part of the accepted contract: a replay
     // that changes them is a different request.
     const fingerprint = requestFingerprint({ tenantId, objectiveId: input.objectiveId || null, missionId: input.missionId || null, parentTaskId,
-      specialist, executionScope, immutableInput, dependencyRefs, deadlineAt, retryBudget });
+      specialist, executionScope, immutableInput, dependencyRefs, dependencyTaskIds, deadlineAt, retryBudget });
     const taskId = input.taskId || uuid();
     if (parentTaskId && String(parentTaskId) === String(taskId)) throw error('durable_task_invalid', 'A task cannot be its own parent.');
     return tx(async (db) => {
+      if (dependencyTaskIds.includes(String(taskId))) throw error('durable_task_invalid', 'A task cannot depend on itself.');
+      if (dependencyTaskIds.length) {
+        const dependencies = await db.query('SELECT id,state FROM max_durable_execution_tasks WHERE tenant_id=$1 AND id=ANY($2::uuid[]) FOR UPDATE', [tenantId, dependencyTaskIds]);
+        if (dependencies.rows.length !== dependencyTaskIds.length) throw error('durable_task_dependency_unavailable', 'Every dependency must be an accepted task of this tenant.');
+      }
       const inserted = await db.query(`INSERT INTO max_durable_execution_tasks(id,tenant_id,objective_id,mission_id,parent_task_id,logical_key,input_fingerprint,specialist,execution_scope,immutable_input,dependency_refs,state,deadline_at,retry_budget)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,'queued',$12,$13)
         ON CONFLICT DO NOTHING RETURNING *`, [taskId, tenantId, input.objectiveId || null, input.missionId || null, parentTaskId, logicalKey, fingerprint, specialist,
         JSON.stringify(executionScope), JSON.stringify(immutableInput), JSON.stringify(dependencyRefs), deadlineAt, retryBudget]);
-      if (inserted.rows[0]) { await event(db, inserted.rows[0], 'accepted', null, STATES.QUEUED); return { accepted: true, replay: false, task: row(inserted.rows[0]) }; }
+      if (inserted.rows[0]) {
+        if (dependencyTaskIds.length) await db.query('INSERT INTO max_durable_execution_task_dependencies(tenant_id,task_id,depends_on_task_id) SELECT $1,$2,unnest($3::uuid[])', [tenantId, taskId, dependencyTaskIds]);
+        const status = await dependencyStatus(db, tenantId, taskId);
+        let accepted = inserted.rows[0];
+        if (status.pending) accepted = (await db.query(`UPDATE max_durable_execution_tasks SET state='blocked_dependency', recovery_reason=$3, updated_at=clock_timestamp() WHERE id=$1 AND tenant_id=$2 RETURNING *`, [taskId, tenantId, status.failed ? 'dependency_failed' : 'dependency_pending'])).rows[0];
+        await event(db, accepted, 'accepted', null, accepted.state, { dependencyTaskIds }); return { accepted: true, replay: false, task: row(accepted) };
+      }
       const existing = (await db.query('SELECT * FROM max_durable_execution_tasks WHERE tenant_id=$1 AND logical_key=$2', [tenantId, logicalKey])).rows[0];
       // No row for this key: either a concurrent writer, or a caller-supplied
       // taskId that already exists (possibly in another tenant). Never say which.
@@ -162,6 +198,7 @@ function createDurableExecutionOwnership(pool, options = {}) {
       const claimed = await db.query(`WITH candidate AS (
           SELECT id, state AS prior_state FROM max_durable_execution_tasks
            WHERE tenant_id=$1 AND state=ANY($2::text[]) AND (deadline_at IS NULL OR deadline_at>clock_timestamp())
+             AND NOT EXISTS (SELECT 1 FROM max_durable_execution_task_dependencies d JOIN max_durable_execution_tasks dep ON dep.id=d.depends_on_task_id AND dep.tenant_id=d.tenant_id WHERE d.tenant_id=max_durable_execution_tasks.tenant_id AND d.task_id=max_durable_execution_tasks.id AND dep.state <> 'completed')
              AND (mission_id IS NULL OR NOT EXISTS (SELECT 1 FROM max_durable_execution_tasks active
                    WHERE active.tenant_id=max_durable_execution_tasks.tenant_id AND active.mission_id=max_durable_execution_tasks.mission_id
                      AND active.state IN ('claimed','running')))
@@ -189,6 +226,7 @@ function createDurableExecutionOwnership(pool, options = {}) {
       const claimed = await db.query(`WITH candidate AS (
           SELECT id, state AS prior_state FROM max_durable_execution_tasks
            WHERE id=$1 AND tenant_id=$2 AND state=ANY($3::text[]) AND (deadline_at IS NULL OR deadline_at>clock_timestamp())
+             AND NOT EXISTS (SELECT 1 FROM max_durable_execution_task_dependencies d JOIN max_durable_execution_tasks dep ON dep.id=d.depends_on_task_id AND dep.tenant_id=d.tenant_id WHERE d.tenant_id=max_durable_execution_tasks.tenant_id AND d.task_id=max_durable_execution_tasks.id AND dep.state <> 'completed')
              AND (mission_id IS NULL OR NOT EXISTS (SELECT 1 FROM max_durable_execution_tasks active
                    WHERE active.tenant_id=max_durable_execution_tasks.tenant_id AND active.mission_id=max_durable_execution_tasks.mission_id
                      AND active.state IN ('claimed','running')))
@@ -228,6 +266,7 @@ function createDurableExecutionOwnership(pool, options = {}) {
       [o.taskId, o.tenantId, escalationReason ? STATES.ESCALATED : STATES.FAILED, reason,
         escalationReason, JSON.stringify(json(input.resultRef, {}))]);
       await event(db, r.rows[0], escalationReason ? 'failure_escalated' : 'failed', task.state, r.rows[0].state, { reason, actionStates: actions });
+      if (escalationReason || r.rows[0].state === STATES.FAILED) await propagateDependencyFailure(db, o.tenantId, o.taskId, escalationReason || 'dependency_failed');
       return row(r.rows[0]);
     });
   }
@@ -372,11 +411,13 @@ function createDurableExecutionOwnership(pool, options = {}) {
     return tx(async (db) => {
       const task = await lockTask(db, tenantId, taskId);
       if (!task || ![STATES.RECOVERY_REQUIRED, STATES.BLOCKED_DEPENDENCY].includes(task.state)) throw error('durable_task_state_conflict', 'Task cannot be revalidated in its current state.');
-      const r = await db.query(`UPDATE max_durable_execution_tasks SET state=CASE WHEN dependency_refs=$3::jsonb THEN 'queued' ELSE 'blocked_dependency' END,
-          recovery_reason=CASE WHEN dependency_refs=$3::jsonb THEN NULL ELSE 'dependency_drift' END, updated_at=clock_timestamp()
-        WHERE id=$1 AND tenant_id=$2 RETURNING *`, [taskId, tenantId, JSON.stringify(current)]);
+      const status = await dependencyStatus(db, tenantId, taskId);
+      const ready = !status.pending && JSON.stringify(task.dependency_refs) === JSON.stringify(current);
+      const reason = ready ? null : (status.failed ? 'dependency_failed' : status.pending ? 'dependency_pending' : 'dependency_drift');
+      const r = await db.query(`UPDATE max_durable_execution_tasks SET state=$3, recovery_reason=$4, updated_at=clock_timestamp()
+        WHERE id=$1 AND tenant_id=$2 RETURNING *`, [taskId, tenantId, ready ? STATES.QUEUED : STATES.BLOCKED_DEPENDENCY, reason]);
       await event(db, r.rows[0], 'dependencies_revalidated', task.state, r.rows[0].state,
-        { drift: r.rows[0].state === STATES.BLOCKED_DEPENDENCY, ...(input.actor ? { actor: String(input.actor).slice(0, 120) } : {}) });
+        { drift: r.rows[0].state === STATES.BLOCKED_DEPENDENCY, dependencyState: reason, ...(input.actor ? { actor: String(input.actor).slice(0, 120) } : {}) });
       return row(r.rows[0]);
     });
   }
@@ -400,6 +441,7 @@ function createDurableExecutionOwnership(pool, options = {}) {
       [taskId, tenantId, afterDispatch ? STATES.ESCALATED : STATES.CANCELLED, reason, afterDispatch ? 'cancelled_after_dispatch' : null]);
       await event(db, r.rows[0], afterDispatch ? 'cancel_escalated' : 'cancelled', task.state, r.rows[0].state,
         { reason, actionStates: actions, ...(input.actor ? { actor: String(input.actor).slice(0, 120) } : {}) });
+      await propagateDependencyFailure(db, tenantId, taskId, afterDispatch ? 'dependency_escalated' : 'dependency_cancelled');
       return row(r.rows[0]);
     });
   }
