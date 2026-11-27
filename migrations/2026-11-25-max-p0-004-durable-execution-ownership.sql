@@ -75,6 +75,9 @@ CREATE INDEX IF NOT EXISTS max_durable_execution_task_dependencies_parent
 CREATE OR REPLACE FUNCTION max_durable_execution_task_dependency_guard() RETURNS trigger
   LANGUAGE plpgsql AS $$
 BEGIN
+  -- Serialize edge admission within a tenant. Without this, two concurrent
+  -- opposite inserts can each observe no path under READ COMMITTED.
+  PERFORM pg_advisory_xact_lock(hashtextextended(NEW.tenant_id, 4));
   IF EXISTS (WITH RECURSIVE reachable(id) AS (
       SELECT depends_on_task_id FROM max_durable_execution_task_dependencies
        WHERE tenant_id=NEW.tenant_id AND task_id=NEW.depends_on_task_id
@@ -96,6 +99,9 @@ END $$;
 DROP TRIGGER IF EXISTS max_durable_execution_task_dependencies_no_update ON max_durable_execution_task_dependencies;
 CREATE TRIGGER max_durable_execution_task_dependencies_no_update BEFORE UPDATE OR DELETE ON max_durable_execution_task_dependencies
   FOR EACH ROW EXECUTE FUNCTION max_durable_execution_task_dependency_immutable();
+DROP TRIGGER IF EXISTS max_durable_execution_task_dependencies_no_truncate ON max_durable_execution_task_dependencies;
+CREATE TRIGGER max_durable_execution_task_dependencies_no_truncate BEFORE TRUNCATE ON max_durable_execution_task_dependencies
+  FOR EACH STATEMENT EXECUTE FUNCTION max_reliability_forbid_delete();
 -- At most one active (claimed/running) task per mission per tenant.
 CREATE UNIQUE INDEX IF NOT EXISTS max_durable_execution_tasks_one_active_per_mission
   ON max_durable_execution_tasks (tenant_id, mission_id)

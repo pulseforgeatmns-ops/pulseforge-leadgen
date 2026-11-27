@@ -346,6 +346,7 @@ function createDurableExecutionOwnership(pool, options = {}) {
         task = (await db.query(`UPDATE max_durable_execution_tasks SET state='escalated', escalation_reason='external_action_unresolved', updated_at=clock_timestamp()
           WHERE id=$1 AND tenant_id=$2 RETURNING *`, [o.taskId, o.tenantId])).rows[0];
         await event(db, task, 'completion_escalated', STATES.AWAITING_VERIFICATION, STATES.ESCALATED, { reason: 'external_action_unresolved', actionStates: actions });
+        await propagateDependencyFailure(db, o.tenantId, o.taskId, 'dependency_escalated');
       }
       return row(task);
     });
@@ -398,6 +399,7 @@ function createDurableExecutionOwnership(pool, options = {}) {
         [task.id, tenantId, escalate ? STATES.ESCALATED : STATES.RECOVERY_REQUIRED, reason, escalate ? reason : null, escalate ? 0 : 1]);
         await event(db, r.rows[0], wasActive ? 'lease_expired' : 'deadline_expired', task.state, r.rows[0].state,
           { reason, actionStates: actions, ...(input.actor ? { actor: String(input.actor).slice(0, 120) } : {}) });
+        if (escalate) await propagateDependencyFailure(db, tenantId, task.id, 'dependency_escalated');
         out.push(row(r.rows[0]));
       }
       return out;
@@ -460,6 +462,7 @@ function createDurableExecutionOwnership(pool, options = {}) {
          WHERE id=$1 AND tenant_id=$2 AND state='queued' RETURNING *`, [taskId, tenantId, reason]);
       if (!r.rows[0]) return null;
       await event(db, r.rows[0], 'cancelled', STATES.QUEUED, STATES.CANCELLED, { reason });
+      await propagateDependencyFailure(db, tenantId, taskId, 'dependency_cancelled');
       return row(r.rows[0]);
     });
   }

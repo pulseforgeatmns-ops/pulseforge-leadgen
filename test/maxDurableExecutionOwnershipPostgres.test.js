@@ -101,6 +101,7 @@ test('dependency admission is tenant-scoped, cycle-free, and terminal failure bl
   assert.equal(blocked.recoveryReason, 'dependency_failed');
   await assert.rejects(store.accept({ ...base, logicalKey: `wrong-tenant-${sequence}`, dependencyTaskIds: [first.id], tenantId: `${tenantId}-other` }), { code: 'durable_task_dependency_unavailable' });
   await assert.rejects(pool.query('INSERT INTO max_durable_execution_task_dependencies(tenant_id,task_id,depends_on_task_id) VALUES($1,$2,$3)', [tenantId, first.id, second.id]), { code: '23514' });
+  await assert.rejects(pool.query('TRUNCATE max_durable_execution_task_dependencies'), { code: '23514' });
 });
 
 test('tenant scope and the P0-003 ledger prevent a stale task owner from reaching a provider', async () => {
