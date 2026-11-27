@@ -208,6 +208,12 @@ test('review: write exemptions are bound to what they may change (scope checked 
   await assert.rejects(policy.runWithOwnershipExemption('inbound_observation', () => persistence.persistStageCommit({ mission: advanced }, pool, { skipEnsure: true })),
     (err) => err.code === 'durable_task_exemption_scope' && /stage/.test(err.message));
   assert.equal((await durable(pool, mission.id)).stage, durableNow.stage, 'nothing written');
+  // inbound_observation may not carry an unpersisted contribution (e.g. a stray approval).
+  const quiet = { ...durableNow }; bumpMissionVersion(quiet, `tx-contrib-${seq}`);
+  const stray = { id: `contrib-stray-${process.pid}-${seq}`, missionId: mission.id, specialist: 'operator', kind: 'operator_approval', at: new Date().toISOString(), payload: { approved: true } };
+  await assert.rejects(policy.runWithOwnershipExemption('inbound_observation', () => persistence.persistStageCommit({ mission: quiet, contributions: [stray] }, pool, { skipEnsure: true })),
+    (err) => err.code === 'durable_task_exemption_scope' && /contribution/.test(err.message));
+  assert.equal((await pool.query('SELECT count(*)::int n FROM acquisition_mission_contributions WHERE id = $1', [stray.id])).rows[0].n, 0, 'stray contribution not written');
   // mission_creation may not overwrite an existing mission.
   const again = { ...durableNow, title: 'recreated' }; bumpMissionVersion(again, `tx-recreate-${seq}`);
   await assert.rejects(policy.runWithOwnershipExemption('mission_creation', () => persistence.persistStageCommit({ mission: again }, pool, { skipEnsure: true })),

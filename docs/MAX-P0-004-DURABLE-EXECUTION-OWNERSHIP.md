@@ -91,7 +91,7 @@ So a key is never spent by a transient collision (`mission_has_active_task`) or 
 - `operator_restriction_tightening`: only `authorizationConstraints`, monotonic (every prohibition and review-only kept, at least one added).
 - `inbound_observation`: none of stage, status, plan-cancelled, pending decision, plan, objective, tenant or constraints may change; the write may only add observations, outcomes and events.
 
-Anything riding along is refused (`durable_task_exemption_scope`).
+Anything riding along is refused (`durable_task_exemption_scope`). An `inbound_observation` write may also not carry a contribution that is new, or that differs from its durable row. That stops an in-memory approval left behind by a failed owned write from being persisted through an exempt write.
 
 Inbound events (provider observations, Riley reply interpretations) persist through `runtime.persistInbound`. It compares the guarded fields before and after the event was applied:
 - if nothing changed, the write is the audited `inbound_observation` exemption;
@@ -159,6 +159,11 @@ State vocabulary differs from the proposal (`queued` ≈ `admitted`, `escalated`
 
 - A retry after a `failed` attempt runs again. That is right for external effects: none happened, and the ledger deduplicates sends anyway. But paid provider work done before a rolled-back stage (Scout/Places, Paige generation) is paid for again on the retry.
 - When two callers retry the same key concurrently, only one attempt is created. The loser usually gets `durable_task_key_reused` (422) rather than a replay. REST is serialized by its receipt.
+- An inbound event that advances a mission needs a task. While another task owns that mission, the event is refused with `durable_task_mission_busy`:
+  - provider observations record it as `observeBlocked`;
+  - for a Riley interpretation the error propagates, and the in-memory change is persisted by that mission's next owned write.
+
+  Each advancing inbound event takes its own short-lived task.
 - The offline Scout marker (`runScout.offlineFixture`) is declared by the caller. It is a reviewed marker, pinned to one script by the structural test, not a cryptographic guarantee.
 
 - Tenant learning rows (`persistLearning`/`persistPrediction`/`persistOutcomeEvaluation`/`persistOutcomeLearning`) are written on the pool after the mission lease commits. Per-send outbound records are written by the Emmett stage, inside the router's fenced execution. Neither is a core mission row, and neither is routed through the exemption audit.

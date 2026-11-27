@@ -1064,7 +1064,7 @@ function wrapStageCommitError(err) {
  *                                  only add observations/outcomes/events).
  * Anything else — e.g. an unowned stage advance riding along — is refused.
  */
-async function assertExemptWriteScope(client, mission, reason) {
+async function assertExemptWriteScope(client, mission, reason, bundle = {}) {
   const { requestFingerprint } = require('./maxReliability/externalActionLedger');
   const row = (await client.query('SELECT payload FROM acquisition_missions WHERE id = $1', [mission.id])).rows[0];
   const durable = row && row.payload;
@@ -1080,6 +1080,21 @@ async function assertExemptWriteScope(client, mission, reason) {
   const allowed = reason === 'operator_restriction_tightening' ? ['authorizationConstraints'] : [];
   const forbidden = changed.filter((f) => !allowed.includes(f));
   if (forbidden.length) throw scopeError(`changes ${forbidden.join(', ')}`);
+  if (reason === 'inbound_observation') {
+    // An inbound event adds no specialist contribution. A contribution that is
+    // new or differs from its durable row (e.g. an approval left in memory by a
+    // failed owned write) must not ride along on an exempt write.
+    const rows = (bundle.contributions || []).filter((r) => r && r.id);
+    if (rows.length) {
+      const durableRows = (await client.query(
+        'SELECT id, payload FROM acquisition_mission_contributions WHERE mission_id = $1 AND id = ANY($2::text[])',
+        [mission.id, rows.map((r) => String(r.id))]
+      )).rows;
+      const byId = new Map(durableRows.map((r) => [String(r.id), r.payload]));
+      const drift = rows.filter((r) => !byId.has(String(r.id)) || !same(byId.get(String(r.id)), JSON.parse(JSON.stringify(r))));
+      if (drift.length) throw scopeError(`carries ${drift.length} unpersisted contribution(s)`);
+    }
+  }
   if (changed.includes('authorizationConstraints')) {
     // Monotonic: every existing prohibition (and review-only) is kept, and at
     // least one is added. tightens() alone only checks the addition.
@@ -1092,7 +1107,7 @@ async function assertExemptWriteScope(client, mission, reason) {
 }
 
 /** MAX-P0-004 P3 — the current task fence must be live and of the mission's tenant. */
-async function assertMissionTaskFence(mission, client) {
+async function assertMissionTaskFence(mission, client, bundle = {}) {
   const fence = currentTaskFence();
   if (!fence) {
     // Criterion 1 — with durable tasks enabled, an unowned write is allowed only
@@ -1102,7 +1117,7 @@ async function assertMissionTaskFence(mission, client) {
       throw ownershipError('durable_task_owner_required',
         'Mission writes require durable task ownership; nothing was written.', { missionId: mission.id });
     }
-    await assertExemptWriteScope(client, mission, currentOwnershipExemption());
+    await assertExemptWriteScope(client, mission, currentOwnershipExemption(), bundle);
     await auditExemptWrite(client, { missionId: mission.id, tenantId: mission.tenantId ?? mission.clientId, reason: currentOwnershipExemption() });
     return;
   }
@@ -1112,7 +1127,7 @@ async function assertMissionTaskFence(mission, client) {
     if (!isWriteExempt()) {
       throw fencedError('The current task owns a different mission; nothing was written.', { missionId: mission.id });
     }
-    await assertExemptWriteScope(client, mission, currentOwnershipExemption());
+    await assertExemptWriteScope(client, mission, currentOwnershipExemption(), bundle);
     await auditExemptWrite(client, { missionId: mission.id, tenantId: mission.tenantId ?? mission.clientId, reason: currentOwnershipExemption() });
     return;
   }
@@ -1155,7 +1170,7 @@ async function persistStageCommit(bundle = {}, pool = defaultPool(), opts = {}) 
         // while that owner is current: the fence is re-checked FOR SHARE in the
         // lease transaction itself, so a superseded, cancelled, recovered or
         // past-deadline owner can never make mission state durable.
-        await assertMissionTaskFence(mission, lease.client);
+        await assertMissionTaskFence(mission, lease.client, bundle);
         await writeStageBundle(bundle, mission, lease.client, expectedFingerprint);
         await lease.client.query('RELEASE SAVEPOINT amo_stage_commit');
       } catch (err) {
