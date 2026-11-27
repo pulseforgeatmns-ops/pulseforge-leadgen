@@ -58,7 +58,7 @@ function nonNegative(value, name) {
 }
 function asList(value, name, { min = 0 } = {}) {
   if (!Array.isArray(value)) throw new ObjectiveContractError('objective_contract_invalid', `${name} must be an array`);
-  const out = [...new Set(value.map(v => String(v || '').trim()).filter(Boolean))];
+  const out = [...new Set(value.map(v => String(v || '').trim()).filter(Boolean))].sort();
   if (out.length < min) throw new ObjectiveContractError('objective_contract_invalid', `${name} requires at least ${min} value(s)`);
   return out;
 }

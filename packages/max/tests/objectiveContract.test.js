@@ -39,6 +39,7 @@ describe('MAX-P0-005 Package A objective contract', () => {
     assert.throws(() => validateObjectiveContract(contract({ allowedProviders: ['anthropic'] })), (err) => err instanceof ObjectiveContractError && err.code === 'objective_contract_provider_retired');
     assert.throws(() => validateObjectiveContract(contract({ verification: { ...contract().verification, initialPollMs: 1 } })), { code: 'objective_contract_invalid' });
     assert.throws(() => validateObjectiveContract(contract({ budget: { caps: {} } })), { code: 'objective_contract_invalid' });
+    assert.throws(() => validateObjectiveContract(contract({ allowedProviders: ['openai'] })), { code: 'objective_contract_provider_unapproved' });
   });
 
   it('contains no Anthropic credential, client, fallback, or spend path', () => {
@@ -80,5 +81,11 @@ describe('MAX-P0-005 Package A objective contract', () => {
     assert.equal(calls[0].immutableInput.contract.allowedProviders.includes('anthropic'), false);
     const persisted = await objectives.getObjectiveById(objective.id, { tenantId: 't1', store });
     assert.equal(persisted.context.maxP005Contract, undefined);
+  });
+
+  it('requires an authenticated tenant-bound actor before enabled admission', async () => {
+    await assert.rejects(() => admitObjectiveRoot({ tenantId: 't1', objectiveId: 'missing', contract: contract() }, {
+      env: { MAX_AUTONOMOUS_OBJECTIVES: 'true', MAX_DURABLE_TASKS: 'true' }, taskStore: { accept: async () => null },
+    }), { code: 'objective_contract_actor_unauthorized' });
   });
 });
