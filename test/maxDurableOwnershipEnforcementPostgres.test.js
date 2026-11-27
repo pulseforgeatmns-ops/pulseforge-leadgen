@@ -199,3 +199,64 @@ test('operator run keys are stable for the same logical operation and differ whe
   assert.match(a, /^script:executeAnchorOneOutbound:[0-9a-f]{40}$/);
   assert.throws(() => operatorRunKey('', {}), { code: 'durable_task_invalid' });
 });
+
+test('review: write exemptions are bound to what they may change (scope checked against the durable row)', { timeout: 60000 }, async () => {
+  const { pool } = fixture; const { engine, mission } = await missionFixture(pool);
+  const durableNow = await durable(pool, mission.id);
+  // inbound_observation may not carry a stage advance (or any guarded change).
+  const advanced = { ...durableNow, stage: 'learn' }; bumpMissionVersion(advanced, `tx-adv-${seq}`);
+  await assert.rejects(policy.runWithOwnershipExemption('inbound_observation', () => persistence.persistStageCommit({ mission: advanced }, pool, { skipEnsure: true })),
+    (err) => err.code === 'durable_task_exemption_scope' && /stage/.test(err.message));
+  assert.equal((await durable(pool, mission.id)).stage, durableNow.stage, 'nothing written');
+  // mission_creation may not overwrite an existing mission.
+  const again = { ...durableNow, title: 'recreated' }; bumpMissionVersion(again, `tx-recreate-${seq}`);
+  await assert.rejects(policy.runWithOwnershipExemption('mission_creation', () => persistence.persistStageCommit({ mission: again }, pool, { skipEnsure: true })),
+    { code: 'durable_task_exemption_scope' });
+  // operator_restriction_tightening may only tighten constraints.
+  const base = { prohibited: ['paid_media'], reviewOnly: false, sources: [] };
+  const seeded = { ...durableNow, authorizationConstraints: amo.mergeAuthorizationConstraints(durableNow.authorizationConstraints, base) };
+  bumpMissionVersion(seeded, `tx-seed-${seq}`);
+  await policy.runWithOwnershipExemption('operator_restriction_tightening', () => persistence.persistStageCommit({ mission: seeded }, pool, { skipEnsure: true }));
+  engine.store.putMission(seeded);
+  const tightened = { ...seeded, authorizationConstraints: amo.mergeAuthorizationConstraints(seeded.authorizationConstraints, { prohibited: ['outreach'], sources: [] }) };
+  bumpMissionVersion(tightened, `tx-tight-${seq}`);
+  await policy.runWithOwnershipExemption('operator_restriction_tightening', () => persistence.persistStageCommit({ mission: tightened }, pool, { skipEnsure: true }));
+  engine.store.putMission(tightened);
+  // Drops paid_media while adding provider_research: adds one, removes one → refused.
+  const loosened = { ...tightened, authorizationConstraints: { ...tightened.authorizationConstraints, prohibited: ['outreach', 'provider_research'] } };
+  bumpMissionVersion(loosened, `tx-loose-${seq}`);
+  await assert.rejects(policy.runWithOwnershipExemption('operator_restriction_tightening', () => persistence.persistStageCommit({ mission: loosened }, pool, { skipEnsure: true })),
+    { code: 'durable_task_exemption_scope' });
+  const plusStage = { ...tightened, stage: 'learn' }; bumpMissionVersion(plusStage, `tx-tight-stage-${seq}`);
+  await assert.rejects(policy.runWithOwnershipExemption('operator_restriction_tightening', () => persistence.persistStageCommit({ mission: plusStage }, pool, { skipEnsure: true })),
+    { code: 'durable_task_exemption_scope' });
+});
+
+test('review: a fence owns only its mission; nested work on another mission takes its own task', { timeout: 60000 }, async () => {
+  const { pool } = fixture; const store = createDurableExecutionOwnership(pool);
+  const a = await missionFixture(pool); const b = await missionFixture(pool);
+  const outer = await runTaskOwnedWork({ store, tenantId: '10', missionId: a.mission.id, logicalKey: `outer-${seq}`, specialist: 'operator' }, async () => {
+    // A direct write to mission B under A's fence is refused.
+    const nb = { ...b.engine.get(b.mission.id, '10'), title: 'cross' }; bumpMissionVersion(nb, `tx-cross-${seq}`);
+    await assert.rejects(persistence.persistStageCommit({ mission: nb }, pool, { skipEnsure: true }), { code: 'durable_task_fenced' });
+    // Owned work on B gets its own task (not A's fence).
+    const inner = await runTaskOwnedWork({ store, tenantId: '10', missionId: b.mission.id, logicalKey: `inner-${seq}`, specialist: 'operator' }, async () => {
+      await persistence.persistStageCommit({ mission: nb }, pool, { skipEnsure: true });
+    });
+    return inner;
+  });
+  assert.equal(outer.durableTask.state, 'completed');
+  assert.equal(outer.result.durableTask.state, 'completed', 'mission B work recorded as its own task');
+  assert.equal(outer.result.inherited, undefined);
+  assert.equal((await durable(pool, b.mission.id)).title, 'cross');
+});
+
+test('review: offline evaluation admits discovery only with a marked fixture Scout runner', { timeout: 60000 }, async () => {
+  const { pool } = fixture; const { engine, mission } = await missionFixture(pool);
+  const handlers = { [amo.EXECUTION_INTENTS.APPROVE_DISCOVERY]: async () => ({}) };
+  const live = async () => ({ companies: [] });
+  await assert.rejects(policy.runWithOwnershipExemption(policy.OFFLINE_EVALUATION,
+    () => amo.routeExecutionRequest(cer(mission, amo.EXECUTION_INTENTS.APPROVE_DISCOVERY), { engine, tenantId: '10', persist: false, handlers, runScout: live })),
+  (err) => err.code === 'durable_task_owner_required' || /planning|constraint/.test(String(err.code)));
+  void pool;
+});

@@ -79,6 +79,26 @@ The structural test pins each exemption to its call sites.
 - **Runtime mutations** (`contribute`, `progress`, `runAutonomousProgression`, legacy `persistSideEffects`): `ownedMissionWork`, one task per call, like an unkeyed router request.
 - **Nested work:** inside an already task-owned execution, nested work reuses the existing fence rather than opening a second task.
 
+**Attempts (independent review, important).** A stable key replays its latest attempt, unless that attempt ended `failed` or `cancelled`. Those two states mean no effect is possible, because the store escalates instead whenever a task-linked action may have reached a provider. In that case a retry of the same logical execution opens `<key>#attempt-N`.
+- `completed` replays as the success.
+- `escalated`, `recovery_required`, `awaiting_verification` and active tasks replay; they need an operator or are still in flight.
+- After 20 no-effect attempts the key requires operator review (`durable_task_attempts_exhausted`).
+
+So a key is never spent by a transient collision (`mission_has_active_task`) or by a clean failure, and concurrent retries still converge on one attempt through the unique key.
+
+**Exemption scope (independent review, important).** Each exempt write is checked against the durable row inside the lease transaction:
+- `mission_creation`: only a mission that does not exist yet.
+- `operator_restriction_tightening`: only `authorizationConstraints`, monotonic (every prohibition and review-only kept, at least one added).
+- `inbound_observation`: none of stage, pending decision, plan, objective, tenant or constraints may change; the write may only add observations, outcomes and events.
+
+Anything riding along is refused (`durable_task_exemption_scope`). Provider observation's LEARN progression is now task-owned work rather than written under the exemption.
+
+**Fence scope.** A fence carries its mission:
+- a write to another mission under it is refused unless an exemption applies;
+- `runTaskOwnedWork` inherits a fence only for the same mission, so nested work on another mission takes its own task.
+
+The offline exemption admits discovery only with a Scout runner explicitly marked `offlineFixture`.
+
 **Structural enforcement.** `test/maxDurableOwnershipStructure.test.js` scans production code for every caller of `routeExecutionRequest`, `executeMissionStage`, `persistMissionState`, `persistStageCommit`, `executeOutboundBundle` and `guardedDispatch`. It requires each file to be classified and to still carry its ownership wiring, and it pins every exemption to its permitted call sites. An unclassified caller, or one that loses its wiring, fails CI. Both failure modes were checked by mutation.
 
 ## Persistence and migration
@@ -130,6 +150,9 @@ The approved proposal (`main` `c51ce3c`, §5) defined 13 criteria across phases 
 State vocabulary differs from the proposal (`queued` ≈ `admitted`, `escalated` ≈ `awaiting_intervention`, `recovery_required` ≈ `interrupted`, `completed` after evidence ≈ `verified`). `DurableTaskStatus` maps it for operators without claiming more.
 
 ## Known limits
+
+- Tenant learning rows (`persistLearning`/`persistPrediction`/`persistOutcomeEvaluation`/`persistOutcomeLearning`) are written on the pool after the mission lease commits. Per-send outbound records are written by the Emmett stage, inside the router's fenced execution. Neither is a core mission row, and neither is routed through the exemption audit.
+- Provider observation skips its OBSERVE/LEARN progression while another task is active on the mission (`mission_busy` is recorded as `observeBlocked`/`learnBlocked`). It is retried on the next event, as it already was when the mission lock was held.
 
 - Activation (`MAX_DURABLE_TASKS=true`) requires the P0-003 and P0-004 migrations; it is an operator decision and not part of this change.
 - `persistStageCommit` still has a pre-existing unlocked fallback when a caller holds the process's mission lock but passes neither `lease` nor `skipGlobalLock`. No production caller reaches it, and under a task fence it is refused.

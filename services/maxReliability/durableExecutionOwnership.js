@@ -423,6 +423,19 @@ function createDurableExecutionOwnership(pool, options = {}) {
   }
 
   async function get(input = {}) { await assertSchema(pool); const r = await pool.query('SELECT * FROM max_durable_execution_tasks WHERE id=$1 AND tenant_id=$2', [text(input.taskId, 'taskId'), text(input.tenantId, 'tenantId')]); return row(r.rows[0]); }
+  /**
+   * The current attempt of a stable logical key: the key itself, or its latest
+   * `<key>#attempt-N`. Prefix matched without LIKE (keys may contain '_' / '%').
+   */
+  async function latestAttempt(input = {}) {
+    await assertSchema(pool); const tenantId = text(input.tenantId, 'tenantId'); const logicalKey = text(input.logicalKey, 'logicalKey');
+    const r = await pool.query(`SELECT * FROM max_durable_execution_tasks
+       WHERE tenant_id=$1 AND (logical_key=$2 OR (left(logical_key, length($2) + 9) = $2 || '#attempt-'))
+       ORDER BY created_at DESC, accepted_at DESC, id DESC LIMIT 1`, [tenantId, logicalKey]);
+    const count = (await pool.query(`SELECT count(*)::int AS n FROM max_durable_execution_tasks
+       WHERE tenant_id=$1 AND (logical_key=$2 OR (left(logical_key, length($2) + 9) = $2 || '#attempt-'))`, [tenantId, logicalKey])).rows[0].n;
+    return { task: row(r.rows[0]), attempts: count };
+  }
   async function getByLogicalKey(input = {}) { await assertSchema(pool); const r = await pool.query('SELECT * FROM max_durable_execution_tasks WHERE tenant_id=$1 AND logical_key=$2', [text(input.tenantId, 'tenantId'), text(input.logicalKey, 'logicalKey')]); return row(r.rows[0]); }
   async function list(input = {}) {
     await assertSchema(pool); const tenantId = text(input.tenantId, 'tenantId'); const limit = Math.min(100, Math.max(1, Number(input.limit) || 50));
@@ -433,7 +446,7 @@ function createDurableExecutionOwnership(pool, options = {}) {
     return r.rows.map(row);
   }
   async function listEvents(input = {}) { await assertSchema(pool); const tenantId = text(input.tenantId, 'tenantId'); const taskId = text(input.taskId, 'taskId'); const r = await pool.query('SELECT id,fence_epoch,event,from_state,to_state,detail,at FROM max_durable_execution_task_events WHERE tenant_id=$1 AND task_id=$2 ORDER BY id', [tenantId, taskId]); return r.rows; }
-  return { accept, claim, claimTask, fail, planRecovery, requireOwner, start, heartbeat, checkpoint, reportCompletion, verify, recoverExpired, revalidateDependencies, cancel, cancelIfQueued, get, getByLogicalKey, list, listEvents };
+  return { accept, claim, claimTask, fail, planRecovery, requireOwner, start, heartbeat, checkpoint, reportCompletion, verify, recoverExpired, revalidateDependencies, cancel, cancelIfQueued, get, getByLogicalKey, latestAttempt, list, listEvents };
 }
 module.exports = {
   STATES, REQUIRED_TABLES, UNRESOLVED_ACTION_STATES, DISPATCHED_ACTION_STATES,

@@ -163,10 +163,12 @@ async function observeAcquisitionMission(state) {
   const runtime = createAcquisitionMissionRuntime({ persist: false, pool: null, production: false });
   const engine = runtime.engine();
   const objective = 'Acquire one recurring commercial cleaning client from a short-term rental operator in Hooksett and Auburn.';
-  const fixtureScout = label => async () => {
+  // Marked as an offline fixture: the only Scout runner the router accepts under
+  // the non-durable offline_evaluation exemption (MAX-P0-004).
+  const fixtureScout = label => Object.assign(async () => {
     state.fixtureCalls.push(label);
     return approval.fixtureScoutDiscoveryResult();
-  };
+  }, { offlineFixture: true });
   const newApprovedMission = async () => {
     const mission = engine.create({ tenantId: TENANT_ID, objective, targetSegment: 'Short-Term Rental Operators' });
     const plan = await approval.advancePlanAfterApproval({

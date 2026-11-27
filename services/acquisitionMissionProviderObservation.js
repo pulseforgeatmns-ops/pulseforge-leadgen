@@ -192,8 +192,14 @@ async function tryMissionStageSideEffects({
         learnBlocked = 'mission_lock_active';
       } else {
         try {
-          const learnResult = tryProgressToLearn(engine, missionId, { tenantId });
-          learnProgressed = learnResult.progressed === true;
+          // MAX-P0-004 — a stage advance is never an inbound observation: it runs
+          // and persists as task-owned work (one task per call) when durable
+          // tasks are enabled; unchanged otherwise.
+          await runtime.ownedMissionWork('progress', missionId, { tenantId, pool: opts.pool || pool, persist: opts.persist }, async () => {
+            const learnResult = tryProgressToLearn(engine, missionId, { tenantId });
+            learnProgressed = learnResult.progressed === true;
+            if (learnProgressed) await runtime.persistMissionState(missionId, { pool: opts.pool || pool, persist: opts.persist });
+          });
         } catch (err) {
           learnBlocked = err.code || err.message;
         }

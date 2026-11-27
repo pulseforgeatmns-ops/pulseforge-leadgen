@@ -546,7 +546,8 @@ async function routeExecutionRequest(request, context = {}) {
   // pool, nothing persisted, and discovery only with an injected Scout runner.
   if (ownershipEnforced() && !context.durableTasks) {
     const offlineOk = isOfflineEvaluation() && !context.pool && context.persist !== true
-      && (!isDiscoveryIntent(request.intent) || typeof context.runScout === 'function');
+      && (!isDiscoveryIntent(request.intent)
+        || (typeof context.runScout === 'function' && context.runScout.offlineFixture === true));
     if (!offlineOk) {
       recordRouterAudit({ requestId: request.id, source: request.source, intent: request.intent, missionId: request.missionId,
         operatorId: request.operatorId, runtimeOwner, specialist, action, outcome: 'blocked_no_task_owner',

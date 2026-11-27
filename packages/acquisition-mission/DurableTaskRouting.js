@@ -38,6 +38,34 @@ function taskError(code, message, extra = {}) {
   return Object.assign(new Error(message), { code, spec: 'MAX-P0-004', ...extra });
 }
 
+/**
+ * Terminal states that by construction carry no possible external effect: the
+ * store escalates instead of failing/cancelling whenever a task-linked action
+ * may have reached a provider. A retry of the same logical execution may run
+ * again after one of these; every other state replays.
+ */
+const RETRYABLE_TERMINAL = new Set(['failed', 'cancelled']);
+const MAX_ATTEMPTS = 20;
+
+/**
+ * Resolve the logical key to use now for a stable caller key: replay the
+ * latest attempt unless it ended failed/cancelled (no effect possible), in
+ * which case the next attempt `<key>#attempt-N` is used. Deterministic, so
+ * concurrent retries converge on one attempt (unique key).
+ */
+async function resolveAttemptKey(store, tenantId, baseKey) {
+  if (typeof store.latestAttempt !== 'function') {
+    return { logicalKey: baseKey, existing: await store.getByLogicalKey({ tenantId, logicalKey: baseKey }) };
+  }
+  const { task, attempts } = await store.latestAttempt({ tenantId, logicalKey: baseKey });
+  if (!task) return { logicalKey: baseKey, existing: null };
+  if (!RETRYABLE_TERMINAL.has(task.state)) return { logicalKey: task.logicalKey, existing: task };
+  if (attempts >= MAX_ATTEMPTS) {
+    throw taskError('durable_task_attempts_exhausted', `This execution failed ${attempts} times without effect; an operator must review it.`, { statusCode: 409 });
+  }
+  return { logicalKey: `${baseKey}#attempt-${attempts + 1}`, existing: null };
+}
+
 /** Compact, non-secret view of a task for responses and receipts. */
 function summarizeTask(task) {
   if (!task) return null;
@@ -92,10 +120,10 @@ async function beginDurableTask(request, context, mission, { specialist } = {}) 
   const tenantId = String(context.tenantId);
   const leaseMs = Number(context.durableTaskLeaseMs) || DEFAULT_LEASE_MS;
   const deadlineMs = Number(context.durableTaskDeadlineMs) || DEFAULT_DEADLINE_MS;
-  const logicalKey = context.durableTaskKey || `cer:${request.id}`;
   // A replay of an already accepted key never dispatches again, and a queued
-  // one (accepted, never claimed) is resumed with its recorded deadline.
-  const existing = await store.getByLogicalKey({ tenantId, logicalKey });
+  // one (accepted, never claimed) is resumed with its recorded deadline. After
+  // a failed/cancelled attempt (no effect possible) a retry opens the next one.
+  const { logicalKey, existing } = await resolveAttemptKey(store, tenantId, context.durableTaskKey || `cer:${request.id}`);
   if (existing && existing.state !== 'queued') return { replay: summarizeTask(existing) };
   const accepted = await store.accept({
     tenantId,
@@ -147,7 +175,7 @@ async function beginDurableTask(request, context, mission, { specialist } = {}) 
       statusCode: 409, missionId: mission.id, taskId: task.id,
     });
   }
-  const owner = { tenantId, taskId: claimed.id, ownershipToken, fenceEpoch: claimed.fenceEpoch };
+  const owner = { tenantId, taskId: claimed.id, ownershipToken, fenceEpoch: claimed.fenceEpoch, missionId: mission.id };
   task = await store.start(owner);
 
   let heartbeatLost = null;
@@ -231,16 +259,20 @@ function missionOperationParts(engine, missionId, intent, extra = {}) {
  * Without a store (durable tasks disabled) fn runs exactly as before.
  * @returns {Promise<{ result, durableTask, replay?: boolean }>}
  */
-async function runTaskOwnedWork({ store, tenantId, missionId, logicalKey, specialist, immutableInput = {}, leaseMs, deadlineMs }, fn) {
+async function runTaskOwnedWork({ store, tenantId, missionId, logicalKey: baseKey, specialist, immutableInput = {}, leaseMs, deadlineMs }, fn) {
   if (!store) return { result: await fn(), durableTask: null };
   // Already inside a task-owned execution of the same tenant: the work is part
   // of it (its writes are fenced by that owner). A second task for the same
   // mission could never be claimed alongside the first.
   const inherited = require('../../services/maxReliability/taskExecutionContext').currentTaskFence();
-  if (inherited && inherited.tenantId === String(tenantId)) return { result: await fn(), durableTask: null, inherited: true };
+  // Only for the SAME mission: work on another mission takes its own task.
+  if (inherited && inherited.tenantId === String(tenantId)
+    && (!missionId || !inherited.missionId || inherited.missionId === String(missionId))) {
+    return { result: await fn(), durableTask: null, inherited: true };
+  }
   const tenant = String(tenantId);
-  if (!logicalKey) throw taskError('durable_task_invalid', 'Task-owned work requires a stable logical key.');
-  const existing = await store.getByLogicalKey({ tenantId: tenant, logicalKey });
+  if (!baseKey) throw taskError('durable_task_invalid', 'Task-owned work requires a stable logical key.');
+  const { logicalKey, existing } = await resolveAttemptKey(store, tenant, baseKey);
   if (existing && existing.state !== 'queued') return { result: null, durableTask: summarizeTask(existing), replay: true };
   const accepted = await store.accept({
     tenantId: tenant, logicalKey, specialist: specialist || 'operator', missionId: missionId || null,
@@ -254,7 +286,7 @@ async function runTaskOwnedWork({ store, tenantId, missionId, logicalKey, specia
     await store.cancelIfQueued({ tenantId: tenant, taskId: accepted.task.id, reason: 'mission_has_active_task' }).catch(() => {});
     throw taskError('durable_task_mission_busy', 'Another execution of this mission is in progress; nothing ran.', { statusCode: 409, missionId, taskId: accepted.task.id });
   }
-  const owner = { tenantId: tenant, taskId: claimed.id, ownershipToken, fenceEpoch: claimed.fenceEpoch };
+  const owner = { tenantId: tenant, taskId: claimed.id, ownershipToken, fenceEpoch: claimed.fenceEpoch, missionId: missionId || null };
   await store.start(owner);
   const timer = setInterval(() => { store.heartbeat({ ...owner, leaseMs: lease }).catch(() => {}); }, Math.max(1000, Math.floor(lease / 3)));
   if (typeof timer.unref === 'function') timer.unref();
