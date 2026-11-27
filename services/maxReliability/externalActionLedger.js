@@ -309,6 +309,13 @@ function createExternalActionLedger(pool, options = {}) {
    */
   async function markDispatchAttempted(input) {
     if (!input || !input.taskFence) {
+      // A claim already linked to a durable task must be marked through that
+      // task's live fence.  The legacy unfenced path remains available only
+      // for genuinely legacy (task_id NULL) claims.
+      if (input) {
+        const linked = await pool.query('SELECT task_id FROM max_external_action_claims WHERE tenant_id=$1 AND idempotency_key=$2 AND owner_token=$3', [input.tenantId, input.idempotencyKey, input.ownerToken]);
+        if (linked.rows[0] && linked.rows[0].task_id) throw ledgerError('durable_task_fenced', 'A task-linked external action requires its task ownership fence.');
+      }
       return transition(input, [STATES.CLAIMED], STATES.DISPATCH_ATTEMPTED, { dispatch_attempted_at: now() }, 'dispatch_attempted');
     }
     await assertReliabilitySchema(pool);

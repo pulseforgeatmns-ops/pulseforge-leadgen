@@ -58,7 +58,8 @@ function nonNegative(value, name) {
 }
 function asList(value, name, { min = 0 } = {}) {
   if (!Array.isArray(value)) throw new ObjectiveContractError('objective_contract_invalid', `${name} must be an array`);
-  const out = [...new Set(value.map(v => String(v || '').trim()).filter(Boolean))].sort();
+  if (value.some(v => typeof v !== 'string')) throw new ObjectiveContractError('objective_contract_invalid', `${name} values must be strings`);
+  const out = [...new Set(value.map(v => v.trim()).filter(Boolean))].sort();
   if (out.length < min) throw new ObjectiveContractError('objective_contract_invalid', `${name} requires at least ${min} value(s)`);
   return out;
 }
@@ -83,10 +84,12 @@ function validateObjectiveContract(input = {}) {
   const allowedActionClasses = asList(input.allowedActionClasses || [], 'allowedActionClasses');
   const allowedSpecialists = asList(input.allowedSpecialists || [], 'allowedSpecialists');
   const allowedProviders = asList(input.allowedProviders || [], 'allowedProviders');
+  if (input.providerPolicy != null && (!input.providerPolicy || typeof input.providerPolicy !== 'object' || Array.isArray(input.providerPolicy))) throw new ObjectiveContractError('objective_contract_invalid', 'providerPolicy must be an object');
   if (hasAnthropic(allowedProviders) || hasAnthropic(input.providerPolicy)) {
     throw new ObjectiveContractError('objective_contract_provider_retired', 'Anthropic is retired and cannot appear in an objective contract');
   }
   for (const provider of allowedProviders) if (!APPROVED_PROVIDERS.includes(provider)) throw new ObjectiveContractError('objective_contract_provider_unapproved', 'provider is not approved');
+  for (const provider of Object.values(input.providerPolicy || {})) if (typeof provider !== 'string' || !APPROVED_PROVIDERS.includes(provider)) throw new ObjectiveContractError('objective_contract_provider_unapproved', 'provider policy is not approved');
   for (const specialist of allowedSpecialists) if (!APPROVED_SPECIALISTS.includes(specialist)) throw new ObjectiveContractError('objective_contract_specialist_unapproved', 'specialist is not approved');
   for (const action of allowedActionClasses) if (!APPROVED_ACTION_CLASSES.includes(action)) throw new ObjectiveContractError('objective_contract_action_unapproved', 'action class is not approved');
   const budget = input.budget;
@@ -145,6 +148,7 @@ function validateObjectiveContract(input = {}) {
     budget: Object.freeze({ caps: Object.freeze(budgetCaps) }),
     wakeConditions,
     idlePolicy: Object.freeze({ noModelCalls: true, noProviderCalls: true, noSpecialistCalls: true }),
+    providerPolicy: Object.freeze({ ...(input.providerPolicy || {}) }),
     verification: Object.freeze({ initialPollMs, maxPollMs, maxAttempts, backoffMultiplier, jitterRatio: 0.1, deadlineAt: deadlineAt.toISOString() }),
     escalationPolicy: text(input.escalationPolicy, 'escalationPolicy'),
   });
@@ -154,10 +158,13 @@ function validateObjectiveContract(input = {}) {
 function nextVerificationWake(policy, attempts, outcome = 'pending', random = Math.random) {
   if (TERMINAL_VERIFICATION.has(outcome)) return null;
   const verification = validateObjectiveContract(policy).verification;
+  if (Date.now() >= new Date(verification.deadlineAt).getTime()) return null;
   const count = int(attempts, 'attempts', 0, MAX_POLL_ATTEMPTS);
   if (count >= verification.maxAttempts) return null;
   const base = Math.min(verification.maxPollMs, Math.round(verification.initialPollMs * (verification.backoffMultiplier ** count)));
-  return Math.round(base * (1 + ((Number(random()) * 2 - 1) * verification.jitterRatio)));
+  const r = Number(random());
+  if (!Number.isFinite(r) || r < 0 || r >= 1) throw new ObjectiveContractError('objective_contract_random_invalid', 'random source must return [0,1)');
+  return Math.max(Math.max(MIN_POLL_MS, verification.initialPollMs), Math.min(verification.maxPollMs, Math.round(base * (1 + ((r * 2 - 1) * verification.jitterRatio)))));
 }
 
 function rootLogicalKey(objectiveId) {
@@ -205,7 +212,7 @@ async function admitObjectiveRoot(input = {}, opts = {}) {
   if (!input.actor || !input.actor.id || !input.actor.authorizedTenantId || String(input.actor.authorizedTenantId) !== tenantId) {
     throw new ObjectiveContractError('objective_contract_actor_unauthorized', 'authenticated tenant-bound actor is required', 403);
   }
-  if (typeof opts.authorizeActor !== 'function' || !(await opts.authorizeActor(input.actor, { tenantId, objectiveId: input.objectiveId }))) {
+  if (typeof opts.authorizeActor !== 'function' || (await opts.authorizeActor(input.actor, { tenantId, objectiveId: input.objectiveId })) !== true) {
     throw new ObjectiveContractError('objective_contract_actor_unauthorized', 'actor is not authorized for objective admission', 403);
   }
   const objectiveService = opts.objectiveService || require('../../../services/operatorObjectives');
