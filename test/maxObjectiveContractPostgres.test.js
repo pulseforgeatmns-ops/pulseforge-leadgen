@@ -12,6 +12,7 @@ const objectives = require('../services/operatorObjectives');
 
 const P003 = path.join(__dirname, '../migrations/2026-11-25-max-p0-003-reliability-core.sql');
 const P004 = path.join(__dirname, '../migrations/2026-11-25-max-p0-004-durable-execution-ownership.sql');
+const P005 = path.join(__dirname, '../migrations/2026-11-27-max-p0-005-package-a-contract-roots.sql');
 let fixture;
 async function db() {
   if (fixture) return fixture;
@@ -19,6 +20,7 @@ async function db() {
   const pool = createTrackedPostgresPool({ connectionString: instance.connectionString, max: 6 });
   await pool.query(fs.readFileSync(P003, 'utf8'));
   await pool.query(fs.readFileSync(P004, 'utf8'));
+  await pool.query(fs.readFileSync(P005, 'utf8'));
   fixture = { instance, pool };
   return fixture;
 }
@@ -35,20 +37,16 @@ function contract() {
     escalationPolicy: 'operator_review',
   };
 }
+function actor(tenantId) { return { id: `operator-${tenantId}`, authorizedTenantId: tenantId }; }
+function opts(tasks, store) { return { env: { MAX_AUTONOMOUS_OBJECTIVES: 'true', MAX_DURABLE_TASKS: 'true' }, taskStore: tasks, objectiveService: objectives, objectiveOpts: { store }, authorizeActor: async input => Boolean(input && input.id) }; }
 
 test('Package A root is durable and does not consume P0-004 mission ownership', async () => {
   const { pool } = await db();
   const objectiveStore = objectives.createMemoryStore();
   const objective = await objectives.createOperatorObjective({ tenantId: 'p005-a', scope: 'operator', title: 'Durable research', objectiveText: 'Verify a safe result.' }, { store: objectiveStore });
   const tasks = createDurableExecutionOwnership(pool);
-  const admitted = await admitObjectiveRoot({ tenantId: 'p005-a', objectiveId: objective.id, contract: contract() }, {
-    env: { MAX_AUTONOMOUS_OBJECTIVES: 'true', MAX_DURABLE_TASKS: 'true' }, taskStore: tasks,
-    objectiveService: objectives, objectiveOpts: { store: objectiveStore },
-  });
-  const replay = await admitObjectiveRoot({ tenantId: 'p005-a', objectiveId: objective.id }, {
-    env: { MAX_AUTONOMOUS_OBJECTIVES: 'true', MAX_DURABLE_TASKS: 'true' }, taskStore: tasks,
-    objectiveService: objectives, objectiveOpts: { store: objectiveStore },
-  });
+  const admitted = await admitObjectiveRoot({ tenantId: 'p005-a', objectiveId: objective.id, contract: contract(), actor: actor('p005-a') }, opts(tasks, objectiveStore));
+  const replay = await admitObjectiveRoot({ tenantId: 'p005-a', objectiveId: objective.id, contract: contract(), actor: actor('p005-a') }, opts(tasks, objectiveStore));
   assert.equal(replay.task.id, admitted.task.id);
   assert.equal(admitted.task.missionId, null);
 
@@ -68,13 +66,10 @@ test('Package A concurrent admission is tenant-scoped, idempotent, and preserves
   const objectiveStore = objectives.createMemoryStore();
   const objective = await objectives.createOperatorObjective({ tenantId: 'p005-concurrent', scope: 'operator', title: 'Concurrent objective', objectiveText: 'Verify exactly once.' }, { store: objectiveStore });
   const tasks = createDurableExecutionOwnership(pool);
-  const options = {
-    env: { MAX_AUTONOMOUS_OBJECTIVES: 'true', MAX_DURABLE_TASKS: 'true' }, taskStore: tasks,
-    objectiveService: objectives, objectiveOpts: { store: objectiveStore },
-  };
+  const options = opts(tasks, objectiveStore);
   const [first, second] = await Promise.all([
-    admitObjectiveRoot({ tenantId: 'p005-concurrent', objectiveId: objective.id, contract: contract() }, options),
-    admitObjectiveRoot({ tenantId: 'p005-concurrent', objectiveId: objective.id, contract: contract() }, options),
+    admitObjectiveRoot({ tenantId: 'p005-concurrent', objectiveId: objective.id, contract: contract(), actor: actor('p005-concurrent') }, options),
+    admitObjectiveRoot({ tenantId: 'p005-concurrent', objectiveId: objective.id, contract: contract(), actor: actor('p005-concurrent') }, options),
   ]);
   assert.equal(first.task.id, second.task.id, 'the P0-004 logical key admits one root under concurrent submission');
   const roots = await pool.query("SELECT id, mission_id, immutable_input FROM max_durable_execution_tasks WHERE tenant_id=$1 AND objective_id=$2", ['p005-concurrent', objective.id]);
@@ -82,13 +77,13 @@ test('Package A concurrent admission is tenant-scoped, idempotent, and preserves
   assert.equal(roots.rows[0].mission_id, null);
   assert.deepEqual(roots.rows[0].immutable_input.contract, validateObjectiveContract(contract()));
   await assert.rejects(
-    () => admitObjectiveRoot({ tenantId: 'other-tenant', objectiveId: objective.id, contract: contract() }, options),
+    () => admitObjectiveRoot({ tenantId: 'other-tenant', objectiveId: objective.id, contract: contract(), actor: actor('other-tenant') }, options),
     error => error.code === 'objective_contract_not_found',
     'the objective lookup never crosses the tenant boundary',
   );
   const changed = contract(); changed.plan.maxSteps = 3;
   await assert.rejects(
-    () => admitObjectiveRoot({ tenantId: 'p005-concurrent', objectiveId: objective.id, contract: changed }, options),
+    () => admitObjectiveRoot({ tenantId: 'p005-concurrent', objectiveId: objective.id, contract: changed, actor: actor('p005-concurrent') }, options),
     error => error.code === 'objective_contract_revision_conflict',
     'a root cannot be revised through duplicate submission',
   );

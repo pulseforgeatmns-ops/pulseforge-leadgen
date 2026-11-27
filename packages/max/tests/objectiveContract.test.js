@@ -28,9 +28,9 @@ describe('MAX-P0-005 Package A objective contract', () => {
   it('validates bounded governance, wakes, and polling without creating a timer', () => {
     const validated = validateObjectiveContract(contract());
     assert.equal(validated.idlePolicy.noModelCalls, true);
-    assert.equal(nextVerificationWake(validated, 0), 5000);
-    assert.equal(nextVerificationWake(validated, 1), 10000);
-    assert.equal(nextVerificationWake(validated, 2), 20000);
+    assert.equal(nextVerificationWake(validated, 0, 'pending', () => 0.5), 5000);
+    assert.equal(nextVerificationWake(validated, 1, 'pending', () => 0.5), 10000);
+    assert.equal(nextVerificationWake(validated, 2, 'pending', () => 0.5), 20000);
     assert.equal(nextVerificationWake(validated, 3), null);
     assert.equal(nextVerificationWake(validated, 0, 'verified'), null);
   });
@@ -51,7 +51,7 @@ describe('MAX-P0-005 Package A objective contract', () => {
     assert.equal(task.missionId, null);
     assert.equal(task.executionScope.missionOwnership, 'none');
     assert.equal(task.retryBudget, 0);
-    assert.match(task.logicalKey, /^objective:o1:v:1$/);
+    assert.match(task.logicalKey, /^objective:o1:root$/);
   });
 
   it('is default-off and cannot accept work or call a task store', async () => {
@@ -68,9 +68,9 @@ describe('MAX-P0-005 Package A objective contract', () => {
     const objective = await objectives.createOperatorObjective({ tenantId: 't1', scope: 'operator', title: 'Research', objectiveText: 'Find evidence.' }, { store });
     const calls = [];
     const taskStore = { accept: async input => { calls.push(input); return { accepted: true, replay: false, task: { id: 'root-1', ...input, state: 'queued' } }; } };
-    const result = await admitObjectiveRoot({ tenantId: 't1', objectiveId: objective.id, contract: contract() }, {
+    const result = await admitObjectiveRoot({ tenantId: 't1', objectiveId: objective.id, contract: contract(), actor: { id: 'operator-1', authorizedTenantId: 't1' } }, {
       env: { MAX_AUTONOMOUS_OBJECTIVES: 'true', MAX_DURABLE_TASKS: 'true' }, taskStore,
-      objectiveService: objectives, objectiveOpts: { store },
+      objectiveService: objectives, objectiveOpts: { store }, authorizeActor: async () => true,
     });
     assert.equal(result.admitted, true);
     assert.equal(calls.length, 1);
@@ -79,7 +79,6 @@ describe('MAX-P0-005 Package A objective contract', () => {
     assert.equal(calls[0].executionScope.role, 'root');
     assert.equal(calls[0].immutableInput.contract.allowedProviders.includes('anthropic'), false);
     const persisted = await objectives.getObjectiveById(objective.id, { tenantId: 't1', store });
-    assert.equal(persisted.context.maxP005Contract.version, 1);
-    assert.equal(persisted.context.maxP005RootTaskId, 'root-1');
+    assert.equal(persisted.context.maxP005Contract, undefined);
   });
 });

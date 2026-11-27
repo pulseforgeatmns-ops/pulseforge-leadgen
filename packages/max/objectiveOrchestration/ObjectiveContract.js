@@ -20,6 +20,13 @@ const WAKE_KINDS = Object.freeze([
   'objective_accepted', 'dependency_terminal', 'lease_or_deadline_due',
   'correlated_inbound', 'operator_reverify', 'due_verification',
 ]);
+// Package A has no provider integration.  This closed registry deliberately
+// admits only the hermetic fixture used by the contract tests.  Later packages
+// must make a reviewed additive registry change; unknown strings are never a
+// provider policy.
+const APPROVED_PROVIDERS = Object.freeze(['deterministic_fixture']);
+const APPROVED_SPECIALISTS = Object.freeze(['scout']);
+const APPROVED_ACTION_CLASSES = Object.freeze([]);
 const TERMINAL_VERIFICATION = new Set(['verified', 'contradicted', 'unverifiable', 'error']);
 
 class ObjectiveContractError extends Error {
@@ -56,6 +63,12 @@ function asList(value, name, { min = 0 } = {}) {
   return out;
 }
 function hasAnthropic(value) { return /anthropic|claude/i.test(JSON.stringify(value)); }
+function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${canonical(value[k])}`).join(',')}}`;
+  return JSON.stringify(value);
+}
+function fingerprint(value) { return require('crypto').createHash('sha256').update(canonical(value)).digest('hex'); }
 function enabled(env = process.env) {
   return String(env.MAX_AUTONOMOUS_OBJECTIVES || '').toLowerCase() === 'true'
     && String(env.MAX_DURABLE_TASKS || '').toLowerCase() === 'true';
@@ -73,6 +86,9 @@ function validateObjectiveContract(input = {}) {
   if (hasAnthropic(allowedProviders) || hasAnthropic(input.providerPolicy)) {
     throw new ObjectiveContractError('objective_contract_provider_retired', 'Anthropic is retired and cannot appear in an objective contract');
   }
+  for (const provider of allowedProviders) if (!APPROVED_PROVIDERS.includes(provider)) throw new ObjectiveContractError('objective_contract_provider_unapproved', 'provider is not approved');
+  for (const specialist of allowedSpecialists) if (!APPROVED_SPECIALISTS.includes(specialist)) throw new ObjectiveContractError('objective_contract_specialist_unapproved', 'specialist is not approved');
+  for (const action of allowedActionClasses) if (!APPROVED_ACTION_CLASSES.includes(action)) throw new ObjectiveContractError('objective_contract_action_unapproved', 'action class is not approved');
   const budget = input.budget;
   if (!budget || typeof budget !== 'object' || Array.isArray(budget)) {
     throw new ObjectiveContractError('objective_contract_invalid', 'budget is required');
@@ -101,7 +117,7 @@ function validateObjectiveContract(input = {}) {
     throw new ObjectiveContractError('objective_contract_invalid', 'verification.deadlineAt must be a timestamp');
   }
   const objectiveDeadline = new Date(input.deadlineAt);
-  if (Number.isNaN(objectiveDeadline.getTime()) || deadlineAt.getTime() > objectiveDeadline.getTime()) {
+  if (Number.isNaN(objectiveDeadline.getTime()) || objectiveDeadline.getTime() <= Date.now() || deadlineAt.getTime() > objectiveDeadline.getTime()) {
     throw new ObjectiveContractError('objective_contract_invalid', 'verification.deadlineAt must not exceed deadlineAt');
   }
   const wakeConditions = asList(input.wakeConditions, 'wakeConditions', { min: 1 });
@@ -129,22 +145,23 @@ function validateObjectiveContract(input = {}) {
     budget: Object.freeze({ caps: Object.freeze(budgetCaps) }),
     wakeConditions,
     idlePolicy: Object.freeze({ noModelCalls: true, noProviderCalls: true, noSpecialistCalls: true }),
-    verification: Object.freeze({ initialPollMs, maxPollMs, maxAttempts, backoffMultiplier, deadlineAt: deadlineAt.toISOString() }),
+    verification: Object.freeze({ initialPollMs, maxPollMs, maxAttempts, backoffMultiplier, jitterRatio: 0.1, deadlineAt: deadlineAt.toISOString() }),
     escalationPolicy: text(input.escalationPolicy, 'escalationPolicy'),
   });
 }
 
 /** Returns a bounded next verification delay; no timer is created. */
-function nextVerificationWake(policy, attempts, outcome = 'pending') {
+function nextVerificationWake(policy, attempts, outcome = 'pending', random = Math.random) {
   if (TERMINAL_VERIFICATION.has(outcome)) return null;
   const verification = validateObjectiveContract(policy).verification;
   const count = int(attempts, 'attempts', 0, MAX_POLL_ATTEMPTS);
   if (count >= verification.maxAttempts) return null;
-  return Math.min(verification.maxPollMs, Math.round(verification.initialPollMs * (verification.backoffMultiplier ** count)));
+  const base = Math.min(verification.maxPollMs, Math.round(verification.initialPollMs * (verification.backoffMultiplier ** count)));
+  return Math.round(base * (1 + ((Number(random()) * 2 - 1) * verification.jitterRatio)));
 }
 
-function rootLogicalKey(objectiveId, version) {
-  return `objective:${text(objectiveId, 'objectiveId')}:v:${int(version, 'version', 1, Number.MAX_SAFE_INTEGER)}`;
+function rootLogicalKey(objectiveId) {
+  return `objective:${text(objectiveId, 'objectiveId')}:root`;
 }
 
 /** Root tasks have no mission ID by design; children own mission slots in Package C. */
@@ -153,7 +170,7 @@ function rootTaskInput({ tenantId, objective, contract }) {
     tenantId: text(tenantId, 'tenantId'),
     objectiveId: text(objective.id, 'objective.id'),
     missionId: null,
-    logicalKey: rootLogicalKey(objective.id, contract.version),
+    logicalKey: rootLogicalKey(objective.id),
     specialist: 'max_objective',
     executionScope: { kind: 'objective_orchestration', role: 'root', missionOwnership: 'none' },
     immutableInput: {
@@ -167,6 +184,16 @@ function rootTaskInput({ tenantId, objective, contract }) {
   };
 }
 
+/** Read-only projection for operators; it cannot advance, claim, or wake work. */
+function projectObjectiveStatus(task) {
+  if (!task) return null;
+  const contract = task.immutableInput && task.immutableInput.contract;
+  return Object.freeze({ objectiveId: task.objectiveId || null, rootTaskId: task.id, state: task.state,
+    nextWakeConditions: contract ? contract.wakeConditions.slice() : [],
+    verification: contract ? { maxAttempts: contract.verification.maxAttempts, deadlineAt: contract.verification.deadlineAt } : null,
+    externalActionsEnabled: false });
+}
+
 /**
  * Explicit opt-in admission. It does not claim, start, poll, or execute a task.
  * A caller must inject the existing objective service and P0-004 task store.
@@ -175,6 +202,12 @@ async function admitObjectiveRoot(input = {}, opts = {}) {
   const env = opts.env || process.env;
   if (!enabled(env)) return { enabled: false, admitted: false, reason: 'max_p0_005_disabled' };
   const tenantId = text(input.tenantId, 'tenantId');
+  if (!input.actor || !input.actor.id || !input.actor.authorizedTenantId || String(input.actor.authorizedTenantId) !== tenantId) {
+    throw new ObjectiveContractError('objective_contract_actor_unauthorized', 'authenticated tenant-bound actor is required', 403);
+  }
+  if (typeof opts.authorizeActor !== 'function' || !(await opts.authorizeActor(input.actor, { tenantId, objectiveId: input.objectiveId }))) {
+    throw new ObjectiveContractError('objective_contract_actor_unauthorized', 'actor is not authorized for objective admission', 403);
+  }
   const objectiveService = opts.objectiveService || require('../../../services/operatorObjectives');
   const taskStore = opts.taskStore;
   if (!taskStore || typeof taskStore.accept !== 'function') {
@@ -183,32 +216,18 @@ async function admitObjectiveRoot(input = {}, opts = {}) {
   let objective = await objectiveService.getObjectiveById(input.objectiveId, { tenantId, ...(opts.objectiveOpts || {}) });
   if (!objective) throw new ObjectiveContractError('objective_contract_not_found', 'objective not found', 404);
   if (objective.status !== 'active') throw new ObjectiveContractError('objective_contract_inactive', 'only active objectives may be admitted', 409);
-  const contract = validateObjectiveContract(input.contract || objective.context?.maxP005Contract);
-  const existingContract = objective.context?.maxP005Contract || null;
-  if (existingContract && JSON.stringify(existingContract) !== JSON.stringify(contract)) {
-    throw new ObjectiveContractError('objective_contract_revision_conflict', 'the admitted objective contract is immutable; create a reviewed revision before admission', 409);
-  }
-  // Persist the canonical contract before accepting the root. A crash in this
-  // harmless gap leaves no execution or external effect; a later admission
-  // resumes by the same stable root key. The root's immutable input remains
-  // the authority used by later packages.
-  if (!existingContract) {
-    objective = await objectiveService.updateOperatorObjective(objective.id, {
-      tenantId, context: { maxP005Contract: clone(contract) },
-    }, opts.objectiveOpts || {});
-  }
+  const contract = validateObjectiveContract(input.contract);
   const accepted = await taskStore.accept(rootTaskInput({ tenantId, objective, contract }));
-  // This is a continuity projection only; P0-004's immutable logical key and
-  // root task remain authoritative if a process dies before this update.
-  await objectiveService.updateOperatorObjective(objective.id, {
-    tenantId, context: { maxP005RootTaskId: accepted.task.id },
-  }, opts.objectiveOpts || {});
-  return { enabled: true, admitted: accepted.accepted === true, replay: accepted.replay === true, task: accepted.task, contract };
+  const acceptedContract = accepted.task && accepted.task.immutableInput && accepted.task.immutableInput.contract;
+  if (accepted.replay && (!acceptedContract || fingerprint(acceptedContract) !== fingerprint(contract))) {
+    throw new ObjectiveContractError('objective_contract_revision_conflict', 'the admitted root contract is immutable', 409);
+  }
+  return { enabled: true, admitted: accepted.accepted === true, replay: accepted.replay === true, task: accepted.task, contract: acceptedContract || contract };
 }
 
 module.exports = {
   MAX_STEPS, MAX_CHILDREN, MAX_REPLANS, MAX_RETRIES, MAX_POLL_ATTEMPTS,
-  MIN_POLL_MS, MAX_POLL_MS, WAKE_KINDS, ObjectiveContractError,
+  MIN_POLL_MS, MAX_POLL_MS, WAKE_KINDS, APPROVED_PROVIDERS, APPROVED_SPECIALISTS, APPROVED_ACTION_CLASSES, ObjectiveContractError,
   enabled, validateObjectiveContract, nextVerificationWake, rootLogicalKey,
-  rootTaskInput, admitObjectiveRoot,
+  rootTaskInput, projectObjectiveStatus, admitObjectiveRoot, canonical, fingerprint,
 };

@@ -57,6 +57,7 @@ function row(task) {
   return { ...rest, id: String(task.id), tenantId: String(task.tenant_id), objectiveId: task.objective_id,
     missionId: task.mission_id, parentTaskId: task.parent_task_id && String(task.parent_task_id), logicalKey: task.logical_key,
     specialist: task.specialist, state: task.state, ownershipToken: task.ownership_token, fenceEpoch: Number(task.fence_epoch),
+    executionScope: task.execution_scope, immutableInput: task.immutable_input,
     leaseExpiresAt: iso(task.lease_expires_at), heartbeatAt: iso(task.heartbeat_at), deadlineAt: iso(task.deadline_at),
     retryBudget: Number(task.retry_budget), recoveryAttempts: Number(task.recovery_attempts),
     recoveryReason: task.recovery_reason || null, cancellationReason: task.cancellation_reason || null,
