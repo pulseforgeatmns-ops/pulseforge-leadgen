@@ -3,13 +3,17 @@
 Paste the whole block into the Render Shell of the production web service. It runs from `/app` on commit `69e7216`.
 
 What it does:
-- Writes two files to `/tmp`. This touches the container only, not the database, and nothing is deployed.
-- Runs both files under `default_transaction_read_only=on`. Each also opens its own `READ ONLY` transaction and ends with `ROLLBACK`.
-- Step 2 only reads the Brevo event log, with GET requests; it never sends. If `BREVO_API_KEY` is absent, it reports that and changes nothing.
-- Printed output contains no e-mail addresses, subjects, bodies or message ids. Recipients and message ids are shown as md5 prefixes.
-- Paste the full output back, from `== 0` to the closing JSON.
+- Writes two files to `/tmp`. This touches the container only, not the database.
+- Runs both read-only: the session default is read-only, each opens a `READ ONLY` transaction, and each ends with `ROLLBACK`.
 
-The source of both files is in `scripts/max-p0-002/`, and they were verified against a fixture built from the deployed migrations.
+Fail-closed behaviour:
+- Nothing is classified and no Brevo lookup is made unless there are exactly **20** unresolved AMO attempts and exactly **1** failed mailbox record.
+- Any error in a required query stops psql with a non-zero exit. The Brevo step then does not run, and `P0002_SQL_COMPLETE` is never printed.
+- Only the optional queries (CRM touchpoints / agent_log, api_usage_events) may fail. They then print `UNAVAILABLE`.
+
+Success shows `P0002_PRECONDITION_OK`, `P0002_SQL_COMPLETE`, `"status": "P0002_BREVO_COMPLETE"` and `brevo_exit=0`.
+
+Step 2 only reads the Brevo event log, with GET requests; it never sends. Printed output contains no e-mail addresses, subjects or bodies.
 
 ```sh
 cat > /tmp/p0002-reconciliation.sql <<'P0002_SQL_EOF'
@@ -21,13 +25,20 @@ cat > /tmp/p0002-reconciliation.sql <<'P0002_SQL_EOF'
 --
 -- Render Shell (production web service, cwd /app):
 --   PGOPTIONS='-c default_transaction_read_only=on -c statement_timeout=30s' \
---     psql "$DATABASE_URL" -X -q -v ON_ERROR_STOP=0 -f /tmp/p0002-reconciliation.sql
+--     psql "$DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -f /tmp/p0002-reconciliation.sql
+--
+-- Fail-closed: any error in a required query stops psql with a non-zero exit
+-- and the completion line is never printed. The run also stops before any
+-- classification unless exactly 20 unresolved AMO attempts and exactly 1
+-- failed mailbox record exist. Only the supplementary queries (CRM touchpoints /
+-- agent_log, api_usage_events) may fail; they then print UNAVAILABLE.
 --
 -- Outcome vocabulary (never upgraded without direct evidence):
 --   SENT_CONFIRMED       direct evidence tied to this record (provider events on the record id,
 --                        provider message id or provider response stored on the record)
 --   NOT_SENT_DEFINITIVE  mailbox only: failure provably before the SMTP boundary
 --   UNKNOWN              anything else; the sub-reason says what was (not) observed
+\set ON_ERROR_STOP on
 \set ON_ERROR_ROLLBACK on
 \pset footer off
 BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
@@ -50,6 +61,22 @@ SELECT (SELECT count(*) FROM acquisition_mission_outbound_executions e
        to_regclass('max_request_receipts') IS NOT NULL AS p0003_receipts,
        (SELECT count(*) FROM pg_locks WHERE locktype = 'advisory') AS advisory_locks;
 
+\echo '== 1a. PRECONDITION (fail-closed): exactly 20 unresolved AMO attempts and exactly 1 failed mailbox record'
+DO $precondition$
+DECLARE attempts bigint; failed bigint;
+BEGIN
+  SELECT count(*) INTO attempts FROM acquisition_mission_outbound_executions e
+   WHERE e.status = 'attempted'
+     AND NOT EXISTS (SELECT 1 FROM acquisition_mission_outbound_executions f
+                      WHERE f.execution_identity = e.execution_identity AND f.status IN ('sent','failed'));
+  SELECT count(*) INTO failed FROM tenant_outreach_messages WHERE direction = 'OUTBOUND' AND status = 'failed';
+  IF attempts <> 20 OR failed <> 1 THEN
+    RAISE EXCEPTION 'P0002_PRECONDITION_FAILED: unresolved_attempts=% (expected 20), failed_mailbox=% (expected 1); nothing classified', attempts, failed;
+  END IF;
+  RAISE NOTICE 'P0002_PRECONDITION_OK: unresolved_attempts=20 failed_mailbox=1';
+END
+$precondition$;
+
 \echo '== 1b. unresolved attempts by tenant / provider'
 SELECT e.tenant_id, e.provider, count(*) AS n, min(e.attempted_at) AS oldest, max(e.attempted_at) AS newest
   FROM acquisition_mission_outbound_executions e
@@ -64,7 +91,13 @@ SELECT (SELECT count(*) FROM acquisition_mission_outbound_executions WHERE updat
        (SELECT count(*) FROM tenant_outreach_messages WHERE direction = 'OUTBOUND' AND created_at > now() - interval '24 hours') AS mailbox_outbound,
        (SELECT count(*) FROM tenant_outreach_scheduled_sends WHERE updated_at > now() - interval '24 hours') AS schedule_writes,
        (SELECT count(*) FROM tenant_outreach_scheduled_sends WHERE status IN ('SCHEDULED','EXECUTING')) AS live_schedules;
+\echo '   (optional) api_usage_events last 24h'
+\set ON_ERROR_STOP off
 SELECT count(*) AS api_usage_events_24h FROM api_usage_events WHERE created_at > now() - interval '24 hours';
+\if :ERROR
+\echo '   OPTIONAL api_usage_events: UNAVAILABLE (sqlstate' :LAST_ERROR_SQLSTATE ')'
+\endif
+\set ON_ERROR_STOP on
 
 \echo '== 3. per-record classification: unresolved AMO attempts'
 WITH u AS (
@@ -142,7 +175,8 @@ SELECT CASE WHEN EXISTS (SELECT 1 FROM acquisition_mission_provider_events p WHE
             THEN 'SENT_CONFIRMED' ELSE 'UNKNOWN' END AS outcome, count(*) AS n
   FROM u GROUP BY 1 ORDER BY 1;
 
-\echo '== 4. supplementary (informational, may be unavailable): CRM touchpoints / agent_log after each attempt'
+\echo '== 4. supplementary (informational, optional): CRM touchpoints / agent_log after each attempt'
+\set ON_ERROR_STOP off
 WITH u AS (
   SELECT e.* FROM acquisition_mission_outbound_executions e
    WHERE e.status = 'attempted'
@@ -161,6 +195,10 @@ SELECT u.id AS record_id,
           FROM agent_log a WHERE a.prospect_id::text = u.prospect_id
            AND a.ran_at BETWEEN u.attempted_at - interval '2 minutes' AND u.attempted_at + interval '30 minutes') AS agent_log_kinds
   FROM u ORDER BY u.tenant_id, u.attempted_at;
+\if :ERROR
+\echo '   OPTIONAL section 4: UNAVAILABLE (sqlstate' :LAST_ERROR_SQLSTATE ')'
+\endif
+\set ON_ERROR_STOP on
 
 \echo '== 5. failed tenant-mailbox outbound record(s)'
 SELECT m.id AS message_id, m.tenant_id, m.mission_id, m.prospect_id, m.failure_code,
@@ -218,7 +256,7 @@ SELECT (SELECT count(*) FROM u) AS attempted_rows_still_attempted,
          WHERE s.status IN ('SCHEDULED','EXECUTING')) AS live_schedules_for_affected;
 
 ROLLBACK;
-\echo '== done (rolled back; nothing written)'
+\echo '== P0002_SQL_COMPLETE (all required queries succeeded; rolled back; nothing written)'
 P0002_SQL_EOF
 cat > /tmp/p0002-brevo-evidence.cjs <<'P0002_JS_EOF'
 #!/usr/bin/env node
@@ -243,6 +281,8 @@ cat > /tmp/p0002-brevo-evidence.cjs <<'P0002_JS_EOF'
 const crypto = require('node:crypto');
 const { Client } = require('pg');
 
+const EXPECTED_ATTEMPTS = 20;
+const EXPECTED_FAILED_MAILBOX = 1;
 const h = (v) => (v ? crypto.createHash('md5').update(String(v)).digest('hex').slice(0, 10) : null);
 const day = (d) => new Date(d).toISOString().slice(0, 10);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -275,6 +315,12 @@ async function main() {
          AND NOT EXISTS (SELECT 1 FROM acquisition_mission_outbound_executions f
                           WHERE f.execution_identity = e.execution_identity AND f.status IN ('sent','failed'))
        ORDER BY e.tenant_id, e.attempted_at`)).rows;
+    // Fail-closed precondition: no provider lookup unless the population is exactly the reviewed one.
+    const failed = Number((await db.query(
+      "SELECT count(*) AS n FROM tenant_outreach_messages WHERE direction = 'OUTBOUND' AND status = 'failed'")).rows[0].n);
+    if (rows.length !== EXPECTED_ATTEMPTS || failed !== EXPECTED_FAILED_MAILBOX) {
+      throw Object.assign(new Error(`P0002_PRECONDITION_FAILED: unresolved_attempts=${rows.length} (expected ${EXPECTED_ATTEMPTS}), failed_mailbox=${failed} (expected ${EXPECTED_FAILED_MAILBOX}); no provider lookup made`), { code: 'P0002_PRECONDITION_FAILED' });
+    }
   } finally {
     await db.query('ROLLBACK').catch(() => {});
     await db.end();
@@ -323,16 +369,18 @@ async function main() {
     });
     await sleep(300);
   }
-  console.log(JSON.stringify({ observed_at: new Date().toISOString(), records: out.length, results: out }, null, 2));
+  console.log(JSON.stringify({ status: 'P0002_BREVO_COMPLETE', observed_at: new Date().toISOString(), records: out.length, results: out }, null, 2));
 }
 
-main().catch((err) => { console.error(JSON.stringify({ error: err.code || err.message })); process.exitCode = 1; });
+main().catch((err) => { console.error(JSON.stringify({ error: err.code || 'error', message: err.message })); process.exitCode = 1; });
 P0002_JS_EOF
-cd /app && git rev-parse --short HEAD 2>/dev/null; echo "RENDER_GIT_COMMIT=${RENDER_GIT_COMMIT:-unset}"
-# 1. local evidence (psql, read-only)
-PGOPTIONS='-c default_transaction_read_only=on -c statement_timeout=30s' \
-  psql "$DATABASE_URL" -X -q -v ON_ERROR_STOP=0 -f /tmp/p0002-reconciliation.sql
-# 2. provider-side evidence (Brevo GET only, read-only DB)
-PGOPTIONS='-c default_transaction_read_only=on -c statement_timeout=30s' \
-  NODE_PATH=/app/node_modules node /tmp/p0002-brevo-evidence.cjs
+cd /app && echo "RENDER_GIT_COMMIT=${RENDER_GIT_COMMIT:-unset}"
+if PGOPTIONS='-c default_transaction_read_only=on -c statement_timeout=30s' \
+     psql "$DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -f /tmp/p0002-reconciliation.sql; then
+  PGOPTIONS='-c default_transaction_read_only=on -c statement_timeout=30s' \
+    NODE_PATH=/app/node_modules node /tmp/p0002-brevo-evidence.cjs
+  echo "brevo_exit=$?"
+else
+  echo "P0002_SQL_FAILED psql_exit=$? : stopped; Brevo lookup NOT run; nothing written"
+fi
 ```

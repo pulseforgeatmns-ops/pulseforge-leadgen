@@ -44,11 +44,12 @@ P0-002 is **accepted** when the Shell output shows all of the following.
 | Check | Section | Required |
 |---|---|---|
 | Session read-only | 0 | `read_only = on` |
+| Fail-closed precondition | 1a | `P0002_PRECONDITION_OK` (otherwise psql stops before classification and no Brevo lookup is made) |
 | Baseline unchanged | 1 | `unresolved_attempts = 20`, `duplicate_groups = 0`, `failed_mailbox = 1`, P0-003 tables `f`, `advisory_locks = 0` |
 | Quiescent | 2 | all 24h write counters `0`, `live_schedules = 0` (any non-zero value must be explained before acceptance) |
 | Every record classified | 3, 3b, 5 | 20 + 1 rows, each with outcome and reason |
 | Holds intact | 6 | `attempted_rows_still_attempted = 20`, no pending governed item or live schedule for an affected prospect |
-| Nothing written | footer | `done (rolled back; nothing written)` |
+| All required queries succeeded, nothing written | footer | `P0002_SQL_COMPLETE …` then `"status": "P0002_BREVO_COMPLETE"` and `brevo_exit=0`. `P0002_SQL_FAILED` means no acceptance. Optional sections may print `UNAVAILABLE`. |
 
 - Acceptance does **not** require resolving `UNKNOWN`s. Unknowns stay held indefinitely.
 - If section 1 differs from the baseline, stop: the population changed and must be re-scoped. Do not classify new rows under this package.

@@ -20,6 +20,8 @@
 const crypto = require('node:crypto');
 const { Client } = require('pg');
 
+const EXPECTED_ATTEMPTS = 20;
+const EXPECTED_FAILED_MAILBOX = 1;
 const h = (v) => (v ? crypto.createHash('md5').update(String(v)).digest('hex').slice(0, 10) : null);
 const day = (d) => new Date(d).toISOString().slice(0, 10);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -52,6 +54,12 @@ async function main() {
          AND NOT EXISTS (SELECT 1 FROM acquisition_mission_outbound_executions f
                           WHERE f.execution_identity = e.execution_identity AND f.status IN ('sent','failed'))
        ORDER BY e.tenant_id, e.attempted_at`)).rows;
+    // Fail-closed precondition: no provider lookup unless the population is exactly the reviewed one.
+    const failed = Number((await db.query(
+      "SELECT count(*) AS n FROM tenant_outreach_messages WHERE direction = 'OUTBOUND' AND status = 'failed'")).rows[0].n);
+    if (rows.length !== EXPECTED_ATTEMPTS || failed !== EXPECTED_FAILED_MAILBOX) {
+      throw Object.assign(new Error(`P0002_PRECONDITION_FAILED: unresolved_attempts=${rows.length} (expected ${EXPECTED_ATTEMPTS}), failed_mailbox=${failed} (expected ${EXPECTED_FAILED_MAILBOX}); no provider lookup made`), { code: 'P0002_PRECONDITION_FAILED' });
+    }
   } finally {
     await db.query('ROLLBACK').catch(() => {});
     await db.end();
@@ -100,7 +108,7 @@ async function main() {
     });
     await sleep(300);
   }
-  console.log(JSON.stringify({ observed_at: new Date().toISOString(), records: out.length, results: out }, null, 2));
+  console.log(JSON.stringify({ status: 'P0002_BREVO_COMPLETE', observed_at: new Date().toISOString(), records: out.length, results: out }, null, 2));
 }
 
-main().catch((err) => { console.error(JSON.stringify({ error: err.code || err.message })); process.exitCode = 1; });
+main().catch((err) => { console.error(JSON.stringify({ error: err.code || 'error', message: err.message })); process.exitCode = 1; });
