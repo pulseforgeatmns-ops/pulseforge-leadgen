@@ -142,7 +142,8 @@ function createDurableExecutionOwnership(pool, options = {}) {
           ownership_token=NULL, lease_expires_at=NULL, updated_at=clock_timestamp()
         FROM (SELECT id, state AS prior_state FROM max_durable_execution_tasks
           WHERE tenant_id=$1 AND id IN (SELECT id FROM descendants)
-            AND state NOT IN ('completed','failed','cancelled','escalated','blocked_dependency')) prior
+            AND state NOT IN ('completed','failed','cancelled','escalated')
+            AND (state <> 'blocked_dependency' OR recovery_reason IS DISTINCT FROM $3)) prior
         WHERE t.id=prior.id RETURNING t.*, prior.prior_state)
       SELECT * FROM changed`, [tenantId, dependencyTaskId, reason]);
     for (const task of blocked.rows) await event(db, task, 'dependency_failed', task.prior_state, STATES.BLOCKED_DEPENDENCY, { dependencyTaskId, reason });
