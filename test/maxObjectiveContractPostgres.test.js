@@ -13,11 +13,13 @@ const objectives = require('../services/operatorObjectives');
 const P003 = path.join(__dirname, '../migrations/2026-11-25-max-p0-003-reliability-core.sql');
 const P004 = path.join(__dirname, '../migrations/2026-11-25-max-p0-004-durable-execution-ownership.sql');
 const P005 = path.join(__dirname, '../migrations/2026-11-27-max-p0-005-package-a-contract-roots.sql');
+const OBJECTIVES = path.join(__dirname, '../migrations/2026-08-13-operator-objectives.sql');
 let fixture;
 async function db() {
   if (fixture) return fixture;
   const instance = await startDisposablePostgres('max-p0-005-a-');
   const pool = createTrackedPostgresPool({ connectionString: instance.connectionString, max: 6 });
+  await pool.query(fs.readFileSync(OBJECTIVES, 'utf8'));
   await pool.query(fs.readFileSync(P003, 'utf8'));
   await pool.query(fs.readFileSync(P004, 'utf8'));
   await pool.query(fs.readFileSync(P005, 'utf8'));
@@ -38,15 +40,14 @@ function contract() {
   };
 }
 function actor(tenantId) { return { id: `operator-${tenantId}`, authorizedTenantId: tenantId }; }
-function opts(tasks, store) { return { env: { MAX_AUTONOMOUS_OBJECTIVES: 'true', MAX_DURABLE_TASKS: 'true' }, taskStore: tasks, objectiveService: objectives, objectiveOpts: { store }, authorizeActor: async input => Boolean(input && input.id) }; }
+function opts(tasks, pool) { return { env: { MAX_AUTONOMOUS_OBJECTIVES: 'true', MAX_DURABLE_TASKS: 'true' }, taskStore: tasks, objectiveService: objectives, objectiveOpts: { pool }, authorizeActor: async input => Boolean(input && input.id) }; }
 
 test('Package A root is durable and does not consume P0-004 mission ownership', async () => {
   const { pool } = await db();
-  const objectiveStore = objectives.createMemoryStore();
-  const objective = await objectives.createOperatorObjective({ tenantId: 'p005-a', scope: 'operator', title: 'Durable research', objectiveText: 'Verify a safe result.' }, { store: objectiveStore });
+  const objective = await objectives.createOperatorObjective({ tenantId: 'p005-a', scope: 'operator', title: 'Durable research', objectiveText: 'Verify a safe result.' }, { pool });
   const tasks = createDurableExecutionOwnership(pool);
-  const admitted = await admitObjectiveRoot({ tenantId: 'p005-a', objectiveId: objective.id, contract: contract(), actor: actor('p005-a') }, opts(tasks, objectiveStore));
-  const replay = await admitObjectiveRoot({ tenantId: 'p005-a', objectiveId: objective.id, contract: contract(), actor: actor('p005-a') }, opts(tasks, objectiveStore));
+  const admitted = await admitObjectiveRoot({ tenantId: 'p005-a', objectiveId: objective.id, contract: contract(), actor: actor('p005-a') }, opts(tasks, pool));
+  const replay = await admitObjectiveRoot({ tenantId: 'p005-a', objectiveId: objective.id, contract: contract(), actor: actor('p005-a') }, opts(tasks, pool));
   assert.equal(replay.task.id, admitted.task.id);
   assert.equal(admitted.task.missionId, null);
 
@@ -63,10 +64,9 @@ test('Package A root is durable and does not consume P0-004 mission ownership', 
 
 test('Package A concurrent admission is tenant-scoped, idempotent, and preserves the immutable root contract', async () => {
   const { pool } = await db();
-  const objectiveStore = objectives.createMemoryStore();
-  const objective = await objectives.createOperatorObjective({ tenantId: 'p005-concurrent', scope: 'operator', title: 'Concurrent objective', objectiveText: 'Verify exactly once.' }, { store: objectiveStore });
+  const objective = await objectives.createOperatorObjective({ tenantId: 'p005-concurrent', scope: 'operator', title: 'Concurrent objective', objectiveText: 'Verify exactly once.' }, { pool });
   const tasks = createDurableExecutionOwnership(pool);
-  const options = opts(tasks, objectiveStore);
+  const options = opts(tasks, pool);
   const [first, second] = await Promise.all([
     admitObjectiveRoot({ tenantId: 'p005-concurrent', objectiveId: objective.id, contract: contract(), actor: actor('p005-concurrent') }, options),
     admitObjectiveRoot({ tenantId: 'p005-concurrent', objectiveId: objective.id, contract: contract(), actor: actor('p005-concurrent') }, options),
