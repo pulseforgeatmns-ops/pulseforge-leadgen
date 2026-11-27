@@ -339,8 +339,9 @@ function createExternalActionLedger(pool, options = {}) {
       if (!owner.rows[0]) {
         throw ledgerError('durable_task_fenced', 'Task ownership is stale, expired, cancelled or past its deadline; nothing was dispatched.');
       }
-      if (!owner.rows[0].task_mission_id || !owner.rows[0].claim_mission_id
-        || String(owner.rows[0].task_mission_id) !== String(owner.rows[0].claim_mission_id)) {
+      if (!owner.rows[0].task_mission_id
+        || (owner.rows[0].claim_mission_id
+          && String(owner.rows[0].task_mission_id) !== String(owner.rows[0].claim_mission_id))) {
         throw ledgerError('durable_task_fenced', 'A null-mission or mismatched task fence cannot authorize a mission external action.');
       }
       const r = await client.query(
