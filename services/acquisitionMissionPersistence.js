@@ -18,6 +18,9 @@ const {
 const { persistOutboundExecution, ensureOutboundExecutionSchema } = require('./acquisitionMissionOutboundPersistence');
 const { currentTaskFence, assertTaskFenceOnClient, fencedError } = require('./maxReliability/taskExecutionContext');
 const {
+  ownershipEnforced, ownershipError, isWriteExempt, currentOwnershipExemption, auditExemptWrite,
+} = require('./maxReliability/executionOwnershipPolicy');
+const {
   ensureAcquisitionKnowledgeSchema,
   persistLearningCandidatesForStageCommit,
 } = require('./acquisitionKnowledgePersistence');
@@ -1031,7 +1034,7 @@ function wrapStageCommitError(err) {
   if (err && err.code === 'tme_persistence' && err.cause) return err;
   const wrapped = new Error((err && err.message) || 'Persistence failure.');
   const passthrough = ['tme_transaction_overlap', 'mission_version_conflict', 'mission_tenant_mismatch',
-    'mission_lock_timeout', 'mission_lease_lost', 'durable_task_fenced'];
+    'mission_lock_timeout', 'mission_lease_lost', 'durable_task_fenced', 'durable_task_owner_required'];
   wrapped.code = err && passthrough.includes(err.code) ? err.code : 'tme_persistence';
   wrapped.cause = err;
   if (err && err.details) wrapped.details = err.details;
@@ -1054,7 +1057,17 @@ function wrapStageCommitError(err) {
 /** MAX-P0-004 P3 — the current task fence must be live and of the mission's tenant. */
 async function assertMissionTaskFence(mission, client) {
   const fence = currentTaskFence();
-  if (!fence) return;
+  if (!fence) {
+    // Criterion 1 — with durable tasks enabled, an unowned write is allowed only
+    // under a closed write exemption, and is audited in this same transaction.
+    if (!ownershipEnforced()) return;
+    if (!isWriteExempt()) {
+      throw ownershipError('durable_task_owner_required',
+        'Mission writes require durable task ownership; nothing was written.', { missionId: mission.id });
+    }
+    await auditExemptWrite(client, { missionId: mission.id, tenantId: mission.tenantId ?? mission.clientId, reason: currentOwnershipExemption() });
+    return;
+  }
   const missionTenant = mission.tenantId != null ? String(mission.tenantId)
     : (mission.clientId != null ? String(mission.clientId) : null);
   if (missionTenant !== fence.tenantId) {
@@ -1140,6 +1153,12 @@ async function persistStageCommit(bundle = {}, pool = defaultPool(), opts = {}) 
   if (currentTaskFence()) {
     throw wrapStageCommitError(fencedError('A task-owned mission write requires the mission lease; nothing was written.',
       { missionId: mission.id }));
+  }
+  // Criterion 1 — with durable tasks enabled, the unlocked path is never allowed
+  // (no exemption covers it): ownership cannot be checked or audited atomically.
+  if (ownershipEnforced()) {
+    throw wrapStageCommitError(ownershipError('durable_task_owner_required',
+      'Mission writes require durable task ownership and the mission lease; nothing was written.', { missionId: mission.id }));
   }
   const client = typeof pool.connect === 'function' ? await pool.connect() : pool;
   const ownsClient = client !== pool && typeof client.release === 'function';

@@ -5,6 +5,7 @@ const amo = require('../packages/acquisition-mission');
 const { hash, fail, missionScope } = require('../packages/acquisition-mission/DailyOutboundPolicy');
 const { unwrapSpecialistPayload } = require('../packages/acquisition-mission/ContributionSupersession');
 const { loadMissionSnapshot } = require('./acquisitionMissionPersistence');
+const { resolveDurableTasks, runTaskOwnedWork } = require('../packages/acquisition-mission/DurableTaskRouting');
 const { getAcquisitionMissionRuntime } = require('./acquisitionMissionRuntime');
 const { resolveCanonicalSenderIdentity, evaluateCanonicalSenderReadiness } = require('../utils/canonicalSenderIdentity');
 const { buildInboxSnapshot } = require('./emmettOutboundSnapshot');
@@ -250,9 +251,12 @@ function adapters(pool, dependencies = {}) {
       permissions: { canExecute: true, role: 'operator' },
       payload: { question: `Bounded delegation ${program.id}: ${intent}`, maxSends: 1,
         ...(extra.prospectId ? { prospectId: extra.prospectId } : {}) } });
+    // MAX-P0-004 criterion 1 — governed executions are task-owned when durable
+    // tasks are enabled; each call site passes a key stable for its logical step.
     const result = await amo.routeExecutionRequest(request, { engine, tenantId,
       pool: dependencies.persist === false ? undefined : (extra.persistencePool || pool), persist: dependencies.persist !== false,
-      operatorId: program.authorized_by, allowFixtureFallback: false, ...extra });
+      operatorId: program.authorized_by, allowFixtureFallback: false,
+      durableTasks: resolveDurableTasks({ pool: dependencies.persist === false ? null : pool }), ...extra });
     if (result.executionResult?.rolledBack) throw result.executionResult.error || new Error(result.executionResult.rollbackReason);
     return result;
   }
@@ -382,6 +386,7 @@ function adapters(pool, dependencies = {}) {
         const allowed = ['APPROVE_DISCOVERY','CONTINUE_INVESTIGATION','APPROVE_PRIORITIZATION','DECIDE_ACQUISITION_APPROACH','GENERATE_VARIANTS','GENERATE_CAPACITY'];
       if (!allowed.includes(intent)) fail('preparation_requires_operator_judgment');
         await route(runtime, missionId, program, intent, {
+          durableTaskKey: `governed-prepare:${program.id}:${day}:${missionId}:${intent}:${Number(mission.version) || 0}`,
           infrastructureSnapshot: infra.snapshot,
           runEmmett: dependencies.runEmmett,
           runScout: (m, o) => scoutWithEligibility(m, { ...o,
@@ -479,7 +484,10 @@ function adapters(pool, dependencies = {}) {
       if (!mission || !mission.executionSummary || mission.executionSummary.complete) return;
       mission.executionSummary.complete = true;
       engine.store.putMission(mission);
-      await runtime.persistMissionState(mission.id, { pool, persist: true });
+      // MAX-P0-004 criterion 1 — envelope completion is task-owned bookkeeping.
+      await runTaskOwnedWork({ store: resolveDurableTasks({ pool }), tenantId, missionId: mission.id,
+        logicalKey: `governed-complete:${envelope.id}`, specialist: 'operator', immutableInput: { envelopeId: String(envelope.id) } },
+      () => runtime.persistMissionState(mission.id, { pool, persist: true }));
     },
     send: createBrevoSend(),
     approve: async (snapshot, program, binding, options = {}) => {
@@ -536,6 +544,7 @@ function adapters(pool, dependencies = {}) {
         if (schemaReady && snapshotHash({ mission: runtime.engine().get(snapshot.mission.id, tenantId),
           contributions: runtime.engine().store.listContributions(snapshot.mission.id) }) !== snapshotHash(snapshot)) fail('anchor_recovery_runtime_artifacts_changed');
         const result = await route(runtime, snapshot.mission.id, program, amo.EXECUTION_INTENTS.APPROVE_EXECUTION, { governedApproval: binding,
+          durableTaskKey: `governed-approve:${program.id}:${snapshot.mission.id}:${snapshotHash(snapshot)}`,
           ...(schemaReady ? { preinitializedSchema: true, persistencePool: options.persistencePool } : {}) });
         return result.executionResult?.approval;
       } finally {
@@ -553,6 +562,7 @@ function adapters(pool, dependencies = {}) {
       const transport = sendEmail || sendFor(program);
       return route(runtime, envelope.mission_id, program, amo.EXECUTION_INTENTS.EXECUTE_OUTBOUND,
         { governedEnvelopeId: envelope.id, maxSends: 1, prospectId: item.candidate_id,
+          durableTaskKey: `governed-send:${program.id}:${envelope.id}:${item.candidate_id}`,
           governedManifestCandidateIds: (envelope.manifest || []).map(row => String(row.candidateId || '')).filter(Boolean),
           governedRefillItem: item.snapshot?.refill === true ? item : null,
           sendEmail: transport, requireProviderReadiness: ctx.requiresLegacyEmailTelemetry });

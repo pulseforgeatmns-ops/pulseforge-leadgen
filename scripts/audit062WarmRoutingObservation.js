@@ -267,7 +267,10 @@ async function observeWarmRoutingDisabledPath(state) {
 }
 
 async function runAudit() {
-  return withOfflineSandbox(async state => {
+  // MAX-P0-004 criterion 1 — non-durable offline evaluation: no pool, nothing is
+  // persisted, Scout is an injected fixture and sends are never permitted.
+  const { runWithOwnershipExemption, OFFLINE_EVALUATION } = require('../services/maxReliability/executionOwnershipPolicy');
+  return runWithOwnershipExemption(OFFLINE_EVALUATION, () => withOfflineSandbox(async state => {
     const mission = await observeAcquisitionMission(state);
     const routing = await observeWarmRoutingDisabledPath(state);
     return {
@@ -281,7 +284,7 @@ async function runAudit() {
       mission, routing, fixtureCalls: state.fixtureCalls.slice(), blockedIoAttempts: state.blocked.slice(),
       warmRoutingModuleLoads: state.loadedModules.slice(),
     };
-  });
+  }));
 }
 
 async function main(argv = process.argv.slice(2)) {

@@ -1,4 +1,5 @@
 'use strict';
+const { runWithOwnershipExemption } = require('./maxReliability/executionOwnershipPolicy');
 
 /**
  * Mission-bound Riley reply interpretation.
@@ -192,7 +193,8 @@ async function consumeRileyReplyInterpretation(input = {}, db = defaultPool(), o
   }, { tenantId: correlation.tenantId });
 
   if (opts.persist !== false) {
-    await runtime.persistMissionState(mission.id, { pool: opts.pool || db, persist: opts.persist });
+    // MAX-P0-004 — an inbound reply interpretation, no outbound effect: an audited write exemption.
+    await runWithOwnershipExemption('inbound_observation', () => runtime.persistMissionState(mission.id, { pool: opts.pool || db, persist: opts.persist }));
   }
 
   return {

@@ -1,5 +1,6 @@
 'use strict';
 const { currentTaskFence, fencedError } = require('../../services/maxReliability/taskExecutionContext');
+const { ownershipEnforced, ownershipError, isOfflineEvaluation } = require('../../services/maxReliability/executionOwnershipPolicy');
 
 const {
   assertActionAuthorized,
@@ -223,6 +224,15 @@ async function executeMissionStage(input = {}) {
   // MAX-P0-004 P3 — inside a task-owned execution a stage may only run under
   // the mission lease, because only the leased write re-checks the task fence
   // atomically with the commit. Refuse before the specialist runs.
+  // MAX-P0-004 criterion 1 — with durable tasks enabled, a specialist stage runs
+  // only under a live task fence (non-durable offline evaluation excepted).
+  if (ownershipEnforced() && !currentTaskFence() && !(isOfflineEvaluation() && !lockPool)) {
+    if (globalLockHeld) await releaseMissionDurableLock(missionId).catch(() => {});
+    endTmeTransaction(missionId, transactionId);
+    throw wrapAs(TME_CLASSES.PERSISTENCE, ownershipError('durable_task_owner_required',
+      'Specialist stages require durable task ownership; nothing ran.', { missionId }),
+    'durable_task_owner_required', 'Specialist stages require durable task ownership; nothing ran.');
+  }
   if (currentTaskFence() && !lease) {
     if (globalLockHeld) await releaseMissionDurableLock(missionId).catch(() => {});
     endTmeTransaction(missionId, transactionId);

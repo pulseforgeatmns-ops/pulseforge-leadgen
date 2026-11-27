@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 'use strict';
+const { resolveDurableTasks, operatorRunKey, missionOperationParts } = require('../packages/acquisition-mission/DurableTaskRouting');
 
 /**
  * Anchor tenant 10 — one controlled production outbound send.
@@ -394,6 +395,11 @@ async function routeIntent({
     },
   });
   const routed = await routeExecutionRequest(request, {
+    // MAX-P0-004 criterion 1 — task-owned when durable tasks are enabled; the run
+    // key is stable for the same logical operation (see operatorRunKey).
+    durableTasks: resolveDurableTasks({ pool: require('../db') }),
+    durableTaskKey: operatorRunKey('executeAnchorOneOutbound', missionOperationParts(engine, request.missionId, request.intent,
+      { prospectId: (request.payload && request.payload.prospectId) || null, maxSends: (request.payload && request.payload.maxSends) ?? null })),
     engine,
     tenantId: TENANT_ID,
     operatorId: OPERATOR_ID,

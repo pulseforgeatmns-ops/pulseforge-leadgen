@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 'use strict';
+const { resolveDurableTasks, operatorRunKey, missionOperationParts } = require('../packages/acquisition-mission/DurableTaskRouting');
 
 /**
  * Anchor tenant 10 — canonical CAPACITY regeneration for a READY mission.
@@ -166,6 +167,11 @@ async function ensureExecutionApproval({ runtime, engine, missionId, mission, te
   });
 
   const routed = await routeExecutionRequest(request, {
+    // MAX-P0-004 criterion 1 — task-owned when durable tasks are enabled; the run
+    // key is stable for the same logical operation (see operatorRunKey).
+    durableTasks: resolveDurableTasks({ pool: require('../db') }),
+    durableTaskKey: operatorRunKey('regenerateAnchorCapacityRevision', missionOperationParts(engine, request.missionId, request.intent,
+      { prospectId: (request.payload && request.payload.prospectId) || null, maxSends: (request.payload && request.payload.maxSends) ?? null })),
     engine,
     tenantId,
     operatorId: OPERATOR_ID,
@@ -192,6 +198,11 @@ async function runRevision({ runtime, engine, missionId, mission, tenantId, paig
   });
 
   return routeExecutionRequest(request, {
+    // MAX-P0-004 criterion 1 — task-owned when durable tasks are enabled; the run
+    // key is stable for the same logical operation (see operatorRunKey).
+    durableTasks: resolveDurableTasks({ pool: require('../db') }),
+    durableTaskKey: operatorRunKey('regenerateAnchorCapacityRevision', missionOperationParts(engine, request.missionId, request.intent,
+      { prospectId: (request.payload && request.payload.prospectId) || null, maxSends: (request.payload && request.payload.maxSends) ?? null })),
     engine,
     tenantId,
     operatorId: OPERATOR_ID,

@@ -1,4 +1,7 @@
 'use strict';
+const { runWithOwnershipExemption } = require('./maxReliability/executionOwnershipPolicy');
+const { resolveDurableTasks, runTaskOwnedWork } = require('../packages/acquisition-mission/DurableTaskRouting');
+const { randomUUID } = require('crypto');
 
 /**
  * SPEC-140 — Unified Acquisition Mission Runtime.
@@ -278,13 +281,32 @@ function createAcquisitionMissionRuntime(opts = {}) {
       if (shouldSuppressLegacyDurableWrite(missionId)) {
         return { suppressed: true, reason: 'tme_transaction_active' };
       }
-      return this.persistMissionState(missionId, sideOpts);
+      return this.ownedMissionWork('side-effects', missionId, sideOpts, () => this.persistMissionState(missionId, sideOpts));
     },
 
     /**
      * ADR-075 — single durable writer for non-TME mission state mutations.
      * Routes exclusively through persistStageCommit().
      */
+    /**
+     * MAX-P0-004 criterion 1 — run a runtime mutation (contribute, progress,
+     * autonomous progression, legacy side effects) as task-owned work when
+     * durable tasks are enabled. Each call is its own request (like an unkeyed
+     * router request); duplicates are still refused by the mission CAS.
+     */
+    async ownedMissionWork(kind, missionId, sideOpts, fn) {
+      const { persist: effectivePersist, pool: effectivePool } = this.persistOpts(sideOpts || {});
+      const store = effectivePersist === false || !effectivePool ? null : resolveDurableTasks({ pool: effectivePool });
+      if (!store) return fn();
+      const mission = state.engine.store.getMission(missionId);
+      const tenantId = String((mission && (mission.tenantId ?? mission.clientId)) ?? (sideOpts && sideOpts.tenantId) ?? '');
+      const owned = await runTaskOwnedWork({
+        store, tenantId, missionId, specialist: kind === 'autonomous' ? 'max' : 'operator',
+        logicalKey: `runtime-${kind}:${missionId}:${randomUUID()}`,
+      }, fn);
+      return owned.result;
+    },
+
     async persistMissionState(missionId, sideOpts = {}) {
       if (shouldSuppressLegacyDurableWrite(missionId)) {
         return { suppressed: true, reason: 'tme_transaction_active' };
@@ -374,7 +396,8 @@ function createAcquisitionMissionRuntime(opts = {}) {
       // ADR-075 — defer durable writes until persistStageCommit (autonomous TME or explicit persist).
       if (!autonomous) {
         try {
-          await this.persistMissionState(mission.id, createOpts);
+          // MAX-P0-004 — creating a mission runs no specialist: an audited write exemption.
+          await runWithOwnershipExemption('mission_creation', () => this.persistMissionState(mission.id, createOpts));
         } catch (err) {
           // The mission row commits before the follow-on learning writes, so a
           // failure may come AFTER the mission is durable. Report what is true.
@@ -411,19 +434,21 @@ function createAcquisitionMissionRuntime(opts = {}) {
     async runAutonomousProgression(missionId, opts = {}) {
       const { runAutonomousProgression } = require('../packages/acquisition-mission/MissionProgression');
       if (opts.tenantId) await this.hydrate(opts.tenantId, opts);
-      const result = await runAutonomousProgression({
-        engine: state.engine,
-        missionId,
-        tenantId: opts.tenantId,
-        operatorId: opts.operatorId,
-        allowFixtureFallback: opts.allowFixtureFallback === true,
-        maxSteps: opts.maxSteps,
-        deps: opts.deps,
-        ...opts,
+      return this.ownedMissionWork('autonomous', missionId, opts, async () => {
+        const result = await runAutonomousProgression({
+          engine: state.engine,
+          missionId,
+          tenantId: opts.tenantId,
+          operatorId: opts.operatorId,
+          allowFixtureFallback: opts.allowFixtureFallback === true,
+          maxSteps: opts.maxSteps,
+          deps: opts.deps,
+          ...opts,
+        });
+        // ADR-075 — persist post-TME side effects (e.g. stage transitions) via persistStageCommit only.
+        await this.persistMissionState(missionId, opts);
+        return result;
       });
-      // ADR-075 — persist post-TME side effects (e.g. stage transitions) via persistStageCommit only.
-      await this.persistMissionState(missionId, opts);
-      return result;
     },
 
     async inspectMission(missionId, inspectOpts = {}) {
@@ -438,16 +463,20 @@ function createAcquisitionMissionRuntime(opts = {}) {
 
     async contribute(missionId, input, contributeOpts = {}) {
       if (contributeOpts.tenantId) await this.hydrate(contributeOpts.tenantId, contributeOpts);
-      const result = state.engine.contribute(missionId, input, contributeOpts);
-      await this.persistMissionState(missionId, contributeOpts);
-      return result;
+      return this.ownedMissionWork('contribute', missionId, contributeOpts, async () => {
+        const result = state.engine.contribute(missionId, input, contributeOpts);
+        await this.persistMissionState(missionId, contributeOpts);
+        return result;
+      });
     },
 
     async progress(missionId, actor, progressOpts = {}, opts = {}) {
       if (opts.tenantId) await this.hydrate(opts.tenantId, opts);
-      const mission = state.engine.progress(missionId, actor, { ...progressOpts, tenantId: opts.tenantId });
-      await this.persistMissionState(missionId, opts);
-      return mission;
+      return this.ownedMissionWork('progress', missionId, opts, async () => {
+        const mission = state.engine.progress(missionId, actor, { ...progressOpts, tenantId: opts.tenantId });
+        await this.persistMissionState(missionId, opts);
+        return mission;
+      });
     },
 
     async answerOperator(question, input = {}, opts = {}) {

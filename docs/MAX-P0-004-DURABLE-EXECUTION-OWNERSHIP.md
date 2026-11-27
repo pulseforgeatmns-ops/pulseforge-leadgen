@@ -50,6 +50,37 @@ Router tasks have `retryBudget: 0`: an interrupted inline request is escalated f
 
 **P6 — presentation** (`packages/max/workspace/DurableTaskStatus.js`). Status comes only from the task row. Only `completed` is "done"; `awaiting_verification` says "not verified"; `escalated` and `recovery_required` name the reason and the operator action; unknown states are reported as unknown. Max chat turns carry `metadata.durableTask` and a visible notice whenever the task is not verifiably done. `GET /api/v1/amo/missions/:id/tasks` is read-only and tenant-scoped (`enabled:false` when off; 503 if the schema is missing).
 
+## No ownership bypasses (criterion 1, PR A)
+
+With `MAX_DURABLE_TASKS=true`, ownership is enforced at four choke points (`services/maxReliability/executionOwnershipPolicy.js`). With the flag unset, none of this changes behaviour.
+
+| Choke point | Without a live task fence |
+|---|---|
+| `routeExecutionRequest` | refused (`durable_task_owner_required`, audited as `blocked_no_task_owner`) unless the caller passes a task store. The only alternative is `offline_evaluation`: no pool, nothing persisted, discovery only with an injected Scout runner. |
+| `executeMissionStage` (TME) | refused before the specialist runs (offline evaluation excepted, never with a lock pool) |
+| `OutboundExecutionAdapter` | refused before any claim or provider call; **no exemption covers a send** |
+| `persistStageCommit` | refused unless a closed **write** exemption applies; even then only through the mission lease, and the exempted write is recorded in `max_reliability_audit` **in the same transaction**. The unlocked path is always refused. |
+
+**Write exemptions (closed allowlist; no specialist, no external effect):**
+- `mission_creation`: `runtime.create`.
+- `operator_restriction_tightening`: monotonic constraint tightening (`AcquisitionOwnership`).
+- `inbound_observation`: provider events and Riley reply interpretation.
+
+The structural test pins each exemption to its call sites.
+
+**Every other caller is task-owned:**
+- **REST and chat:** unchanged from P2.
+- **Governed adapters:** `governed-prepare:<program>:<day>:<mission>:<intent>:<version>`, `governed-approve:<program>:<mission>:<snapshotHash>`, `governed-send:<program>:<envelope>:<candidate>`, and envelope completion as `governed-complete:<envelope>`.
+- **Anchor scoped-resume:** `anchor-crm-prep:<operationId>:<step>:<intent>`.
+- **Operator scripts:** `operatorRunKey(script, parts)`, where the parts are mission, intent, the prepared-artifact revision read before the call, prospect and limits. The key never contains a run id or a time, so a retry of the same logical execution replays its task; TME rolls back on a crash, so the inputs are unchanged. The repair script `auditAnchorCapacitySupersession` goes through the mission lease when enforced.
+- **Authorization amendments:** `amendment:<mission>:<amendmentId>`.
+- **Outcome-learning evaluation:** `outcome-learning:<mission>:<version>`.
+- **Cancellation persistence:** runs inside the router task through `afterDispatch`.
+- **Runtime mutations** (`contribute`, `progress`, `runAutonomousProgression`, legacy `persistSideEffects`): `ownedMissionWork`, one task per call, like an unkeyed router request.
+- **Nested work:** inside an already task-owned execution, nested work reuses the existing fence rather than opening a second task.
+
+**Structural enforcement.** `test/maxDurableOwnershipStructure.test.js` scans production code for every caller of `routeExecutionRequest`, `executeMissionStage`, `persistMissionState`, `persistStageCommit`, `executeOutboundBundle` and `guardedDispatch`. It requires each file to be classified and to still carry its ownership wiring, and it pins every exemption to its permitted call sites. An unclassified caller, or one that loses its wiring, fails CI. Both failure modes were checked by mutation.
+
 ## Persistence and migration
 
 Apply `migrations/2026-11-25-max-p0-004-durable-execution-ownership.sql` only after P0-003 and only with separate production approval. It is additive and re-runnable: two task tables, a composite-keyed immutable `task_id` on request receipts, indexes (including the one-active-task-per-mission index), a nullable composite-keyed `task_id` link on the existing ledger with an immutability trigger, the task guard and append-only triggers above, and P0-003-style no-delete/no-truncate triggers for durable task evidence. It changes no existing rows or authorization policies. Old code ignores the new column and tables, so application rollback is a previous deploy while retaining the records. Do not drop them while unfinished tasks or action claims could require recovery.
@@ -82,7 +113,7 @@ The approved proposal (`main` `c51ce3c`, §5) defined 13 criteria across phases 
 
 | # | Criterion (abridged) | Status |
 |---|---|---|
-| 1 | Every execution request creates one durable root task before specialist code; concurrent identical requests yield one task | **Met for router-owned surfaces when enabled**: REST `/execute` and Max chat accept a task after the router's gates and before any handler, and a duplicate key yields one task. Operator scripts and governed adapters that call the router with their own context (`scripts/*`, `services/governedOutboundAdapters.js`, `services/anchorScopedResumeCrmPreparation.js`) do not pass a store yet. |
+| 1 | Every execution request creates one durable root task before specialist code; concurrent identical requests yield one task | **Met when enabled**: every router caller (REST, chat, governed adapters, Anchor scoped-resume, operator scripts) passes a task store with a stable key. Router, TME and send refuse unowned work, and mission writes outside a task are limited to three audited write exemptions. A structural CI test inventories every caller. |
 | 2 | Max status derived from durable task state; never "done" early | **Met when enabled**: `DurableTaskStatus` + chat notice + `GET …/tasks`. |
 | 3 | CAS on state/fence/owner/DB-time lease; fence enforced in the TME commit | **Met**: every store transition, the dispatch marker and every leased mission commit re-check the fence in PostgreSQL. *Mission-lease narrowing (§3.2) is deliberately not done*: it changes P0-003's lock topology and needs its own approval and multi-process proof. |
 | 4 | At most one active task per mission per tenant, DB-enforced | **Met** (partial unique index; the router refuses a second request). |

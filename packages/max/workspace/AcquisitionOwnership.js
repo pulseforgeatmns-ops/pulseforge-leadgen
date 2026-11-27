@@ -1,4 +1,5 @@
 'use strict';
+const { runWithOwnershipExemption } = require('../../../services/maxReliability/executionOwnershipPolicy');
 
 /**
  * SPEC-124 — Acquisition Ownership Convergence.
@@ -568,7 +569,8 @@ async function handleAcquisitionOwnershipForTenant(input, ctx) {
       ),
     };
     runtime.engine().store.putMission(tightened);
-    await runtime.persistMissionState(mission.id, persistOpts);
+    // MAX-P0-004 — restrictions only narrow: an audited write exemption.
+    await runWithOwnershipExemption('operator_restriction_tightening', () => runtime.persistMissionState(mission.id, persistOpts));
     mission = runtime.engine().store.getMission(mission.id) || tightened;
   }
 

@@ -1,4 +1,5 @@
 'use strict';
+const { runWithOwnershipExemption } = require('./maxReliability/executionOwnershipPolicy');
 
 /**
  * Mission-bound provider event → canonical communication observation → OBSERVE.
@@ -200,7 +201,8 @@ async function tryMissionStageSideEffects({
     }
 
     try {
-      await runtime.persistMissionState(missionId, { pool: opts.pool || pool, persist: opts.persist });
+      // MAX-P0-004 — an inbound provider event, no outbound effect: an audited write exemption.
+      await runWithOwnershipExemption('inbound_observation', () => runtime.persistMissionState(missionId, { pool: opts.pool || pool, persist: opts.persist }));
     } catch (err) {
       const code = err.code || err.message;
       observeBlocked = observeBlocked || code;
