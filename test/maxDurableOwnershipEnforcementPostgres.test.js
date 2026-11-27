@@ -260,3 +260,33 @@ test('review: offline evaluation admits discovery only with a marked fixture Sco
   (err) => err.code === 'durable_task_owner_required' || /planning|constraint/.test(String(err.code)));
   void pool;
 });
+
+test('review: inbound writes persist — pure additions under the audited exemption, mission-advancing ones as task-owned work', { timeout: 60000 }, async () => {
+  const { pool } = fixture; const store = createDurableExecutionOwnership(pool);
+  const { guardedSnapshot } = policy;
+  const { createAcquisitionMissionRuntime } = require('../services/acquisitionMissionRuntime');
+  TP.resetMissionDurableLocksForTests();
+  const runtime = createAcquisitionMissionRuntime({ pool, persist: true });
+  const m = await runtime.create({ tenantId: '10', objective: `Acquire facility buyers inbound ${process.pid}-${++seq}.`, targetSegment: 'Facilities' }, { pool, persist: true });
+  const engine = runtime.engine();
+  const auditCount = async () => (await pool.query("SELECT count(*)::int n FROM max_reliability_audit WHERE subject_kind='mission_write_exemption' AND detail->>'reason'='inbound_observation' AND detail->>'missionId'=$1", [m.id])).rows[0].n;
+
+  // Pure inbound addition (no guarded field changes): audited exemption, no task.
+  let before = guardedSnapshot(engine.store.getMission(m.id));
+  const quiet = { ...engine.store.getMission(m.id), lastInboundAt: new Date().toISOString() };
+  engine.store.putMission(quiet);
+  await runtime.persistInbound(m.id, before, { pool, persist: true });
+  assert.equal(await auditCount(), 1);
+  assert.equal((await store.list({ tenantId: '10', missionId: m.id })).filter((t) => /^runtime-inbound:/.test(t.logicalKey)).length, 0);
+
+  // Inbound that auto-advanced the stage: persisted as task-owned work, never refused.
+  before = guardedSnapshot(engine.store.getMission(m.id));
+  // (a refreshed status stands in for an auto-advance; both are guarded fields)
+  const advanced = { ...engine.store.getMission(m.id), status: 'Observing outcomes' };
+  engine.store.putMission(advanced);
+  await runtime.persistInbound(m.id, before, { pool, persist: true });
+  assert.equal((await durable(pool, m.id)).status, 'Observing outcomes', 'the mission-advancing write was persisted');
+  const inboundTasks = (await store.list({ tenantId: '10', missionId: m.id })).filter((t) => /^runtime-inbound:/.test(t.logicalKey));
+  assert.equal(inboundTasks.length, 1); assert.equal(inboundTasks[0].state, 'completed');
+  assert.equal(await auditCount(), 1, 'the advancing write was not recorded as an exemption');
+});

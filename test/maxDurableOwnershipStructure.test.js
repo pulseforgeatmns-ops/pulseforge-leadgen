@@ -64,8 +64,10 @@ const WRITERS = {
   'services/acquisitionMissionPersistence.js': ['definition'],
   'services/acquisitionMissionRuntime.js': ['task_owned_work', 'ownedMissionWork('],
   'packages/max/workspace/AcquisitionOwnership.js': ['exemption:operator_restriction_tightening', "runWithOwnershipExemption('operator_restriction_tightening'"],
-  'services/acquisitionMissionProviderObservation.js': ['exemption:inbound_observation', "runWithOwnershipExemption('inbound_observation'"],
-  'services/acquisitionMissionRileyInterpretation.js': ['exemption:inbound_observation', "runWithOwnershipExemption('inbound_observation'"],
+  // Inbound events persist through runtime.persistInbound: an audited
+  // inbound_observation write, or task-owned work if they advanced the mission.
+  'services/acquisitionMissionProviderObservation.js': ['inbound', 'runtime.persistInbound('],
+  'services/acquisitionMissionRileyInterpretation.js': ['inbound', 'runtime.persistInbound('],
   'services/governedOutboundAdapters.js': ['task_owned_work', 'logicalKey: `governed-complete:'],
   'routes/acquisitionMissions.js': ['task_owned_work', 'logicalKey: `outcome-learning:'],
   'services/acquisitionMission.js': ['after_dispatch', 'afterDispatch: intent === amo.EXECUTION_INTENTS.CANCEL_PLAN'],
@@ -105,6 +107,7 @@ test('every mission writer is task-owned, after-dispatch, or under a closed audi
     assert.ok(has('services/acquisitionMissionRuntime.js', `ownedMissionWork('${kind}'`), `runtime ${kind} is task-owned`);
   }
   assert.ok(has('services/acquisitionMissionRuntime.js', "runWithOwnershipExemption('mission_creation'"), 'creation uses its exemption');
+  assert.ok(has('services/acquisitionMissionRuntime.js', "this.ownedMissionWork('inbound'"), 'an inbound event that advanced the mission is task-owned');
 });
 
 test('every send path is the fenced adapter, a router handler or the ledger primitive', () => {
@@ -121,7 +124,7 @@ test('exemptions are a closed allowlist, used only where classified, and none co
   const allowedSites = {
     mission_creation: ['services/acquisitionMissionRuntime.js'],
     operator_restriction_tightening: ['packages/max/workspace/AcquisitionOwnership.js'],
-    inbound_observation: ['services/acquisitionMissionProviderObservation.js', 'services/acquisitionMissionRileyInterpretation.js'],
+    inbound_observation: ['services/acquisitionMissionRuntime.js'],
     [OFFLINE_EVALUATION]: ['scripts/audit062WarmRoutingObservation.js'],
   };
   for (const [file, reason] of uses) {

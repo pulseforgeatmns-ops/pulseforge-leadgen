@@ -1,5 +1,5 @@
 'use strict';
-const { runWithOwnershipExemption } = require('./maxReliability/executionOwnershipPolicy');
+const { guardedSnapshot } = require('./maxReliability/executionOwnershipPolicy');
 
 /**
  * Mission-bound provider event → canonical communication observation → OBSERVE.
@@ -157,6 +157,7 @@ async function tryMissionStageSideEffects({
     await syncObservationToEngine(engine, missionId, observation);
 
     const priorOutcomes = engine.store.listOutcomes(missionId).length;
+    const guardedBefore = guardedSnapshot(engine.store.getMission(missionId));
     const structured = engine.recordCommunicationObservation(missionId, providerEvent, {
       tenantId,
       skipInterpretation: opts.skipInterpretation === true,
@@ -192,14 +193,8 @@ async function tryMissionStageSideEffects({
         learnBlocked = 'mission_lock_active';
       } else {
         try {
-          // MAX-P0-004 — a stage advance is never an inbound observation: it runs
-          // and persists as task-owned work (one task per call) when durable
-          // tasks are enabled; unchanged otherwise.
-          await runtime.ownedMissionWork('progress', missionId, { tenantId, pool: opts.pool || pool, persist: opts.persist }, async () => {
-            const learnResult = tryProgressToLearn(engine, missionId, { tenantId });
-            learnProgressed = learnResult.progressed === true;
-            if (learnProgressed) await runtime.persistMissionState(missionId, { pool: opts.pool || pool, persist: opts.persist });
-          });
+          const learnResult = tryProgressToLearn(engine, missionId, { tenantId });
+          learnProgressed = learnResult.progressed === true;
         } catch (err) {
           learnBlocked = err.code || err.message;
         }
@@ -207,8 +202,9 @@ async function tryMissionStageSideEffects({
     }
 
     try {
-      // MAX-P0-004 — an inbound provider event, no outbound effect: an audited write exemption.
-      await runWithOwnershipExemption('inbound_observation', () => runtime.persistMissionState(missionId, { pool: opts.pool || pool, persist: opts.persist }));
+      // MAX-P0-004 — an inbound provider event: an audited inbound_observation write,
+      // or task-owned work if it also advanced the mission (e.g. OBSERVE→LEARN).
+      await runtime.persistInbound(missionId, guardedBefore, { pool: opts.pool || pool, persist: opts.persist });
     } catch (err) {
       const code = err.code || err.message;
       observeBlocked = observeBlocked || code;

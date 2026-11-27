@@ -89,9 +89,15 @@ So a key is never spent by a transient collision (`mission_has_active_task`) or 
 **Exemption scope (independent review, important).** Each exempt write is checked against the durable row inside the lease transaction:
 - `mission_creation`: only a mission that does not exist yet.
 - `operator_restriction_tightening`: only `authorizationConstraints`, monotonic (every prohibition and review-only kept, at least one added).
-- `inbound_observation`: none of stage, pending decision, plan, objective, tenant or constraints may change; the write may only add observations, outcomes and events.
+- `inbound_observation`: none of stage, status, plan-cancelled, pending decision, plan, objective, tenant or constraints may change; the write may only add observations, outcomes and events.
 
-Anything riding along is refused (`durable_task_exemption_scope`). Provider observation's LEARN progression is now task-owned work rather than written under the exemption.
+Anything riding along is refused (`durable_task_exemption_scope`).
+
+Inbound events (provider observations, Riley reply interpretations) persist through `runtime.persistInbound`. It compares the guarded fields before and after the event was applied:
+- if nothing changed, the write is the audited `inbound_observation` exemption;
+- if applying the event also advanced the mission (an outcome auto-advancing OBSERVE→LEARN, a refreshed decision or status), the write is task-owned work.
+
+So a legitimate inbound write is never refused, and a mission advance is never recorded as an observation. With durable tasks off both reduce to the original `persistMissionState`.
 
 **Fence scope.** A fence carries its mission:
 - a write to another mission under it is refused unless an exemption applies;
@@ -150,6 +156,10 @@ The approved proposal (`main` `c51ce3c`, §5) defined 13 criteria across phases 
 State vocabulary differs from the proposal (`queued` ≈ `admitted`, `escalated` ≈ `awaiting_intervention`, `recovery_required` ≈ `interrupted`, `completed` after evidence ≈ `verified`). `DurableTaskStatus` maps it for operators without claiming more.
 
 ## Known limits
+
+- A retry after a `failed` attempt runs again. That is right for external effects: none happened, and the ledger deduplicates sends anyway. But paid provider work done before a rolled-back stage (Scout/Places, Paige generation) is paid for again on the retry.
+- When two callers retry the same key concurrently, only one attempt is created. The loser usually gets `durable_task_key_reused` (422) rather than a replay. REST is serialized by its receipt.
+- The offline Scout marker (`runScout.offlineFixture`) is declared by the caller. It is a reviewed marker, pinned to one script by the structural test, not a cryptographic guarantee.
 
 - Tenant learning rows (`persistLearning`/`persistPrediction`/`persistOutcomeEvaluation`/`persistOutcomeLearning`) are written on the pool after the mission lease commits. Per-send outbound records are written by the Emmett stage, inside the router's fenced execution. Neither is a core mission row, and neither is routed through the exemption audit.
 - Provider observation skips its OBSERVE/LEARN progression while another task is active on the mission (`mission_busy` is recorded as `observeBlocked`/`learnBlocked`). It is retried on the next event, as it already was when the mission lock was held.

@@ -18,7 +18,7 @@ const {
 const { persistOutboundExecution, ensureOutboundExecutionSchema } = require('./acquisitionMissionOutboundPersistence');
 const { currentTaskFence, assertTaskFenceOnClient, fencedError } = require('./maxReliability/taskExecutionContext');
 const {
-  ownershipEnforced, ownershipError, isWriteExempt, currentOwnershipExemption, auditExemptWrite,
+  ownershipEnforced, ownershipError, isWriteExempt, currentOwnershipExemption, auditExemptWrite, EXEMPT_GUARDED_FIELDS,
 } = require('./maxReliability/executionOwnershipPolicy');
 const {
   ensureAcquisitionKnowledgeSchema,
@@ -1064,7 +1064,6 @@ function wrapStageCommitError(err) {
  *                                  only add observations/outcomes/events).
  * Anything else — e.g. an unowned stage advance riding along — is refused.
  */
-const EXEMPT_GUARDED_FIELDS = ['stage', 'pendingOperatorDecision', 'structuredMission', 'objective', 'tenantId', 'clientId', 'authorizationConstraints'];
 async function assertExemptWriteScope(client, mission, reason) {
   const { requestFingerprint } = require('./maxReliability/externalActionLedger');
   const row = (await client.query('SELECT payload FROM acquisition_missions WHERE id = $1', [mission.id])).rows[0];

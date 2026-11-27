@@ -1,5 +1,5 @@
 'use strict';
-const { runWithOwnershipExemption } = require('./maxReliability/executionOwnershipPolicy');
+const { guardedSnapshot } = require('./maxReliability/executionOwnershipPolicy');
 
 /**
  * Mission-bound Riley reply interpretation.
@@ -183,6 +183,7 @@ async function consumeRileyReplyInterpretation(input = {}, db = defaultPool(), o
     (row) => row.prospectId === String(prospect.id) && row.eventType === 'replied'
   );
 
+  const guardedBefore = guardedSnapshot(engine.store.getMission(mission.id));
   const result = engine.applyRileyReplyInterpretation({
     missionId: mission.id,
     prospectId: String(prospect.id),
@@ -193,8 +194,9 @@ async function consumeRileyReplyInterpretation(input = {}, db = defaultPool(), o
   }, { tenantId: correlation.tenantId });
 
   if (opts.persist !== false) {
-    // MAX-P0-004 — an inbound reply interpretation, no outbound effect: an audited write exemption.
-    await runWithOwnershipExemption('inbound_observation', () => runtime.persistMissionState(mission.id, { pool: opts.pool || db, persist: opts.persist }));
+    // MAX-P0-004 — an inbound reply interpretation: an audited inbound_observation
+    // write, or task-owned work if applying it also advanced the mission.
+    await runtime.persistInbound(mission.id, guardedBefore, { pool: opts.pool || db, persist: opts.persist });
   }
 
   return {

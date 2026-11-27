@@ -1,5 +1,5 @@
 'use strict';
-const { runWithOwnershipExemption } = require('./maxReliability/executionOwnershipPolicy');
+const { runWithOwnershipExemption, guardedSnapshot } = require('./maxReliability/executionOwnershipPolicy');
 const { resolveDurableTasks, runTaskOwnedWork } = require('../packages/acquisition-mission/DurableTaskRouting');
 const { randomUUID } = require('crypto');
 
@@ -305,6 +305,21 @@ function createAcquisitionMissionRuntime(opts = {}) {
         logicalKey: `runtime-${kind}:${missionId}:${randomUUID()}`,
       }, fn);
       return owned.result;
+    },
+
+    /**
+     * MAX-P0-004 — persist an inbound event (provider observation, reply
+     * interpretation). If applying it changed none of the guarded fields it
+     * is an audited inbound_observation write; if it also advanced the mission
+     * (an outcome auto-advancing the stage, a refreshed decision) the write is
+     * task-owned work instead. With durable tasks disabled both are a plain
+     * persistMissionState, exactly as before.
+     */
+    async persistInbound(missionId, guardedBefore, sideOpts = {}) {
+      const mission = state.engine.store.getMission(missionId);
+      const advanced = !mission || guardedSnapshot(mission) !== guardedBefore;
+      if (advanced) return this.ownedMissionWork('inbound', missionId, sideOpts, () => this.persistMissionState(missionId, sideOpts));
+      return runWithOwnershipExemption('inbound_observation', () => this.persistMissionState(missionId, sideOpts));
     },
 
     async persistMissionState(missionId, sideOpts = {}) {

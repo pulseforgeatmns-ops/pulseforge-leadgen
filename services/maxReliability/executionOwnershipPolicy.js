@@ -36,6 +36,21 @@ const OFFLINE_EVALUATION = 'offline_evaluation';
 
 const ALL_EXEMPTIONS = Object.freeze([...Object.keys(WRITE_EXEMPTIONS), OFFLINE_EVALUATION]);
 
+/**
+ * Mission fields a write exemption may never change (mission_creation aside;
+ * operator_restriction_tightening may change only authorizationConstraints).
+ */
+const EXEMPT_GUARDED_FIELDS = Object.freeze(['stage', 'status', 'planCancelled', 'pendingOperatorDecision',
+  'structuredMission', 'objective', 'tenantId', 'clientId', 'authorizationConstraints']);
+
+/** Canonical fingerprint of a mission's guarded fields (key order irrelevant). */
+function guardedSnapshot(mission) {
+  const { requestFingerprint } = require('./externalActionLedger');
+  const picked = {};
+  for (const f of EXEMPT_GUARDED_FIELDS) picked[f] = mission && mission[f] !== undefined ? mission[f] : null;
+  return requestFingerprint(picked);
+}
+
 function ownershipError(code, message, extra = {}) {
   return Object.assign(new Error(message), { code, spec: 'MAX-P0-004', statusCode: 409, ...extra });
 }
@@ -78,6 +93,8 @@ async function auditExemptWrite(client, { missionId, tenantId, reason }) {
 }
 
 module.exports = {
+  EXEMPT_GUARDED_FIELDS,
+  guardedSnapshot,
   WRITE_EXEMPTIONS,
   OFFLINE_EVALUATION,
   ALL_EXEMPTIONS,
