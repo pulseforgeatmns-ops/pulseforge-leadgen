@@ -10,6 +10,8 @@ async function authorizeObjectiveAdmission(pool, actor, tenantId) {
   if (!row || row.active !== true || !['admin', 'manager'].includes(row.role)) return { authorized: false };
   // Operator admins are tenant-scoped by their trusted client membership.
   if (String(row.client_id) !== String(tenantId)) return { authorized: false };
-  return { authorized: true, actorId: String(row.id), tenantId: String(tenantId), policy: 'objective_admission_v1' };
+  // Identity and tenant membership are authentication facts, not an objective
+  // admission grant. Governance will introduce an explicit permission later.
+  return { authorized: false, actorId: String(row.id), tenantId: String(tenantId), policy: 'objective_admission_v1', reason: 'objective_admission_permission_absent' };
 }
 module.exports = { authorizeObjectiveAdmission };
