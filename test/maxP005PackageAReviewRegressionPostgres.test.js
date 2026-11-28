@@ -453,6 +453,90 @@ test('R5-05 authorization reuses an existing repository policy', async () => {
   assert.deepEqual(await policy.authorizeObjectiveAdmission(pool, { id: 'not-an-id' }, '10'), { authorized: false });
 });
 
+test('R5-06 [fixture-only] authenticated identities stay denied in production while a disposable policy fixture admits and replays', async () => {
+  /*
+   * This authorizer is intentionally declared inside this disposable-PostgreSQL
+   * test.  It is not exported by, configurable from, or reachable through the
+   * production admission boundary.  It lets this suite exercise the positive
+   * lifecycle while production has no objective-admission permission yet.
+   */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id integer PRIMARY KEY,
+      client_id integer NOT NULL,
+      role text NOT NULL,
+      active boolean NOT NULL DEFAULT true
+    )`);
+  const tenantId = '50506';
+  const adminId = 505061;
+  const managerId = 505062;
+  await pool.query(
+    `INSERT INTO users(id, client_id, role, active) VALUES
+       ($1, $2, 'admin', true), ($3, $2, 'manager', true)
+     ON CONFLICT (id) DO UPDATE SET client_id=EXCLUDED.client_id, role=EXCLUDED.role, active=EXCLUDED.active`,
+    [adminId, Number(tenantId), managerId],
+  );
+
+  const productionPolicy = require('../services/maxReliability/objectiveAdmissionAuthorization');
+  // Trusted identity and matching tenant membership are not an admission grant.
+  for (const id of [adminId, managerId]) {
+    const decision = await productionPolicy.authorizeObjectiveAdmission(pool, { id: String(id) }, tenantId);
+    assert.equal(decision.authorized, false);
+    assert.equal(decision.reason, 'objective_admission_permission_absent');
+    assert.equal(decision.actorId, String(id));
+  }
+
+  // Build the candidate from the trusted, persisted identity fixture rather
+  // than accepting a caller-supplied role or tenant claim.
+  const identity = (await pool.query(
+    'SELECT id, client_id, role, active FROM users WHERE id=$1', [adminId],
+  )).rows[0];
+  const trustedActor = Object.freeze({ id: String(identity.id), authorizedTenantId: String(identity.client_id) });
+  const fixturePolicy = async (candidate, scope) => {
+    if (candidate !== trustedActor || String(scope.tenantId) !== tenantId) return { authorized: false };
+    return Object.freeze({ authorized: true, policy: 'disposable_postgres_objective_admission_fixture_v1' });
+  };
+
+  const objective = await newObjective(tenantId, 'Exercise only the disposable positive-admission fixture.');
+  // Exercise the production call shape (no caller-provided authorizer).  The
+  // temporary replacement is confined to this Node test process and restored
+  // before the test ends; production code has no switch that can select it.
+  const originalAuthorizer = productionPolicy.authorizeObjectiveAdmission;
+  let first; let replay;
+  productionPolicy.authorizeObjectiveAdmission = fixturePolicy;
+  try {
+    const fixtureOptions = (() => {
+      const result = options();
+      delete result.authorizeActor;
+      return result;
+    })();
+    first = await C.admitObjectiveRoot({ tenantId, objectiveId: objective.id, contract: contract(), actor: trustedActor }, fixtureOptions);
+    replay = await C.admitObjectiveRoot({
+      tenantId,
+      objectiveId: objective.id,
+      // Deliberately reorder JSON members: replay is fingerprint based, not
+      // dependent on JavaScript insertion order or PostgreSQL JSONB ordering.
+      contract: { ...contract(), plan: { maxRetries: 0, maxReplans: 0, maxChildren: 1, maxSteps: 2 } },
+      actor: trustedActor,
+    }, fixtureOptions);
+  } finally {
+    productionPolicy.authorizeObjectiveAdmission = originalAuthorizer;
+  }
+  assert.equal(first.admitted, true);
+  assert.equal(replay.replay, true);
+  assert.equal(replay.task.id, first.task.id);
+  const roots = await objectiveTasks(tenantId, objective.id);
+  assert.equal(roots.length, 1, 'positive lifecycle creates one immutable canonical root');
+  const events = (await pool.query(
+    `SELECT detail FROM max_durable_execution_task_events
+       WHERE task_id=$1 AND event='accepted'`, [first.task.id],
+  )).rows;
+  assert.equal(events.length, 1);
+  assert.equal(events[0].detail.actorId, String(adminId));
+  assert.equal(events[0].detail.authorizationPolicy, 'disposable_postgres_objective_admission_fixture_v1');
+  assert.equal(events[0].detail.admission, 'objective_contract');
+});
+
 /* ------------------------------------------------------------------------ */
 /* R6 — provider / specialist / action-class governance                      */
 /* ------------------------------------------------------------------------ */
