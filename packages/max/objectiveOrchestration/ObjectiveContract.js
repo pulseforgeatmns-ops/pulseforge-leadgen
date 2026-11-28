@@ -189,7 +189,7 @@ function rootTaskInput({ tenantId, objective, contract, actor }) {
     dependencyTaskIds: [],
     deadlineAt: contract.deadlineAt,
     retryBudget: 0,
-    acceptedEventDetail: actor && actor.id ? { actorId: String(actor.id), admission: 'objective_contract' } : undefined,
+    acceptedEventDetail: actor && actor.id ? { actorId: String(actor.id), authorizationPolicy: actor.authorizationPolicy || 'explicit_fixture', admission: 'objective_contract' } : undefined,
   };
 }
 
@@ -214,7 +214,11 @@ async function admitObjectiveRoot(input = {}, opts = {}) {
   if (!input.actor || !input.actor.id || !input.actor.authorizedTenantId || String(input.actor.authorizedTenantId) !== tenantId) {
     throw new ObjectiveContractError('objective_contract_actor_unauthorized', 'authenticated tenant-bound actor is required', 403);
   }
-  if (typeof opts.authorizeActor !== 'function' || (await opts.authorizeActor(input.actor, { tenantId, objectiveId: input.objectiveId })) !== true) {
+  const authorizer = opts.authorizeActor || (opts.objectiveOpts && opts.objectiveOpts.pool
+    ? async (actor, scope) => require('../../../services/maxReliability/objectiveAdmissionAuthorization').authorizeObjectiveAdmission(opts.objectiveOpts.pool, actor, scope.tenantId)
+    : null);
+  const decision = authorizer && await authorizer(input.actor, { tenantId, objectiveId: input.objectiveId });
+  if (!(decision === true || (decision && decision.authorized === true))) {
     throw new ObjectiveContractError('objective_contract_actor_unauthorized', 'actor is not authorized for objective admission', 403);
   }
   const objectiveService = opts.objectiveService || require('../../../services/operatorObjectives');
@@ -241,7 +245,7 @@ async function admitObjectiveRoot(input = {}, opts = {}) {
   const contract = validateObjectiveContract(input.contract);
   let accepted;
   try {
-    accepted = await taskStore.accept(rootTaskInput({ tenantId, objective, contract, actor: input.actor }));
+    accepted = await taskStore.accept(rootTaskInput({ tenantId, objective, contract, actor: { ...input.actor, authorizationPolicy: decision && decision.policy } }));
   } catch (error) {
     if (error && error.code === 'durable_task_key_reused') {
       throw new ObjectiveContractError('objective_contract_revision_conflict', 'the admitted root contract is immutable', 409);
