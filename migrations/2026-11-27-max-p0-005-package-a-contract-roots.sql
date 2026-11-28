@@ -39,7 +39,11 @@ BEGIN
     AND i.indkey::text = format('%s %s',
       (SELECT attnum FROM pg_attribute WHERE attrelid='max_durable_execution_tasks'::regclass AND attname='tenant_id' AND NOT attisdropped),
       (SELECT attnum FROM pg_attribute WHERE attrelid='max_durable_execution_tasks'::regclass AND attname='objective_id' AND NOT attisdropped))
-    AND regexp_replace(replace(lower(pg_get_expr(i.indpred, i.indrelid)), '::text', ''), '[^a-z0-9_]', '', 'g')
+    -- pg_get_expr preserves column-specific casts (for example
+    -- ::character varying) on some PostgreSQL versions. Strip every type
+    -- cast before comparing the canonical predicate shape, but still require
+    -- the complete boolean expression rather than merely matching clauses.
+    AND regexp_replace(regexp_replace(lower(pg_get_expr(i.indpred, i.indrelid)), '::[a-z_ ]+', '', 'g'), '[^a-z0-9_]', '', 'g')
       = 'mission_idisnullandobjective_idisnotnullandspecialistmax_objectiveorexecutionscoperoleroot'
     INTO root_ok
   FROM pg_index i WHERE i.indexrelid=to_regclass('max_durable_execution_tasks_one_objective_root');
@@ -48,8 +52,8 @@ BEGIN
     AND i.indkey::text = format('%s %s 0',
       (SELECT attnum FROM pg_attribute WHERE attrelid='max_durable_execution_task_events'::regclass AND attname='tenant_id' AND NOT attisdropped),
       (SELECT attnum FROM pg_attribute WHERE attrelid='max_durable_execution_task_events'::regclass AND attname='task_id' AND NOT attisdropped))
-    AND regexp_replace(replace(lower(pg_get_expr(i.indexprs, i.indrelid)), '::text', ''), '[^a-z0-9_]', '', 'g') = 'detailwakeidentity'
-    AND regexp_replace(replace(lower(pg_get_expr(i.indpred, i.indrelid)), '::text', ''), '[^a-z0-9_]', '', 'g') = 'eventobjective_wakeanddetailwakeidentity'
+    AND regexp_replace(regexp_replace(lower(pg_get_expr(i.indexprs, i.indrelid)), '::[a-z_ ]+', '', 'g'), '[^a-z0-9_]', '', 'g') = 'detailwakeidentity'
+    AND regexp_replace(regexp_replace(lower(pg_get_expr(i.indpred, i.indrelid)), '::[a-z_ ]+', '', 'g'), '[^a-z0-9_]', '', 'g') = 'eventobjective_wakeanddetailwakeidentity'
     INTO wake_ok
   FROM pg_index i WHERE i.indexrelid=to_regclass('max_durable_execution_task_events_one_objective_wake');
 
