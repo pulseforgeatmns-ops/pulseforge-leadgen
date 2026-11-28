@@ -89,7 +89,7 @@ async function main() {
       WHERE c.relname IN ('max_durable_execution_tasks_one_objective_root','max_durable_execution_task_events_one_objective_wake')
     ) SELECT
       coalesce((SELECT indisunique AND indisvalid AND indisready AND key_arity=2 AND key_vector=format('%s %s', root_tenant, root_objective)
-        AND regexp_replace(regexp_replace(lower(predicate), '::[a-z_ ]+', '', 'g'), '[^a-z0-9_]', '', 'g')='mission_idisnullandobjective_idisnotnullandspecialistmax_objectiveorexecutionscoperoleroot'
+        AND regexp_replace(regexp_replace(lower(predicate), '::[a-z_ ]+', '', 'g'), '[^a-z0-9_]', '', 'g')='mission_idisnullandobjective_idisnotnullandspecialistmax_objectiveorexecution_scoperoleroot'
         FROM idx, attrs WHERE relname='max_durable_execution_tasks_one_objective_root'), false) AS canonical_root,
       coalesce((SELECT indisunique AND indisvalid AND indisready AND key_arity=3 AND key_vector=format('%s %s 0', wake_tenant, wake_task)
         AND regexp_replace(regexp_replace(lower(expressions), '::[a-z_ ]+', '', 'g'), '[^a-z0-9_]', '', 'g')='detailwakeidentity'

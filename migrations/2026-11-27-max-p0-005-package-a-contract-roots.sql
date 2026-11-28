@@ -44,7 +44,7 @@ BEGIN
     -- cast before comparing the canonical predicate shape, but still require
     -- the complete boolean expression rather than merely matching clauses.
     AND regexp_replace(regexp_replace(lower(pg_get_expr(i.indpred, i.indrelid)), '::[a-z_ ]+', '', 'g'), '[^a-z0-9_]', '', 'g')
-      = 'mission_idisnullandobjective_idisnotnullandspecialistmax_objectiveorexecutionscoperoleroot'
+      = 'mission_idisnullandobjective_idisnotnullandspecialistmax_objectiveorexecution_scoperoleroot'
     INTO root_ok
   FROM pg_index i WHERE i.indexrelid=to_regclass('max_durable_execution_tasks_one_objective_root');
 
