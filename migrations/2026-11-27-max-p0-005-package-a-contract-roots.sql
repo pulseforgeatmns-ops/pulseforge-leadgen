@@ -18,4 +18,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS max_durable_execution_tasks_one_objective_root
   WHERE mission_id IS NULL AND objective_id IS NOT NULL
     AND (specialist='max_objective' OR execution_scope->>'role'='root');
 
+CREATE UNIQUE INDEX IF NOT EXISTS max_durable_execution_task_events_one_objective_wake
+  ON max_durable_execution_task_events (tenant_id, task_id, (detail->>'wakeIdentity'))
+  WHERE event='objective_wake' AND detail ? 'wakeIdentity';
+
 COMMIT;

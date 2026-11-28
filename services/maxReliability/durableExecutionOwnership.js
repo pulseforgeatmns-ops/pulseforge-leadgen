@@ -493,7 +493,17 @@ function createDurableExecutionOwnership(pool, options = {}) {
     return r.rows.map(row);
   }
   async function listEvents(input = {}) { await assertSchema(pool); const tenantId = text(input.tenantId, 'tenantId'); const taskId = text(input.taskId, 'taskId'); const r = await pool.query('SELECT id,fence_epoch,event,from_state,to_state,detail,at FROM max_durable_execution_task_events WHERE tenant_id=$1 AND task_id=$2 ORDER BY id', [tenantId, taskId]); return r.rows; }
-  return { accept, claim, claimTask, fail, planRecovery, requireOwner, start, heartbeat, checkpoint, reportCompletion, verify, recoverExpired, revalidateDependencies, cancel, cancelIfQueued, get, getByLogicalKey, latestAttempt, list, listEvents };
+  async function registerObjectiveWake(input = {}) {
+    const tenantId = text(input.tenantId, 'tenantId'); const taskId = text(input.taskId, 'taskId'); const wakeIdentity = text(input.wakeIdentity, 'wakeIdentity');
+    return tx(async db => {
+      const task = await lockTask(db, tenantId, taskId);
+      if (!task) throw error('durable_task_not_found', 'Task not found.');
+      const r = await db.query(`INSERT INTO max_durable_execution_task_events(task_id,tenant_id,fence_epoch,event,detail)
+        VALUES($1,$2,$3,'objective_wake',$4::jsonb) ON CONFLICT DO NOTHING RETURNING id,at`, [taskId, tenantId, task.fence_epoch, JSON.stringify({ wakeIdentity, reason: input.reason || null })]);
+      return { registered: Boolean(r.rows[0]), replay: !r.rows[0], wakeIdentity, event: r.rows[0] || null };
+    });
+  }
+  return { accept, claim, claimTask, fail, planRecovery, requireOwner, start, heartbeat, checkpoint, reportCompletion, verify, recoverExpired, revalidateDependencies, cancel, cancelIfQueued, get, getByLogicalKey, latestAttempt, list, listEvents, registerObjectiveWake };
 }
 module.exports = {
   STATES, REQUIRED_TABLES, UNRESOLVED_ACTION_STATES, DISPATCHED_ACTION_STATES,

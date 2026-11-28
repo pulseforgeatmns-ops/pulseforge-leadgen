@@ -88,3 +88,14 @@ test('Package A concurrent admission is tenant-scoped, idempotent, and preserves
     'a root cannot be revised through duplicate submission',
   );
 });
+
+test('Package A objective wakes deduplicate durably across concurrent store instances', async () => {
+  const { pool } = await db(); const objective = await objectives.createOperatorObjective({ tenantId: 'p005-wake', scope: 'operator', title: 'Wake', objectiveText: 'Wake safely.' }, { pool });
+  const root = (await admitObjectiveRoot({ tenantId:'p005-wake', objectiveId:objective.id, contract:contract(), actor:actor('p005-wake') }, opts(createDurableExecutionOwnership(pool), pool))).task;
+  const wake = `objective-wake:${objective.id}:${root.id}:due_verification:v1`;
+  const [a,b] = await Promise.all([createDurableExecutionOwnership(pool).registerObjectiveWake({ tenantId:'p005-wake', taskId:root.id, wakeIdentity:wake, reason:'due_verification' }), createDurableExecutionOwnership(pool).registerObjectiveWake({ tenantId:'p005-wake', taskId:root.id, wakeIdentity:wake, reason:'due_verification' })]);
+  assert.equal(Number(a.registered) + Number(b.registered), 1);
+  assert.equal((await createDurableExecutionOwnership(pool).registerObjectiveWake({ tenantId:'p005-wake', taskId:root.id, wakeIdentity:`${wake}:other`, reason:'operator_reverify' })).registered, true);
+  const rows = await pool.query("SELECT detail->>'wakeIdentity' AS identity FROM max_durable_execution_task_events WHERE task_id=$1 AND event='objective_wake'", [root.id]);
+  assert.equal(rows.rows.length, 2);
+});
