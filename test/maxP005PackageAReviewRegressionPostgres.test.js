@@ -49,8 +49,25 @@ const P005_INDEX = 'max_durable_execution_tasks_one_objective_root';
 /* Fixtures                                                                  */
 /* ------------------------------------------------------------------------ */
 
-let fixture; let pool; let tasks;
+let fixture; let pool; let tasks; let trustedProductionAdmissionAuthorizer;
 const previousDurableFlag = process.env.MAX_DURABLE_TASKS;
+
+function positiveFixtureAdmissionAuthorizer(fixturePool, candidate, tenantId) {
+  if (fixturePool !== pool || !candidate || !candidate.id
+    || String(candidate.authorizedTenantId) !== String(tenantId)) return { authorized: false };
+  return { authorized: true, policy: 'isolated_review_objective_admission_fixture' };
+}
+
+async function withProductionAdmissionPolicy(work) {
+  const policy = require('../services/maxReliability/objectiveAdmissionAuthorization');
+  const suiteFixtureAuthorizer = policy.authorizeObjectiveAdmission;
+  policy.authorizeObjectiveAdmission = trustedProductionAdmissionAuthorizer;
+  try {
+    return await work(policy);
+  } finally {
+    policy.authorizeObjectiveAdmission = suiteFixtureAuthorizer;
+  }
+}
 
 before(async () => {
   const instance = await startDisposablePostgres('max-p0-005-review-');
@@ -63,10 +80,16 @@ before(async () => {
   await ensureAcquisitionKnowledgeSchema(pool);
   for (const f of [OBJECTIVES_SQL, P003_SQL, P004_SQL, P005_SQL]) await pool.query(MIG(f));
   tasks = createDurableExecutionOwnership(pool);
+  const policy = require('../services/maxReliability/objectiveAdmissionAuthorization');
+  trustedProductionAdmissionAuthorizer = policy.authorizeObjectiveAdmission;
+  policy.authorizeObjectiveAdmission = positiveFixtureAdmissionAuthorizer;
   process.env.MAX_DURABLE_TASKS = 'true'; // ownership enforcement for R4
 });
 
 after(async () => {
+  if (trustedProductionAdmissionAuthorizer) {
+    require('../services/maxReliability/objectiveAdmissionAuthorization').authorizeObjectiveAdmission = trustedProductionAdmissionAuthorizer;
+  }
   if (previousDurableFlag === undefined) delete process.env.MAX_DURABLE_TASKS;
   else process.env.MAX_DURABLE_TASKS = previousDurableFlag;
   if (fixture) await closePostgresFixture(fixture.pool, fixture.instance);
@@ -99,9 +122,8 @@ function widened() {
 }
 const ENV = Object.freeze({ MAX_AUTONOMOUS_OBJECTIVES: 'true', MAX_DURABLE_TASKS: 'true' });
 const actor = (tenantId, id = `operator-${tenantId}`) => ({ id, authorizedTenantId: tenantId });
-const allowAll = async () => true;
 function options(extra = {}) {
-  return { env: ENV, taskStore: tasks, objectiveService: objectives, objectiveOpts: { pool }, authorizeActor: allowAll, ...extra };
+  return { env: ENV, taskStore: tasks, objectiveService: objectives, objectiveOpts: { pool }, ...extra };
 }
 async function newObjective(tenantId, objectiveText = 'Verify a safe result.') {
   return objectives.createOperatorObjective({ tenantId, scope: 'operator', title: `review ${tenantId}`, objectiveText }, { pool });
@@ -404,38 +426,52 @@ test('R4-07 P0-004 one-active-task-per-mission still holds with an active root',
 /* R5 — actor authorization                                                  */
 /* ------------------------------------------------------------------------ */
 
-test('R5-01 missing, malformed, cross-tenant or denied actors fail closed', async () => {
+test('R5-01 missing, malformed, cross-tenant, or trusted-policy-denied actors fail closed', async () => {
   const o = await newObjective('r5-01');
   const base = { tenantId: 'r5-01', objectiveId: o.id, contract: contract() };
   const cases = [
     ['no actor', base, options()],
     ['actor without id', { ...base, actor: { authorizedTenantId: 'r5-01' } }, options()],
     ['cross-tenant actor', { ...base, actor: actor('other-tenant') }, options()],
-    ['no authorizer', { ...base, actor: actor('r5-01') }, options({ authorizeActor: undefined })],
-    ['authorizer false', { ...base, actor: actor('r5-01') }, options({ authorizeActor: async () => false })],
+    ['production default-deny', { ...base, actor: actor('r5-01') }, options()],
   ];
-  for (const [label, input, opts] of cases) {
-    assert.equal(await outcome(C.admitObjectiveRoot(input, opts)), 'objective_contract_actor_unauthorized', label);
-  }
+  await withProductionAdmissionPolicy(async () => {
+    for (const [label, input, opts] of cases) {
+      assert.equal(await outcome(C.admitObjectiveRoot(input, opts)), 'objective_contract_actor_unauthorized', label);
+    }
+  });
   assert.equal((await objectiveTasks('r5-01', o.id)).length, 0);
 });
 
-test('R5-02 [NF-1] only an explicit approval admits: truthy denials and non-boolean results are refused', async () => {
+test('R5-02 [N1 regression] production callers cannot override the trusted authorization decision', async () => {
   const o = await newObjective('r5-02');
-  for (const [label, verdict] of [
-    ["string 'no'", 'no'], ['{ authorized: false }', { authorized: false, reason: 'denied' }],
-    ['number 1', 1], ['empty object', {}], ['array', []],
-  ]) {
-    assert.equal(await outcome(admit('r5-02', o.id, contract(), {}, options({ authorizeActor: async () => verdict }))),
-      'objective_contract_actor_unauthorized', label);
-  }
+  await withProductionAdmissionPolicy(async () => {
+    for (const [label, callerOverride] of [
+      ['boolean approval', async () => true],
+      ['object approval', async () => ({ authorized: true, policy: 'caller_controlled' })],
+      ['truthy approval', async () => 'approved'],
+      ['throwing approval', async () => { throw new Error('caller authorizer must not run'); }],
+    ]) {
+      assert.equal(await outcome(admit('r5-02', o.id, contract(), {}, options({ authorizeActor: callerOverride }))),
+        'objective_contract_actor_unauthorized', label);
+    }
+  });
   assert.equal((await objectiveTasks('r5-02', o.id)).length, 0);
 });
 
-test('R5-03 an authorizer that throws fails closed with no root', async () => {
+test('R5-03 a trusted authorization-policy failure fails closed with no root', async () => {
   const o = await newObjective('r5-03');
-  const res = await outcome(admit('r5-03', o.id, contract(), {}, options({ authorizeActor: async () => { throw new Error('policy store down'); } })));
-  assert.notEqual(res, 'new'); assert.notEqual(res, 'replay');
+  let res;
+  await withProductionAdmissionPolicy(async (productionPolicy) => {
+    const originalAuthorizer = productionPolicy.authorizeObjectiveAdmission;
+    productionPolicy.authorizeObjectiveAdmission = async () => { throw new Error('policy store down'); };
+    try {
+      res = await outcome(admit('r5-03', o.id, contract()));
+    } finally {
+      productionPolicy.authorizeObjectiveAdmission = originalAuthorizer;
+    }
+  });
+  assert.equal(res, 'objective_contract_actor_unauthorized');
   assert.equal((await objectiveTasks('r5-03', o.id)).length, 0);
 });
 
@@ -449,8 +485,9 @@ test('R5-04 [R5 attribution] the admitting actor is durably attributable on the 
 });
 
 test('R5-05 authorization reuses an existing repository policy', async () => {
-  const policy = require('../services/maxReliability/objectiveAdmissionAuthorization');
-  assert.deepEqual(await policy.authorizeObjectiveAdmission(pool, { id: 'not-an-id' }, '10'), { authorized: false });
+  await withProductionAdmissionPolicy(async (policy) => {
+    assert.deepEqual(await policy.authorizeObjectiveAdmission(pool, { id: 'not-an-id' }, '10'), { authorized: false });
+  });
 });
 
 test('R5-06 [fixture-only] authenticated identities stay denied in production while a disposable policy fixture admits and replays', async () => {
@@ -479,12 +516,14 @@ test('R5-06 [fixture-only] authenticated identities stay denied in production wh
 
   const productionPolicy = require('../services/maxReliability/objectiveAdmissionAuthorization');
   // Trusted identity and matching tenant membership are not an admission grant.
-  for (const id of [adminId, managerId]) {
-    const decision = await productionPolicy.authorizeObjectiveAdmission(pool, { id: String(id) }, tenantId);
-    assert.equal(decision.authorized, false);
-    assert.equal(decision.reason, 'objective_admission_permission_absent');
-    assert.equal(decision.actorId, String(id));
-  }
+  await withProductionAdmissionPolicy(async () => {
+    for (const id of [adminId, managerId]) {
+      const decision = await productionPolicy.authorizeObjectiveAdmission(pool, { id: String(id) }, tenantId);
+      assert.equal(decision.authorized, false);
+      assert.equal(decision.reason, 'objective_admission_permission_absent');
+      assert.equal(decision.actorId, String(id));
+    }
+  });
 
   // Build the candidate from the trusted, persisted identity fixture rather
   // than accepting a caller-supplied role or tenant claim.
@@ -508,15 +547,11 @@ test('R5-06 [fixture-only] authenticated identities stay denied in production wh
   // Exercise the production call shape (no caller-provided authorizer).  The
   // temporary replacement is confined to this Node test process and restored
   // before the test ends; production code has no switch that can select it.
-  const originalAuthorizer = productionPolicy.authorizeObjectiveAdmission;
+  const suiteFixtureAuthorizer = productionPolicy.authorizeObjectiveAdmission;
   let first; let replay;
   productionPolicy.authorizeObjectiveAdmission = fixturePolicy;
   try {
-    const fixtureOptions = (() => {
-      const result = options();
-      delete result.authorizeActor;
-      return result;
-    })();
+    const fixtureOptions = options();
     first = await C.admitObjectiveRoot({ tenantId, objectiveId: objective.id, contract: contract(), actor: trustedActor }, fixtureOptions);
     replay = await C.admitObjectiveRoot({
       tenantId,
@@ -527,7 +562,7 @@ test('R5-06 [fixture-only] authenticated identities stay denied in production wh
       actor: trustedActor,
     }, fixtureOptions);
   } finally {
-    productionPolicy.authorizeObjectiveAdmission = originalAuthorizer;
+    productionPolicy.authorizeObjectiveAdmission = suiteFixtureAuthorizer;
   }
   assert.equal(first.admitted, true);
   assert.equal(replay.replay, true);

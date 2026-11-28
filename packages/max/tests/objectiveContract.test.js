@@ -71,21 +71,16 @@ describe('MAX-P0-005 Package A objective contract', () => {
     assert.equal(calls, 0);
   });
 
-  it('accepts exactly one P0-004-style root after explicit dual opt-in, without claiming or executing it', async () => {
+  it('cannot use a caller-supplied authorizer to bypass the trusted default-deny policy', async () => {
     const store = objectives.createMemoryStore();
     const objective = await objectives.createOperatorObjective({ tenantId: 't1', scope: 'operator', title: 'Research', objectiveText: 'Find evidence.' }, { store });
     const calls = [];
     const taskStore = { accept: async input => { calls.push(input); return { accepted: true, replay: false, task: { id: 'root-1', ...input, state: 'queued' } }; } };
-    const result = await admitObjectiveRoot({ tenantId: 't1', objectiveId: objective.id, contract: contract(), actor: { id: 'operator-1', authorizedTenantId: 't1' } }, {
+    await assert.rejects(() => admitObjectiveRoot({ tenantId: 't1', objectiveId: objective.id, contract: contract(), actor: { id: 'operator-1', authorizedTenantId: 't1' } }, {
       env: { MAX_AUTONOMOUS_OBJECTIVES: 'true', MAX_DURABLE_TASKS: 'true' }, taskStore,
-      objectiveService: objectives, objectiveOpts: { store }, authorizeActor: async () => true,
-    });
-    assert.equal(result.admitted, true);
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0].missionId, null);
-    assert.equal(calls[0].specialist, 'max_objective');
-    assert.equal(calls[0].executionScope.role, 'root');
-    assert.equal(calls[0].immutableInput.contract.allowedProviders.includes('anthropic'), false);
+      objectiveService: objectives, objectiveOpts: { store }, authorizeActor: async () => ({ authorized: true, policy: 'caller_controlled' }),
+    }), { code: 'objective_contract_actor_unauthorized' });
+    assert.equal(calls.length, 0);
     const persisted = await objectives.getObjectiveById(objective.id, { tenantId: 't1', store });
     assert.equal(persisted.context.maxP005Contract, undefined);
   });

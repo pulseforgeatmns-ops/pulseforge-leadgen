@@ -196,7 +196,11 @@ function rootTaskInput({ tenantId, objective, contract, actor }) {
     dependencyTaskIds: [],
     deadlineAt: contract.deadlineAt,
     retryBudget: 0,
-    acceptedEventDetail: actor && actor.id ? { actorId: String(actor.id), authorizationPolicy: actor.authorizationPolicy || 'explicit_fixture', admission: 'objective_contract' } : undefined,
+    acceptedEventDetail: actor && actor.id ? {
+      actorId: String(actor.id),
+      authorizationPolicy: actor.authorizationPolicy,
+      admission: 'objective_contract',
+    } : undefined,
   };
 }
 
@@ -221,11 +225,22 @@ async function admitObjectiveRoot(input = {}, opts = {}) {
   if (!input.actor || !input.actor.id || !input.actor.authorizedTenantId || String(input.actor.authorizedTenantId) !== tenantId) {
     throw new ObjectiveContractError('objective_contract_actor_unauthorized', 'authenticated tenant-bound actor is required', 403);
   }
-  const authorizer = opts.authorizeActor || (opts.objectiveOpts && opts.objectiveOpts.pool
-    ? async (actor, scope) => require('../../../services/maxReliability/objectiveAdmissionAuthorization').authorizeObjectiveAdmission(opts.objectiveOpts.pool, actor, scope.tenantId)
-    : null);
-  const decision = authorizer && await authorizer(input.actor, { tenantId, objectiveId: input.objectiveId });
-  if (!(decision === true || (decision && decision.authorized === true))) {
+  // Admission authorization is deliberately resolved only through the trusted
+  // policy module.  In particular, this boundary must not accept a caller-
+  // supplied authorizer: that would let a production caller turn default-deny
+  // into approval.  The policy is also the source of the durable provenance.
+  let decision;
+  try {
+    const policy = require('../../../services/maxReliability/objectiveAdmissionAuthorization');
+    decision = await policy.authorizeObjectiveAdmission(
+      opts.objectiveOpts && opts.objectiveOpts.pool,
+      input.actor,
+      tenantId,
+    );
+  } catch (_) {
+    decision = null;
+  }
+  if (!decision || decision.authorized !== true || typeof decision.policy !== 'string' || !decision.policy.trim()) {
     throw new ObjectiveContractError('objective_contract_actor_unauthorized', 'actor is not authorized for objective admission', 403);
   }
   const objectiveService = opts.objectiveService || require('../../../services/operatorObjectives');
@@ -252,7 +267,7 @@ async function admitObjectiveRoot(input = {}, opts = {}) {
   const contract = validateObjectiveContract(input.contract);
   let accepted;
   try {
-    accepted = await taskStore.accept(rootTaskInput({ tenantId, objective, contract, actor: { ...input.actor, authorizationPolicy: decision && decision.policy } }));
+    accepted = await taskStore.accept(rootTaskInput({ tenantId, objective, contract, actor: { id: input.actor.id, authorizationPolicy: decision.policy } }));
   } catch (error) {
     if (error && error.code === 'durable_task_key_reused') {
       throw new ObjectiveContractError('objective_contract_revision_conflict', 'the admitted root contract is immutable', 409);
