@@ -493,7 +493,13 @@ test('R5-06 [fixture-only] authenticated identities stay denied in production wh
   )).rows[0];
   const trustedActor = Object.freeze({ id: String(identity.id), authorizedTenantId: String(identity.client_id) });
   const fixturePolicy = async (candidate, scope) => {
-    if (candidate !== trustedActor || String(scope.tenantId) !== tenantId) return { authorized: false };
+    // Admission receives the authenticated identity value across the module
+    // boundary, so bind the fixture to the identity loaded from this fixture's
+    // real users row rather than JavaScript object identity.
+    if (!candidate
+      || String(candidate.id) !== trustedActor.id
+      || String(candidate.authorizedTenantId) !== trustedActor.authorizedTenantId
+      || String(scope.tenantId) !== tenantId) return { authorized: false };
     return Object.freeze({ authorized: true, policy: 'disposable_postgres_objective_admission_fixture_v1' });
   };
 
