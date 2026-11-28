@@ -76,7 +76,38 @@ async function main() {
     const otherSchemas = await q(`SELECT nspname AS schema FROM pg_namespace
       WHERE nspname NOT IN ('public','information_schema') AND nspname NOT LIKE 'pg\\_%' ORDER BY 1`);
     const signalTables = tables.filter((t) => /^signal_/.test(t.name)).map((t) => t.name);
-    const p005 = (await q(`SELECT to_regclass('max_durable_execution_tasks_one_objective_root') IS NOT NULL AS objectiveRootUniqueIndex`))[0];
+    const packageATablesPresent = present.has('max_durable_execution_tasks') && present.has('max_durable_execution_task_events');
+    const packageAInvariants = packageATablesPresent ? (await q(`WITH attrs AS (
+      SELECT (SELECT attnum FROM pg_attribute WHERE attrelid='max_durable_execution_tasks'::regclass AND attname='tenant_id' AND NOT attisdropped) AS root_tenant,
+        (SELECT attnum FROM pg_attribute WHERE attrelid='max_durable_execution_tasks'::regclass AND attname='objective_id' AND NOT attisdropped) AS root_objective,
+        (SELECT attnum FROM pg_attribute WHERE attrelid='max_durable_execution_task_events'::regclass AND attname='tenant_id' AND NOT attisdropped) AS wake_tenant,
+        (SELECT attnum FROM pg_attribute WHERE attrelid='max_durable_execution_task_events'::regclass AND attname='task_id' AND NOT attisdropped) AS wake_task
+    ), idx AS (
+      SELECT c.relname, i.indisunique, i.indisvalid, i.indisready, i.indnkeyatts::int AS key_arity, i.indkey::text AS key_vector,
+        pg_get_expr(i.indexprs, i.indrelid) AS expressions, pg_get_expr(i.indpred, i.indrelid) AS predicate
+      FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid
+      WHERE c.relname IN ('max_durable_execution_tasks_one_objective_root','max_durable_execution_task_events_one_objective_wake')
+    ) SELECT
+      coalesce((SELECT indisunique AND indisvalid AND indisready AND key_arity=2 AND key_vector=format('%s %s', root_tenant, root_objective)
+        AND regexp_replace(replace(lower(predicate), '::text', ''), '[^a-z0-9_]', '', 'g')='mission_idisnullandobjective_idisnotnullandspecialistmax_objectiveorexecutionscoperoleroot'
+        FROM idx, attrs WHERE relname='max_durable_execution_tasks_one_objective_root'), false) AS canonical_root,
+      coalesce((SELECT indisunique AND indisvalid AND indisready AND key_arity=3 AND key_vector=format('%s %s 0', wake_tenant, wake_task)
+        AND regexp_replace(replace(lower(expressions), '::text', ''), '[^a-z0-9_]', '', 'g')='detailwakeidentity'
+        AND regexp_replace(replace(lower(predicate), '::text', ''), '[^a-z0-9_]', '', 'g')='eventobjective_wakeanddetailwakeidentity'
+        FROM idx, attrs WHERE relname='max_durable_execution_task_events_one_objective_wake'), false) AS wake_deduplication,
+      coalesce((SELECT jsonb_build_object('unique', indisunique, 'valid', indisvalid, 'ready', indisready, 'keyArity', key_arity, 'keyVector', key_vector, 'expressions', expressions, 'predicate', predicate)
+        FROM idx WHERE relname='max_durable_execution_tasks_one_objective_root'), '{}'::jsonb) AS canonical_root_evidence,
+      coalesce((SELECT jsonb_build_object('unique', indisunique, 'valid', indisvalid, 'ready', indisready, 'keyArity', key_arity, 'keyVector', key_vector, 'expressions', expressions, 'predicate', predicate)
+        FROM idx WHERE relname='max_durable_execution_task_events_one_objective_wake'), '{}'::jsonb) AS wake_deduplication_evidence`))[0]
+      : { canonical_root: false, wake_deduplication: false, canonical_root_evidence: {}, wake_deduplication_evidence: {} };
+    const packageAMigrationPreflight = packageATablesPresent ? (await q(`SELECT
+      (SELECT count(*)::int FROM (SELECT 1 FROM max_durable_execution_tasks
+        WHERE mission_id IS NULL AND objective_id IS NOT NULL AND (specialist='max_objective' OR execution_scope->>'role'='root')
+        GROUP BY tenant_id, objective_id HAVING count(*) > 1) roots) AS duplicate_canonical_roots,
+      (SELECT count(*)::int FROM (SELECT 1 FROM max_durable_execution_task_events
+        WHERE event='objective_wake' AND detail ? 'wakeIdentity'
+        GROUP BY tenant_id, task_id, detail->>'wakeIdentity' HAVING count(*) > 1) wakes) AS duplicate_objective_wakes`))[0]
+      : { duplicate_canonical_roots: null, duplicate_objective_wakes: null };
 
     // Tenant and operational continuity (counts and timestamps only).
     const tenants = present.has('clients')
@@ -110,7 +141,18 @@ async function main() {
       maxCore,
       reliabilityCoreInstalled: ['max_external_action_claims', 'max_request_receipts', 'max_reliability_audit'].every((t) => present.has(t)),
       durableExecutionOwnershipInstalled: ['max_durable_execution_tasks', 'max_durable_execution_task_events'].every((t) => present.has(t)),
-      packageA: { objectiveRootUniqueIndex: p005.objectiverootuniqueindex === true },
+      packageA: {
+        canonicalRootInvariant: packageAInvariants.canonical_root === true,
+        wakeDeduplicationInvariant: packageAInvariants.wake_deduplication === true,
+        canonicalRootEvidence: packageAInvariants.canonical_root_evidence,
+        wakeDeduplicationEvidence: packageAInvariants.wake_deduplication_evidence,
+        migrationPreflight: {
+          duplicateCanonicalRoots: packageAMigrationPreflight.duplicate_canonical_roots,
+          duplicateObjectiveWakes: packageAMigrationPreflight.duplicate_objective_wakes,
+          ready: packageATablesPresent && Number(packageAMigrationPreflight.duplicate_canonical_roots) === 0
+            && Number(packageAMigrationPreflight.duplicate_objective_wakes) === 0,
+        },
+      },
       otherSchemas: otherSchemas.map((r) => r.schema),
       signalTables,
       tenants,

@@ -41,6 +41,7 @@ const DISPATCHED_ACTION_STATES = ['dispatch_attempted', 'outcome_unknown', 'prov
 const REQUIRED_TABLES = Object.freeze(['max_durable_execution_tasks', 'max_durable_execution_task_events', 'max_durable_execution_task_dependencies']);
 const MAX_RETRY_BUDGET = 100;
 const verifiedPools = new WeakSet();
+const OBJECTIVE_WAKE_INDEX = 'max_durable_execution_task_events_one_objective_wake';
 
 /** The single ownership predicate. $1 id, $2 tenant, $3 token, $4 epoch. */
 const OWNER_PREDICATE = `id=$1 AND tenant_id=$2 AND ownership_token=$3 AND fence_epoch=$4
@@ -93,6 +94,66 @@ function retryBudgetOf(value) {
   if (value == null) return 0;
   if (!Number.isSafeInteger(value) || value < 0 || value > MAX_RETRY_BUDGET) throw error('durable_task_invalid', `retryBudget must be an integer 0–${MAX_RETRY_BUDGET}.`);
   return value;
+}
+function canonicalCatalogExpression(value) {
+  return String(value || '').toLowerCase().replace(/::text/g, '').replace(/[^a-z0-9_]/g, '');
+}
+
+/**
+ * Read catalog evidence for the Package A wake uniqueness invariant.  A named
+ * index alone is not evidence: it must be a valid, ready UNIQUE partial index
+ * over exactly (tenant_id, task_id, detail->>'wakeIdentity').
+ */
+async function inspectObjectiveWakeInvariant(db) {
+  const r = await db.query(`SELECT i.indisunique, i.indisvalid, i.indisready,
+      i.indnkeyatts::int AS key_arity, i.indkey::text AS key_vector,
+      i.indrelid = 'max_durable_execution_task_events'::regclass AS correct_table,
+      pg_get_expr(i.indexprs, i.indrelid) AS expressions,
+      pg_get_expr(i.indpred, i.indrelid) AS predicate,
+      (SELECT attnum::text FROM pg_attribute WHERE attrelid='max_durable_execution_task_events'::regclass
+        AND attname='tenant_id' AND NOT attisdropped) AS tenant_attnum,
+      (SELECT attnum::text FROM pg_attribute WHERE attrelid='max_durable_execution_task_events'::regclass
+        AND attname='task_id' AND NOT attisdropped) AS task_attnum
+    FROM pg_index i WHERE i.indexrelid=to_regclass($1)`, [OBJECTIVE_WAKE_INDEX]);
+  const index = r.rows[0] || null;
+  const expectedKeys = index && `${index.tenant_attnum} ${index.task_attnum} 0`;
+  const ok = Boolean(index && index.indisunique === true && index.indisvalid === true && index.indisready === true
+    && index.correct_table === true && Number(index.key_arity) === 3
+    && String(index.key_vector).trim() === expectedKeys
+    && canonicalCatalogExpression(index.expressions) === 'detailwakeidentity'
+    && canonicalCatalogExpression(index.predicate) === 'eventobjective_wakeanddetailwakeidentity');
+  return { ok, index: index && {
+    unique: index.indisunique === true, valid: index.indisvalid === true, ready: index.indisready === true,
+    correctTable: index.correct_table === true, keyArity: Number(index.key_arity), keyVector: index.key_vector,
+    expressions: index.expressions, predicate: index.predicate,
+  } };
+}
+async function assertObjectiveWakeInvariant(db) {
+  let invariant;
+  try { invariant = await inspectObjectiveWakeInvariant(db); } catch (cause) {
+    throw error('durable_objective_wake_schema_invalid', 'Objective wake deduplication invariant could not be verified.', { cause });
+  }
+  if (!invariant.ok) throw error('durable_objective_wake_schema_invalid', 'Objective wake deduplication invariant is missing or invalid.', { invariant });
+}
+function assertCanonicalObjectiveWake(task, tenantId, input) {
+  const scope = task.execution_scope || {};
+  const contract = task.immutable_input && task.immutable_input.contract;
+  const reason = text(input.reason, 'reason');
+  if (task.mission_id !== null || !task.objective_id || task.specialist !== 'max_objective'
+    || scope.kind !== 'objective_orchestration' || scope.role !== 'root' || scope.missionOwnership !== 'none'
+    || !task.immutable_input || String(task.immutable_input.objectiveId) !== String(task.objective_id)
+    || !contract || !Number.isSafeInteger(Number(contract.version)) || Number(contract.version) < 1
+    || !Array.isArray(contract.wakeConditions) || !contract.wakeConditions.includes(reason)) {
+    throw error('durable_objective_wake_invalid', 'Objective wakes require a canonical root and an approved contract wake reason.');
+  }
+  const expected = require('../../packages/max/objectiveOrchestration/ObjectiveContract').wakeIdentity({
+    objectiveId: String(task.objective_id), rootTaskId: String(task.id), reason, version: Number(contract.version),
+  });
+  if (String(input.wakeIdentity) !== expected) {
+    throw error('durable_objective_wake_invalid', 'Objective wake identity does not match the authoritative root contract.', { expectedWakeIdentity: expected });
+  }
+  if (String(task.tenant_id) !== tenantId) throw error('durable_objective_wake_invalid', 'Objective wake tenant does not match the authoritative root.');
+  return { reason, wakeIdentity: expected };
 }
 
 function createDurableExecutionOwnership(pool, options = {}) {
@@ -496,16 +557,18 @@ function createDurableExecutionOwnership(pool, options = {}) {
   async function registerObjectiveWake(input = {}) {
     const tenantId = text(input.tenantId, 'tenantId'); const taskId = text(input.taskId, 'taskId'); const wakeIdentity = text(input.wakeIdentity, 'wakeIdentity');
     return tx(async db => {
+      await assertObjectiveWakeInvariant(db);
       const task = await lockTask(db, tenantId, taskId);
       if (!task) throw error('durable_task_not_found', 'Task not found.');
+      const canonicalWake = assertCanonicalObjectiveWake(task, tenantId, { ...input, wakeIdentity });
       const r = await db.query(`INSERT INTO max_durable_execution_task_events(task_id,tenant_id,fence_epoch,event,detail)
-        VALUES($1,$2,$3,'objective_wake',$4::jsonb) ON CONFLICT DO NOTHING RETURNING id,at`, [taskId, tenantId, task.fence_epoch, JSON.stringify({ wakeIdentity, reason: input.reason || null })]);
-      return { registered: Boolean(r.rows[0]), replay: !r.rows[0], wakeIdentity, event: r.rows[0] || null };
+        VALUES($1,$2,$3,'objective_wake',$4::jsonb) ON CONFLICT DO NOTHING RETURNING id,at`, [taskId, tenantId, task.fence_epoch, JSON.stringify(canonicalWake)]);
+      return { registered: Boolean(r.rows[0]), replay: !r.rows[0], wakeIdentity: canonicalWake.wakeIdentity, event: r.rows[0] || null };
     });
   }
   return { accept, claim, claimTask, fail, planRecovery, requireOwner, start, heartbeat, checkpoint, reportCompletion, verify, recoverExpired, revalidateDependencies, cancel, cancelIfQueued, get, getByLogicalKey, latestAttempt, list, listEvents, registerObjectiveWake };
 }
 module.exports = {
   STATES, REQUIRED_TABLES, UNRESOLVED_ACTION_STATES, DISPATCHED_ACTION_STATES,
-  assertDurableExecutionSchema: assertSchema, createDurableExecutionOwnership,
+  assertDurableExecutionSchema: assertSchema, inspectObjectiveWakeInvariant, createDurableExecutionOwnership,
 };

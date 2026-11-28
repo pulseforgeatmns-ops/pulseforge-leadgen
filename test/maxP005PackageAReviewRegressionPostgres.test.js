@@ -220,9 +220,54 @@ test('R1-06 migration preflight refuses pre-existing duplicate roots and leaves 
   }
 });
 
+test('N4 regression: migration preflight refuses duplicate objective wakes and rolls back the deduplication index', async () => {
+  const instance = await startDisposablePostgres('max-p0-005-review-wake-preflight-');
+  const p = createTrackedPostgresPool({ connectionString: instance.connectionString, max: 2 });
+  try {
+    await p.query(MIG(P003_SQL)); await p.query(MIG(P004_SQL));
+    const task = await p.query(`INSERT INTO max_durable_execution_tasks
+      (id, tenant_id, objective_id, logical_key, input_fingerprint, specialist, execution_scope, immutable_input, state)
+      VALUES (gen_random_uuid(), 't', '11111111-1111-1111-1111-111111111112', 'ordinary-task', repeat('b',64), 'operator', '{}', '{}', 'queued') RETURNING id`);
+    for (let i = 0; i < 2; i += 1) await p.query(`INSERT INTO max_durable_execution_task_events
+      (task_id, tenant_id, fence_epoch, event, detail) VALUES ($1, 't', 0, 'objective_wake', '{"wakeIdentity":"duplicate-wake"}')`, [task.rows[0].id]);
+    await assert.rejects(p.query(MIG(P005_SQL)), /preflight failed: duplicate objective wakes/);
+    assert.equal((await p.query(`SELECT to_regclass('max_durable_execution_task_events_one_objective_wake') AS i`)).rows[0].i, null,
+      'transaction rollback leaves no partial wake-deduplication index');
+  } finally {
+    await closePostgresFixture(p, instance);
+  }
+});
+
+test('N4 regression: a same-named malformed wake index is not accepted as the invariant', async () => {
+  const instance = await startDisposablePostgres('max-p0-005-review-wake-index-');
+  const p = createTrackedPostgresPool({ connectionString: instance.connectionString, max: 2 });
+  try {
+    await p.query(MIG(P003_SQL)); await p.query(MIG(P004_SQL));
+    await p.query(`CREATE UNIQUE INDEX max_durable_execution_task_events_one_objective_wake
+      ON max_durable_execution_task_events (tenant_id, task_id, id)`);
+    await assert.rejects(p.query(MIG(P005_SQL)), /objective-wake deduplication index is missing or invalid/);
+    const wrong = await p.query(`SELECT i.indisunique, i.indisvalid, i.indisready, i.indnkeyatts::int AS keys
+      FROM pg_index i WHERE i.indexrelid='max_durable_execution_task_events_one_objective_wake'::regclass`);
+    assert.deepEqual(wrong.rows[0], { indisunique: true, indisvalid: true, indisready: true, keys: 3 },
+      'the rejection is definition-based, not merely a missing/invalid-name check');
+  } finally {
+    await closePostgresFixture(p, instance);
+  }
+});
+
 test('R1-07 read-only preflight/schema report exposes the Package A uniqueness index', async () => {
   const r = await pool.query('SELECT to_regclass($1) AS index_name', [P005_INDEX]);
   assert.ok(r.rows[0].index_name, 'Package A reportable uniqueness index exists');
+});
+
+test('N4 regression: read-only schema report verifies both Package A invariants by catalog definition', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../scripts/max-reliability/schemaReport.cjs'), 'utf8');
+  assert.match(source, /canonicalRootInvariant/);
+  assert.match(source, /wakeDeduplicationInvariant/);
+  assert.match(source, /migrationPreflight/);
+  assert.match(source, /duplicateObjectiveWakes/);
+  assert.match(source, /pg_get_expr\(i\.indexprs/);
+  assert.match(source, /indisunique AND indisvalid AND indisready/);
 });
 
 /* ------------------------------------------------------------------------ */

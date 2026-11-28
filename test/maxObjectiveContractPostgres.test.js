@@ -119,8 +119,48 @@ test('Package A objective wakes deduplicate durably across concurrent store inst
     const wake = `objective-wake:${objective.id}:${root.id}:due_verification:v1`;
     const [a,b] = await Promise.all([createDurableExecutionOwnership(pool).registerObjectiveWake({ tenantId:'p005-wake', taskId:root.id, wakeIdentity:wake, reason:'due_verification' }), createDurableExecutionOwnership(pool).registerObjectiveWake({ tenantId:'p005-wake', taskId:root.id, wakeIdentity:wake, reason:'due_verification' })]);
     assert.equal(Number(a.registered) + Number(b.registered), 1);
-    assert.equal((await createDurableExecutionOwnership(pool).registerObjectiveWake({ tenantId:'p005-wake', taskId:root.id, wakeIdentity:`${wake}:other`, reason:'operator_reverify' })).registered, true);
+    await assert.rejects(
+      () => createDurableExecutionOwnership(pool).registerObjectiveWake({ tenantId:'p005-wake', taskId:root.id, wakeIdentity:`${wake}:other`, reason:'operator_reverify' }),
+      error => error.code === 'durable_objective_wake_invalid',
+    );
     const rows = await pool.query("SELECT detail->>'wakeIdentity' AS identity FROM max_durable_execution_task_events WHERE task_id=$1 AND event='objective_wake'", [root.id]);
-    assert.equal(rows.rows.length, 2);
+    assert.equal(rows.rows.length, 1);
+  });
+});
+
+test('N2 regression: wake registration fails closed when the deduplication index is absent or malformed', async () => {
+  const { pool } = await db(); const tenantId = 'p005-wake-invariant';
+  const objective = await objectives.createOperatorObjective({ tenantId, scope: 'operator', title: 'Wake invariant', objectiveText: 'Require durable deduplication.' }, { pool });
+  await withFixtureAdmission(pool, async () => {
+    const store = createDurableExecutionOwnership(pool);
+    const root = (await admitObjectiveRoot({ tenantId, objectiveId: objective.id, contract: contract(), actor: actor(tenantId) }, opts(store, pool))).task;
+    const wake = `objective-wake:${objective.id}:${root.id}:due_verification:v1`;
+    await pool.query('DROP INDEX max_durable_execution_task_events_one_objective_wake');
+    await assert.rejects(() => store.registerObjectiveWake({ tenantId, taskId: root.id, wakeIdentity: wake, reason: 'due_verification' }),
+      error => error.code === 'durable_objective_wake_schema_invalid');
+    await pool.query(`CREATE UNIQUE INDEX max_durable_execution_task_events_one_objective_wake
+      ON max_durable_execution_task_events (tenant_id, task_id, id)`);
+    await assert.rejects(() => store.registerObjectiveWake({ tenantId, taskId: root.id, wakeIdentity: wake, reason: 'due_verification' }),
+      error => error.code === 'durable_objective_wake_schema_invalid');
+    await pool.query('DROP INDEX max_durable_execution_task_events_one_objective_wake');
+    await pool.query(fs.readFileSync(P005, 'utf8'));
+    assert.equal((await store.registerObjectiveWake({ tenantId, taskId: root.id, wakeIdentity: wake, reason: 'due_verification' })).registered, true);
+  });
+});
+
+test('N3 regression: objective wakes accept only canonical root identities and contract reasons', async () => {
+  const { pool } = await db(); const tenantId = 'p005-wake-integrity';
+  const objective = await objectives.createOperatorObjective({ tenantId, scope: 'operator', title: 'Wake integrity', objectiveText: 'Bind wakes to their root.' }, { pool });
+  await withFixtureAdmission(pool, async () => {
+    const store = createDurableExecutionOwnership(pool);
+    const root = (await admitObjectiveRoot({ tenantId, objectiveId: objective.id, contract: contract(), actor: actor(tenantId) }, opts(store, pool))).task;
+    const canonical = `objective-wake:${objective.id}:${root.id}:due_verification:v1`;
+    const child = (await store.accept({ tenantId, objectiveId: objective.id, parentTaskId: root.id, missionId: 'wake-child', logicalKey: `wake-child:${objective.id}`, specialist: 'fixture', immutableInput: { fixture: true }, dependencyRefs: [], retryBudget: 0 })).task;
+    for (const input of [
+      { tenantId, taskId: root.id, wakeIdentity: `${canonical}:forged`, reason: 'due_verification' },
+      { tenantId, taskId: root.id, wakeIdentity: `objective-wake:${objective.id}:${root.id}:operator_reverify:v1`, reason: 'operator_reverify' },
+      { tenantId, taskId: child.id, wakeIdentity: `objective-wake:${objective.id}:${child.id}:due_verification:v1`, reason: 'due_verification' },
+    ]) await assert.rejects(() => store.registerObjectiveWake(input), error => error.code === 'durable_objective_wake_invalid');
+    assert.equal((await store.registerObjectiveWake({ tenantId, taskId: root.id, wakeIdentity: canonical, reason: 'due_verification' })).registered, true);
   });
 });
