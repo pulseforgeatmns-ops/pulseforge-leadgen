@@ -57,8 +57,14 @@ BEGIN
     INTO wake_ok
   FROM pg_index i WHERE i.indexrelid=to_regclass('max_durable_execution_task_events_one_objective_wake');
 
-  IF root_ok IS DISTINCT FROM true THEN RAISE EXCEPTION 'MAX-P0-005 invariant failed: canonical objective-root index is missing or invalid'; END IF;
-  IF wake_ok IS DISTINCT FROM true THEN RAISE EXCEPTION 'MAX-P0-005 invariant failed: objective-wake deduplication index is missing or invalid'; END IF;
+  IF root_ok IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'MAX-P0-005 invariant failed: canonical objective-root index is missing or invalid (%)',
+      coalesce(pg_get_indexdef(to_regclass('max_durable_execution_tasks_one_objective_root')), 'absent');
+  END IF;
+  IF wake_ok IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'MAX-P0-005 invariant failed: objective-wake deduplication index is missing or invalid (%)',
+      coalesce(pg_get_indexdef(to_regclass('max_durable_execution_task_events_one_objective_wake')), 'absent');
+  END IF;
 END $$;
 
 COMMIT;
