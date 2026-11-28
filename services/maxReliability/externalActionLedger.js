@@ -309,6 +309,19 @@ function createExternalActionLedger(pool, options = {}) {
    */
   async function markDispatchAttempted(input) {
     if (!input || !input.taskFence) {
+      // A claim already linked to a durable task must be marked through that
+      // task's live fence.  The legacy unfenced path remains available only
+      // for genuinely legacy (task_id NULL) claims.
+      if (input) {
+        // P0-003 is independently deployable: its schema legitimately lacks
+        // task_id. Probe metadata first so the new P0-004 fence cannot break
+        // the established legacy ledger lane.
+        const column = await pool.query("SELECT 1 FROM information_schema.columns WHERE table_name='max_external_action_claims' AND column_name='task_id'");
+        if (column.rows[0]) {
+          const linked = await pool.query('SELECT task_id FROM max_external_action_claims WHERE tenant_id=$1 AND idempotency_key=$2 AND owner_token=$3', [input.tenantId, input.idempotencyKey, input.ownerToken]);
+          if (linked.rows[0] && linked.rows[0].task_id) throw ledgerError('durable_task_fenced', 'A task-linked external action requires its task ownership fence.');
+        }
+      }
       return transition(input, [STATES.CLAIMED], STATES.DISPATCH_ATTEMPTED, { dispatch_attempted_at: now() }, 'dispatch_attempted');
     }
     await assertReliabilitySchema(pool);
@@ -326,15 +339,26 @@ function createExternalActionLedger(pool, options = {}) {
     try {
       await client.query('BEGIN');
       const owner = await client.query(
-        `SELECT id FROM max_durable_execution_tasks
-          WHERE id = $1 AND tenant_id = $2 AND ownership_token = $3 AND fence_epoch = $4
-            AND state IN ('claimed','running') AND lease_expires_at > clock_timestamp()
-            AND (deadline_at IS NULL OR deadline_at > clock_timestamp())
+        `SELECT t.id, t.mission_id AS task_mission_id, t.specialist, t.execution_scope, c.mission_id AS claim_mission_id
+           FROM max_durable_execution_tasks t
+           JOIN max_external_action_claims c ON c.task_id=t.id AND c.tenant_id=t.tenant_id
+          WHERE t.id = $1 AND t.tenant_id = $2 AND t.ownership_token = $3 AND t.fence_epoch = $4
+            AND c.tenant_id=$2 AND c.idempotency_key=$5 AND c.owner_token=$6 AND c.state='claimed'
+            AND t.state IN ('claimed','running') AND t.lease_expires_at > clock_timestamp()
+            AND (t.deadline_at IS NULL OR t.deadline_at > clock_timestamp())
           FOR SHARE`,
-        [taskId, tenantId, taskToken, fenceEpoch]
+        [taskId, tenantId, taskToken, fenceEpoch, idempotencyKey, ownerToken]
       );
       if (!owner.rows[0]) {
         throw ledgerError('durable_task_fenced', 'Task ownership is stale, expired, cancelled or past its deadline; nothing was dispatched.');
+      }
+      const rootTask = owner.rows[0].specialist === 'max_objective'
+        || owner.rows[0].execution_scope?.role === 'root';
+      if (rootTask || (owner.rows[0].claim_mission_id
+          && !owner.rows[0].task_mission_id)
+        || (owner.rows[0].claim_mission_id
+          && String(owner.rows[0].task_mission_id) !== String(owner.rows[0].claim_mission_id))) {
+        throw ledgerError('durable_task_fenced', 'A null-mission or mismatched task fence cannot authorize a mission external action.');
       }
       const r = await client.query(
         `UPDATE max_external_action_claims SET state = 'dispatch_attempted', dispatch_attempted_at = $5, updated_at = $5

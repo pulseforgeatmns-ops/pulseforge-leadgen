@@ -266,8 +266,13 @@ async function runTaskOwnedWork({ store, tenantId, missionId, logicalKey: baseKe
   // mission could never be claimed alongside the first.
   const inherited = require('../../services/maxReliability/taskExecutionContext').currentTaskFence();
   // Only for the SAME mission: work on another mission takes its own task.
+  // A null-mission root fence is deliberately *not* a wildcard.  It may only
+  // inherit null-mission work; any mission-specific persistence or external
+  // path must acquire that mission's own P0-004 child-task fence.
   if (inherited && inherited.tenantId === String(tenantId)
-    && (!missionId || !inherited.missionId || inherited.missionId === String(missionId))) {
+    && (missionId
+      ? inherited.missionId === String(missionId)
+      : !inherited.missionId)) {
     return { result: await fn(), durableTask: null, inherited: true };
   }
   const tenant = String(tenantId);

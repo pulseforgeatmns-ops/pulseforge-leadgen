@@ -1123,7 +1123,9 @@ async function assertMissionTaskFence(mission, client, bundle = {}) {
   }
   // A fence of another mission does not own this mission (nested work on a
   // second mission must take its own task); an audited exemption may still apply.
-  if (fence.missionId && String(fence.missionId) !== String(mission.id)) {
+  // A root/objective fence carries no mission authority.  Only the exact
+  // mission-specific child task may persist this mission.
+  if (String(fence.missionId || '') !== String(mission.id)) {
     if (!isWriteExempt()) {
       throw fencedError('The current task owns a different mission; nothing was written.', { missionId: mission.id });
     }
