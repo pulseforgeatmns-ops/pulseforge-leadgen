@@ -225,6 +225,7 @@ async function admitObjectiveRoot(input = {}, opts = {}) {
   let objective = await objectiveService.getObjectiveById(input.objectiveId, { tenantId, ...(opts.objectiveOpts || {}) });
   if (!objective) throw new ObjectiveContractError('objective_contract_not_found', 'objective not found', 404);
   if (objective.status !== 'active') throw new ObjectiveContractError('objective_contract_inactive', 'only active objectives may be admitted', 409);
+  if (!input.contract) throw new ObjectiveContractError('objective_contract_invalid', 'contract is required');
   // A previously accepted immutable root remains the authority even after its
   // deadline: exact replay is safe and truthful; a changed request is not.
   const existing = typeof taskStore.getByLogicalKey === 'function'
