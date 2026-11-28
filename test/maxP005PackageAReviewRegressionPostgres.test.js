@@ -21,9 +21,10 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
-const { createTrackedPostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
+const { createTrackedPostgresPool, closePostgresPool, closePostgresFixture } = require('./helpers/closePostgresPool');
 const { createDurableExecutionOwnership } = require('../services/maxReliability/durableExecutionOwnership');
 const { createExternalActionLedger } = require('../services/maxReliability/externalActionLedger');
 const { runWithTaskFence } = require('../services/maxReliability/taskExecutionContext');
@@ -44,6 +45,15 @@ const P003_SQL = '2026-11-25-max-p0-003-reliability-core.sql';
 const P004_SQL = '2026-11-25-max-p0-004-durable-execution-ownership.sql';
 const P005_SQL = '2026-11-27-max-p0-005-package-a-contract-roots.sql';
 const P005_INDEX = 'max_durable_execution_tasks_one_objective_root';
+const SCHEMA_REPORT = path.join(__dirname, '../scripts/max-reliability/schemaReport.cjs');
+
+function schemaReport(connectionString) {
+  const run = spawnSync(process.execPath, [SCHEMA_REPORT], {
+    env: { ...process.env, DATABASE_URL: connectionString }, encoding: 'utf8', timeout: 30000,
+  });
+  assert.equal(run.status, 0, run.stderr || run.stdout);
+  return JSON.parse(run.stdout);
+}
 
 /* ------------------------------------------------------------------------ */
 /* Fixtures                                                                  */
@@ -255,9 +265,35 @@ test('N4 regression: a same-named malformed wake index is not accepted as the in
   }
 });
 
-test('R1-07 read-only preflight/schema report exposes the Package A uniqueness index', async () => {
-  const r = await pool.query('SELECT to_regclass($1) AS index_name', [P005_INDEX]);
-  assert.ok(r.rows[0].index_name, 'Package A reportable uniqueness index exists');
+test('R1-07 read-only schema report executes and distinguishes valid, missing, and malformed Package A invariants', async () => {
+  const valid = schemaReport(fixture.instance.connectionString);
+  assert.equal(valid.server.read_only, 'on');
+  assert.equal(valid.packageA.canonicalRootInvariant, true);
+  assert.equal(valid.packageA.wakeDeduplicationInvariant, true);
+  assert.equal(valid.packageA.migrationPreflight.ready, true);
+
+  const missingInstance = await startDisposablePostgres('max-p0-005-report-missing-');
+  const missingPool = createTrackedPostgresPool({ connectionString: missingInstance.connectionString, max: 2 });
+  try {
+    await missingPool.query(MIG(P003_SQL)); await missingPool.query(MIG(P004_SQL));
+    const missing = schemaReport(missingInstance.connectionString);
+    assert.equal(missing.packageA.canonicalRootInvariant, false);
+    assert.equal(missing.packageA.wakeDeduplicationInvariant, false);
+  } finally { await closePostgresFixture(missingPool, missingInstance); }
+
+  const malformedInstance = await startDisposablePostgres('max-p0-005-report-malformed-');
+  const malformedPool = createTrackedPostgresPool({ connectionString: malformedInstance.connectionString, max: 2 });
+  try {
+    await malformedPool.query(MIG(P003_SQL)); await malformedPool.query(MIG(P004_SQL));
+    await malformedPool.query(`CREATE UNIQUE INDEX max_durable_execution_tasks_one_objective_root
+      ON max_durable_execution_tasks (tenant_id, objective_id, logical_key)`);
+    await malformedPool.query(`CREATE UNIQUE INDEX max_durable_execution_task_events_one_objective_wake
+      ON max_durable_execution_task_events (tenant_id, task_id, id)`);
+    const malformed = schemaReport(malformedInstance.connectionString);
+    assert.equal(malformed.packageA.canonicalRootInvariant, false);
+    assert.equal(malformed.packageA.wakeDeduplicationInvariant, false);
+    assert.equal(malformed.packageA.canonicalRootEvidence.unique, true);
+  } finally { await closePostgresFixture(malformedPool, malformedInstance); }
 });
 
 test('N4 regression: read-only schema report verifies both Package A invariants by catalog definition', () => {
@@ -529,9 +565,33 @@ test('R5-04 [R5 attribution] the admitting actor is durably attributable on the 
   assert.match(haystack, /operator-alice/, 'actor id must be recorded for audit');
 });
 
-test('R5-05 authorization reuses an existing repository policy', async () => {
-  await withProductionAdmissionPolicy(async (policy) => {
-    assert.deepEqual(await policy.authorizeObjectiveAdmission(pool, { id: 'not-an-id' }, '10'), { authorized: false });
+test('R5-05 production authorization rejects malformed, nonexistent, tenant-mismatched, and permissionless actors without durable admission', async () => {
+  await pool.query(`CREATE TABLE IF NOT EXISTS users (id integer PRIMARY KEY, client_id integer NOT NULL, role text NOT NULL, active boolean NOT NULL DEFAULT true)`);
+  await pool.query(`INSERT INTO users(id, client_id, role, active) VALUES
+    (505051, 50505, 'admin', true), (505052, 50506, 'manager', true)
+    ON CONFLICT (id) DO UPDATE SET client_id=EXCLUDED.client_id, role=EXCLUDED.role, active=EXCLUDED.active`);
+  await withProductionAdmissionPolicy(async (productionPolicy) => {
+    assert.deepEqual(await productionPolicy.authorizeObjectiveAdmission(pool, { id: 'not-an-id' }, '50505'), { authorized: false });
+    assert.deepEqual(await productionPolicy.authorizeObjectiveAdmission(pool, { id: '999999' }, '50505'), { authorized: false });
+    const permissionless = await productionPolicy.authorizeObjectiveAdmission(pool, { id: '505051' }, '50505');
+    assert.equal(permissionless.authorized, false); assert.equal(permissionless.reason, 'objective_admission_permission_absent');
+    assert.deepEqual(await productionPolicy.authorizeObjectiveAdmission(pool, { id: '505052' }, '50505'), { authorized: false });
+
+    for (const [label, actorInput] of [
+      ['malformed', { id: 'not-an-id', authorizedTenantId: '50505' }],
+      ['nonexistent', { id: '999999', authorizedTenantId: '50505' }],
+      ['permissionless', { id: '505051', authorizedTenantId: '50505' }],
+      ['tenant-mismatched', { id: '505052', authorizedTenantId: '50505' }],
+    ]) {
+      const tenantId = '50505';
+      const objective = await newObjective(tenantId);
+      const candidate = { ...actorInput, authorizedTenantId: tenantId };
+      await assert.rejects(() => C.admitObjectiveRoot({ tenantId, objectiveId: objective.id, contract: contract(), actor: candidate }, options()),
+        error => error.code === 'objective_contract_actor_unauthorized', label);
+      assert.equal((await objectiveTasks(tenantId, objective.id)).length, 0, `${label}: no root`);
+      assert.equal((await pool.query(`SELECT count(*)::int AS n FROM max_durable_execution_task_events WHERE tenant_id=$1 AND event='accepted'`, [tenantId])).rows[0].n, 0,
+        `${label}: no accepted event`);
+    }
   });
 });
 
@@ -676,7 +736,13 @@ test('R6-05 a supplied providerPolicy is persisted in the immutable contract (or
 
 test('R6-06 specialist/action registries are sourced from the approved repository registries', () => {
   const registry = require('../packages/max/specialistDelegation/CapabilityRegistry').createDefaultCapabilityRegistry();
-  assert.ok(registry.listCallable().some(x => x.specialist === 'scout'));
+  const callable = [...new Set(registry.listCallable().map(x => x.specialist))].sort();
+  assert.ok(callable.includes('scout'));
+  assert.deepEqual(C.APPROVED_SPECIALISTS, ['scout'], 'Package A explicitly approves only Scout');
+  assert.ok(C.APPROVED_SPECIALISTS.every(specialist => callable.includes(specialist)), 'every approved specialist is callable by the authoritative registry');
+  for (const specialist of callable.filter(specialist => !C.APPROVED_SPECIALISTS.includes(specialist))) {
+    assert.throws(() => C.validateObjectiveContract(contract({ allowedSpecialists: [specialist] })), { code: 'objective_contract_specialist_unapproved' });
+  }
   assert.deepEqual(C.APPROVED_ACTION_CLASSES, []);
 });
 
@@ -736,11 +802,26 @@ test('R7-06 status projection is read-only and derived from the authoritative ro
   assert.equal(C.projectObjectiveStatus(null), null);
 });
 
-test('R7-07 wake-deduplication contract is defined and persisted (objective/task/reason/version key)', async () => {
+test('R7-07 wake deduplication is atomic across independent PostgreSQL pools and persists one event', async () => {
   const o = await newObjective('r7-07'); const root = (await admit('r7-07', o.id, contract())).task;
   const stored = await tasks.get({ tenantId: 'r7-07', taskId: root.id });
   assert.equal(stored.immutableInput.contract.wakeDeduplication.persistence, 'max_durable_execution_task_events');
-  assert.equal(C.wakeIdentity({ objectiveId:o.id, rootTaskId:root.id, reason:'due_verification', version:1 }), C.wakeIdentity({ objectiveId:o.id, rootTaskId:root.id, reason:'due_verification', version:1 }));
+  const wakeIdentity = C.wakeIdentity({ objectiveId:o.id, rootTaskId:root.id, reason:'due_verification', version:1 });
+  const aPool = createTrackedPostgresPool({ connectionString: fixture.instance.connectionString, max: 2 });
+  const bPool = createTrackedPostgresPool({ connectionString: fixture.instance.connectionString, max: 2 });
+  try {
+    const [a, b] = await Promise.all([
+      createDurableExecutionOwnership(aPool).registerObjectiveWake({ tenantId: 'r7-07', taskId: root.id, wakeIdentity, reason: 'due_verification' }),
+      createDurableExecutionOwnership(bPool).registerObjectiveWake({ tenantId: 'r7-07', taskId: root.id, wakeIdentity, reason: 'due_verification' }),
+    ]);
+    assert.equal(Number(a.registered) + Number(b.registered), 1);
+    assert.equal(Number(a.replay) + Number(b.replay), 1);
+    const events = await pool.query(`SELECT detail->>'wakeIdentity' AS identity FROM max_durable_execution_task_events
+      WHERE tenant_id=$1 AND task_id=$2 AND event='objective_wake'`, ['r7-07', root.id]);
+    assert.deepEqual(events.rows, [{ identity: wakeIdentity }]);
+  } finally {
+    await closePostgresPool(aPool); await closePostgresPool(bPool);
+  }
 });
 
 test('R7-08 Package A creates no timers', async () => {
