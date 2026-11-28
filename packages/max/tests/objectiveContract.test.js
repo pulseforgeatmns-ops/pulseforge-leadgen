@@ -7,7 +7,7 @@ const path = require('node:path');
 const objectives = require('../../../services/operatorObjectives');
 const {
   ObjectiveContractError, validateObjectiveContract, nextVerificationWake,
-  rootTaskInput, admitObjectiveRoot,
+  rootTaskInput, admitObjectiveRoot, wakeIdentity,
 } = require('../objectiveOrchestration/ObjectiveContract');
 
 function contract(overrides = {}) {
@@ -53,6 +53,13 @@ describe('MAX-P0-005 Package A objective contract', () => {
     assert.equal(task.executionScope.missionOwnership, 'none');
     assert.equal(task.retryBudget, 0);
     assert.match(task.logicalKey, /^objective:o1:root$/);
+  });
+
+  it('defines a stable durable wake identity without scheduling work', () => {
+    const a = wakeIdentity({ objectiveId: 'o1', rootTaskId: 'r1', reason: 'due_verification', version: 1 });
+    assert.equal(a, wakeIdentity({ reason: 'due_verification', version: 1, rootTaskId: 'r1', objectiveId: 'o1' }));
+    assert.match(a, /^objective-wake:o1:r1:due_verification:v1$/);
+    assert.equal(validateObjectiveContract(contract()).wakeDeduplication.persistence, 'max_durable_execution_task_events');
   });
 
   it('is default-off and cannot accept work or call a task store', async () => {

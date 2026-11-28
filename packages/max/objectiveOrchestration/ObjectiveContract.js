@@ -25,7 +25,9 @@ const WAKE_KINDS = Object.freeze([
 // must make a reviewed additive registry change; unknown strings are never a
 // provider policy.
 const APPROVED_PROVIDERS = Object.freeze(['deterministic_fixture']);
-const APPROVED_SPECIALISTS = Object.freeze(['scout']);
+const { createDefaultCapabilityRegistry } = require('../specialistDelegation/CapabilityRegistry');
+const APPROVED_SPECIALISTS = Object.freeze(createDefaultCapabilityRegistry().listCallable()
+  .filter(entry => entry.specialist === 'scout').map(entry => entry.specialist));
 const APPROVED_ACTION_CLASSES = Object.freeze([]);
 const TERMINAL_VERIFICATION = new Set(['verified', 'contradicted', 'unverifiable', 'error']);
 
@@ -70,6 +72,10 @@ function canonical(value) {
   return JSON.stringify(value);
 }
 function fingerprint(value) { return require('crypto').createHash('sha256').update(canonical(value)).digest('hex'); }
+function wakeIdentity({ objectiveId, rootTaskId, reason, version }) {
+  if (![objectiveId, rootTaskId, reason, version].every(v => typeof v === 'string' || Number.isSafeInteger(v))) throw new ObjectiveContractError('objective_contract_invalid', 'wake identity requires canonical fields');
+  return `objective-wake:${String(objectiveId)}:${String(rootTaskId)}:${String(reason)}:v${String(version)}`;
+}
 function enabled(env = process.env) {
   return String(env.MAX_AUTONOMOUS_OBJECTIVES || '').toLowerCase() === 'true'
     && String(env.MAX_DURABLE_TASKS || '').toLowerCase() === 'true';
@@ -147,6 +153,7 @@ function validateObjectiveContract(input = {}, { allowExpired = false } = {}) {
     }),
     budget: Object.freeze({ caps: Object.freeze(budgetCaps) }),
     wakeConditions,
+    wakeDeduplication: Object.freeze({ version: 1, key: 'objectiveId:rootTaskId:reason:contractVersion', persistence: 'max_durable_execution_task_events', duplicateHandling: 'idempotent_event_key' }),
     idlePolicy: Object.freeze({ noModelCalls: true, noProviderCalls: true, noSpecialistCalls: true }),
     providerPolicy: Object.freeze({ ...(input.providerPolicy || {}) }),
     verification: Object.freeze({ initialPollMs, maxPollMs, maxAttempts, backoffMultiplier, jitterRatio: 0.1, deadlineAt: deadlineAt.toISOString() }),
@@ -263,5 +270,5 @@ module.exports = {
   MAX_STEPS, MAX_CHILDREN, MAX_REPLANS, MAX_RETRIES, MAX_POLL_ATTEMPTS,
   MIN_POLL_MS, MAX_POLL_MS, WAKE_KINDS, APPROVED_PROVIDERS, APPROVED_SPECIALISTS, APPROVED_ACTION_CLASSES, ObjectiveContractError,
   enabled, validateObjectiveContract, nextVerificationWake, rootLogicalKey,
-  rootTaskInput, projectObjectiveStatus, admitObjectiveRoot, canonical, fingerprint,
+  rootTaskInput, projectObjectiveStatus, admitObjectiveRoot, canonical, fingerprint, wakeIdentity,
 };
