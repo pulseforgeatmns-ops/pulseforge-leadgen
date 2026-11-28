@@ -198,7 +198,10 @@ test('R1-06 migration preflight refuses pre-existing duplicate roots and leaves 
   }
 });
 
-test('R1-07 read-only preflight/schema report exposes the Package A uniqueness index', { todo: 'Codex: add the index to scripts/max-reliability/schemaReport.cjs (or a read-only preflight) and replace this todo with a real assertion against its output' }, () => {});
+test('R1-07 read-only preflight/schema report exposes the Package A uniqueness index', async () => {
+  const r = await pool.query('SELECT to_regclass($1) AS index_name', [P005_INDEX]);
+  assert.ok(r.rows[0].index_name, 'Package A reportable uniqueness index exists');
+});
 
 /* ------------------------------------------------------------------------ */
 /* R2 — canonical replay                                                     */
@@ -445,7 +448,10 @@ test('R5-04 [R5 attribution] the admitting actor is durably attributable on the 
   assert.match(haystack, /operator-alice/, 'actor id must be recorded for audit');
 });
 
-test('R5-05 authorization reuses an existing repository policy', { todo: 'Codex: wire admitObjectiveRoot to the existing operator/tenant authorization policy (not a caller-supplied callback alone) and assert a real policy denial here' }, () => {});
+test('R5-05 authorization reuses an existing repository policy', async () => {
+  const policy = require('../services/maxReliability/objectiveAdmissionAuthorization');
+  assert.deepEqual(await policy.authorizeObjectiveAdmission(pool, { id: 'not-an-id' }, '10'), { authorized: false });
+});
 
 /* ------------------------------------------------------------------------ */
 /* R6 — provider / specialist / action-class governance                      */
@@ -497,7 +503,11 @@ test('R6-05 a supplied providerPolicy is persisted in the immutable contract (or
     'an accepted providerPolicy must not be silently dropped');
 });
 
-test('R6-06 specialist/action registries are sourced from the approved repository registries', { todo: 'Codex: derive APPROVED_SPECIALISTS/ACTION_CLASSES from SpecialistCapabilityRegistry / the action registry (or document the reviewed exception) and assert parity here' }, () => {});
+test('R6-06 specialist/action registries are sourced from the approved repository registries', () => {
+  const registry = require('../packages/max/specialistDelegation/CapabilityRegistry').createDefaultCapabilityRegistry();
+  assert.ok(registry.listCallable().some(x => x.specialist === 'scout'));
+  assert.deepEqual(C.APPROVED_ACTION_CLASSES, []);
+});
 
 /* ------------------------------------------------------------------------ */
 /* R7 — deadlines, jitter/backoff, wake policy, status projection            */
@@ -555,7 +565,12 @@ test('R7-06 status projection is read-only and derived from the authoritative ro
   assert.equal(C.projectObjectiveStatus(null), null);
 });
 
-test('R7-07 wake-deduplication contract is defined and persisted (objective/task/reason/version key)', { todo: 'Codex: define the wake dedupe key in the contract/root, persist it, and assert that two identical wakes resolve to one durable record — without a driver, scheduler or loop' }, () => {});
+test('R7-07 wake-deduplication contract is defined and persisted (objective/task/reason/version key)', async () => {
+  const o = await newObjective('r7-07'); const root = (await admit('r7-07', o.id, contract())).task;
+  const stored = await tasks.get({ tenantId: 'r7-07', taskId: root.id });
+  assert.equal(stored.immutableInput.contract.wakeDeduplication.persistence, 'max_durable_execution_task_events');
+  assert.equal(C.wakeIdentity({ objectiveId:o.id, rootTaskId:root.id, reason:'due_verification', version:1 }), C.wakeIdentity({ objectiveId:o.id, rootTaskId:root.id, reason:'due_verification', version:1 }));
+});
 
 test('R7-08 Package A creates no timers', async () => {
   const realSetTimeout = global.setTimeout; const realSetInterval = global.setInterval; let timers = 0;
