@@ -76,6 +76,7 @@ async function main() {
     const otherSchemas = await q(`SELECT nspname AS schema FROM pg_namespace
       WHERE nspname NOT IN ('public','information_schema') AND nspname NOT LIKE 'pg\\_%' ORDER BY 1`);
     const signalTables = tables.filter((t) => /^signal_/.test(t.name)).map((t) => t.name);
+    const p005 = (await q(`SELECT to_regclass('max_durable_execution_tasks_one_objective_root') IS NOT NULL AS objectiveRootUniqueIndex`))[0];
 
     // Tenant and operational continuity (counts and timestamps only).
     const tenants = present.has('clients')
@@ -109,6 +110,7 @@ async function main() {
       maxCore,
       reliabilityCoreInstalled: ['max_external_action_claims', 'max_request_receipts', 'max_reliability_audit'].every((t) => present.has(t)),
       durableExecutionOwnershipInstalled: ['max_durable_execution_tasks', 'max_durable_execution_task_events'].every((t) => present.has(t)),
+      packageA: { objectiveRootUniqueIndex: p005.objectiverootuniqueindex === true },
       otherSchemas: otherSchemas.map((r) => r.schema),
       signalTables,
       tenants,
